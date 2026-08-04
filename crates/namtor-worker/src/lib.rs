@@ -19,6 +19,7 @@ pub mod infer;
 #[cfg(feature = "onnx")]
 pub mod infer_onnx;
 pub mod pipe;
+pub mod sandbox;
 
 use thiserror::Error;
 
