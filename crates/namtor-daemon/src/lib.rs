@@ -12,6 +12,7 @@ pub mod lifecycle;
 pub mod listener;
 pub mod models;
 pub mod nonce;
+pub mod supervisor;
 
 use thiserror::Error;
 
