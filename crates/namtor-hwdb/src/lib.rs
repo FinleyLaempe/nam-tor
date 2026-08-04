@@ -8,6 +8,7 @@
 use thiserror::Error;
 
 pub mod classify;
+pub mod nodes;
 pub mod sysfs;
 
 /// Errors raised by the hardware database.
