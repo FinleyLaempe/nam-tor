@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! `namtor-daemon`: the privilege-separated authentication daemon.
+//!
+//! Runs as user `namtor` (groups `video`, `tss`). Owns the camera, the emitter,
+//! and the worker supervisor. Listens on an `AF_UNIX` socket (`SO_PEERCRED`
+//! ACL, nonce-bound replies — spec §3.2) and drives the warm-models /
+//! cold-camera lifecycle (spec §5.5).
+
+pub mod acl;
+pub mod nonce;
+
+use thiserror::Error;
+
+/// Daemon-wide error.
+#[derive(Debug, Error)]
+pub enum DaemonError {
+    #[error("socket error: {0}")]
+    Socket(String),
+    #[error("ACL error: {0}")]
+    Acl(String),
+    #[error("protocol error: {0}")]
+    Proto(#[from] namtor_proto::framing::ProtoError),
+    #[error("worker error: {0}")]
+    Worker(String),
+    #[error("state error: {0}")]
+    State(String),
+    #[error("i/o error: {0}")]
+    Io(#[from] std::io::Error),
+}
