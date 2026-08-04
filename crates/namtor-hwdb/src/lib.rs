@@ -10,6 +10,7 @@ use thiserror::Error;
 pub mod classify;
 pub mod nodes;
 pub mod sysfs;
+pub mod xu_index;
 
 /// Errors raised by the hardware database.
 #[derive(Debug, Error)]
