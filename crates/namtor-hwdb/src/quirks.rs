@@ -205,6 +205,32 @@ pub struct QuirksDb {
     pub entries: HashMap<String, QuirksEntry>,
 }
 
+impl QuirksDb {
+    /// Looks up a quirks entry by VID/PID, optionally qualified by bcdDevice.
+    ///
+    /// Lookup order: with `bcd`, the key is `{vid:04x}:{pid:04x}:{bcd:04x}`;
+    /// without, `{vid:04x}:{pid:04x}`. A bcd-qualified query never falls back
+    /// to the unqualified key — a bcd mismatch is a different device.
+    pub fn match_device(&self, vid: u16, pid: u16, bcd: Option<u16>) -> Option<&QuirksEntry> {
+        let key = match bcd {
+            Some(b) => format!("{vid:04x}:{pid:04x}:{b:04x}"),
+            None => format!("{vid:04x}:{pid:04x}"),
+        };
+        self.entries.get(&key)
+    }
+}
+
+/// Parses a `"vid:pid"` (or `"vid:pid:bcd"`) key into its VID/PID pair.
+pub fn parse_vid_pid(s: &str) -> Option<(u16, u16)> {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let vid = u16::from_str_radix(parts[0], 16).ok()?;
+    let pid = u16::from_str_radix(parts[1], 16).ok()?;
+    Some((vid, pid))
+}
+
 /// Parses a hex payload string (`"01030200..."`) to bytes.
 pub fn parse_hex_payload(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
@@ -322,5 +348,62 @@ mod tests {
         );
         assert_eq!(parse_hex_payload(""), Some(Vec::new()));
         assert!(parse_hex_payload("abc").is_none(), "odd length is invalid");
+    }
+
+    fn empty_entry(vid_pid: &str) -> QuirksEntry {
+        let text = format!(
+            "[device]\nvid_pid = \"{vid_pid}\"\nname = \"x\"\n\
+             [nodes]\nir_vc_interface = 0\nir_streaming = 0\n\
+             ir_format_guid = \"x\"\nmetadata_node = false\ndepth = false\n\
+             [emitter]\nmethod = \"unknown\"\npayload_on = \"\"\npayload_off = \"\"\n\
+             [meta]\nverified_by = \"x\"\nverified_on = \"x\"\nkernel = \"x\"\n"
+        );
+        toml::from_str(&text).expect("valid entry")
+    }
+
+    #[test]
+    fn matches_by_vid_pid_without_bcd() {
+        let mut db = QuirksDb::default();
+        db.entries
+            .insert("3277:0018".into(), empty_entry("3277:0018"));
+        db.entries
+            .insert("1111:2222:0001".into(), empty_entry("1111:2222:0001"));
+
+        let m = db.match_device(0x3277, 0x0018, None);
+        assert!(m.is_some());
+        assert_eq!(m.unwrap().device.vid_pid, "3277:0018");
+    }
+
+    #[test]
+    fn matches_by_bcd_qualified_key() {
+        let mut db = QuirksDb::default();
+        db.entries
+            .insert("1111:2222:0001".into(), empty_entry("1111:2222:0001"));
+
+        assert!(db.match_device(0x1111, 0x2222, Some(0x0001)).is_some());
+    }
+
+    #[test]
+    fn bcd_mismatch_returns_none_without_fallback() {
+        let mut db = QuirksDb::default();
+        db.entries
+            .insert("1111:2222:0001".into(), empty_entry("1111:2222:0001"));
+
+        assert!(db.match_device(0x1111, 0x2222, Some(0x0002)).is_none());
+    }
+
+    #[test]
+    fn unknown_device_returns_none() {
+        let db = QuirksDb::default();
+        assert!(db.match_device(0x9999, 0x9999, None).is_none());
+    }
+
+    #[test]
+    fn parse_vid_pid_handles_known_shapes() {
+        assert_eq!(parse_vid_pid("3277:0018"), Some((0x3277, 0x0018)));
+        assert_eq!(parse_vid_pid("3277:0018:0001"), Some((0x3277, 0x0018)));
+        assert!(parse_vid_pid("bad").is_none());
+        assert!(parse_vid_pid("3277").is_none());
+        assert!(parse_vid_pid("zzzz:0018").is_none());
     }
 }
