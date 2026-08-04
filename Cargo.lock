@@ -1003,6 +1003,7 @@ dependencies = [
  "clap",
  "namtor-camera",
  "namtor-hwdb",
+ "namtor-proto",
  "tempfile",
 ]
 
