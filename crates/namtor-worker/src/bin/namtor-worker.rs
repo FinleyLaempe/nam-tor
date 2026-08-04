@@ -20,6 +20,9 @@ fn main() -> ExitCode {
             "--landlock-self-test" if i + 1 < args.len() => {
                 return landlock_self_test(&args[i + 1]);
             }
+            "--apply-sandbox" if i + 2 < args.len() && args[i + 1] == "--self-test" => {
+                return combined_escape_test(&args[i + 2]);
+            }
             "--read-fd" if i + 1 < args.len() => {
                 i += 2;
             }
@@ -182,5 +185,116 @@ fn test_read_inherited() -> TestResult {
     match std::io::stdin().read(&mut buf) {
         Ok(0) | Ok(_) => TestResult::Ok,
         Err(e) => TestResult::Errno(e.raw_os_error().unwrap_or(0)),
+    }
+}
+
+/// Combined sandbox escape test: apply both landlock + seccomp, then attempt
+/// the named escape kind. Used by `tests/escape.rs` (G5.2).
+fn combined_escape_test(kind: &str) -> ExitCode {
+    if let Err(e) = namtor_worker::sandbox::apply_sandbox() {
+        eprintln!("sandbox apply failed: {e}");
+        return ExitCode::FAILURE;
+    }
+    let result = match kind {
+        "open_file" => test_open(),
+        "open_socket" => test_socket(),
+        "connect" => test_connect(),
+        "exec" => test_exec(),
+        "fork" => test_fork(),
+        "write_inherited" => test_write(),
+        other => {
+            eprintln!("unknown combined self-test kind: {other}");
+            return ExitCode::from(2);
+        }
+    };
+    match result {
+        TestResult::Ok => {
+            println!("ok");
+            ExitCode::SUCCESS
+        }
+        TestResult::Errno(n) => {
+            println!("errno {n}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn test_connect() -> TestResult {
+    use std::os::raw::c_int;
+    extern "C" {
+        fn socket(domain: c_int, ty: c_int, protocol: c_int) -> c_int;
+        fn connect(fd: c_int, addr: *const std::os::raw::c_void, len: u32) -> c_int;
+    }
+    // AF_UNIX = 1, SOCK_STREAM = 1
+    let fd = unsafe { socket(1, 1, 0) };
+    if fd < 0 {
+        return TestResult::Errno(errno());
+    }
+    // Minimal sockaddr_un for abstract namespace "\0test".
+    #[repr(C)]
+    struct SockAddrUnix {
+        family: u16,
+        path: [u8; 108],
+    }
+    let mut addr = SockAddrUnix {
+        family: 1,
+        path: [0u8; 108],
+    };
+    addr.path[1] = b't';
+    let ret = unsafe { connect(fd, &addr as *const _ as *const _, 110) };
+    extern "C" {
+        fn close(fd: c_int) -> c_int;
+    }
+    unsafe { close(fd) };
+    if ret < 0 {
+        TestResult::Errno(errno())
+    } else {
+        TestResult::Ok
+    }
+}
+
+fn test_exec() -> TestResult {
+    use std::ffi::CString;
+    extern "C" {
+        fn execve(
+            path: *const std::os::raw::c_char,
+            argv: *const *const std::os::raw::c_char,
+            envp: *const *const std::os::raw::c_char,
+        ) -> std::os::raw::c_int;
+    }
+    let path = CString::new("/bin/true").unwrap();
+    let null_ptr: *const std::os::raw::c_char = std::ptr::null();
+    // SAFETY: execve only returns on error. If it succeeds, the process is
+    // replaced — but the sandbox should deny it before that happens.
+    let ret = unsafe { execve(path.as_ptr(), &null_ptr, &null_ptr) };
+    if ret < 0 {
+        TestResult::Errno(errno())
+    } else {
+        TestResult::Ok
+    }
+}
+
+fn test_fork() -> TestResult {
+    extern "C" {
+        fn fork() -> std::os::raw::c_int;
+    }
+    // SAFETY: fork is denied by seccomp; if it somehow succeeds, the child
+    // exits immediately.
+    let ret = unsafe { fork() };
+    if ret < 0 {
+        TestResult::Errno(errno())
+    } else if ret == 0 {
+        std::process::exit(0);
+    } else {
+        extern "C" {
+            fn waitpid(
+                pid: std::os::raw::c_int,
+                status: *mut std::os::raw::c_int,
+                opts: std::os::raw::c_int,
+            ) -> std::os::raw::c_int;
+        }
+        let mut status: std::os::raw::c_int = 0;
+        unsafe { waitpid(ret, &mut status, 0) };
+        TestResult::Ok
     }
 }
