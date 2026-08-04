@@ -61,12 +61,35 @@ Camera detail, read from USB descriptors:
 | if3 | `/dev/video2` | `{00000032-0002-0010-8000-00aa00389b71}` L8, 640×360@30 | **IR sensor** |
 | if3 meta | `/dev/video3` | `UVCH` | UVC payload header metadata |
 
-Extension units, both on the IR VideoControl interface (if2):
+Extension units. The device exposes **two VideoControl interfaces, one per
+sensor**, and each declares both extension units. Parsed from the descriptor
+blob on 2026-08-04:
 
-| GUID | `bmControls` | Role |
-|---|---|---|
-| `28f03370-6311-4a2e-ba2c-6890eb334016` | `0xbf` | Sonix vendor XU — expected emitter control path |
-| `0f3f95dc-2632-4c4e-92c9-a04782f43bc8` | `0x00 0x00` | Microsoft camera XU (MSXU) — declared, no controls advertised |
+| Interface | Unit | GUID | `bmControls` | Reading |
+|---|---|---|---|---|
+| if0 (colour VC) | 3 | `28f03370-6311-4a2e-ba2c-6890eb334016` | `bf` | Sonix vendor XU, 7 controls — belongs to the **colour** sensor |
+| if0 (colour VC) | 4 | `0f3f95dc-2632-4c4e-92c9-a04782f43bc8` | `00 00` | MSXU, no controls advertised |
+| **if2 (IR VC)** | **3** | `28f03370-…` | **`00`** | Sonix vendor XU, **no controls advertised on the IR sensor** |
+| **if2 (IR VC)** | **4** | `0f3f95dc-…` | **`20 01`** | **MSXU with controls advertised** — bit 5 and bit 8 |
+
+This is the most consequential detail in the table, and it is easy to get
+wrong: a truncated `lsusb` reading attributes the colour sensor's `bf` to the
+IR sensor and concludes the vendor XU is the emitter path. The descriptor blob
+says otherwise.
+
+Extension unit `bmControls` bit *n* corresponds to control selector *n+1*, so
+`20 01` advertises **selectors 6 and 9 on unit 4** of the IR interface. Those
+are the primary emitter candidates.
+
+Two consequences:
+
+1. **MSXU is the primary path on this device, not the fallback.** The tier-1
+   silent probe of §4.10.1 is therefore expected to succeed on the reference
+   hardware, which means gate G1.4 — zero user interaction — is achievable on
+   the development machine itself.
+2. The IR sensor's vendor XU advertising `00` does not prove it is inert;
+   vendors under-declare routinely. It remains a tier-2 fallback, behind
+   consent.
 
 There is **no depth stream**: the device advertises exactly two format GUIDs
 across all interfaces, neither of which is a depth format, and there is no second
@@ -259,10 +282,19 @@ is last-resort and always reported as such in diagnostics.
 
 Two paths, tried in order:
 
-1. **MSXU** (`{0f3f95dc-…}`). Standardised. Attempted first even when
-   `bmControls` reads zero — vendors under-declare routinely.
-2. **Vendor XU** (`{28f03370-…}`, `bmControls 0xbf`). Expected path on the
-   reference device.
+1. **MSXU** (`{0f3f95dc-…}`, unit 4 on the IR VideoControl interface).
+   Standardised, so probing is silent (§4.10.1). **On the reference device this
+   is the expected path**: it advertises `bmControls 20 01`, i.e. selectors 6
+   and 9. Probing begins with the advertised selectors, then widens.
+2. **Vendor XU** (`{28f03370-…}`, unit 3). On the reference IR interface it
+   advertises `00`, but vendors under-declare routinely, so it remains a
+   fallback — behind the tier-2 consent gate, since payload search on a vendor
+   unit is a genuinely blind write.
+
+Discovery always targets the extension units **on the IR sensor's own
+VideoControl interface**. The colour sensor declares its own instances of both
+units with different control bitmaps; probing those would poke the wrong
+device.
 
 **Verification is automatic.** `linux-enable-ir-emitter` frequently asks a human
 whether the light came on, which is unreasonable for invisible 850 nm emission

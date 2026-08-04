@@ -668,19 +668,39 @@ git commit -m "feat(uvc): safe XU accessor enforcing probe safety rules"
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: `ExtensionUnit { interface, unit_id, guid: [u8; 16], bm_controls: Vec<u8> }`; `FormatDescriptor { interface, format_index, guid: [u8; 16] }`; `parse_descriptors(blob: &[u8]) -> DescriptorSet`; `DescriptorSet { extension_units, formats }`; `guid_leading_dword(guid) -> u32`; `is_l8_ir_format(guid) -> bool`.
+- Produces: `ExtensionUnit { interface, unit_id, guid: [u8; 16], bm_controls: Vec<u8> }` with `advertised_selectors(&self) -> Vec<u8>`; `FormatDescriptor { interface, format_index, guid: [u8; 16] }`; `parse_descriptors(blob: &[u8]) -> DescriptorSet`; `DescriptorSet { extension_units, formats }`; `guid_leading_dword(guid) -> u32`; `is_l8_ir_format(guid) -> bool`; `format_guid(&[u8; 16]) -> String`.
 
 **Why this task exists:** spec §4.1 claims the IR sensor is identifiable by its `MFVideoFormat_L8` format GUID, which `uvcvideo` discards before userspace sees it. This task proves that claim against the real device's descriptor blob.
 
-- [ ] **Step 1: Capture the fixture from the reference device**
+**These assertions were validated against the real blob on 2026-08-04** and encode a correction that cost real time to find. The device has **two VideoControl interfaces, one per sensor**, each declaring both extension units:
+
+```
+if0 unit=3  28f03370-…  bmControls=bf      colour sensor, vendor XU
+if0 unit=4  0f3f95dc-…  bmControls=0000    colour sensor, MSXU
+if2 unit=3  28f03370-…  bmControls=00      IR sensor, vendor XU — nothing advertised
+if2 unit=4  0f3f95dc-…  bmControls=2001    IR sensor, MSXU — selectors 6 and 9
+```
+
+A truncated `lsusb` reading attributes the colour sensor's `bf` to the IR sensor and sends emitter probing at the wrong device. **Always filter extension units by `interface` before probing.**
+
+- [ ] **Step 1: Verify the fixture**
+
+**The fixture is already committed.** It was captured and validated on 2026-08-04, and the expected values below were derived from this exact blob. Verify you have it:
+
+```bash
+sha256sum fixtures/descriptors/3277-0018.bin
+```
+
+Expected: `68936ace0b0d04288d5a5d51342671fc7d488a80b42dd0d11e22a1fdf7e8caa7`, 1119 bytes.
+
+If the file is missing or the hash differs, recapture and expect the assertions in this task to need updating for your device:
 
 ```bash
 mkdir -p fixtures/descriptors
 cp /sys/bus/usb/devices/3-8/descriptors fixtures/descriptors/3277-0018.bin
-ls -l fixtures/descriptors/3277-0018.bin
 ```
 
-Expected: a binary file of roughly 300–700 bytes. If `3-8` is not the camera on a rerun, find it with `ls -l /sys/bus/usb/devices/*/idVendor` and match `3277`.
+If `3-8` is not the camera, find it with `ls -l /sys/bus/usb/devices/*/idVendor` and match `3277`.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -708,42 +728,90 @@ mod tests {
     }
 
     #[test]
-    fn parses_both_extension_units_on_the_reference_camera() {
+    fn parses_four_extension_units_two_per_videocontrol_interface() {
+        // The device has TWO VideoControl interfaces, one per sensor, and each
+        // declares both extension units. Reading this as "two units" attributes
+        // the colour sensor's control bitmap to the IR sensor and sends emitter
+        // probing at the wrong device.
         let set = parse_descriptors(&reference_blob());
-
-        assert_eq!(
-            set.extension_units.len(),
-            2,
-            "reference camera declares a Sonix vendor XU and a Microsoft XU"
-        );
+        assert_eq!(set.extension_units.len(), 4);
     }
 
     #[test]
-    fn finds_the_sonix_vendor_extension_unit() {
+    fn the_ir_interfaces_vendor_xu_advertises_no_controls() {
         let set = parse_descriptors(&reference_blob());
 
-        let sonix = set
+        let sonix_ir = set
             .extension_units
             .iter()
-            .find(|xu| format_guid(&xu.guid).starts_with("28f03370-6311-4a2e"))
-            .expect("Sonix vendor XU not found");
+            .find(|xu| {
+                xu.interface == 2 && format_guid(&xu.guid).starts_with("28f03370-6311-4a2e")
+            })
+            .expect("Sonix vendor XU on the IR interface not found");
 
-        assert_eq!(
-            sonix.bm_controls[0], 0xbf,
-            "Sonix XU should advertise bmControls 0xbf"
-        );
+        assert_eq!(sonix_ir.bm_controls, vec![0x00]);
     }
 
     #[test]
-    fn finds_the_microsoft_camera_extension_unit() {
+    fn the_colour_interfaces_vendor_xu_is_the_one_advertising_bf() {
+        // Guards against re-attributing this bitmap to the IR sensor.
         let set = parse_descriptors(&reference_blob());
 
-        assert!(
-            set.extension_units
-                .iter()
-                .any(|xu| format_guid(&xu.guid).starts_with("0f3f95dc-2632-4c4e")),
-            "Microsoft camera XU not found"
-        );
+        let sonix_rgb = set
+            .extension_units
+            .iter()
+            .find(|xu| {
+                xu.interface == 0 && format_guid(&xu.guid).starts_with("28f03370-6311-4a2e")
+            })
+            .expect("Sonix vendor XU on the colour interface not found");
+
+        assert_eq!(sonix_rgb.bm_controls, vec![0xbf]);
+    }
+
+    #[test]
+    fn the_ir_interfaces_msxu_advertises_selectors_six_and_nine() {
+        // The primary emitter candidates on this device.
+        let set = parse_descriptors(&reference_blob());
+
+        let msxu_ir = set
+            .extension_units
+            .iter()
+            .find(|xu| {
+                xu.interface == 2 && format_guid(&xu.guid).starts_with("0f3f95dc-2632-4c4e")
+            })
+            .expect("MSXU on the IR interface not found");
+
+        assert_eq!(msxu_ir.unit_id, 4);
+        assert_eq!(msxu_ir.bm_controls, vec![0x20, 0x01]);
+        assert_eq!(msxu_ir.advertised_selectors(), vec![6, 9]);
+    }
+
+    #[test]
+    fn the_colour_interfaces_msxu_advertises_nothing() {
+        let set = parse_descriptors(&reference_blob());
+
+        let msxu_rgb = set
+            .extension_units
+            .iter()
+            .find(|xu| {
+                xu.interface == 0 && format_guid(&xu.guid).starts_with("0f3f95dc-2632-4c4e")
+            })
+            .expect("MSXU on the colour interface not found");
+
+        assert!(msxu_rgb.advertised_selectors().is_empty());
+    }
+
+    #[test]
+    fn selector_mapping_is_one_based() {
+        // UVC: bmControls bit n indicates the control with selector n+1.
+        let xu = ExtensionUnit {
+            interface: 0,
+            unit_id: 1,
+            guid: [0u8; 16],
+            bm_controls: vec![0b0000_0001, 0b0000_0010],
+        };
+        // bit 0 -> selector 1; bit 9 -> selector 10.
+        assert_eq!(xu.advertised_selectors(), vec![1, 10]);
     }
 
     #[test]
@@ -819,12 +887,36 @@ const VC_EXTENSION_UNIT: u8 = 0x06;
 const VS_FORMAT_UNCOMPRESSED: u8 = 0x04;
 
 /// A UVC extension unit declared by the device.
+///
+/// Note that a multi-sensor camera declares **one set per VideoControl
+/// interface**. Always filter by `interface` before probing, or emitter
+/// discovery will poke the wrong sensor's controls.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtensionUnit {
     pub interface: u8,
     pub unit_id: u8,
     pub guid: [u8; 16],
     pub bm_controls: Vec<u8>,
+}
+
+impl ExtensionUnit {
+    /// Control selectors this unit claims to support.
+    ///
+    /// UVC encodes `bmControls` as a little-endian bitmap in which bit *n*
+    /// indicates the control with selector *n+1*. An empty result does not
+    /// prove the unit is inert — vendors under-declare routinely — but a
+    /// non-empty result is a strong starting point for probing.
+    pub fn advertised_selectors(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (byte_index, byte) in self.bm_controls.iter().enumerate() {
+            for bit in 0..8u32 {
+                if byte & (1 << bit) != 0 {
+                    out.push((byte_index as u32 * 8 + bit + 1) as u8);
+                }
+            }
+        }
+        out
+    }
 }
 
 /// An uncompressed format declared by a streaming interface.
@@ -952,9 +1044,31 @@ pub fn parse_descriptors(blob: &[u8]) -> DescriptorSet {
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `cargo test -p namtor-uvc descriptors::`
-Expected: PASS — 7 tests.
+Expected: PASS — 10 tests.
 
-If `finds_the_sonix_vendor_extension_unit` fails on `bm_controls[0]`, print the parsed units and compare against `lsusb -d 3277:0018 -v | grep -A8 EXTENSION_UNIT`. The `bNrInPins` offset arithmetic is the likely culprit.
+Troubleshooting, in order of likelihood:
+
+- **Wrong `bm_controls` values:** the `bNrInPins` offset arithmetic is the usual culprit. `baSourceID` is `bNrInPins` bytes long and sits between `bNrInPins` and `bControlSize`.
+- **Only two extension units parsed:** the interface tracking is not resetting on `DT_INTERFACE` (0x04) descriptors, so units from the second VideoControl interface are being merged or skipped.
+- **Assertions differ from the values above:** the reference blob may have been captured from a different device path. Confirm with `ls -l /sys/bus/usb/devices/*/idVendor` and match `3277`.
+
+A quick independent check, which is how these expected values were produced:
+
+```bash
+python3 -c "
+import pathlib
+b=pathlib.Path('fixtures/descriptors/3277-0018.bin').read_bytes()
+i=0; iface=0
+while i+2<=len(b):
+    n=b[i]
+    if n<2 or i+n>len(b): break
+    d=b[i:i+n]
+    if d[1]==0x04 and n>=3: iface=d[2]
+    elif d[1]==0x24 and n>=22 and d[2]==0x06:
+        nr=d[21]; cs=d[22+nr]
+        print('if%d unit=%d bm=%s' % (iface, d[3], d[23+nr:23+nr+cs].hex()))
+    i+=n"
+```
 
 - [ ] **Step 6: Commit**
 
@@ -1715,11 +1829,17 @@ mod tests {
         let dev = V4l2Device::open(Path::new("/dev/video2")).unwrap();
         let mut xu = SafeXu::new(dev);
 
-        // Sonix vendor XU is unit 3 on the reference camera; confirm with
-        // `lsusb -d 3277:0018 -v | grep -B2 -A6 EXTENSION_UNIT`.
-        match xu.probe_control(3, 0x01) {
-            Ok(p) => eprintln!("unit 3 selector 0x01: len={} info={:?}", p.len, p.info),
-            Err(e) => eprintln!("unit 3 selector 0x01: {e}"),
+        // Unit 4 is the MSXU on the IR VideoControl interface, and it
+        // advertises selectors 6 and 9 (bmControls 20 01). These are the
+        // primary emitter candidates on this device.
+        for selector in [6u8, 9u8] {
+            match xu.probe_control(4, selector) {
+                Ok(p) => eprintln!(
+                    "unit 4 selector {selector}: len={} info={:?} current={:02x?}",
+                    p.len, p.info, p.current
+                ),
+                Err(e) => eprintln!("unit 4 selector {selector}: {e}"),
+            }
         }
     }
 }
@@ -2132,7 +2252,17 @@ pub fn discover_emitter<T: XuTransport, S: FrameSampler>(
     let mut found = Vec::new();
 
     for unit in units {
-        for &selector in &cfg.selectors {
+        // Try selectors the unit actually advertises before sweeping blindly.
+        // On the reference camera the IR MSXU advertises 6 and 9, so this
+        // finds the emitter in two queries instead of sixteen.
+        let mut ordered = unit.advertised_selectors();
+        for &s in &cfg.selectors {
+            if !ordered.contains(&s) {
+                ordered.push(s);
+            }
+        }
+
+        for selector in ordered {
             let Ok(profile) = xu.probe_control(unit.unit_id, selector) else {
                 continue; // control absent; not an error
             };
@@ -2303,7 +2433,12 @@ fn cmd_descriptors(path: PathBuf) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn cmd_emitter(device: PathBuf, descriptors: PathBuf, assume_yes: bool) -> ExitCode {
+fn cmd_emitter(
+    device: PathBuf,
+    descriptors: PathBuf,
+    ir_vc_interface: u8,
+    assume_yes: bool,
+) -> ExitCode {
     if !assume_yes {
         println!(
             "This probes vendor extension unit controls by writing to them.\n\
@@ -2329,7 +2464,35 @@ fn cmd_emitter(device: PathBuf, descriptors: PathBuf, assume_yes: bool) -> ExitC
         }
     };
     let set = parse_descriptors(&blob);
-    println!("found {} extension unit(s)", set.extension_units.len());
+
+    // CRITICAL: a multi-sensor camera declares one set of extension units per
+    // VideoControl interface. Probing the colour sensor's units would poke the
+    // wrong device. Keep only the IR sensor's VideoControl interface.
+    const MSXU_PREFIX: &str = "0f3f95dc-2632-4c4e";
+    let mut units: Vec<_> = set
+        .extension_units
+        .iter()
+        .filter(|xu| xu.interface == ir_vc_interface)
+        .cloned()
+        .collect();
+
+    // MSXU first: standardised semantics, so tier 1 probes it silently
+    // (spec §4.10.1). Vendor units are the consented tier-2 fallback.
+    units.sort_by_key(|xu| !format_guid(&xu.guid).starts_with(MSXU_PREFIX));
+
+    println!(
+        "probing {} extension unit(s) on VideoControl interface {}:",
+        units.len(),
+        ir_vc_interface
+    );
+    for xu in &units {
+        println!(
+            "  unit {:<3} {}  advertised selectors {:?}",
+            xu.unit_id,
+            format_guid(&xu.guid),
+            xu.advertised_selectors()
+        );
+    }
 
     let transport = match V4l2Device::open(&device) {
         Ok(d) => d,
@@ -2355,12 +2518,7 @@ fn cmd_emitter(device: PathBuf, descriptors: PathBuf, assume_yes: bool) -> ExitC
     };
 
     let started = Instant::now();
-    let found = discover_emitter(
-        &mut xu,
-        &mut sampler,
-        &set.extension_units,
-        &DiscoverCfg::default(),
-    );
+    let found = discover_emitter(&mut xu, &mut sampler, &units, &DiscoverCfg::default());
     let elapsed = started.elapsed();
 
     println!("\n=== R3: emitter controllability ===");
@@ -2389,7 +2547,11 @@ fn usage() -> ! {
     eprintln!(
         "usage:\n  \
          namtor-spike descriptors --path <file>\n  \
-         namtor-spike emitter --device <node> --descriptors <file> [--yes]"
+         namtor-spike emitter --device <node> --descriptors <file> \
+         [--ir-vc-interface N] [--yes]\n\n\
+         --ir-vc-interface defaults to 2 (the reference camera's IR\n\
+         VideoControl interface). Find it with `namtor-spike descriptors`:\n\
+         it is the interface whose extension units accompany the L8 format."
     );
     std::process::exit(2);
 }
@@ -2403,6 +2565,7 @@ fn main() -> ExitCode {
     let mut path: Option<PathBuf> = None;
     let mut device: Option<PathBuf> = None;
     let mut descriptors: Option<PathBuf> = None;
+    let mut ir_vc_interface: u8 = 2;
     let mut assume_yes = false;
 
     let mut i = 1;
@@ -2411,6 +2574,14 @@ fn main() -> ExitCode {
             "--path" => { i += 1; path = Some(PathBuf::from(args.get(i).unwrap_or_else(|| usage()))); }
             "--device" => { i += 1; device = Some(PathBuf::from(args.get(i).unwrap_or_else(|| usage()))); }
             "--descriptors" => { i += 1; descriptors = Some(PathBuf::from(args.get(i).unwrap_or_else(|| usage()))); }
+            "--ir-vc-interface" => {
+                i += 1;
+                ir_vc_interface = args
+                    .get(i)
+                    .unwrap_or_else(|| usage())
+                    .parse()
+                    .unwrap_or_else(|_| usage());
+            }
             "--yes" => assume_yes = true,
             _ => usage(),
         }
@@ -2422,6 +2593,7 @@ fn main() -> ExitCode {
         "emitter" => cmd_emitter(
             device.unwrap_or_else(|| usage()),
             descriptors.unwrap_or_else(|| usage()),
+            ir_vc_interface,
             assume_yes,
         ),
         _ => usage(),
@@ -2438,7 +2610,9 @@ cargo run -p namtor-uvc --bin namtor-spike -- \
     descriptors --path fixtures/descriptors/3277-0018.bin
 ```
 
-Expected: two extension units listed (`28f03370-…` with `bmControls=[bf]`, and `0f3f95dc-…`), and two formats, with the L8 one annotated `<- IR (L8)`.
+Expected: **four** extension units — `if0 unit 3` (`bf`), `if0 unit 4` (`0000`), `if2 unit 3` (`00`), `if2 unit 4` (`2001`) — and two formats, with the L8 one on `if3` annotated `<- IR (L8)`.
+
+The IR VideoControl interface is `if2`: its extension units accompany the L8 streaming interface (`if3`). Pass `--ir-vc-interface 2` to the `emitter` subcommand, which is also its default.
 
 - [ ] **Step 4: Run the emitter discovery against the real camera**
 
@@ -2932,36 +3106,11 @@ gate G4.
 <One line per spec section needing revision, or "none".>
 ```
 
-- [ ] **Step 2: Write the quirks database README**
+- [ ] **Step 2: Verify the quirks database README**
 
-Create `quirks/README.md`:
+`quirks/README.md` **already exists** — it was written during project scaffolding and documents the schema, the `emitter.method` values, and the interface-numbers-not-device-nodes rule. Read it before writing the entry in Step 3, then confirm the entry you produce matches the documented schema.
 
-```markdown
-# Nam-tor device quirks database
-
-Licensed **Apache-2.0** so any project can consume it. IR camera detection is
-a Linux-wide problem, and this database is the piece most likely to outlive
-Nam-tor itself.
-
-This is our substitute for Microsoft's per-device driver metadata store. It
-only works if contributing is easy, so `namtor-probe` generates a candidate
-entry and prints the exact command to submit it.
-
-## Contributing
-
-```bash
-namtor-probe --contribute
-```
-
-Review the generated entry, then follow the printed `gh pr create` command.
-
-Entries record only hardware facts: USB identifiers, interface numbers, format
-GUIDs, and extension unit control parameters. **No personal data, no images.**
-
-## Schema
-
-See `devices/3277-0018.toml` for a documented example.
-```
+No changes needed unless your device exercises a case the README does not describe, in which case extend the README too.
 
 - [ ] **Step 3: Write quirks entry #1**
 
@@ -2994,12 +3143,25 @@ metadata_node  = true
 #   always_on        energised by streaming     -> no strobe differential
 #   firmware_strobed device strobes itself      -> pair from metadata, no control
 #   unknown          nothing found              -> R3-FAIL for this device
-method      = "vendor_xu"
-guid        = "28f03370-6311-4a2e-ba2c-6890eb334016"
-unit        = 0              # <- from spike output
-selector    = 0x00           # <- from spike output
-payload_on  = ""             # <- from spike output, hex
-payload_off = ""             # <- from spike output, hex
+#
+# EXPECTED on this device: the IR sensor's MSXU (unit 4 on VideoControl
+# interface 2) advertises bmControls 20 01, i.e. selectors 6 and 9. The IR
+# sensor's vendor XU advertises nothing. The colour sensor's vendor XU is the
+# one advertising bf — do not confuse them.
+method        = "msxu"
+guid          = "0f3f95dc-2632-4c4e-92c9-a04782f43bc8"
+vc_interface  = 2            # IR sensor's VideoControl interface
+unit          = 4
+selector      = 0            # <- from spike output; try 6 and 9 first
+payload_on    = ""           # <- from spike output, hex
+payload_off   = ""           # <- from spike output, hex
+
+# Fallback path if MSXU proves inert. Requires tier-2 consent (spec §4.10.1).
+[emitter.fallback]
+method       = "vendor_xu"
+guid         = "28f03370-6311-4a2e-ba2c-6890eb334016"
+vc_interface = 2
+unit         = 3
 
 [emitter.idle]
 # From scripts/spike-emitter-idle.sh. Establishes what the sensor does with no

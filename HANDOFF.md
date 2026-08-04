@@ -8,26 +8,45 @@
 
 Nam-tor is an infrared face authentication system for Linux — a privilege-separated daemon, a PAM module, and native GNOME and KDE integration. It replaces Howdy, targeting Windows Hello parity on speed and accuracy.
 
-**Current state: design and planning complete, zero implementation.** The repository contains three documents and nothing else. No code has been written.
+**Current state: design, planning, and scaffolding complete. Zero implementation.** No source code has been written; that is deliberate and is your job.
 
 ```
-docs/superpowers/specs/2026-08-04-nam-tor-design.md          the spec — read first
-docs/superpowers/plans/2026-08-04-nam-tor-roadmap.md         11 milestones, deps, gates
-docs/superpowers/plans/2026-08-04-nam-tor-m0-eval-harness.md 16 TDD tasks, ready
-docs/superpowers/plans/2026-08-04-nam-tor-m1-hardware-spike.md 13 TDD tasks, ready
+README.md                  project front door
+COPYING.md                 the GPL-3.0 / Apache-2.0 split and why
+CONTRIBUTING.md            workflow, non-negotiables, rejected "improvements"
+HANDOFF.md                 this file
+rust-toolchain.toml        pinned stable + rustfmt + clippy
+rustfmt.toml .editorconfig formatting
+scripts/check-env.sh       pre-flight check — RUN THIS FIRST
+fixtures/descriptors/      pre-captured, validated USB descriptor blob
+docs/architecture.md       navigational map into the spec
+docs/threat-model.md       what is defended, and explicitly what is not
+ml/DATASETS.md             dataset licensing — read before touching training data
+docs/superpowers/specs/2026-08-04-nam-tor-design.md            the spec — read first
+docs/superpowers/plans/2026-08-04-nam-tor-roadmap.md           11 milestones, deps, gates
+docs/superpowers/plans/2026-08-04-nam-tor-m0-eval-harness.md   16 TDD tasks, ready
+docs/superpowers/plans/2026-08-04-nam-tor-m1-hardware-spike.md 14 TDD tasks, ready
 ```
 
-Git history is two commits, both documentation. Branch `main`.
+Branch `main`. All commits are documentation and scaffolding.
 
 ---
 
 ## Start here
 
-**Execute M1 first, not M0**, despite the numbering — *if* the user is at the reference machine. M1 answers three questions that can invalidate large parts of the design, and it needs physical hardware. M0 is pure software and can be done any time.
+```bash
+./scripts/check-env.sh
+```
 
-If the user is not at the reference machine, do M0.
+It reports what your machine is missing and which milestone each gap blocks. On the reference machine it exits 0 with no blocking items.
+
+**Then execute M1 first, not M0**, despite the numbering — *if* you are at the reference machine. M1 answers three questions that can invalidate large parts of the design, and it needs physical hardware. M0 is pure software and can be done any time.
+
+If you are not at the reference machine, do M0.
 
 Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` on the milestone plan files. They are bite-sized TDD: write the failing test, run it, implement, run it, commit.
+
+**Do not create files the plans instruct creating** — `Cargo.toml`, `.gitignore`, `scripts/check-spdx.sh`, `.github/workflows/ci.yml`, and the `quirks/` files are all M0 Task 1 or M1 Task 14 deliverables. Everything already present was deliberately kept out of the plans' path.
 
 ---
 
@@ -37,7 +56,7 @@ Ranked by consequence. All answered by M1, in days.
 
 | Risk | Question | If it fails |
 |---|---|---|
-| **R3** | Can the IR emitter be controlled via UVC extension units at all? | **Project-defining.** No strobing → no differential liveness → roughly Howdy's position. M1's plan ends with a hard stop and three named fallbacks. Do not plan M2 against a falsified premise. |
+| **R3** | Can the IR emitter be controlled via UVC extension units at all? | **Project-defining.** No strobing → no differential liveness → roughly Howdy's position. M1's plan ends with a hard stop and three named fallbacks. Do not plan M2 against a falsified premise. **Odds improved:** the IR MSXU advertises selectors 6 and 9, so there is a declared, standardised control to try first. |
 | **R1** | Will UVC allow simultaneous IR + RGB streams? | Dual-camera fusion falls back to alternating bursts. Adds ~100 ms. Fusion is not lost. |
 | **R2** | Does firmware auto-exposure hunt against the strobe? | Strobe differential weakens; the learned PAD model carries more of gate G4. Three mitigations in spec §4.5. **Preliminary evidence is favourable** — see below. |
 
@@ -75,6 +94,10 @@ Do not re-probe. These were read off the reference machine and are recorded in s
 
 **TPM:** 2.0 present and usable (`/dev/tpmrm0`, tss2 stack). **Secure Boot disabled (setup mode)** — this is why the design seals templates to the TPM with *no* PCR policy by default.
 
+**Toolchain, verified 2026-08-04:** rustc/cargo 1.96.1, Python 3.14.6, v4l-utils 1.32.0, git 2.55.0, `gh` present. Missing but not yet needed: `tpm2-tools` (M4), `jq`, `onnxruntime` system library (M3 — the `ort` crate can fetch its own; Arch has `onnxruntime-cpu`).
+
+**Group membership caveat.** The user is in neither `video` nor `tss`; desktop camera access works via a logind **seat ACL**. That ACL does not extend to system daemons, so the `namtor` system user created in M3 needs **real group membership**. This will not surface until the daemon runs as its own user — expect it, and don't debug it as a permissions mystery.
+
 **Camera:** Sonix `3277:0018`, USB `3-8`, UVC 1.00.
 
 | Interface | Node | Format | Role |
@@ -84,10 +107,20 @@ Do not re-probe. These were read off the reference machine and are recorded in s
 | if3 | `/dev/video2` | L8 `{00000032-0002-…}`, 640×360@30 | **IR** |
 | if3 meta | `/dev/video3` | `UVCH` | Metadata |
 
-Extension units, both on the IR VideoControl interface (if2):
+**Extension units — read this carefully, it is easy to get wrong.** The device has **two VideoControl interfaces, one per sensor**, and each declares both extension units. Parsed from the committed descriptor blob:
 
-- `28f03370-6311-4a2e-ba2c-6890eb334016` — Sonix vendor XU, `bmControls 0xbf`. Expected emitter path.
-- `0f3f95dc-2632-4c4e-92c9-a04782f43bc8` — Microsoft camera XU, declares `bmControls 0x00 0x00`. Probe anyway; vendors under-declare constantly.
+```
+if0 unit=3  28f03370-…  bmControls=bf      colour sensor, Sonix vendor XU
+if0 unit=4  0f3f95dc-…  bmControls=0000    colour sensor, MSXU — nothing
+if2 unit=3  28f03370-…  bmControls=00      IR sensor, Sonix vendor XU — nothing
+if2 unit=4  0f3f95dc-…  bmControls=2001    IR sensor, MSXU — SELECTORS 6 AND 9
+```
+
+A truncated `lsusb` reading attributes the colour sensor's `bf` to the IR sensor and concludes the vendor XU is the emitter path. **It is not.** An earlier draft of this project made exactly that error.
+
+Extension unit `bmControls` bit *n* maps to selector *n+1*, so `20 01` means selectors 6 and 9 on unit 4 of interface 2. **Those are the primary emitter candidates**, and because MSXU is standardised, they are probed silently under tier 1 — meaning gate G1.4 (zero user interaction) is achievable on this very machine.
+
+Always filter extension units by `interface` before probing, or you will poke the wrong sensor.
 
 **No depth stream.** The device advertises exactly two format GUIDs across all interfaces and has no second IR sensor. Liveness must work without depth. This is the same sensor class Windows Hello runs on this machine.
 
