@@ -2360,42 +2360,75 @@ use namtor_uvc::device::V4l2Device;
 use namtor_uvc::discover::{discover_emitter, DiscoverCfg, FrameSampler};
 use namtor_uvc::probe::{SafeXu, XuError};
 use namtor_capture::frame::{EmitterState, Frame, PixFmt};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
-/// Reads frames with the V4L2 `read()` API.
+/// Samples frames by shelling out to `v4l2-ctl --stream-mmap`.
 ///
-/// Sufficient for the spike. M2's capture layer uses mmap streaming.
-struct ReadSampler {
-    file: std::fs::File,
+/// Deliberately not the V4L2 `read()` API: most UVC devices support only
+/// mmap streaming, and `read()` would fail on them — which would block the
+/// single most important measurement in the project. Subprocess overhead of
+/// a few hundred milliseconds per sample is irrelevant for a spike run a few
+/// dozen times. M2's capture layer does mmap streaming in-process.
+struct V4l2CtlSampler {
+    device: PathBuf,
     width: u32,
     height: u32,
     started: Instant,
+    scratch: PathBuf,
 }
 
-impl FrameSampler for ReadSampler {
+impl FrameSampler for V4l2CtlSampler {
     fn sample(&mut self, n: usize) -> Result<Vec<Frame>, XuError> {
+        let fmt = format!(
+            "width={},height={},pixelformat=GREY",
+            self.width, self.height
+        );
+        let out = Command::new("v4l2-ctl")
+            .arg("-d")
+            .arg(&self.device)
+            .arg(format!("--set-fmt-video={fmt}"))
+            .arg("--stream-mmap")
+            .arg(format!("--stream-count={n}"))
+            .arg(format!("--stream-to={}", self.scratch.display()))
+            .output()
+            .map_err(|e| XuError::Ioctl(format!("spawn v4l2-ctl: {e}")))?;
+
+        if !out.status.success() {
+            return Err(XuError::Ioctl(format!(
+                "v4l2-ctl failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+
+        let raw = std::fs::read(&self.scratch)
+            .map_err(|e| XuError::Ioctl(format!("read capture: {e}")))?;
         let len = (self.width * self.height) as usize;
-        let mut out = Vec::with_capacity(n);
-        for _ in 0..n {
-            let mut buf = vec![0u8; len];
-            self.file
-                .read_exact(&mut buf)
-                .map_err(|e| XuError::Ioctl(format!("read frame: {e}")))?;
-            out.push(Frame {
-                data: buf,
+
+        if raw.len() < len {
+            return Err(XuError::Ioctl(format!(
+                "captured {} bytes, need at least {len} for one frame",
+                raw.len()
+            )));
+        }
+
+        Ok(raw
+            .chunks_exact(len)
+            .take(n)
+            .enumerate()
+            .map(|(i, chunk)| Frame {
+                data: chunk.to_vec(),
                 format: PixFmt::Grey8,
                 width: self.width,
                 height: self.height,
-                ts_mono: self.started.elapsed(),
+                ts_mono: self.started.elapsed() + Duration::from_millis(33 * i as u64),
                 sof: None,
                 emitter: EmitterState::Unknown,
                 quality: None,
-            });
-        }
-        Ok(out)
+            })
+            .collect())
     }
 }
 
@@ -2503,18 +2536,17 @@ fn cmd_emitter(
     };
     let mut xu = SafeXu::new(transport);
 
-    let file = match std::fs::File::open(&device) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("error: open {} for reading: {e}", device.display());
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut sampler = ReadSampler {
-        file,
+    if Command::new("v4l2-ctl").arg("--version").output().is_err() {
+        eprintln!("error: v4l2-ctl not found (pkg: v4l-utils); frame sampling needs it");
+        return ExitCode::FAILURE;
+    }
+
+    let mut sampler = V4l2CtlSampler {
+        device: device.clone(),
         width: 640,
         height: 360,
         started: Instant::now(),
+        scratch: std::env::temp_dir().join("namtor-spike-frames.raw"),
     };
 
     let started = Instant::now();
@@ -2628,7 +2660,12 @@ Expected: either a list of candidate controls with luminance deltas (**R3-PASS**
 
 **Record the full output verbatim.** This is the project's most consequential measurement.
 
-If the run fails with a `read frame` error, the device likely does not support the `read()` API and requires mmap streaming. Note it as a finding and defer to M2 rather than expanding the spike.
+Troubleshooting:
+
+- **`v4l2-ctl failed: ... Device or resource busy`** — something else holds the camera. Close any application using it, and check with `fuser -v /dev/video2`.
+- **`UVCIOC_CTRL_QUERY ...: EPERM`** — unmapped extension unit access needs elevated privilege on this kernel. Re-run under `sudo` to get the measurement, and **record it as a finding**: it changes the daemon's capability requirements in M3.
+- **`captured N bytes, need at least ...`** — the negotiated format differs from 640×360 GREY. Check `v4l2-ctl -d /dev/video2 --list-formats-ext` and adjust the sampler's geometry.
+- **Every candidate reports `delta` near zero** — the emitter may be strobing too briefly to register, or the control latches only while streaming. Note it; this is the case where §4.10.5's `firmware_strobed` or a stream-scoped control is in play.
 
 - [ ] **Step 5: Commit**
 
@@ -2971,9 +3008,14 @@ if alt > 15.0:
     print("The device strobes the emitter itself. Pair frames from metadata;")
     print("no emitter control may be needed at all (spec §4.10.5).")
 elif overall > 30.0:
-    print("always_on: the emitter appears energised by streaming alone.")
-    print("Strobe differential is impossible unless an off control is found.")
-    print("Record method = \"always_on\" and evaluate G4 separately.")
+    print("always_on (PROVISIONAL): the image is bright with no control applied.")
+    print("Strobe differential would be impossible unless an off control exists.")
+    print("")
+    print("CONFIRM BEFORE RECORDING THIS. Strong ambient infrared -- direct")
+    print("sunlight, halogen or incandescent lamps, a space heater -- produces")
+    print("the same signature. Re-run in a darkened room with no window and no")
+    print("incandescent source. If the image goes dark, the verdict is")
+    print("idle_dark and the brightness was ambient, not the emitter.")
 else:
     print("idle_dark: the emitter is not energised by streaming.")
     print("Emitter control is REQUIRED; the sensor is unusable without it.")

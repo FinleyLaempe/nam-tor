@@ -204,7 +204,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ml/eval[dev]
+      - run: pip install -e 'ml/eval[dev]'   # quoted: brackets are glob chars
       - run: pytest ml/eval/tests -v
 ```
 
@@ -420,6 +420,12 @@ pub enum EmitterState {
 }
 
 /// Per-frame quality signals used for enrollment filtering and fusion weighting.
+///
+/// Defined here so the [`Frame`] shape is stable, but **not populated during
+/// M0** — `Frame::quality` is `None` throughout this milestone. M4 computes it
+/// during enrollment (spec §6.6 Tier 1), and M6 uses it to weight multi-frame
+/// fusion. Do not add computation for it here; there is nothing to consume it
+/// yet, and the metric definitions depend on M1's measurements.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FrameQuality {
     /// Variance of the Laplacian. Higher is sharper.
@@ -1587,16 +1593,30 @@ mod tests {
     }
 
     #[test]
-    fn malformed_lines_are_reported_with_line_numbers() {
+    fn malformed_lines_are_reported_with_one_based_line_numbers() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad.jsonl");
-        std::fs::write(&path, "{\"probe_id\":\"p\"}\nnot json\n").unwrap();
+
+        // A VALID record first, so the reported line unambiguously identifies
+        // the garbage on line 2 rather than an incomplete record on line 1.
+        let good = serde_json::to_string(&rec(true, 0.5, None)).unwrap();
+        std::fs::write(&path, format!("{good}\nnot json\n")).unwrap();
 
         let err = read_jsonl(&path).unwrap_err();
         assert!(
-            err.to_string().contains("line 1"),
-            "error must identify the failing line, got: {err}"
+            err.to_string().contains("line 2"),
+            "error must identify the failing line as 2, got: {err}"
         );
+    }
+
+    #[test]
+    fn records_missing_required_fields_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("partial.jsonl");
+        std::fs::write(&path, "{\"probe_id\":\"p\"}\n").unwrap();
+
+        let err = read_jsonl(&path).unwrap_err();
+        assert!(err.to_string().contains("line 1"), "got: {err}");
     }
 }
 ```
@@ -1677,14 +1697,21 @@ pub fn write_jsonl(path: &Path, records: &[ScoreRecord]) -> Result<(), ScoreErro
     Ok(())
 }
 
-/// Reads a JSON Lines score file, reporting the line number on failure.
+/// Reads a JSON Lines score file, reporting the failing line on error.
+///
+/// Line numbers are **1-based**, matching what an editor shows. Blank lines
+/// are skipped but still consume a line number, so the reported position
+/// always refers to the real file.
 pub fn read_jsonl(path: &Path) -> Result<Vec<ScoreRecord>, ScoreError> {
     let raw = fs::read_to_string(path)?;
     raw.lines()
         .enumerate()
         .filter(|(_, l)| !l.trim().is_empty())
         .map(|(i, l)| {
-            serde_json::from_str(l).map_err(|source| ScoreError::Malformed { line: i, source })
+            serde_json::from_str(l).map_err(|source| ScoreError::Malformed {
+                line: i + 1,
+                source,
+            })
         })
         .collect()
 }
@@ -1693,7 +1720,7 @@ pub fn read_jsonl(path: &Path) -> Result<Vec<ScoreRecord>, ScoreError> {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p namtor-eval score::`
-Expected: PASS — 3 tests.
+Expected: PASS — 4 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1925,6 +1952,7 @@ Create `ml/eval/tests/test_metrics.py`:
 
 ```python
 # SPDX-License-Identifier: GPL-3.0-only
+import numpy as np
 import pytest
 
 from namtor_eval.metrics import far_frr_sweep, point_at_far, wilson_interval
@@ -2006,6 +2034,42 @@ def test_wilson_interval_of_zero_events_is_bounded_below_by_zero():
     lo, hi = wilson_interval(0, 1000)
     assert lo == pytest.approx(0.0)
     assert 0.0 < hi < 0.01
+
+
+def test_sweep_is_fast_enough_for_the_sample_size_gate_g3_requires():
+    # Gate G3.2 requires >=100k impostor comparisons. A per-threshold boolean
+    # mask would be O(T*N) and take hours here; the sorted binary search is
+    # O((N+T) log N). This test fails loudly if the implementation regresses.
+    import time
+
+    rng = np.random.default_rng(0)
+    records = [rec(True, float(s)) for s in rng.normal(0.8, 0.05, 5_000)] + [
+        rec(False, float(s)) for s in rng.normal(0.2, 0.05, 100_000)
+    ]
+
+    start = time.perf_counter()
+    points = far_frr_sweep(records)
+    elapsed = time.perf_counter() - start
+
+    assert len(points) > 1000
+    assert elapsed < 5.0, f"sweep took {elapsed:.1f}s; implementation is O(T*N)"
+
+
+def test_sweep_counts_match_a_naive_reference_implementation():
+    # Guards the binary-search boundary conditions, which are easy to get
+    # off by one against the >= / < semantics.
+    rng = np.random.default_rng(1)
+    scores = np.round(rng.uniform(0, 1, 200), 3)
+    records = [rec(i % 2 == 0, float(s)) for i, s in enumerate(scores)]
+
+    genuine = [r.score for r in records if r.genuine]
+    impostor = [r.score for r in records if not r.genuine]
+
+    for p in far_frr_sweep(records):
+        naive_far = sum(1 for s in impostor if s >= p.threshold) / len(impostor)
+        naive_frr = sum(1 for s in genuine if s < p.threshold) / len(genuine)
+        assert p.far == pytest.approx(naive_far)
+        assert p.frr == pytest.approx(naive_frr)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -2072,31 +2136,44 @@ def far_frr_sweep(
     When ``thresholds`` is omitted, every observed score is used as a
     candidate threshold, which is sufficient to recover the exact DET curve.
     """
-    genuine = np.array([r.score for r in records if r.genuine], dtype=float)
-    impostor = np.array(
-        [r.score for r in records if not r.genuine and not r.is_attack], dtype=float
+    genuine = np.sort(np.array([r.score for r in records if r.genuine], dtype=float))
+    impostor = np.sort(
+        np.array(
+            [r.score for r in records if not r.genuine and not r.is_attack],
+            dtype=float,
+        )
     )
 
     if thresholds is None:
-        observed = np.concatenate([genuine, impostor]) if len(records) else np.array([])
-        thresholds = sorted(set(observed.tolist()))
+        both = np.concatenate([genuine, impostor]) if len(records) else np.array([])
+        candidates = np.unique(both)
+    else:
+        candidates = np.unique(np.asarray(list(thresholds), dtype=float))
+
+    n_g = len(genuine)
+    n_i = len(impostor)
+
+    # Counting per threshold with a boolean mask is O(T*N), which at the
+    # >=100k impostor comparisons gate G3.2 requires would be ~1e10 operations
+    # and take hours. Both arrays are sorted, so binary search gives the same
+    # counts in O((N + T) log N).
+    #
+    #   false accepts  = impostor >= t  = n_i - searchsorted(impostor, t, 'left')
+    #   false rejects  = genuine  < t   =       searchsorted(genuine,  t, 'left')
+    false_accepts = n_i - np.searchsorted(impostor, candidates, side="left")
+    false_rejects = np.searchsorted(genuine, candidates, side="left")
 
     points: list[OperatingPoint] = []
-    for t in thresholds:
-        n_g = len(genuine)
-        n_i = len(impostor)
-        false_accepts = int((impostor >= t).sum())
-        false_rejects = int((genuine < t).sum())
-
+    for t, fa, fr in zip(candidates, false_accepts, false_rejects):
         points.append(
             OperatingPoint(
                 threshold=float(t),
-                far=false_accepts / n_i if n_i else 0.0,
-                frr=false_rejects / n_g if n_g else 0.0,
+                far=int(fa) / n_i if n_i else 0.0,
+                frr=int(fr) / n_g if n_g else 0.0,
                 n_genuine=n_g,
                 n_impostor=n_i,
-                far_ci=wilson_interval(false_accepts, n_i),
-                frr_ci=wilson_interval(false_rejects, n_g),
+                far_ci=wilson_interval(int(fa), n_i),
+                frr_ci=wilson_interval(int(fr), n_g),
             )
         )
     return points
@@ -2115,7 +2192,7 @@ def point_at_far(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd ml/eval && python -m pytest tests/test_metrics.py -v`
-Expected: PASS — 8 tests.
+Expected: PASS — 10 tests. The performance test sweeps 105k records and should finish well under a second.
 
 - [ ] **Step 5: Commit**
 
@@ -2541,6 +2618,17 @@ def test_confidence_intervals_are_shown():
     assert "95% CI" in md
 
 
+def test_operating_points_an_order_of_magnitude_apart_render_differently():
+    # Fixed 3-decimal percent renders 1e-5 and 1e-6 identically as "0.001%",
+    # which would make Balanced and Paranoid indistinguishable in the report
+    # whose purpose is to compare them.
+    from namtor_eval.report import _pct
+
+    assert _pct(1e-5) != _pct(1e-6)
+    assert _pct(0.0) == "0.000%"
+    assert _pct(0.021) == "2.100%"
+
+
 def test_csv_export_has_a_header_and_one_row_per_point(tmp_path):
     p = tmp_path / "det.csv"
     write_csv(p, [POINT, POINT])
@@ -2589,6 +2677,17 @@ GATE_G4_BPCER = 0.05
 
 
 def _pct(x: float) -> str:
+    """Formats a rate as a percentage with enough precision to be useful.
+
+    Fixed 3-decimal percent renders both 1e-5 and 1e-6 as "0.001%", which
+    would make the Balanced and Paranoid operating points indistinguishable
+    in the report that exists to compare them. Small rates therefore get
+    additional digits.
+    """
+    if x <= 0.0:
+        return "0.000%"
+    if x < 1e-3:
+        return f"{x * 100:.6f}%"
     return f"{x * 100:.3f}%"
 
 
@@ -2693,7 +2792,7 @@ def write_csv(path: str | Path, points: list[OperatingPoint]) -> None:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd ml/eval && python -m pytest tests/test_report.py -v`
-Expected: PASS — 6 tests.
+Expected: PASS — 7 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -2903,6 +3002,7 @@ CI-testable as it grows.
 """
 
 import json
+import pathlib
 import shutil
 import subprocess
 
@@ -2914,16 +3014,30 @@ from namtor_eval.pad import pad_rates
 from namtor_eval.records import load_jsonl
 from namtor_eval.report import render_report
 
-NAMTOR_SYNTH = shutil.which("namtor-synth") or "target/debug/namtor-synth"
+# The test runs from ml/eval, so a bare "target/debug/..." would resolve to
+# ml/eval/target/ and never be found. Walk up to the workspace root instead.
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+
+
+def _synth_binary() -> str | None:
+    on_path = shutil.which("namtor-synth")
+    if on_path:
+        return on_path
+    for profile in ("debug", "release"):
+        candidate = REPO_ROOT / "target" / profile / "namtor-synth"
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 
 @pytest.mark.skipif(
-    not shutil.which("cargo"), reason="cargo not available"
+    _synth_binary() is None,
+    reason="namtor-synth not built; run `cargo build --bin namtor-synth`",
 )
 def test_synth_binary_produces_a_replayable_session(tmp_path):
     out = tmp_path / "session"
     subprocess.run(
-        [NAMTOR_SYNTH, "--out", str(out), "--pairs", "3",
+        [_synth_binary(), "--out", str(out), "--pairs", "3",
          "--seed", "42", "--geometry", "face"],
         check=True,
     )
@@ -3086,14 +3200,15 @@ Replace the `python` job in `.github/workflows/ci.yml`:
           python-version: "3.11"
       - name: Build the synth binary the smoke test drives
         run: cargo build --bin namtor-synth
-      - run: pip install -e ml/eval[dev]
+      - run: pip install -e 'ml/eval[dev]'   # quoted: brackets are glob chars
       - run: python -m pytest ml/eval/tests -v
 ```
 
 - [ ] **Step 6: Run the full suite**
 
 Run: `cargo test --all && cd ml/eval && python -m pytest tests -v`
-Expected: PASS — all Rust tests (25) and all Python tests (26).
+
+Expected: everything passes. Approximate totals if you have followed every task — **27 Rust** (23 in `namtor-capture`, 4 in `namtor-eval`) and **37 Python**. Treat these as a sanity check, not a gate: a mismatch means you added or merged tests, not that something is broken. The gate is that nothing fails.
 
 - [ ] **Step 7: Commit**
 
