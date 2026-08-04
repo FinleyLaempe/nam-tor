@@ -432,6 +432,129 @@ The IR emitter is invisible, but the **RGB camera LED illuminates whenever fusio
 is active**. This is documented prominently in the README, not a footnote. Users
 must never be surprised by their camera light.
 
+### 4.10 Emitter seamlessness
+
+Windows Hello's emitter feels seamless because of five properties. Zero-config
+detection (§4.1) delivers only the first. The remaining four are specified here
+because each, if missed, produces a visible failure that no amount of accuracy
+compensates for.
+
+| Hello property | Mechanism | Nam-tor equivalent |
+|---|---|---|
+| No user action, ever | Driver plus per-device INF store | Quirks DB, plus **silent MSXU probing** (§4.10.1) |
+| Emitter driven per frame by the pipeline | MSXU, firmware-synchronised | Userspace strobe with UVCH pairing (§4.4) |
+| Never stuck on | Driver owns the lifecycle | **Lifecycle guarantees** (§4.10.2) |
+| Works after suspend | Driver reinitialises | **Resume re-application** (§4.10.3) |
+| Works on hotplug | Plug and play | **udev re-detection** (§4.10.4) |
+
+#### 4.10.1 Tiered probing — removing the consent prompt where it is not earned
+
+Spec §4.3 requires explicit user confirmation before probing, because blind
+writes to vendor extension units can hang a camera. That prompt is correct for
+vendor XUs and *wrong* for MSXU: Microsoft's extension unit has published
+control semantics, so writing a known control with a known payload is not a
+blind write.
+
+Probing is therefore tiered:
+
+| Tier | Scope | User interaction |
+|---|---|---|
+| **1 — MSXU** | Standardised controls on `{0f3f95dc-…}` | **None.** Runs silently at first use. |
+| **2 — Vendor XU** | Selector and payload search on vendor GUIDs | Explicit confirmation with the risk stated |
+| **3 — Manual** | User supplies parameters from a report | Explicit, documented |
+
+Any camera implementing MSXU therefore reaches working face unlock with **zero
+interaction**, matching Hello. The consent prompt survives only where the risk
+that justifies it is real.
+
+Tier 1 still obeys every probe safety rule in §4.3 — read before write,
+round-trip and restore, honour `GET_LEN` and `GET_INFO`. Silent does not mean
+unsafe; it means the operation is well-defined rather than exploratory.
+
+#### 4.10.2 Emitter lifecycle guarantees
+
+An emitter left on after a crash is a defect Hello does not have, and on this
+hardware it is invisible — the user cannot see that it happened. Four
+mechanisms, in depth order:
+
+1. **RAII restore.** Every write returns a guard that restores the prior value
+   on drop, including during unwind (§4.3 rule 2).
+2. **Watchdog.** The daemon enforces a maximum continuous on-time, default
+   **2 seconds**. Expiry forces the emitter off regardless of pipeline state.
+   This is a safety property, not only a cleanliness one: 850 nm emission at
+   laptop distance should be duty-cycled, not continuous.
+3. **Unit teardown.** The systemd unit carries `ExecStopPost=` invoking an
+   emitter-off command, so stop and crash paths both clear it.
+4. **Start-up reconciliation.** On start, the daemon forces the emitter off
+   **before** anything else, recovering from a predecessor that died without
+   cleanup.
+
+Mechanisms 2 and 4 exist specifically because 1 and 3 cannot cover `SIGKILL`
+or power loss mid-frame.
+
+#### 4.10.3 Suspend and resume
+
+USB devices commonly reset across S3, discarding extension unit state. Without
+handling, **the first unlock after a lid-open fails** — which is the single
+most common Windows Hello interaction, and therefore the most damaging
+seamlessness defect available to us.
+
+The daemon subscribes to logind's `PrepareForSleep` signal. On resume it
+re-runs device reconciliation and re-applies emitter configuration before
+accepting authentication requests. An authentication arriving before
+reconciliation completes waits, rather than failing.
+
+#### 4.10.4 Hotplug and multiple cameras
+
+A udev rule on UVC device add and remove triggers daemon re-detection, so an
+external IR camera works without a restart or a re-enrollment.
+
+When several IR-capable cameras are present, selection order is: the device
+named in configuration, then the enrolled device, then the internal device
+(non-removable per sysfs), then the first classified IR device. The selected
+device is always reported in `namtor-cli status`; selection is never silently
+ambiguous.
+
+#### 4.10.5 Always-on emitters
+
+Some cameras energise the emitter whenever the IR stream is open, with no
+control to toggle it. On such devices strobe differential is impossible, since
+no emitter-off frame can be captured.
+
+Detection is part of probing, and the result is recorded in the quirks entry as
+`method = "always_on"`. The consequence is stated honestly rather than hidden:
+liveness falls back to the non-differential signals (specular highlight
+detection, reflectance texture, and the geometric consistency check of §6.5),
+gate G4 is evaluated separately for such devices, and the reduced protection is
+surfaced in the UI rather than assumed.
+
+**Measured on the reference camera (2026-08-04):** 60 consecutive IR frames at
+640×360 showed mean luminance 0.0–0.5 of 255, with an even/odd frame difference
+of 0.01. There is no firmware strobing, and the emitter is not energised by
+streaming alone. The reference device is therefore not always-on, and its IR
+sensor produces no usable image without emitter control — which is why R3 is
+the project's defining risk rather than merely an important one.
+
+### 4.11 Upstream path
+
+Windows Hello is seamless because the **driver** handles the emitter, not
+because userspace tries harder. The durable fix for Linux is the same: extend
+`uvcvideo` so IR classification and MSXU emitter control are exposed as
+standard V4L2 controls, removing userspace XU poking entirely.
+
+Nam-tor therefore treats upstream contribution as a project goal, not an
+afterthought:
+
+- `namtor-hwdb` and the quirks database are Apache-2.0 precisely so this work
+  is reusable by the kernel community and by other projects.
+- The device corpus gathered through §4.6 is the evidence base such a patch
+  would require.
+- Where a device-specific quirk proves general, it belongs in `uvcvideo`
+  rather than in our database.
+
+Success here would make parts of this specification obsolete. That is the
+intended outcome.
+
 ---
 
 ## 5. Inference and hardware acceleration
@@ -1144,6 +1267,21 @@ evidence.
   target ≥ 80% of UVC IR cameras with a vendor or MS extension unit.
 - **G1.3** Every failure mode in §8.3 produces a specific, actionable message. No
   unexplained timeouts. *Measured:* fault-injection test coverage of the table.
+- **G1.4** On a device implementing MSXU, emitter configuration completes with
+  **zero user interaction** — no prompt, no wizard, no confirmation (§4.10.1).
+  *Measured:* integration test asserting the tier-1 path issues no prompt and
+  reaches a working emitter.
+- **G1.5** The emitter is off within **200 ms** of an authentication attempt
+  ending, and is off after daemon stop, daemon `SIGKILL`, and system resume
+  (§4.10.2). *Measured:* hardware-in-the-loop luminance check after each of the
+  four teardown paths.
+- **G1.6** The first authentication after resume from S3 succeeds without user
+  intervention (§4.10.3). *Measured:* scripted suspend/resume cycle on reference
+  hardware, repeated 20 times, requiring 20 successes.
+
+G1.6 is called out separately because lid-open is the most common interaction
+in the product, and the failure it guards against is invisible in every test
+that does not actually suspend the machine.
 
 ### G2 — Speed
 
@@ -1216,13 +1354,15 @@ invalidate design sections.
 | ID | Risk | Impact if realised | Resolution |
 |---|---|---|---|
 | **R1** | UVC refuses simultaneous IR + RGB streams (§4.8) | Dual-camera fusion (§6.5) must fall back to alternating bursts, adding latency | M1 hardware spike |
-| **R2** | Firmware AE hunts against the strobe (§4.5) | Strobe differential degrades; learned PAD carries more weight; G4 harder | M1 hardware spike |
+| **R2** | Firmware AE hunts against the strobe (§4.5) | Strobe differential degrades; learned PAD carries more weight; G4 harder | M1 hardware spike. **Preliminary evidence is favourable:** reference-camera AE was observed ramping over ~2.4 s, orders of magnitude slower than a 33 ms strobe period, so it is unlikely to track the strobe. Not conclusive — behaviour may differ once the sensor receives real signal. |
 | **R3** | Neither MSXU nor vendor XU yields emitter control on the reference device | The entire liveness approach requires rework; project premise at risk | M1 hardware spike |
 | **R4** | INT8 degrades embedding quality beyond tolerance (§10.6) | Fall back to FP16; latency budget tightens but G2 likely still met | M0 eval harness |
 | **R5** | Normalisation cohort cannot be sourced without licence ambiguity (§6.6) | Synthetic cohort, or contributed cohort via `namtor-collect`; possible accuracy cost | M3 |
 | **R6** | PAD generalisation from few subjects is inadequate (§10.3) | G4 met on reference hardware only; claim scoped accordingly | M6, ongoing |
 | **R7** | Quirks database fails to attract contributions | G1.2 unverifiable at scale; zero-config claim limited to tested devices | M8, ongoing |
 | **R8** | Kernel changes to `uvcvideo` MSXU handling alter XU access | Detection layer needs maintenance | Ongoing |
+| **R9** | Some devices energise the emitter whenever streaming, with no off control (§4.10.5) | Strobe differential impossible on those devices; G4 evaluated separately and reduced protection surfaced in the UI | M2, per device |
+| **R10** | Extension unit state is lost across S3, and re-application proves unreliable | G1.6 fails; first unlock after lid-open fails, the most damaging seamlessness defect available | M2, via the §4.10.3 resume path |
 
 **R3 is the single greatest threat to the project.** If the emitter cannot be
 controlled, strobing is impossible, and liveness reduces to what a static IR image
@@ -1299,6 +1439,8 @@ Nam-tor/
 | Process model | Four processes, privilege-separated, sandboxed inference worker |
 | Detection | USB descriptor parsing (format GUID), not V4L2 heuristics |
 | Emitter | MSXU first, vendor XU fallback, automatic optical verification |
+| Emitter seamlessness | Tiered probing — MSXU silent, vendor XU consented; watchdog, teardown, and start-up reconciliation; resume re-application; udev hotplug |
+| Long-term | Upstream IR classification and MSXU emitter control into `uvcvideo`, making userspace XU poking unnecessary |
 | Liveness | Strobe differential, analytic gates first, learned PAD second |
 | Differentiator | Dual-camera RGB+IR fusion with cross-sensor geometric consistency |
 | Embedding | AdaFace R50, INT8 on AVX-VNNI, NIR fine-tuned |

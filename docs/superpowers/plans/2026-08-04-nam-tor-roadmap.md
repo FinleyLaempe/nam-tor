@@ -125,9 +125,18 @@ schema and loader, production capture layer built on M1's findings.
 - Classification order: quirks entry → format GUID → heuristic, with the fallback always reported as such
 - `namtor-probe` emitting a candidate quirks entry plus the exact `gh pr create` invocation
 - `IrUvc` and `RgbUvc` capture sources
+- **Tiered probing** (spec §4.10.1): MSXU tier runs silently with no prompt; vendor XU tier keeps the consent gate
+- **Emitter lifecycle** (spec §4.10.2): watchdog with a 2 s maximum on-time, `ExecStopPost=` teardown, start-up reconciliation forcing the emitter off before anything else
+- **Resume handling** (spec §4.10.3): logind `PrepareForSleep` subscription, device reconciliation and emitter re-application on resume, requests queued rather than failed during reconciliation
+- **Hotplug** (spec §4.10.4): udev rule on UVC add/remove, deterministic multi-camera selection order, selected device always reported in `namtor-cli status`
+- **Always-on detection** (spec §4.10.5): record `method = "always_on"` and surface the reduced protection rather than assuming strobe works
 
 **Dependencies:** M1 (emitter method, strobe timings must be known)
-**Gates advanced:** G1.1, G1.2, G1.3
+**Gates advanced:** G1.1, G1.2, G1.3, G1.4, G1.5, G1.6; retires R9, R10
+
+**Note on G1.6:** the suspend/resume gate requires a scripted S3 cycle repeated
+20 times with 20 successes. It cannot be satisfied by any test that does not
+actually suspend the machine, so it is hardware-in-the-loop by construction.
 
 ---
 
@@ -287,6 +296,9 @@ no gate is orphaned.
 | G1.1 zero-config on known device | M2, M7 |
 | G1.2 automatic probe on unknown device | M2 |
 | G1.3 specific message per failure mode | M2, M5, M7 |
+| G1.4 zero interaction on MSXU devices | M2 |
+| G1.5 emitter off after every teardown path | M2 |
+| G1.6 first unlock after resume succeeds | M2 |
 | G2.1–G2.3 latency | M6, measured by M0 harness |
 | G3.1–G3.2 FAR/FRR | M4, M9, measured by M0 harness |
 | G4.1–G4.3 APCER/BPCER | M6, M9, measured by M0 harness |
@@ -310,3 +322,5 @@ no gate is orphaned.
 | R6 PAD generalisation | M9, ongoing |
 | R7 quirks contributions | M8, ongoing |
 | R8 kernel uvcvideo changes | ongoing maintenance |
+| R9 always-on emitters | M2, per device |
+| R10 XU state lost across S3 | M2 |

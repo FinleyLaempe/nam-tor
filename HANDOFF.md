@@ -39,7 +39,25 @@ Ranked by consequence. All answered by M1, in days.
 |---|---|---|
 | **R3** | Can the IR emitter be controlled via UVC extension units at all? | **Project-defining.** No strobing → no differential liveness → roughly Howdy's position. M1's plan ends with a hard stop and three named fallbacks. Do not plan M2 against a falsified premise. |
 | **R1** | Will UVC allow simultaneous IR + RGB streams? | Dual-camera fusion falls back to alternating bursts. Adds ~100 ms. Fusion is not lost. |
-| **R2** | Does firmware auto-exposure hunt against the strobe? | Strobe differential weakens; the learned PAD model carries more of gate G4. Three mitigations in spec §4.5. |
+| **R2** | Does firmware auto-exposure hunt against the strobe? | Strobe differential weakens; the learned PAD model carries more of gate G4. Three mitigations in spec §4.5. **Preliminary evidence is favourable** — see below. |
+
+### Already measured on the reference camera, 2026-08-04
+
+60 IR frames captured with no emitter control applied:
+
+```
+means: 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.4 0.4 ... 0.5 0.5   (of 255)
+even-idx mean=0.38  odd-idx mean=0.40  alternation=0.01
+brightest frame: centre-strip=0.6  edge-strip=0.6
+```
+
+Three conclusions, all recorded in spec §4.10.5:
+
+1. **The IR sensor is black without the emitter.** Not merely degraded — unusable. This is what makes R3 project-defining rather than important.
+2. **No firmware strobing** (alternation 0.01). There is no free hardware-synchronised frame pairing to exploit; userspace must drive the strobe.
+3. **Auto-exposure is slow.** The `0.0 → 0.5` ramp is AE searching for light over ~2.4 s, orders of magnitude slower than a 33 ms strobe period. **R2 looks much smaller than feared.** Not conclusive — behaviour may differ once the sensor receives real signal.
+
+M1 Task 13 scripts this measurement so it is reproducible on other devices. Run it **before** emitter probing: an `always_on` or `firmware_strobed` device changes what probing means.
 
 M1 Task 4 is a falsifier for the spec's central detection claim: it parses the real USB descriptor blob and asserts an L8 format GUID exists. If spec §4.1 is wrong, that test fails in hour one.
 
@@ -87,6 +105,8 @@ Each was reasoned through with the user. If you think one is wrong, say why and 
 | Language | **Rust** core (daemon, PAM, worker), **Python** for ML tooling only, GTK4-Rust for GNOME, QML + thin C++ KCM for KDE. |
 | Process model | Four processes. Inference runs in a `nobody` worker under seccomp + landlock with no filesystem. This is the fix for Howdy's CVE class. |
 | Detection | Parse USB descriptors from sysfs, keying on format GUID. `uvcvideo` discards the GUID; `GREY` means greyscale, not infrared. This is how Hello does it. |
+| Emitter seamlessness | **Tiered probing** (spec §4.10.1): MSXU is standardised, so it is probed **silently with no prompt**; only vendor XU brute-force keeps the consent gate. Plus watchdog, teardown, start-up reconciliation, resume re-application, udev hotplug. |
+| Long-term | Upstream IR classification and MSXU emitter control into `uvcvideo`. Hello is seamless because the *driver* handles the emitter, not because userspace tries harder. Success would make parts of the spec obsolete — that is intended. |
 | Liveness | Strobe differential, **analytic gates first, learned PAD second**. Analytic needs zero training data and already kills screen replay. |
 | Differentiator | **Dual-camera RGB+IR fusion** with cross-sensor geometric consistency. Hello is IR-only. Extrinsics are fitted at enrollment, never configured. |
 | Acceleration | **CPU only in the auth path.** The dGPU is at D3cold under runtime PM; waking it costs ~1 s, exceeding the whole latency budget. GPU is for training and eval on the user's desktop 5070 Ti. |
@@ -115,7 +135,7 @@ The user asked for zero-config, Hello-or-better speed, Hello-or-better accuracy,
 
 | Gate | Threshold |
 |---|---|
-| G1 | Known device: zero config. Unknown device: automatic probe succeeds ≥80%. Every failure gets a specific message. |
+| G1 | Known device: zero config. Unknown device: automatic probe succeeds ≥80%. Every failure gets a specific message. **G1.4** MSXU devices need zero interaction. **G1.5** emitter off within 200 ms of teardown, and after stop, `SIGKILL`, and resume. **G1.6** first unlock after S3 succeeds, 20 of 20 cycles. |
 | G2 | Median ≤ 500 ms, p95 ≤ 1000 ms |
 | G3 | FAR ≤ 1e-5 at FRR ≤ **3%** (Hello's own requirement is FRR < 5%) |
 | G4 | APCER ≤ 5% per attack type, **reported per type, never averaged** |
@@ -134,6 +154,9 @@ Two honest limits already written into the spec, which should not be quietly dro
 - Don't expose raw match thresholds in any GUI. Named operating points only — a user who types `0.4` into a box has silently disabled their own security.
 - Don't let PAD become a weighted term in the decision. It is a veto gate. A successful spoof produces a very strong match by construction.
 - Don't commit anything to `fixtures/` containing a real face without recorded consent.
+- Don't put a consent prompt in front of MSXU probing. The prompt exists because *blind* writes to vendor units are risky; MSXU has published semantics, so prompting there buys nothing and costs the zero-interaction property (G1.4).
+- Don't ship emitter control without the watchdog and start-up reconciliation. An emitter stuck on is invisible at 850 nm — the user cannot tell it happened.
+- Don't skip the suspend/resume path. Lid-open is the most common interaction in the product, and no test that fails to actually suspend the machine will catch it (G1.6).
 
 ---
 

@@ -2709,7 +2709,132 @@ git commit -m "feat(spike): auto-exposure hunting measurement for R2"
 
 ---
 
-### Task 13: Spike report and quirks entry #1
+### Task 13: Emitter-idle baseline — R9 and always-on detection
+
+**Files:**
+- Create: `scripts/spike-emitter-idle.sh`
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks
+- Produces: a script capturing IR frames with no emitter control applied, reporting mean luminance per frame, whether frames alternate (firmware strobing), and a verdict of `always_on`, `idle_dark`, or `firmware_strobed`.
+
+**Why this exists:** spec §4.10.5. Some cameras energise the emitter whenever the IR stream opens, with no off control — on those, strobe differential is impossible. Others strobe in firmware, which would be free hardware-synchronised pairing. Both must be detected before any emitter probing, because both change what probing means.
+
+**Reference result, already measured 2026-08-04.** The script must reproduce this on the reference machine:
+
+```
+frames=60
+means: 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.4 0.4 ... 0.5 0.5
+even-idx mean=0.38  odd-idx mean=0.40  diff=0.01
+brightest frame: centre-strip=0.6 edge-strip=0.6
+```
+
+Verdict `idle_dark`: no firmware strobing, emitter not energised by streaming, and the sensor produces **no usable image at all** without the emitter. The slow 0.0 → 0.5 ramp is auto-exposure searching for light over ~2.4 s — orders of magnitude slower than a 33 ms strobe period, which is favourable preliminary evidence for R2.
+
+- [ ] **Step 1: Write the script**
+
+Create `scripts/spike-emitter-idle.sh`:
+
+```bash
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+#
+# M1 spike, risk R9: is the emitter energised by streaming alone, and does the
+# firmware strobe it? Must run BEFORE any emitter probing, because both cases
+# change what probing means (spec §4.10.5).
+set -uo pipefail
+
+IR_NODE="${IR_NODE:-/dev/video2}"
+FRAMES="${FRAMES:-60}"
+WIDTH="${WIDTH:-640}"
+HEIGHT="${HEIGHT:-360}"
+RAW="${RAW:-/tmp/namtor-idle.raw}"
+
+command -v v4l2-ctl >/dev/null || { echo "v4l2-ctl not found (pkg: v4l-utils)"; exit 1; }
+command -v python3 >/dev/null || { echo "python3 not found"; exit 1; }
+
+echo "=== R9: emitter idle baseline ==="
+echo "Capturing $FRAMES frames from $IR_NODE with no emitter control applied."
+echo "Leave the scene normally lit; do not cover the camera."
+echo
+
+v4l2-ctl -d "$IR_NODE" \
+    --set-fmt-video=width="$WIDTH",height="$HEIGHT",pixelformat=GREY \
+    --stream-mmap --stream-count="$FRAMES" --stream-to="$RAW" 2>&1 | tail -2
+
+python3 - "$RAW" "$WIDTH" "$HEIGHT" <<'PY'
+import sys, pathlib
+
+raw = pathlib.Path(sys.argv[1])
+w, h = int(sys.argv[2]), int(sys.argv[3])
+size = w * h
+
+data = raw.read_bytes()
+n = len(data) // size
+if n == 0:
+    print("no frames captured")
+    sys.exit(1)
+
+means = [sum(data[i * size:(i + 1) * size]) / size for i in range(n)]
+even = [m for i, m in enumerate(means) if i % 2 == 0]
+odd = [m for i, m in enumerate(means) if i % 2 == 1]
+
+even_m = sum(even) / len(even)
+odd_m = sum(odd) / len(odd)
+alt = abs(even_m - odd_m)
+overall = sum(means) / len(means)
+ramp = means[-1] - means[0]
+
+print(f"\nframes={n}")
+print("means:", " ".join(f"{m:.1f}" for m in means))
+print(f"\neven-idx mean={even_m:.2f}  odd-idx mean={odd_m:.2f}  alternation={alt:.2f}")
+print(f"overall mean={overall:.2f}  min={min(means):.1f}  max={max(means):.1f}")
+print(f"first-to-last ramp={ramp:+.2f}")
+
+print("\n=== VERDICT ===")
+if alt > 15.0:
+    print("firmware_strobed: frames alternate in brightness.")
+    print("The device strobes the emitter itself. Pair frames from metadata;")
+    print("no emitter control may be needed at all (spec §4.10.5).")
+elif overall > 30.0:
+    print("always_on: the emitter appears energised by streaming alone.")
+    print("Strobe differential is impossible unless an off control is found.")
+    print("Record method = \"always_on\" and evaluate G4 separately.")
+else:
+    print("idle_dark: the emitter is not energised by streaming.")
+    print("Emitter control is REQUIRED; the sensor is unusable without it.")
+    print("This makes R3 project-defining rather than merely important.")
+
+if abs(ramp) > 0.2 and overall < 5.0:
+    print(f"\nNote: a slow monotonic ramp ({ramp:+.2f} over {n} frames) is")
+    print("auto-exposure searching for light. Slow AE is favourable for R2:")
+    print("it cannot track a strobe toggling in tens of milliseconds.")
+PY
+```
+
+Make it executable:
+
+```bash
+chmod +x scripts/spike-emitter-idle.sh
+```
+
+- [ ] **Step 2: Run it and confirm it reproduces the reference result**
+
+Run: `./scripts/spike-emitter-idle.sh`
+Expected on the reference machine: verdict `idle_dark`, overall mean below 1.0, alternation below 1.0, and the auto-exposure note.
+
+If the verdict differs from `idle_dark`, the reference measurement above was environment-dependent — record the new result and note the conditions.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add scripts/spike-emitter-idle.sh
+git commit -m "feat(spike): emitter idle baseline and always-on detection for R9"
+```
+
+---
+
+### Task 14: Spike report and quirks entry #1
 
 **Files:**
 - Create: `docs/spikes/2026-08-04-m1-hardware-findings.md`
@@ -2730,6 +2855,22 @@ Create `docs/spikes/2026-08-04-m1-hardware-findings.md`, filling every `<paste>`
 Date: <date run>
 Machine: ASUS ROG Flow X16 GV601VI, Arch Linux, kernel <uname -r>
 Camera: Sonix 3277:0018, USB 3-8
+
+## R9 — Emitter idle baseline
+
+Command: `./scripts/spike-emitter-idle.sh`
+
+Output:
+```
+<paste verbatim>
+```
+
+**Verdict:** idle_dark / always_on / firmware_strobed
+
+**Consequences:** `always_on` makes strobe differential impossible on this
+device — record `method = "always_on"`, evaluate gate G4 separately, and
+surface the reduced protection in the UI (spec §4.10.5). `firmware_strobed`
+is the best case: pair frames from metadata and skip emitter control entirely.
 
 ## R3 — Emitter controllability
 
@@ -2846,12 +2987,30 @@ metadata_node  = true
 
 [emitter]
 # Measured by `namtor-spike emitter`. See docs/spikes/2026-08-04-m1-hardware-findings.md
-method      = "vendor_xu"    # vendor_xu | msxu | unknown
+#
+# method values:
+#   msxu             standardised Microsoft XU  -> tier 1, probed silently
+#   vendor_xu        vendor-specific XU         -> tier 2, requires consent
+#   always_on        energised by streaming     -> no strobe differential
+#   firmware_strobed device strobes itself      -> pair from metadata, no control
+#   unknown          nothing found              -> R3-FAIL for this device
+method      = "vendor_xu"
 guid        = "28f03370-6311-4a2e-ba2c-6890eb334016"
 unit        = 0              # <- from spike output
 selector    = 0x00           # <- from spike output
 payload_on  = ""             # <- from spike output, hex
 payload_off = ""             # <- from spike output, hex
+
+[emitter.idle]
+# From scripts/spike-emitter-idle.sh. Establishes what the sensor does with no
+# emitter control applied, which determines what probing even means.
+verdict      = "idle_dark"   # idle_dark | always_on | firmware_strobed
+mean_luma    = 0.4           # of 255
+alternation  = 0.01          # even/odd frame difference; >15 implies firmware strobing
+
+[emitter.lifecycle]
+# Spec §4.10.2. Enforced by the daemon, recorded here for per-device tuning.
+max_on_ms = 2000
 
 [strobe]
 settle_ms    = 6
@@ -2896,12 +3055,17 @@ git commit -m "docs: M1 spike findings and quirks database entry #1"
 - [ ] `cargo clippy --all-targets -- -D warnings` is clean
 - [ ] `./scripts/check-spdx.sh` passes
 - [ ] Descriptor parsing tests pass against the **real** reference fixture, proving the L8 IR detection claim (spec §4.1)
+- [ ] `scripts/spike-emitter-idle.sh` has been run **first**, before any emitter probing, and its verdict recorded
 - [ ] `namtor-spike emitter` has been run against the real camera and its output recorded
 - [ ] `scripts/spike-dual-stream.sh` has been run and its verdict recorded
 - [ ] `scripts/spike-ae-hunting.sh` has been run and its verdict recorded
 - [ ] `docs/spikes/2026-08-04-m1-hardware-findings.md` contains verbatim output, not summaries
 - [ ] `quirks/devices/3277-0018.toml` reflects measured values
-- [ ] R1, R2, R3 each have an explicit verdict
+- [ ] R1, R2, R3, R9 each have an explicit verdict
+
+**Order matters.** The idle baseline runs before emitter probing: if the device
+turns out to be `always_on` or `firmware_strobed`, probing means something
+different and the emitter section of the quirks entry changes shape.
 
 ## Decision point after M1
 
