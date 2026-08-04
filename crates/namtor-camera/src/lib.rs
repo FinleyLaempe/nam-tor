@@ -2,6 +2,7 @@
 //! `namtor-camera`: emitter lifecycle, watchdog, resume, hotplug, and
 //! multi-camera selection. Sits between the daemon and the capture layer.
 
+pub mod always_on;
 pub mod emitter_ctrl;
 pub mod hotplug;
 pub mod resume;
