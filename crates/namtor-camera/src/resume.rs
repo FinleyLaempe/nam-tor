@@ -71,6 +71,81 @@ impl Default for ResumeMachine {
     }
 }
 
+/// An auth request that may need to wait for reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Request {
+    pub user: String,
+}
+
+/// Outcome of queueing a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingState {
+    /// Request was serviced immediately (state was `Ready`).
+    Serviced,
+    /// Request was held; will be drained once reconciliation completes.
+    Reconciling,
+}
+
+/// Owns the resume state machine plus a queue of auth requests. On resume,
+/// re-runs the reconcile callback (re-detect device, re-apply emitter), then
+/// drains queued requests once `mark_ready` is called.
+pub struct Reconciler<F: FnMut()> {
+    machine: ResumeMachine,
+    pending: Vec<Request>,
+    on_reconcile: F,
+}
+
+impl<F: FnMut()> Reconciler<F> {
+    pub fn new(on_reconcile: F) -> Self {
+        Self {
+            machine: ResumeMachine::new(),
+            pending: Vec::new(),
+            on_reconcile,
+        }
+    }
+
+    pub fn state(&self) -> ResumeState {
+        self.machine.state()
+    }
+
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Feeds a sleep event. On `Resume`, transitions to `Reconciling` and
+    /// fires the reconcile callback directly (re-detect + re-apply emitter).
+    pub fn handle(&mut self, event: SleepEvent) {
+        self.machine.handle(event, &NoopSignal);
+        if event == SleepEvent::Resume && self.machine.state() == ResumeState::Reconciling {
+            (self.on_reconcile)();
+        }
+    }
+
+    /// Queues a request. Returns `Serviced` if the machine is `Ready`, or
+    /// `Reconciling` if the request is held until reconciliation completes.
+    pub fn queue_request(&mut self, req: Request) -> PendingState {
+        match self.machine.state() {
+            ResumeState::Ready => PendingState::Serviced,
+            ResumeState::Reconciling => {
+                self.pending.push(req);
+                PendingState::Reconciling
+            }
+        }
+    }
+
+    /// Marks reconciliation complete and returns the queued requests for the
+    /// caller to service.
+    pub fn drain_ready(&mut self) -> Vec<Request> {
+        self.machine.mark_ready();
+        std::mem::take(&mut self.pending)
+    }
+}
+
+struct NoopSignal;
+impl SleepSignal for NoopSignal {
+    fn on_resume(&self) {}
+}
+
 /// Live logind `PrepareForSleep` subscription. The signal payload is a bool:
 /// `true` = about to suspend, `false` = resumed.
 pub struct ResumeMonitor;
@@ -180,5 +255,79 @@ mod tests {
         assert_eq!(r.calls(), 1);
         m.mark_ready();
         assert_eq!(m.state(), ResumeState::Ready);
+    }
+
+    #[test]
+    fn reconciler_holds_requests_during_reconciling() {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(0u32));
+        let calls_for_closure = std::rc::Rc::clone(&calls);
+        let mut rec = Reconciler::new(move || {
+            *calls_for_closure.borrow_mut() += 1;
+        });
+
+        rec.handle(SleepEvent::Suspend);
+        assert_eq!(rec.state(), ResumeState::Reconciling);
+
+        let st = rec.queue_request(Request {
+            user: "alice".into(),
+        });
+        assert_eq!(st, PendingState::Reconciling);
+        assert_eq!(rec.pending_count(), 1);
+    }
+
+    #[test]
+    fn reconciler_drains_queued_requests_after_ready() {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(0u32));
+        let calls_for_closure = std::rc::Rc::clone(&calls);
+        let mut rec = Reconciler::new(move || {
+            *calls_for_closure.borrow_mut() += 1;
+        });
+
+        rec.handle(SleepEvent::Suspend);
+        rec.queue_request(Request {
+            user: "alice".into(),
+        });
+        rec.queue_request(Request { user: "bob".into() });
+        assert_eq!(rec.pending_count(), 2);
+
+        rec.handle(SleepEvent::Resume);
+        assert_eq!(*calls.borrow(), 1, "on_reconcile fired once on resume");
+        assert_eq!(rec.state(), ResumeState::Reconciling);
+
+        let drained = rec.drain_ready();
+        assert_eq!(drained.len(), 2);
+        assert_eq!(drained[0].user, "alice");
+        assert_eq!(drained[1].user, "bob");
+        assert_eq!(rec.pending_count(), 0);
+        assert_eq!(rec.state(), ResumeState::Ready);
+    }
+
+    #[test]
+    fn reconciler_services_immediately_when_ready() {
+        let mut rec = Reconciler::new(|| {});
+        assert_eq!(rec.state(), ResumeState::Ready);
+        let st = rec.queue_request(Request {
+            user: "carol".into(),
+        });
+        assert_eq!(st, PendingState::Serviced);
+        assert_eq!(rec.pending_count(), 0);
+    }
+
+    #[test]
+    fn reconciler_fires_on_reconcile_once_per_resume() {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(0u32));
+        let calls_for_closure = std::rc::Rc::clone(&calls);
+        let mut rec = Reconciler::new(move || {
+            *calls_for_closure.borrow_mut() += 1;
+        });
+
+        rec.handle(SleepEvent::Suspend);
+        rec.handle(SleepEvent::Resume);
+        assert_eq!(*calls.borrow(), 1);
+
+        rec.drain_ready();
+        rec.handle(SleepEvent::Suspend);
+        rec.handle(SleepEvent::Resume);
+        assert_eq!(*calls.borrow(), 2);
     }
 }
