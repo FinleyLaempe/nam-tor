@@ -15,4 +15,6 @@ pub mod ir_uvc;
 #[cfg(target_os = "linux")]
 pub mod rgb_uvc;
 #[cfg(target_os = "linux")]
+pub mod session;
+#[cfg(target_os = "linux")]
 pub mod v4l2;
