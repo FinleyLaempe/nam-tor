@@ -8,6 +8,7 @@
 //! §3.2). Status requests bypass the lock (read-only).
 
 use std::io::Write;
+use std::os::fd::FromRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -57,6 +58,31 @@ impl Listener {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
         Ok(Self {
             path: path.to_path_buf(),
+            listener,
+            auth_gid,
+            nonce: NonceService::new(),
+            camera_lock: Mutex::new(()),
+            dispatcher,
+            shutdown: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    /// Socket-activation seam: adopt a pre-bound listener fd handed off by
+    /// systemd (`LISTEN_FDS=1`). The fd must already be bound to the right
+    /// path with the right mode/owner; systemd's `namtor-daemon.socket` unit
+    /// handles that. `path` is recorded for status/diagnostics only.
+    pub fn from_fd(
+        fd: std::os::fd::RawFd,
+        path: PathBuf,
+        auth_gid: u32,
+        dispatcher: Arc<dyn LifecycleDispatch>,
+    ) -> Result<Self, DaemonError> {
+        // SAFETY: caller guarantees `fd` is a valid, bound AF_UNIX listener
+        // that we now own (systemd passes it with CLOEXEC cleared on the
+        // LISTEN_FDS fds).
+        let listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+        Ok(Self {
+            path,
             listener,
             auth_gid,
             nonce: NonceService::new(),
@@ -173,6 +199,7 @@ mod tests {
     use super::*;
     use namtor_proto::pam::AuthPhase;
     use std::io::{BufReader, Read, Write};
+    use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::path::Path;
     use std::sync::atomic::AtomicU64;
@@ -446,5 +473,29 @@ mod tests {
                 warm_remaining_ms: None,
             }
         }
+    }
+
+    #[test]
+    fn from_fd_adopts_pre_bound_listener() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sock");
+        let bound = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+        let fd = bound.as_raw_fd();
+        std::mem::forget(bound);
+
+        let dispatcher = Arc::new(StubDispatcher::new());
+        let gid = nix::unistd::getgid().as_raw() as u32;
+        let listener = Listener::from_fd(fd, path.clone(), gid, dispatcher).expect("from_fd");
+
+        assert_eq!(listener.path(), path);
+
+        let t = std::thread::spawn(move || listener.accept_one().expect("accept"));
+        let s = connect_and_hello(&path);
+        let hello: HelloMsg = serde_json::from_value(recv_msg(&s)).expect("hello");
+        assert_eq!(hello.server_version, 1);
+        send_msg(&s, &AuthRequest::Status);
+        let _status: StatusReply = serde_json::from_value(recv_msg(&s)).expect("status");
+        drop(s);
+        t.join().expect("join");
     }
 }

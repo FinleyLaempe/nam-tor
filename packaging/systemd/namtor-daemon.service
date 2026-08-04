@@ -1,0 +1,26 @@
+[Unit]
+Description=Nam-tor face authentication daemon
+Documentation=man:namtor-daemon(8)
+After=local-fs.target
+Requires=namtor-daemon.socket
+
+[Service]
+Type=simple
+User=namtor
+Group=namtor
+SupplementaryGroups=video tss
+ExecStart=/usr/lib/namtor/namtor-daemon
+ExecStopPost=/usr/lib/namtor/namtor-camera-emitter-off /dev/video2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/namtor
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
+RestrictNamespaces=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

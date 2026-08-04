@@ -1,0 +1,13 @@
+[Unit]
+Description=Nam-tor PAM socket
+Documentation=man:namtor-daemon(8)
+
+[Socket]
+ListenStream=/run/namtor/auth.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=namtor-auth
+Service=namtor-daemon.service
+
+[Install]
+WantedBy=sockets.target
