@@ -6,6 +6,7 @@
 //! crate underpins. IR camera detection is a Linux-wide problem.
 
 pub mod descriptors;
+pub mod device;
 pub mod emitter;
 pub mod metadata;
 pub mod probe;
