@@ -42,6 +42,41 @@ impl Query {
 // _IOWR('u', 0x21, struct uvc_xu_control_query)
 nix::ioctl_readwrite!(uvc_ctrl_query, b'u', 0x21, UvcXuControlQuery);
 
+/// Decoded GET_INFO capability byte, UVC 1.5 §4.1.2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CtrlInfo(u8);
+
+impl CtrlInfo {
+    pub fn from_bits(bits: u8) -> Self {
+        Self(bits)
+    }
+
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+
+    pub fn supports_get(self) -> bool {
+        self.0 & 0b0000_0001 != 0
+    }
+
+    /// Probe safety rule 4: controls without SET support are never written.
+    pub fn supports_set(self) -> bool {
+        self.0 & 0b0000_0010 != 0
+    }
+
+    pub fn is_disabled(self) -> bool {
+        self.0 & 0b0000_0100 != 0
+    }
+
+    pub fn is_autoupdate(self) -> bool {
+        self.0 & 0b0000_1000 != 0
+    }
+
+    pub fn is_async(self) -> bool {
+        self.0 & 0b0001_0000 != 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +119,33 @@ mod tests {
         ] {
             assert!(!q.is_write(), "{q:?} must not be classified as a write");
         }
+    }
+
+    #[test]
+    fn ctrl_info_decodes_get_and_set_support() {
+        // UVC 1.5 §4.1.2: bit 0 = GET supported, bit 1 = SET supported.
+        let both = CtrlInfo::from_bits(0b0000_0011);
+        assert!(both.supports_get());
+        assert!(both.supports_set());
+
+        let read_only = CtrlInfo::from_bits(0b0000_0001);
+        assert!(read_only.supports_get());
+        assert!(!read_only.supports_set());
+    }
+
+    #[test]
+    fn ctrl_info_decodes_state_bits() {
+        // bit 2 = disabled due to automatic mode, bit 3 = autoupdate,
+        // bit 4 = asynchronous.
+        assert!(CtrlInfo::from_bits(0b0000_0100).is_disabled());
+        assert!(CtrlInfo::from_bits(0b0000_1000).is_autoupdate());
+        assert!(CtrlInfo::from_bits(0b0001_0000).is_async());
+    }
+
+    #[test]
+    fn a_control_with_no_set_support_is_never_probe_writable() {
+        // Probe safety rule 4.
+        let info = CtrlInfo::from_bits(0b0000_0001);
+        assert!(!info.supports_set());
     }
 }
