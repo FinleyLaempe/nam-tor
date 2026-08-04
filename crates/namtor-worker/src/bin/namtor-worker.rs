@@ -11,6 +11,8 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Self-test modes (escape suites) take priority.
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -23,11 +25,39 @@ fn main() -> ExitCode {
             "--apply-sandbox" if i + 2 < args.len() && args[i + 1] == "--self-test" => {
                 return combined_escape_test(&args[i + 2]);
             }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    // Normal worker mode: parse --read-fd, --write-fd, --frame-memfd, --frame-len.
+    let mut read_fd: Option<i32> = None;
+    let mut write_fd: Option<i32> = None;
+    let mut frame_memfd: Option<i32> = None;
+    let mut frame_len: u64 = 0;
+    let mut apply_sbx = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
             "--read-fd" if i + 1 < args.len() => {
+                read_fd = args[i + 1].parse().ok();
                 i += 2;
             }
             "--write-fd" if i + 1 < args.len() => {
+                write_fd = args[i + 1].parse().ok();
                 i += 2;
+            }
+            "--frame-memfd" if i + 1 < args.len() => {
+                frame_memfd = args[i + 1].parse().ok();
+                i += 2;
+            }
+            "--frame-len" if i + 1 < args.len() => {
+                frame_len = args[i + 1].parse().unwrap_or(0);
+                i += 2;
+            }
+            "--apply-sandbox" => {
+                apply_sbx = true;
+                i += 1;
             }
             other => {
                 eprintln!("namtor-worker: unknown arg {other}");
@@ -35,8 +65,30 @@ fn main() -> ExitCode {
             }
         }
     }
-    eprintln!("usage: namtor-worker --read-fd N --write-fd M");
-    ExitCode::from(2)
+
+    let (read_fd, write_fd) = match (read_fd, write_fd) {
+        (Some(r), Some(w)) => (r, w),
+        _ => {
+            eprintln!("usage: namtor-worker --read-fd N --write-fd M [--frame-memfd F --frame-len L] [--apply-sandbox]");
+            return ExitCode::from(2);
+        }
+    };
+
+    let backend = namtor_worker::infer::default_backend();
+    match namtor_worker::run_main(
+        read_fd,
+        write_fd,
+        backend,
+        apply_sbx,
+        frame_memfd,
+        frame_len,
+    ) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("namtor-worker: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Apply seccomp then attempt `kind`; print the errno (or "ok") and exit.
