@@ -11,4 +11,6 @@ pub mod source;
 pub mod synth;
 
 #[cfg(target_os = "linux")]
+pub mod ir_uvc;
+#[cfg(target_os = "linux")]
 pub mod v4l2;
