@@ -359,9 +359,16 @@ Consequences, which simplify several later sections:
 - **Ambient IR indoors is effectively zero** (clean frames read 0.0), so the
   differential is very nearly the illuminated frame itself. Subtraction still
   matters outdoors and under incandescent light, where it is doing real work.
-- **The mode is not persistent.** It reverts on restore and is not retained
-  across device reset, so the daemon must set it per capture session — which is
-  also why §4.10.3's resume handling is required.
+- **The mode persists across stream sessions.** Measured: set once, then three
+  successive stream start/stop cycles with no re-set all continued alternating,
+  and the control read back `01 03 02 …` each time. The daemon does not need to
+  re-issue it per capture — but it should **verify with a `GET_CUR` and re-apply
+  if wrong**, which costs one ioctl and covers the cases below.
+
+  Not yet measured: whether the mode survives USB reset or S3. Tracked as R10.
+  Because a device that loses it would fail the first unlock after lid-open —
+  the most common interaction — §4.10.3's resume reconciliation is required
+  regardless of the answer.
 
 **Tier 1 — MSXU direct emitter control**
 
@@ -826,16 +833,75 @@ the fast one.
 
 The CUDA EP ships in `ml/` tooling only. It never appears in the auth daemon.
 
-### 5.5 Warm models, cold camera
+### 5.5 Warm models, cold camera — and the latency it costs
 
 Cold-starting ONNX Runtime at authentication time would add hundreds of
 milliseconds, making the first unlock after boot feel broken.
 
 `namtor-daemon` starts at boot as a systemd service and pre-loads models into the
 warm worker, **but opens no camera**. The camera LED stays dark, the privacy
-property of §4.9 holds exactly, and authentication latency is steady-state from
-the first unlock onward. Presence mode changes only the capture lifecycle, never
+property of §4.9 holds exactly, and inference latency is steady-state from the
+first unlock onward. Presence mode changes only the capture lifecycle, never
 the model lifecycle.
+
+#### 5.5.1 Camera open is not free — measured
+
+Opening the IR stream costs far more than this design originally assumed.
+Measured on the reference camera 2026-08-04, capturing N frames and timing the
+whole operation:
+
+| Frames | Wall time |
+|---|---|
+| 2 | 811 ms |
+| 4 | 920 ms |
+| 10 | 1353 ms |
+| 40 | 3354 ms |
+
+A linear fit gives ~66.9 ms per frame and a **fixed startup cost of roughly
+677 ms**: device open, format negotiation, buffer allocation, and stream-on.
+
+**This measurement was taken through subprocess spawn, so it is an upper
+bound** — an in-process V4L2 open avoids process creation and binary loading.
+The true fixed cost must be re-measured in-process during M2 and recorded here.
+But even a fraction of 677 ms is serious: gate G2.1 budgets **500 ms median in
+total**, and a cold camera open could consume all of it before a single frame
+arrives.
+
+#### 5.5.2 Consequence: warm on intent, not on request
+
+Windows Hello does not open the camera when you ask to authenticate — **it is
+already looking** by the time you sit down. The lock screen appearing is a
+strong signal that authentication is imminent, and that is the moment to warm
+the pipeline.
+
+The D-Bus API therefore separates warming from verifying:
+
+```
+org.namtor.Device
+  PrepareForAuth()     open the stream, apply the emitter mode, let AE settle
+  VerifyStart(user)    score frames that are already arriving
+  Release()            close the stream, emitter off
+```
+
+Greeters and lock screens call `PrepareForAuth()` when they display, and
+`VerifyStart()` when the user is actually present. The expensive part happens
+while the user is still reaching for the laptop.
+
+This is a **deliberate, visible** relaxation of §4.9's cold-camera property, and
+it is bounded rather than blanket:
+
+- Warming happens only on an explicit request from a greeter or lock screen,
+  never speculatively by the daemon.
+- The camera LED behaviour is unchanged for the colour sensor, which is not
+  opened for IR-only authentication.
+- A warm stream is closed after a timeout (default 30 s) if no `VerifyStart`
+  follows, so an abandoned lock screen does not hold the camera open.
+- `namtor-cli status` reports whether a stream is currently open and who
+  requested it.
+
+If G2.1 proves reachable with a cold open once measured in-process, warming
+becomes an optimisation rather than a requirement. That determination belongs to
+M2, on real numbers.
 
 ### 5.6 Backend abstraction
 
@@ -1208,6 +1274,7 @@ org.namtor.Manager
 
 org.namtor.Device
   Claim(username)
+  PrepareForAuth()                  warm the stream ahead of a request (§5.5.2)
   Release()
   EnrollStart(spectrum) / EnrollStop()
   VerifyStart(username) / VerifyStop()
@@ -1568,7 +1635,8 @@ invalidate design sections.
 
 | ID | Risk | Impact if realised | Resolution |
 |---|---|---|---|
-| **R1** | UVC refuses simultaneous IR + RGB streams (§4.8) | Dual-camera fusion (§6.5) must fall back to alternating bursts, adding latency | M1 hardware spike |
+| ~~**R1**~~ | ~~UVC refuses simultaneous IR + RGB streams~~ | — | **RESOLVED PASS, 2026-08-04.** Concurrent capture succeeded. Cost: IR drops from ~25 fps solo to **19.8 fps** under contention, and RGB ran at 12 fps with one dropped buffer. A strobe pair therefore costs ~101 ms during fusion rather than ~66 ms — fusion is available but not free. |
+| **R11** | Camera stream open costs ~677 ms fixed (§5.5.1), consuming the entire G2.1 budget | Gate G2.1 unreachable with a cold open; `PrepareForAuth` warming (§5.5.2) becomes mandatory rather than an optimisation | M2, re-measured in-process |
 | **R2** | Firmware AE hunts against the strobe (§4.5) | Strobe differential degrades; learned PAD carries more weight; G4 harder | **RESOLVED for Tier 0, 2026-08-04.** AE settles in ~15 pairs and affects only illuminated frames; clean frames hold at 0.0. Per-pair normalisation absorbs it, and the first pair has the best SNR. **Remains open for Tier 1 and Tier 2 devices**, where userspace drives the strobe. |
 | ~~**R3**~~ | ~~Neither MSXU nor vendor XU yields emitter control~~ | — | **RESOLVED PASS, 2026-08-04.** MSXU unit 4 selector 6 mode 2 makes the firmware strobe its own emitter: strict 1:1 alternation, illuminated 81.9 vs clean 0.13. Reached with one `SET_CUR`, no elevated privilege, no user interaction (§4.2). |
 | **R4** | INT8 degrades embedding quality beyond tolerance (§10.6) | Fall back to FP16; latency budget tightens but G2 likely still met | M0 eval harness |

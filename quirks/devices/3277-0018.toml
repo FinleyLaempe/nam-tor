@@ -60,10 +60,13 @@ pattern           = "1:1"
 duty_cycle        = 0.5
 illuminated_mean  = 81.9
 clean_mean        = 0.13
-# The mode is NOT persistent: it reverts on restore and does not survive device
-# reset, so the daemon sets it per capture session. This is also why resume
-# handling (spec §4.10.3) is required.
-persistent        = false
+# Measured: the mode PERSISTS across stream stop/start. Three successive
+# capture sessions with no re-set all continued alternating, and the control
+# read back 01 03 02 each time. The daemon need not re-issue it per capture,
+# but should verify with GET_CUR and re-apply if wrong (one ioctl).
+# Not yet measured: survival across USB reset or S3. See risk R10.
+persistent_across_streams = true
+persistent_across_suspend = "untested"
 
 [emitter.idle]
 # With no control set. Confirms the sensor is unusable without the emitter.
@@ -88,8 +91,23 @@ ae_settle_pairs      = 15
 requires_per_pair_norm = true
 
 [bandwidth]
-# From scripts/spike-dual-stream.sh — not yet run.
-concurrent_ir_rgb = "untested"
+# Measured 2026-08-04: 40 IR frames and 40 RGB frames captured concurrently,
+# both streams exited 0.
+concurrent_ir_rgb = true
+# Measured: concurrent capture works, but with contention.
+ir_fps_solo       = 25.0
+ir_fps_concurrent = 19.8
+rgb_fps_concurrent = 12.0
+# A strobe pair costs ~101 ms during fusion vs ~66 ms IR-only.
+pair_ms_solo       = 66
+pair_ms_concurrent = 101
+
+[latency]
+# Fixed cost of opening the IR stream, measured via subprocess so this is an
+# UPPER BOUND -- must be re-measured in-process during M2 (risk R11).
+# Linear fit over N=2,4,10,40 frames: 66.9 ms/frame + ~677 ms fixed.
+stream_open_ms_upper_bound = 677
+per_frame_ms               = 66.9
 
 [access]
 # UVCIOC_CTRL_QUERY on unmapped MSXU controls succeeded as an ordinary desktop

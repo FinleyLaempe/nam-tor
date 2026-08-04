@@ -18,17 +18,23 @@ M0 and M1 are fully planned and ready to execute. M2–M10 are scoped here with
 deliverables, dependencies, and acceptance criteria, but their bite-sized task
 plans are written **after their blocking measurements land**.
 
-This is not deferral for convenience. Three open risks (spec §13) can invalidate
-whole design sections:
+This is not deferral for convenience: task plans written against unmeasured
+assumptions encode fiction rather than facts.
 
-| Risk | Question | Blocks |
+**Status as of 2026-08-04 — the blocking risks were measured directly on the
+reference hardware, ahead of implementation:**
+
+| Risk | Question | Status |
 |---|---|---|
-| **R3** | Can the IR emitter be controlled at all? | M6 entirely; liveness approach |
-| **R1** | Will UVC allow simultaneous IR + RGB streams? | M6 fusion design |
-| **R2** | Does firmware AE hunt against the strobe? | M6 PAD weighting |
+| **R3** | Can the IR emitter be controlled at all? | **RESOLVED PASS.** MSXU unit 4 selector 6 mode 2 — the firmware strobes its own emitter, 1:1 alternation, illuminated 81.9 vs clean 0.13. One `SET_CUR`, no elevated privilege. |
+| **R1** | Will UVC allow simultaneous IR + RGB streams? | **RESOLVED PASS.** Both streams ran. IR falls 25 → 19.8 fps under contention; a fused pair costs ~101 ms rather than ~66 ms. |
+| **R2** | Does firmware AE hunt against the strobe? | **RESOLVED for Tier 0.** Settles in ~15 pairs, affects illuminated frames only, first pair has the best SNR. **Open for Tier 1/2** devices where userspace drives the strobe. |
+| **R11** | What does opening the camera stream cost? | **NEW, open.** ~677 ms fixed (upper bound, measured via subprocess). Threatens gate G2.1 and may make `PrepareForAuth` warming mandatory. Re-measure in-process in M2. |
 
-M1 answers all three in days. Task-level plans for M2+ written before then would
-encode assumptions rather than facts.
+**Consequence: M2 is unblocked and its plan can now be written.** The emitter
+method, strobe behaviour, and fusion feasibility are all known facts recorded in
+`quirks/devices/3277-0018.toml`. M6 remains gated on M2's real capture data for
+PAD calibration, not on these risks.
 
 **Rule:** when a milestone's dependencies are satisfied, write its plan using
 superpowers:writing-plans, then execute it.
@@ -105,12 +111,21 @@ UVC extension unit ioctl bindings, safe probe harness, automatic emitter
 discovery via luminance delta, UVCH metadata parsing, strobe sequencing with
 torn-frame rejection, dual-stream bandwidth test, AE behaviour measurement.
 
-**Why immediately after M0:** retires R1, R2, R3 — the only unknowns that can
-invalidate the design. Days, not weeks.
+Plus **Task 14, Tier 0 discovery** — asking the camera to strobe its own emitter,
+which is what Windows Hello does. Run it before the Task 10 emitter search.
+
+**Status:** R1, R2 and R3 were measured directly on the reference hardware on
+2026-08-04, ahead of implementation. M1 is now **reproduction and codification**
+of known-good results rather than open-ended discovery: turn the throwaway
+measurement scripts into tested code, confirm the numbers, and extend
+`quirks/devices/3277-0018.toml` where fields are still `untested`.
+
+Still genuinely open in M1: whether the emitter mode survives suspend (R10), and
+the in-process camera-open cost (R11).
 
 **Dependencies:** M0 (frame types, recording format)
-**Gates advanced:** none directly; unblocks M2 and M6
-**Output:** spike report + quirks database entry #1 for the reference camera
+**Gates advanced:** none directly; M2 already unblocked by the measurements
+**Output:** spike report, plus verification of quirks entry #1
 
 ---
 
@@ -345,13 +360,14 @@ no gate is orphaned.
 
 | Risk | Retired by |
 |---|---|
-| R1 dual-stream bandwidth | M1 |
-| R2 AE hunting vs strobe | M1 |
-| R3 emitter controllability | M1 |
+| ~~R1 dual-stream bandwidth~~ | **RESOLVED PASS 2026-08-04** — works, IR 25→19.8 fps under contention |
+| R2 AE hunting vs strobe | **RESOLVED for Tier 0** — settles in ~15 pairs, affects illuminated frames only. Open for Tier 1/2 |
+| ~~R3 emitter controllability~~ | **RESOLVED PASS 2026-08-04** — MSXU mode 2, firmware strobes itself |
 | R4 INT8 embedding degradation | M3, measured by M0 |
 | R5 normalisation cohort licensing | M4 |
 | R6 PAD generalisation | M9, ongoing |
 | R7 quirks contributions | M8, ongoing |
 | R8 kernel uvcvideo changes | ongoing maintenance |
+| R11 camera open costs ~677 ms | M2, re-measure in-process; may make `PrepareForAuth` warming mandatory |
 | R9 always-on emitters | M2, per device |
 | R10 XU state lost across S3 | M2 |

@@ -2770,6 +2770,8 @@ chmod +x scripts/spike-dual-stream.sh
 Run: `./scripts/spike-dual-stream.sh`
 Expected: a verdict line, `R1-PASS` or `R1-FAIL`.
 
+**Already answered on the reference camera (2026-08-04): R1-PASS.** Both streams exited 0. Contention is real though: IR fell from ~25 fps solo to **19.8 fps**, RGB ran at 12 fps with one dropped buffer. A strobe pair therefore costs ~101 ms during fusion versus ~66 ms IR-only. Reproduce and confirm.
+
 **Record the full output.** If `R1-FAIL`, note the exact error — `ENOSPC` and `Cannot allocate memory` are the usual bandwidth-negotiation refusals, and distinguishing them from a permissions problem matters.
 
 - [ ] **Step 3: Commit**
@@ -3393,10 +3395,10 @@ pub fn measure_alternation(frames: &[Frame]) -> AlternationEvidence {
 
     // Split by parity, then decide which parity is the illuminated one.
     // Robust to the illuminated phase decaying under auto-exposure.
-    let (even, odd): (Vec<f64>, Vec<f64>) = means
-        .iter()
-        .enumerate()
-        .partition_map_parity();
+    let (even, odd): (Vec<f64>, Vec<f64>) =
+        means.iter().enumerate().partition(|(i, _)| i % 2 == 0);
+    let even: Vec<f64> = even.into_iter().map(|(_, v)| *v).collect();
+    let odd: Vec<f64> = odd.into_iter().map(|(_, v)| *v).collect();
 
     if even.is_empty() || odd.is_empty() {
         return none;
@@ -3419,25 +3421,6 @@ pub fn measure_alternation(frames: &[Frame]) -> AlternationEvidence {
     }
 }
 
-/// Splits an indexed iterator of means into (even-index, odd-index) vectors.
-trait ParityPartition {
-    fn partition_map_parity(self) -> (Vec<f64>, Vec<f64>);
-}
-
-impl<'a, I: Iterator<Item = (usize, &'a f64)>> ParityPartition for I {
-    fn partition_map_parity(self) -> (Vec<f64>, Vec<f64>) {
-        let mut even = Vec::new();
-        let mut odd = Vec::new();
-        for (i, v) in self {
-            if i % 2 == 0 {
-                even.push(*v);
-            } else {
-                odd.push(*v);
-            }
-        }
-        (even, odd)
-    }
-}
 ```
 
 Add this accessor to `SafeXu` in `crates/namtor-uvc/src/probe.rs`, so mode discovery can issue read queries without duplicating the transport:

@@ -81,12 +81,17 @@ Full parameters are in `quirks/devices/3277-0018.toml`, already committed.
 - Gate G1.4 (zero user interaction) is satisfiable on this hardware.
 - **The mode is not persistent.** It reverts and does not survive device reset, so the daemon must set it per capture session — which is also why resume handling (§4.10.3) is mandatory, not optional.
 
+**R1 is also resolved — PASS.** Concurrent IR + RGB capture works, but with contention: IR falls from ~25 fps solo to **19.8 fps**, RGB runs at 12 fps with one dropped buffer. A fused strobe pair therefore costs ~101 ms rather than ~66 ms. Fusion is available and not free.
+
+**The emitter mode persists across stream stop/start.** Three successive capture sessions with no re-set kept alternating, and the control read back `01 03 02` each time. The daemon needn't re-issue it per capture — but should verify with one `GET_CUR` and re-apply if wrong.
+
 ### Remaining open risks
 
 | Risk | Question | If it fails |
 |---|---|---|
-| **R1** | Will UVC allow simultaneous IR + RGB streams? | Dual-camera fusion falls back to alternating bursts. Adds ~100 ms. Fusion is not lost. **Still untested** — `scripts/spike-dual-stream.sh`. |
-| **R2** | Does firmware auto-exposure hunt against the strobe? | **Resolved for Tier 0, still open for Tier 1/2.** See below. |
+| **R11** | What does opening the camera stream actually cost? | **New, and the most pressing.** Measured ~677 ms fixed (upper bound — taken through subprocess spawn). Gate G2.1 budgets **500 ms median total**, so a cold open could consume the whole budget before a frame arrives. Re-measure **in-process** first thing in M2. If confirmed, `PrepareForAuth` warming (spec §5.5.2) is mandatory rather than an optimisation. |
+| **R2** | Does firmware AE hunt against the strobe? | **Resolved for Tier 0, still open for Tier 1/2** devices where userspace drives the strobe. See below. |
+| **R10** | Does the emitter mode survive suspend? | **Untested — needs an actual S3 cycle**, which will interrupt your session. This is the one remaining measurement that needs you at the keyboard. If it fails, the first unlock after lid-open fails, which is the most common interaction in the product. |
 
 ### Auto-exposure, measured under mode 2
 
