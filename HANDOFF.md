@@ -1,0 +1,144 @@
+# Nam-tor — Handoff
+
+**For the agent picking this up.** You have no prior context. This file is the entry point. Read it fully before touching anything.
+
+---
+
+## What this is
+
+Nam-tor is an infrared face authentication system for Linux — a privilege-separated daemon, a PAM module, and native GNOME and KDE integration. It replaces Howdy, targeting Windows Hello parity on speed and accuracy.
+
+**Current state: design and planning complete, zero implementation.** The repository contains three documents and nothing else. No code has been written.
+
+```
+docs/superpowers/specs/2026-08-04-nam-tor-design.md          the spec — read first
+docs/superpowers/plans/2026-08-04-nam-tor-roadmap.md         11 milestones, deps, gates
+docs/superpowers/plans/2026-08-04-nam-tor-m0-eval-harness.md 16 TDD tasks, ready
+docs/superpowers/plans/2026-08-04-nam-tor-m1-hardware-spike.md 13 TDD tasks, ready
+```
+
+Git history is two commits, both documentation. Branch `main`.
+
+---
+
+## Start here
+
+**Execute M1 first, not M0**, despite the numbering — *if* the user is at the reference machine. M1 answers three questions that can invalidate large parts of the design, and it needs physical hardware. M0 is pure software and can be done any time.
+
+If the user is not at the reference machine, do M0.
+
+Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` on the milestone plan files. They are bite-sized TDD: write the failing test, run it, implement, run it, commit.
+
+---
+
+## The three questions that decide the project
+
+Ranked by consequence. All answered by M1, in days.
+
+| Risk | Question | If it fails |
+|---|---|---|
+| **R3** | Can the IR emitter be controlled via UVC extension units at all? | **Project-defining.** No strobing → no differential liveness → roughly Howdy's position. M1's plan ends with a hard stop and three named fallbacks. Do not plan M2 against a falsified premise. |
+| **R1** | Will UVC allow simultaneous IR + RGB streams? | Dual-camera fusion falls back to alternating bursts. Adds ~100 ms. Fusion is not lost. |
+| **R2** | Does firmware auto-exposure hunt against the strobe? | Strobe differential weakens; the learned PAD model carries more of gate G4. Three mitigations in spec §4.5. |
+
+M1 Task 4 is a falsifier for the spec's central detection claim: it parses the real USB descriptor blob and asserts an L8 format GUID exists. If spec §4.1 is wrong, that test fails in hour one.
+
+---
+
+## Hardware facts already measured
+
+Do not re-probe. These were read off the reference machine and are recorded in spec §1.2.
+
+**Machine:** ASUS ROG Flow X16 GV601VI, Arch Linux, kernel 7.1.x, systemd 261, GNOME/Wayland (GDM).
+
+**CPU:** Intel i9-13900H, 14C/20T. `avx2`, `avx_vnni`, `f16c`. **No AVX-512** (fused off on Raptor Lake), no AMX. `avx_vnni` is why INT8 inference on CPU is the design's default and why no GPU appears in the auth path.
+
+**GPUs:** Intel Iris Xe (`renderD128`), NVIDIA RTX 4070 Laptop (`renderD129`). **No NPU** — the `Signal processing controller` PCI entries are DPTF and telemetry, not a VPU.
+
+**TPM:** 2.0 present and usable (`/dev/tpmrm0`, tss2 stack). **Secure Boot disabled (setup mode)** — this is why the design seals templates to the TPM with *no* PCR policy by default.
+
+**Camera:** Sonix `3277:0018`, USB `3-8`, UVC 1.00.
+
+| Interface | Node | Format | Role |
+|---|---|---|---|
+| if1 | `/dev/video0` | YUY2 + MJPEG, to 1920×1080 | Colour |
+| if1 meta | `/dev/video1` | `UVCH` | Metadata |
+| if3 | `/dev/video2` | L8 `{00000032-0002-…}`, 640×360@30 | **IR** |
+| if3 meta | `/dev/video3` | `UVCH` | Metadata |
+
+Extension units, both on the IR VideoControl interface (if2):
+
+- `28f03370-6311-4a2e-ba2c-6890eb334016` — Sonix vendor XU, `bmControls 0xbf`. Expected emitter path.
+- `0f3f95dc-2632-4c4e-92c9-a04782f43bc8` — Microsoft camera XU, declares `bmControls 0x00 0x00`. Probe anyway; vendors under-declare constantly.
+
+**No depth stream.** The device advertises exactly two format GUIDs across all interfaces and has no second IR sensor. Liveness must work without depth. This is the same sensor class Windows Hello runs on this machine.
+
+**The IR node exposes only `region_of_interest_*` and a read-only `privacy` control.** No exposure, no gain, no emitter. The kernel gives us nothing; everything goes through raw XU ioctls.
+
+---
+
+## Decisions already made — do not relitigate
+
+Each was reasoned through with the user. If you think one is wrong, say why and ask; don't silently deviate.
+
+| Decision | Choice |
+|---|---|
+| Integration point | **PAM**, plus a D-Bus service for UIs. The fprintd architecture. Not direct SDDM/GDM integration. |
+| Language | **Rust** core (daemon, PAM, worker), **Python** for ML tooling only, GTK4-Rust for GNOME, QML + thin C++ KCM for KDE. |
+| Process model | Four processes. Inference runs in a `nobody` worker under seccomp + landlock with no filesystem. This is the fix for Howdy's CVE class. |
+| Detection | Parse USB descriptors from sysfs, keying on format GUID. `uvcvideo` discards the GUID; `GREY` means greyscale, not infrared. This is how Hello does it. |
+| Liveness | Strobe differential, **analytic gates first, learned PAD second**. Analytic needs zero training data and already kills screen replay. |
+| Differentiator | **Dual-camera RGB+IR fusion** with cross-sensor geometric consistency. Hello is IR-only. Extrinsics are fitted at enrollment, never configured. |
+| Acceleration | **CPU only in the auth path.** The dGPU is at D3cold under runtime PM; waking it costs ~1 s, exceeding the whole latency budget. GPU is for training and eval on the user's desktop 5070 Ti. |
+| Storage | TPM2-sealed, AEAD, graceful fallback, device-bound and deliberately non-exportable. |
+| Licence | **GPL-3.0** core; **Apache-2.0** for `namtor-hwdb`, `namtor-probe`, `namtor-uvc`, and `quirks/` so any project can consume the hardware database. |
+| Accuracy strategy | Enrollment quality and per-user score normalisation **before** model size. R100 is worse value than fixing enrollment. |
+| Latency strategy | Early exit. **Capture dominates, not inference** — one emitter pair costs ≥66 ms at 30 fps. |
+
+---
+
+## Constraints that must hold
+
+- **No model weights, ever committed.** No datasets committed. Essentially every usable face dataset is research-licensed and non-redistributable. Ship recipes; a first-run fetcher pulls upstream weights under the upstream licence.
+- **PAM module:** `panic = "abort"`, no ML deps, no image decoders, < 500 KB, fail-closed on every error path. Enforced in CI.
+- **No biometric data in logs at any level.** Asserted by a CI log scan.
+- **Probe safety** (spec §4.3): never write an XU control that hasn't been read; always round-trip and restore; honour `GET_LEN`/`GET_INFO`; skip controls without SET support. M1 Task 3 makes these structurally unbypassable rather than merely documented.
+- TDD throughout. Commit after every task.
+
+---
+
+## The user's conditions, and how they're encoded
+
+The user asked for zero-config, Hello-or-better speed, Hello-or-better accuracy, and full scope with no timeboxing — and asked for a guarantee.
+
+**A guarantee was not given, deliberately.** Speed and accuracy are measurements, not derivations. Instead each condition became a numbered acceptance gate with a stated measurement procedure and pass threshold (spec §12), under the rule that **a claim is not made unless its gate passes with published evidence.**
+
+| Gate | Threshold |
+|---|---|
+| G1 | Known device: zero config. Unknown device: automatic probe succeeds ≥80%. Every failure gets a specific message. |
+| G2 | Median ≤ 500 ms, p95 ≤ 1000 ms |
+| G3 | FAR ≤ 1e-5 at FRR ≤ **3%** (Hello's own requirement is FRR < 5%) |
+| G4 | APCER ≤ 5% per attack type, **reported per type, never averaged** |
+| G5 | Security posture, CI-asserted |
+
+Hold this line. If a measurement misses a gate, report the number and scope the claim — do not soften the gate.
+
+Two honest limits already written into the spec, which should not be quietly dropped: FAR 1e-5 cannot be established from one subject (needs ~100k+ impostor comparisons), and a PAD model trained on a handful of subjects will not generalise like Microsoft's. Both are stated in §10.6 and §10.3.
+
+---
+
+## What not to do
+
+- Don't write M2–M10 task plans before M1's measurements land. Their details depend on R1/R2/R3. That's why they're scoped but not decomposed.
+- Don't add a GPU execution provider to the auth path to chase latency. The CPU numbers already fit and the sandbox is the point.
+- Don't expose raw match thresholds in any GUI. Named operating points only — a user who types `0.4` into a box has silently disabled their own security.
+- Don't let PAD become a weighted term in the decision. It is a veto gate. A successful spoof produces a very strong match by construction.
+- Don't commit anything to `fixtures/` containing a real face without recorded consent.
+
+---
+
+## Open questions for the user
+
+- **Project name.** `Nam-tor` was taken from the directory name and never confirmed.
+- **`git init` was run by the previous session** to commit the design docs, since the directory was not a repository. Confirm that's wanted, and whether a remote should exist.
+- Nothing else is blocking. Everything else needed to start M0 or M1 is in the plans.
