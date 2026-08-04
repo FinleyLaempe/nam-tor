@@ -7,6 +7,7 @@
 //! cold-camera lifecycle (spec §5.5).
 
 pub mod acl;
+pub mod listener;
 pub mod nonce;
 
 use thiserror::Error;
@@ -24,6 +25,8 @@ pub enum DaemonError {
     Worker(String),
     #[error("state error: {0}")]
     State(String),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
 }
