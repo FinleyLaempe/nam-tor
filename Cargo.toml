@@ -9,6 +9,7 @@ members = [
     "crates/namtor-probe",
     "crates/namtor-proto",
     "crates/namtor-uvc",
+    "crates/namtor-worker",
 ]
 
 [workspace.package]

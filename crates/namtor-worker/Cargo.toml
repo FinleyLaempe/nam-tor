@@ -1,0 +1,26 @@
+[package]
+name = "namtor-worker"
+version = "0.1.0"
+edition.workspace = true
+license = "GPL-3.0-only"
+
+[dependencies]
+namtor-proto = { path = "../namtor-proto" }
+nix = { version = "0.29", features = ["fs", "mman", "process", "socket"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+namtor-capture = { path = "../namtor-capture" }
+
+[features]
+default = []
+# Use the deterministic MockBackend instead of the ort-backed OnnxCpu backend.
+# Used by daemon tests (Task 21) and the M3 e2e harness (Task 26) so CI runs
+# with no ONNX Runtime and no model weights.
+mock-infer = []
+
+[[bin]]
+name = "namtor-worker"
+path = "src/bin/namtor-worker.rs"

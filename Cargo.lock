@@ -619,6 +619,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "namtor-worker"
+version = "0.1.0"
+dependencies = [
+ "namtor-capture",
+ "namtor-proto",
+ "nix",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "nix"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -628,6 +640,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
