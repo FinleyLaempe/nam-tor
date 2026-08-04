@@ -9,6 +9,7 @@ use thiserror::Error;
 
 pub mod classify;
 pub mod nodes;
+pub mod quirks;
 pub mod sysfs;
 pub mod xu_index;
 

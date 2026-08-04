@@ -8,6 +8,7 @@ license = "Apache-2.0"
 namtor-uvc = { path = "../namtor-uvc" }
 serde = { workspace = true }
 thiserror = { workspace = true }
+toml = "0.8"
 
 [dev-dependencies]
 tempfile = { workspace = true }

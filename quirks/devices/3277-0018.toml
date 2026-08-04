@@ -56,6 +56,7 @@ selector     = 6
 length       = 9
 payload_on   = "010302000000000000"   # mode 2 — alternating illumination
 payload_off  = "010301000000000000"   # mode 1 — plain IR, emitter off (default)
+mode         = 2                       # the strobe mode byte (byte 2 of payload_on)
 
 # Byte 1 (0x03) is a capability bitmask and must be preserved. Byte 2 is the
 # mode field. Measured behaviour of every accepted value:
@@ -84,6 +85,10 @@ clean_mean        = 0.13
 # Not yet measured: survival across USB reset or S3. See risk R10.
 persistent_across_streams = true
 persistent_across_suspend = "untested"
+# Settling time observed before the strobe reaches steady 1:1 alternation.
+settle_ms    = 6
+# Pair illumination phase from the per-frame UVC metadata payload.
+use_metadata = true
 
 [emitter.idle]
 # With no control set. Confirms the sensor is unusable without the emitter.
