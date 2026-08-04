@@ -5,4 +5,5 @@
 pub mod emitter_ctrl;
 pub mod hotplug;
 pub mod resume;
+pub mod selection;
 pub mod watchdog;
