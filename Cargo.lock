@@ -240,7 +240,10 @@ dependencies = [
  "namtor-capture",
  "namtor-hwdb",
  "namtor-uvc",
+ "serde",
+ "serde_json",
  "tempfile",
+ "toml",
 ]
 
 [[package]]

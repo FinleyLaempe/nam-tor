@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use namtor_hwdb::sysfs::enumerate_usb;
 use namtor_probe::describe::{load_quirks_db, run_describe};
+use namtor_probe::emit::{gh_pr_create_invocation, render_quirks_entry, render_redacted_report};
 use namtor_probe::probe::{run_probe_live, ConsentGate, ProbeResult};
 
 /// Hardware probe and contribution CLI.
@@ -51,6 +52,18 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Render a candidate quirks TOML entry from a prior probe result file.
+    Emit {
+        /// Path to a prior probe result (TOML sidecar written by `probe`).
+        #[arg(long)]
+        result: PathBuf,
+        /// Human-readable device name (e.g. from `lsusb`).
+        #[arg(long)]
+        name: String,
+        /// Where to write the rendered entry (default: stdout).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -74,6 +87,7 @@ fn main() -> ExitCode {
             ir_vc_interface,
             yes,
         ),
+        Command::Emit { result, name, out } => cmd_emit(&result, &name, out.as_deref()),
     }
 }
 
@@ -185,26 +199,29 @@ fn cmd_probe(
 
     let consent = CliConsent { yes };
     match run_probe_live(device, &ir_xus, vid, pid, &consent) {
-        Ok(ProbeResult {
-            vid_pid,
-            method,
-            unit,
-            selector,
-            payload_on,
-            payload_off,
-            mode,
-            evidence,
-        }) => {
-            println!("probe result for {vid_pid}:");
-            println!("  method    = {method:?}");
-            println!("  unit      = {unit}");
-            println!("  selector  = {selector}");
-            println!("  payload_on  = {payload_on:02x?}");
-            println!("  payload_off = {payload_off:02x?}");
-            if let Some(m) = mode {
+        Ok(result) => {
+            println!("probe result for {}:", result.vid_pid);
+            println!("  method    = {:?}", result.method);
+            println!("  unit      = {}", result.unit);
+            println!("  selector  = {}", result.selector);
+            println!("  payload_on  = {:02x?}", result.payload_on);
+            println!("  payload_off = {:02x?}", result.payload_off);
+            if let Some(m) = result.mode {
                 println!("  mode      = {m}");
             }
-            println!("  evidence  = {evidence}");
+            println!("  evidence  = {}", result.evidence);
+            let sidecar = std::env::temp_dir().join(format!(
+                "namtor-probe-{}.json",
+                result.vid_pid.replace(':', "-")
+            ));
+            match serde_json::to_string_pretty(&result) {
+                Ok(json) => {
+                    if std::fs::write(&sidecar, json).is_ok() {
+                        eprintln!("probe result written to {}", sidecar.display());
+                    }
+                }
+                Err(e) => eprintln!("warn: could not serialise probe result: {e}"),
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -212,4 +229,40 @@ fn cmd_probe(
             ExitCode::FAILURE
         }
     }
+}
+
+fn cmd_emit(result: &std::path::Path, name: &str, out: Option<&std::path::Path>) -> ExitCode {
+    let json = match std::fs::read_to_string(result) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: read {}: {e}", result.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let probe: ProbeResult = match serde_json::from_str(&json) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: parse probe result: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let entry = render_quirks_entry(&probe, name);
+    let report = render_redacted_report(&probe);
+
+    match out {
+        Some(path) => {
+            if let Err(e) = std::fs::write(path, &entry) {
+                eprintln!("error: write {}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+            println!("quirks entry written to {}", path.display());
+            println!("submit with: {}", gh_pr_create_invocation(path));
+        }
+        None => {
+            print!("{entry}");
+            eprintln!("\n--- redacted report ---\n{report}");
+        }
+    }
+    ExitCode::SUCCESS
 }

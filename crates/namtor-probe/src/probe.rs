@@ -27,6 +27,7 @@ use namtor_uvc::device::V4l2Device;
 use namtor_uvc::discover::{discover_emitter, DiscoverCfg, FrameSampler};
 use namtor_uvc::mode::{find_mode_controls, measure_alternation};
 use namtor_uvc::probe::{SafeXu, XuError, XuTransport};
+use serde::{Deserialize, Serialize};
 
 /// Decides whether to attempt a vendor-XU probe. The probe never prompts
 /// directly; it asks this gate, so the policy (CLI flag, polkit, config) lives
@@ -36,7 +37,7 @@ pub trait ConsentGate {
 }
 
 /// Outcome of a probe run.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ProbeResult {
     pub vid_pid: String,
     pub method: EmitterMethod,

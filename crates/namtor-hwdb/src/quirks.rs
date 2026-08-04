@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::HwdbError;
 
@@ -43,7 +43,7 @@ pub struct NodesCfg {
 }
 
 /// Emitter control method. Probing tier follows the variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EmitterMethod {
     MsxuMode,

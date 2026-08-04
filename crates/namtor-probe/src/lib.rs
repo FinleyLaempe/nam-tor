@@ -6,4 +6,5 @@
 //! reusable by any project — IR camera detection is a Linux-wide problem.
 
 pub mod describe;
+pub mod emit;
 pub mod probe;
