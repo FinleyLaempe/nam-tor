@@ -8,6 +8,7 @@
 
 pub mod acl;
 pub mod licence;
+pub mod lifecycle;
 pub mod listener;
 pub mod models;
 pub mod nonce;
