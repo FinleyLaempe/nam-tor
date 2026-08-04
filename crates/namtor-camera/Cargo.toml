@@ -10,6 +10,7 @@ namtor-hwdb = { path = "../namtor-hwdb" }
 namtor-capture = { path = "../namtor-capture" }
 thiserror = { workspace = true }
 toml = "0.8"
+zbus = { version = "5", features = ["blocking"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
