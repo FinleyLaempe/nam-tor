@@ -10,15 +10,29 @@ nix = { version = "0.29", features = ["fs", "mman", "process", "socket"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# ort + ndarray are only needed for the real OnnxCpu backend (the `onnx`
+# feature, on by default). The `mock-infer` feature turns the backend off and
+# drops these deps entirely, so CI test builds pull no ONNX Runtime and no
+# model weights.
+ort = { version = "2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "ndarray",
+    "download-binaries",
+    "tls-rustls",
+], optional = true }
 
 [dev-dependencies]
 namtor-capture = { path = "../namtor-capture" }
+tempfile = { workspace = true }
 
 [features]
-default = []
-# Use the deterministic MockBackend instead of the ort-backed OnnxCpu backend.
-# Used by daemon tests (Task 21) and the M3 e2e harness (Task 26) so CI runs
-# with no ONNX Runtime and no model weights.
+default = ["onnx"]
+# Real OnnxCpu backend backed by the ort crate (ONNX Runtime, CPU EP).
+# AVX-VNNI is auto-detected by the CPU EP; no explicit flag. ort bundles
+# ONNX Runtime statically via its `download-binaries` feature.
+onnx = ["dep:ort"]
+# Use the deterministic MockBackend instead of OnnxCpu. CI and the M3 e2e
+# harness enable this so tests run with no ONNX Runtime and no model weights.
 mock-infer = []
 
 [[bin]]

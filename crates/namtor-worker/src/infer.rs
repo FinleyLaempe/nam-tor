@@ -82,15 +82,20 @@ impl InferenceBackend for MockBackend {
 ///
 /// With `mock-infer` enabled, returns [`MockBackend`]; otherwise returns the
 /// production [`OnnxCpu`] backend (Task 5). The `ort` dependency is only
-/// pulled in when `mock-infer` is OFF.
+/// pulled in when the `onnx` feature is enabled (default).
 #[cfg(feature = "mock-infer")]
 pub fn default_backend() -> Box<dyn InferenceBackend> {
     Box::new(MockBackend::new(192))
 }
 
-#[cfg(not(feature = "mock-infer"))]
+#[cfg(all(feature = "onnx", not(feature = "mock-infer")))]
 pub fn default_backend() -> Box<dyn InferenceBackend> {
     Box::new(crate::infer_onnx::OnnxCpu::new(1))
+}
+
+#[cfg(not(any(feature = "mock-infer", feature = "onnx")))]
+pub fn default_backend() -> Box<dyn InferenceBackend> {
+    Box::new(MockBackend::new(192))
 }
 
 #[cfg(test)]
