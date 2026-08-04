@@ -9,6 +9,7 @@ use namtor_capture::frame::{EmitterState, Frame, PixFmt};
 use namtor_uvc::descriptors::{format_guid, is_l8_ir_format, parse_descriptors};
 use namtor_uvc::device::V4l2Device;
 use namtor_uvc::discover::{discover_emitter, DiscoverCfg, FrameSampler};
+use namtor_uvc::mode::{find_mode_controls, measure_alternation};
 use namtor_uvc::probe::{SafeXu, XuError};
 use std::io::Write;
 use std::path::PathBuf;
@@ -229,11 +230,142 @@ fn cmd_emitter(
     ExitCode::SUCCESS
 }
 
+fn cmd_modes(
+    device: PathBuf,
+    descriptors: PathBuf,
+    ir_vc_interface: u8,
+    assume_yes: bool,
+) -> ExitCode {
+    if !assume_yes {
+        println!(
+            "This sets the camera's MSXU mode control to each value it accepts,\n\
+             capturing a burst after each to detect firmware-driven strobing.\n\
+             Every value is restored after testing. A non-compliant device may\n\
+             still need a USB replug.\n\
+             Continue? [y/N] "
+        );
+        let _ = std::io::stdout().flush();
+        let mut answer = String::new();
+        if std::io::stdin().read_line(&mut answer).is_err()
+            || !answer.trim().eq_ignore_ascii_case("y")
+        {
+            println!("aborted");
+            return ExitCode::SUCCESS;
+        }
+    }
+
+    let blob = match std::fs::read(&descriptors) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: read {}: {e}", descriptors.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let units: Vec<_> = parse_descriptors(&blob)
+        .extension_units
+        .into_iter()
+        .filter(|xu| xu.interface == ir_vc_interface)
+        .collect();
+
+    let transport = match V4l2Device::open(&device) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut xu = SafeXu::new(transport);
+    let mut sampler = V4l2CtlSampler {
+        device: device.clone(),
+        width: 640,
+        height: 360,
+        started: Instant::now(),
+        scratch: std::env::temp_dir().join("namtor-spike-modes.raw"),
+    };
+
+    let controls = find_mode_controls(&mut xu, &units);
+    println!("mode-like controls found: {}", controls.len());
+
+    let mut winners = Vec::new();
+
+    for ctrl in &controls {
+        println!(
+            "\nunit {} selector {} len {}  CUR {:02x?}  MAX {:02x?}",
+            ctrl.unit, ctrl.selector, ctrl.len, ctrl.current, ctrl.max
+        );
+
+        // Baseline at the current value, so a device that already alternates
+        // is not credited to a mode change.
+        match sampler.sample(16) {
+            Ok(f) => {
+                let ev = measure_alternation(&f);
+                println!(
+                    "  baseline           alternation={:.1} alternates={}",
+                    ev.alternation, ev.alternates
+                );
+            }
+            Err(e) => println!("  baseline capture failed: {e}"),
+        }
+
+        for payload in ctrl.mode_candidates() {
+            let Ok(restorer) = xu.try_write(ctrl.unit, ctrl.selector, &payload) else {
+                println!("  {payload:02x?}  rejected by device");
+                continue;
+            };
+
+            let frames = sampler.sample(16).unwrap_or_default();
+            drop(restorer); // restores the previous value
+
+            if frames.is_empty() {
+                println!("  {payload:02x?}  no frames captured");
+                continue;
+            }
+
+            let ev = measure_alternation(&frames);
+            let luma = frames
+                .iter()
+                .map(|f| namtor_uvc::emitter::luma_stats(f).mean)
+                .sum::<f64>()
+                / frames.len() as f64;
+
+            println!(
+                "  {payload:02x?}  mean={luma:.1} alternation={:.1} on={:.1} off={:.1} \
+                 alternates={}",
+                ev.alternation, ev.on_mean, ev.off_mean, ev.alternates
+            );
+
+            if ev.alternates {
+                winners.push((ctrl.clone(), payload.clone(), ev));
+            }
+        }
+    }
+
+    println!("\n=== TIER 0: device-driven illumination ===");
+    if winners.is_empty() {
+        println!("No mode produced firmware alternation.");
+        println!("Fall back to Tier 1 (`namtor-spike emitter`): userspace strobe.");
+        return ExitCode::SUCCESS;
+    }
+    for (ctrl, payload, ev) in &winners {
+        println!(
+            "TIER-0-PASS  unit {} selector {} payload {:02x?}  \
+             alternation={:.1} (on {:.1} / off {:.1})",
+            ctrl.unit, ctrl.selector, payload, ev.alternation, ev.on_mean, ev.off_mean
+        );
+    }
+    println!("\nThe camera strobes the emitter itself, as it does for Windows Hello.");
+    println!("Torn-frame handling (spec §4.4) is unnecessary and risk R2 is void.");
+    ExitCode::SUCCESS
+}
+
 fn usage() -> ! {
     eprintln!(
         "usage:\n  \
          namtor-spike descriptors --path <file>\n  \
          namtor-spike emitter --device <node> --descriptors <file> \
+         [--ir-vc-interface N] [--yes]\n  \
+         namtor-spike modes --device <node> --descriptors <file> \
          [--ir-vc-interface N] [--yes]\n\n\
          --ir-vc-interface defaults to 2 (the reference camera's IR\n\
          VideoControl interface). Find it with `namtor-spike descriptors`:\n\
@@ -286,6 +418,12 @@ fn main() -> ExitCode {
     match args[0].as_str() {
         "descriptors" => cmd_descriptors(path.unwrap_or_else(|| usage())),
         "emitter" => cmd_emitter(
+            device.unwrap_or_else(|| usage()),
+            descriptors.unwrap_or_else(|| usage()),
+            ir_vc_interface,
+            assume_yes,
+        ),
+        "modes" => cmd_modes(
             device.unwrap_or_else(|| usage()),
             descriptors.unwrap_or_else(|| usage()),
             ir_vc_interface,

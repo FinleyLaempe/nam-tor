@@ -10,6 +10,7 @@ pub mod device;
 pub mod discover;
 pub mod emitter;
 pub mod metadata;
+pub mod mode;
 pub mod probe;
 pub mod strobe;
 pub mod xu;

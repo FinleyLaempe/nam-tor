@@ -142,6 +142,26 @@ impl<T: XuTransport> SafeXu<T> {
     }
 }
 
+impl<T: XuTransport> SafeXu<T> {
+    /// Issues a **read-only** query directly against the transport.
+    ///
+    /// Panics in debug builds if given a write query: writes must go through
+    /// [`SafeXu::try_write`], which enforces the probe safety rules.
+    pub fn transport_query(
+        &self,
+        unit: u8,
+        selector: u8,
+        query: Query,
+        buf: &mut [u8],
+    ) -> Result<(), XuError> {
+        debug_assert!(!query.is_write(), "writes must use try_write");
+        if query.is_write() {
+            return Err(XuError::NoSetSupport { unit, selector });
+        }
+        self.transport.query(unit, selector, query, buf)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
