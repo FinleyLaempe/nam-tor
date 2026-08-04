@@ -7,7 +7,9 @@
 //! cold-camera lifecycle (spec §5.5).
 
 pub mod acl;
+pub mod licence;
 pub mod listener;
+pub mod models;
 pub mod nonce;
 
 use thiserror::Error;
