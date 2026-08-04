@@ -25,7 +25,7 @@ ml/DATASETS.md             dataset licensing — read before touching training d
 docs/superpowers/specs/2026-08-04-nam-tor-design.md            the spec — read first
 docs/superpowers/plans/2026-08-04-nam-tor-roadmap.md           11 milestones, deps, gates
 docs/superpowers/plans/2026-08-04-nam-tor-m0-eval-harness.md   16 TDD tasks, ready
-docs/superpowers/plans/2026-08-04-nam-tor-m1-hardware-spike.md 14 TDD tasks, ready
+docs/superpowers/plans/2026-08-04-nam-tor-m1-hardware-spike.md 15 TDD tasks, ready
 ```
 
 Branch `main`. All commits are documentation and scaffolding.
@@ -46,7 +46,7 @@ If you are not at the reference machine, do M0.
 
 Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` on the milestone plan files. They are bite-sized TDD: write the failing test, run it, implement, run it, commit.
 
-**Do not create files the plans instruct creating** — `Cargo.toml`, `.gitignore`, `scripts/check-spdx.sh`, `.github/workflows/ci.yml`, and the `quirks/` files are all M0 Task 1 or M1 Task 14 deliverables. Everything already present was deliberately kept out of the plans' path.
+**Do not create files the plans instruct creating** — `Cargo.toml`, `.gitignore`, `scripts/check-spdx.sh`, `.github/workflows/ci.yml`, and the `quirks/` files are all M0 Task 1 or M1 Task 15 deliverables. Everything already present was deliberately kept out of the plans' path.
 
 ---
 
@@ -73,8 +73,10 @@ brightest frame: centre-strip=0.6  edge-strip=0.6
 Three conclusions, all recorded in spec §4.10.5:
 
 1. **The IR sensor is black without the emitter.** Not merely degraded — unusable. This is what makes R3 project-defining rather than important.
-2. **No firmware strobing** (alternation 0.01). There is no free hardware-synchronised frame pairing to exploit; userspace must drive the strobe.
+2. **No firmware strobing *in the default mode*** (alternation 0.01). Read the qualification below before concluding anything from this — it does **not** rule out device-driven illumination.
 3. **Auto-exposure is slow.** The `0.0 → 0.5` ramp is AE searching for light over ~2.4 s, orders of magnitude slower than a 33 ms strobe period. **R2 looks much smaller than feared.** Not conclusive — behaviour may differ once the sensor receives real signal.
+
+**Qualification on point 2, and it matters.** That capture was taken with the MSXU mode control at its default value of `1`. Windows Hello's alternating illumination only begins once face-authentication mode is selected — and mode 2 has never been tried on this machine. Measure the idle baseline **per mode**, not once. Concluding "userspace must drive the strobe" from a default-mode capture would discard the Tier 0 path entirely.
 
 M1 Task 13 scripts this measurement so it is reproducible on other devices. Run it **before** emitter probing: an `always_on` or `firmware_strobed` device changes what probing means.
 
@@ -118,9 +120,45 @@ if2 unit=4  0f3f95dc-…  bmControls=2001    IR sensor, MSXU — SELECTORS 6 AND
 
 A truncated `lsusb` reading attributes the colour sensor's `bf` to the IR sensor and concludes the vendor XU is the emitter path. **It is not.** An earlier draft of this project made exactly that error.
 
-Extension unit `bmControls` bit *n* maps to selector *n+1*, so `20 01` means selectors 6 and 9 on unit 4 of interface 2. **Those are the primary emitter candidates**, and because MSXU is standardised, they are probed silently under tier 1 — meaning gate G1.4 (zero user interaction) is achievable on this very machine.
+Extension unit `bmControls` bit *n* maps to selector *n+1*, so `20 01` means selectors 6 and 9 on unit 4 of interface 2.
 
 Always filter extension units by `interface` before probing, or you will poke the wrong sensor.
+
+### Those two controls were probed read-only, 2026-08-04
+
+```
+MSXU unit 4, /dev/video2
+  selector 6  len=9  info=0x03 [GET,SET]
+      CUR 01 03 01 00 00 00 00 00 00
+      MAX 01 03 03 00 00 00 00 00 00
+      DEF 01 03 01 00 00 00 00 00 00
+  selector 9  len=4  info=0x03 [GET,SET]
+      CUR 01 00 00 00   MAX 01 00 00 00   DEF 00 00 00 00
+
+Sonix unit 3: no control responds to GET_LEN.
+UVCIOC_CTRL_QUERY succeeded as an ORDINARY DESKTOP USER — no root, no CAP_SYS_ADMIN.
+```
+
+**Selector 6 is a mode control.** Byte 1 is fixed at `0x03` across CUR/MAX/DEF — a capability bitmask advertising two modes. Byte 2 is the live mode field: currently `1`, maximum `3`. **Mode 2 has never been selected on this machine.**
+
+This matters because **Windows Hello does not strobe the emitter from userspace** — it sets an MSXU mode control and the firmware alternates illuminated and clean frames, tagging them. That is why Hello has no torn frames and no auto-exposure fight.
+
+So M1 Task 14 (`namtor-spike modes`) is the highest-value task in the milestone, and **must run before Task 10's emitter search**. A `TIER-0-PASS` means several spec sections become unnecessary rather than merely satisfied.
+
+**Correction to a conclusion you may read elsewhere:** the 60-frame capture below showing no alternation was taken at the *default* mode. It does not rule out firmware strobing — Hello's alternation only starts once face-auth mode is selected. Measure the idle baseline **per mode**, not once.
+
+### The kernel already knows MSXU
+
+From `uvcvideo` 1.1.1 on kernel 7.1.4:
+
+```
+uvc_msxu_guid                     MSXU GUID already known
+V4L2_META_FMT_UVC_MSXU_1_5        MSXU 1.5 metadata format exists
+```
+
+Your camera's IR metadata node reports plain `UVCH`, because the metadata format comes from a **per-device entry in uvcvideo's info table** and this Sonix isn't in it. MSXU 1.5 metadata plausibly carries the per-frame illumination tagging Hello uses.
+
+**This is why writing our own driver would be wrong** (spec §4.11.2): XU access already works unprivileged, so a driver buys access we have. An out-of-tree module means DKMS, Secure Boot signing, and breakage on every kernel update — a worse setup experience than the manual configuration we are removing, and ring-0 code in a project whose security argument is privilege separation. The correct path is userspace now, a small upstream `uvcvideo` patch later, never out-of-tree — and that patch needs the device corpus the userspace tool collects first.
 
 **No depth stream.** The device advertises exactly two format GUIDs across all interfaces and has no second IR sensor. Liveness must work without depth. This is the same sensor class Windows Hello runs on this machine.
 

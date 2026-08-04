@@ -209,6 +209,37 @@ consistency, multi-frame consensus with temporal coherence, early exit.
 **Dependencies:** M5, and **M1 results** — R1, R2, R3 all shape this milestone
 **Gates advanced:** G2, G4
 
+#### M6 needs a calibration sub-task, not just implementation
+
+Spec §6.4 describes the analytic PAD gates **qualitatively** — differential
+energy, radial falloff regression, specular highlight detection — and gives no
+numeric thresholds. That is correct and deliberate: the numbers must come from
+real strobe data, which does not exist until M1 succeeds and real captures are
+recorded. Writing constants into the spec beforehand would have been invention.
+
+The consequence is that **M6 cannot be planned as pure implementation.** Its
+plan must open with a calibration task that:
+
+1. Records bona fide sessions across pose, distance, and ambient IR, plus attack
+   sessions for each type in the §10.6 battery, using `namtor-collect`.
+2. Computes the distribution of each analytic statistic separately for bona fide
+   and attack presentations.
+3. Chooses thresholds from the measured separation at the BPCER budget gate G4.1
+   allows — not from intuition, and not from a single sample.
+4. Records the chosen thresholds, the data they came from, and the measured
+   APCER per attack type in the eval report.
+5. Stores per-device threshold overrides in the quirks database where sensor
+   response differs enough to matter.
+
+Ordering: calibration precedes gate implementation, because a gate whose
+threshold is guessed is not a gate. Budget real capture time for it — this is
+the step where a rushed M6 quietly becomes Howdy's magic-number problem wearing
+better architecture.
+
+**If M1 returns TIER-0-PASS**, calibration gets easier: firmware-paired frames
+remove torn-frame noise from every statistic, so the distributions separate more
+cleanly and the thresholds are more stable across devices.
+
 ---
 
 ### M7 — Desktop integration

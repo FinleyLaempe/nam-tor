@@ -37,7 +37,7 @@ Tests requiring the real camera are marked `#[ignore]` and run with:
 NAMTOR_HW_TEST=1 cargo test -p namtor-uvc -- --ignored --test-threads=1
 ```
 
-CI never sets `NAMTOR_HW_TEST`. Hardware tests are run by the developer on the reference machine and their output pasted into the spike report (Task 13).
+CI never sets `NAMTOR_HW_TEST`. Hardware tests are run by the developer on the reference machine and their output pasted into the spike report (Task 15).
 
 ---
 
@@ -3050,7 +3050,551 @@ git commit -m "feat(spike): emitter idle baseline and always-on detection for R9
 
 ---
 
-### Task 14: Spike report and quirks entry #1
+### Task 14: Tier 0 — device-driven illumination (the Windows Hello path)
+
+**Files:**
+- Create: `crates/namtor-uvc/src/mode.rs`
+- Modify: `crates/namtor-uvc/src/lib.rs`
+- Modify: `crates/namtor-uvc/src/bin/namtor-spike.rs`
+
+**Interfaces:**
+- Consumes: `SafeXu`, `FrameSampler`, `ExtensionUnit`, `luma_stats`
+- Produces: `ModeControl { unit, selector, len, current: Vec<u8>, max: Vec<u8>, default: Vec<u8> }`; `find_mode_controls(xu, units) -> Vec<ModeControl>`; `AlternationEvidence { alternation: f64, on_mean: f64, off_mean: f64, alternates: bool }`; `measure_alternation(frames: &[Frame]) -> AlternationEvidence`; `try_modes(xu, sampler, ctrl, cfg) -> Vec<(Vec<u8>, AlternationEvidence)>`.
+
+**Why this task is the most valuable one in M1.** Windows Hello does not drive the emitter from userspace — it sets an MSXU mode control and the *firmware* alternates illuminated and clean IR frames, tagging them. That is why Hello has no torn frames, no auto-exposure fight, and no per-device strobe timing. If this camera can do the same, §4.4's torn-frame machinery is unnecessary and risk R2 disappears entirely.
+
+**Read-only measurements already taken on the reference camera (2026-08-04):**
+
+```
+MSXU unit 4, IR VideoControl interface, /dev/video2
+  selector 6  len=9  info=0x03 [GET,SET]
+      CUR 01 03 01 00 00 00 00 00 00
+      MAX 01 03 03 00 00 00 00 00 00
+      DEF 01 03 01 00 00 00 00 00 00
+      MIN 00 00 00 00 00 00 00 00 00
+  selector 9  len=4  info=0x03 [GET,SET]
+      CUR 01 00 00 00   MAX 01 00 00 00   DEF 00 00 00 00   RES 01 00 00 00
+
+Sonix unit 3: no control responds to GET_LEN.
+UVCIOC_CTRL_QUERY succeeded as an ordinary desktop user — no root, no CAP_SYS_ADMIN.
+```
+
+Selector 6 byte 1 is fixed at `0x03` across CUR, MAX and DEF — a capability bitmask advertising two modes. Byte 2 is the live mode field, currently `1`, maximum `3`. **Mode 2 has never been selected.**
+
+**Do not assume MSXU control semantics.** We cannot verify the published specification from here, and vendors deviate. Determine behaviour empirically: set each accepted mode, capture a burst, measure whether frames alternate. A mode producing clean alternation *is* device-driven illumination, whatever it is nominally called.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `crates/namtor-uvc/src/mode.rs`:
+
+```rust
+// SPDX-License-Identifier: Apache-2.0
+//! Device-driven illumination: asking the camera to alternate the emitter
+//! itself, which is what Windows Hello does.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use namtor_capture::frame::{EmitterState, Frame, PixFmt};
+    use std::time::Duration;
+
+    fn frames(levels: &[u8]) -> Vec<Frame> {
+        levels
+            .iter()
+            .enumerate()
+            .map(|(i, &l)| Frame {
+                data: vec![l; 64 * 64],
+                format: PixFmt::Grey8,
+                width: 64,
+                height: 64,
+                ts_mono: Duration::from_millis(33 * i as u64),
+                sof: Some(i as u16),
+                emitter: EmitterState::Unknown,
+                quality: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn alternating_frames_are_detected() {
+        let ev = measure_alternation(&frames(&[200, 40, 200, 40, 200, 40]));
+        assert!(ev.alternates, "clear alternation must be detected");
+        assert!(ev.alternation > 100.0);
+        assert!(ev.on_mean > ev.off_mean);
+    }
+
+    #[test]
+    fn steady_frames_do_not_alternate() {
+        let ev = measure_alternation(&frames(&[120, 120, 120, 120, 120, 120]));
+        assert!(!ev.alternates);
+        assert!(ev.alternation < 5.0);
+    }
+
+    #[test]
+    fn a_slow_ramp_is_not_alternation() {
+        // Auto-exposure hunting produces a monotonic drift, not alternation.
+        // Misreading it as alternation would report Tier 0 support falsely.
+        let ev = measure_alternation(&frames(&[40, 60, 80, 100, 120, 140]));
+        assert!(!ev.alternates, "a monotonic ramp is drift, not strobing");
+    }
+
+    #[test]
+    fn on_and_off_are_assigned_by_brightness_not_by_index() {
+        // The first frame of a burst may be either phase. Assigning by parity
+        // would invert the pairing half the time.
+        let ev = measure_alternation(&frames(&[40, 200, 40, 200]));
+        assert!(ev.alternates);
+        assert!(ev.on_mean > ev.off_mean);
+    }
+
+    #[test]
+    fn too_few_frames_is_inconclusive() {
+        assert!(!measure_alternation(&frames(&[200])).alternates);
+        assert!(!measure_alternation(&[]).alternates);
+    }
+
+    #[test]
+    fn mode_candidates_walk_the_field_up_to_its_maximum() {
+        // Selector 6 on the reference camera: byte 2 is the mode field,
+        // current 1, max 3. Candidates must cover 2 and 3, and must preserve
+        // every other byte of the payload.
+        let ctrl = ModeControl {
+            unit: 4,
+            selector: 6,
+            len: 9,
+            current: vec![0x01, 0x03, 0x01, 0, 0, 0, 0, 0, 0],
+            max: vec![0x01, 0x03, 0x03, 0, 0, 0, 0, 0, 0],
+            default: vec![0x01, 0x03, 0x01, 0, 0, 0, 0, 0, 0],
+        };
+
+        let cands = ctrl.mode_candidates();
+
+        assert!(cands.contains(&vec![0x01, 0x03, 0x02, 0, 0, 0, 0, 0, 0]));
+        assert!(cands.contains(&vec![0x01, 0x03, 0x03, 0, 0, 0, 0, 0, 0]));
+        assert!(
+            !cands.contains(&ctrl.current),
+            "the current value produces no state change to observe"
+        );
+        for c in &cands {
+            assert_eq!(c.len(), 9);
+            assert_eq!(c[0], 0x01, "fixed bytes must be preserved");
+            assert_eq!(c[1], 0x03, "capability mask must be preserved");
+        }
+    }
+
+    #[test]
+    fn the_varying_byte_is_located_by_comparing_current_with_max() {
+        // Bytes equal in CUR and MAX are fixed; the differing byte is the
+        // field with a range. Hardcoding an offset would break on any other
+        // vendor's payload layout.
+        let ctrl = ModeControl {
+            unit: 4,
+            selector: 6,
+            len: 9,
+            current: vec![0x01, 0x03, 0x01, 0, 0, 0, 0, 0, 0],
+            max: vec![0x01, 0x03, 0x03, 0, 0, 0, 0, 0, 0],
+            default: vec![0x01, 0x03, 0x01, 0, 0, 0, 0, 0, 0],
+        };
+        assert_eq!(ctrl.mode_byte(), Some(2));
+    }
+
+    #[test]
+    fn a_boolean_control_yields_its_opposite_value() {
+        // Selector 9 on the reference camera: CUR 1, MAX 1, DEF 0.
+        let ctrl = ModeControl {
+            unit: 4,
+            selector: 9,
+            len: 4,
+            current: vec![0x01, 0, 0, 0],
+            max: vec![0x01, 0, 0, 0],
+            default: vec![0x00, 0, 0, 0],
+        };
+        assert!(ctrl.mode_candidates().contains(&vec![0x00, 0, 0, 0]));
+    }
+}
+```
+
+Add to `crates/namtor-uvc/src/lib.rs`:
+
+```rust
+pub mod mode;
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cargo test -p namtor-uvc mode::`
+Expected: FAIL — `cannot find struct ModeControl in this scope`.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Add to `crates/namtor-uvc/src/mode.rs` above the `tests` module:
+
+```rust
+use crate::descriptors::ExtensionUnit;
+use crate::emitter::luma_stats;
+use crate::probe::{SafeXu, XuError, XuTransport};
+use crate::xu::Query;
+use namtor_capture::frame::Frame;
+
+/// A control whose payload contains a bounded field — a mode selector.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModeControl {
+    pub unit: u8,
+    pub selector: u8,
+    pub len: usize,
+    pub current: Vec<u8>,
+    pub max: Vec<u8>,
+    pub default: Vec<u8>,
+}
+
+impl ModeControl {
+    /// Index of the byte that varies between CUR and MAX.
+    ///
+    /// Bytes equal in both are fixed — version numbers, capability masks —
+    /// and must be preserved. Hardcoding an offset would break on any other
+    /// vendor's payload layout.
+    pub fn mode_byte(&self) -> Option<usize> {
+        self.current
+            .iter()
+            .zip(self.max.iter())
+            .position(|(c, m)| c != m)
+    }
+
+    /// Payloads to try: every value of the mode field from its minimum
+    /// through its maximum, excluding the current value, with all other
+    /// bytes preserved exactly.
+    pub fn mode_candidates(&self) -> Vec<Vec<u8>> {
+        let Some(idx) = self.mode_byte() else {
+            // No varying byte. A boolean whose CUR equals MAX still has a
+            // distinct DEF worth trying.
+            return if self.default != self.current {
+                vec![self.default.clone()]
+            } else {
+                Vec::new()
+            };
+        };
+
+        let hi = self.max[idx];
+        let mut out = Vec::new();
+        for v in 0..=hi {
+            if v == self.current[idx] {
+                continue;
+            }
+            let mut p = self.current.clone();
+            p[idx] = v;
+            out.push(p);
+        }
+        out
+    }
+}
+
+/// Reads CUR, MAX and DEF for the selectors a unit advertises, keeping those
+/// that look like mode controls.
+pub fn find_mode_controls<T: XuTransport>(
+    xu: &mut SafeXu<T>,
+    units: &[ExtensionUnit],
+) -> Vec<ModeControl> {
+    let mut out = Vec::new();
+
+    for unit in units {
+        for selector in unit.advertised_selectors() {
+            let Ok(profile) = xu.probe_control(unit.unit_id, selector) else {
+                continue;
+            };
+            if !profile.info.supports_set() || profile.len == 0 {
+                continue;
+            }
+
+            let mut max = vec![0u8; profile.len];
+            let mut default = vec![0u8; profile.len];
+            if xu.transport_query(unit.unit_id, selector, Query::GetMax, &mut max).is_err() {
+                continue;
+            }
+            let _ = xu.transport_query(unit.unit_id, selector, Query::GetDef, &mut default);
+
+            out.push(ModeControl {
+                unit: unit.unit_id,
+                selector,
+                len: profile.len,
+                current: profile.current,
+                max,
+                default,
+            });
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AlternationEvidence {
+    /// Mean luminance difference between the bright and dark phases.
+    pub alternation: f64,
+    pub on_mean: f64,
+    pub off_mean: f64,
+    /// Whether the burst shows genuine frame-to-frame alternation.
+    pub alternates: bool,
+}
+
+/// Minimum luminance separation between phases to call it alternation.
+const ALTERNATION_THRESHOLD: f64 = 20.0;
+
+/// Detects firmware-driven strobing in a captured burst.
+///
+/// Phases are assigned by **brightness, not frame parity** — the first frame
+/// of a burst may be either phase, and parity would invert the pairing half
+/// the time. A monotonic ramp (auto-exposure hunting) must not be mistaken
+/// for alternation, so consecutive differences must change sign.
+pub fn measure_alternation(frames: &[Frame]) -> AlternationEvidence {
+    let none = AlternationEvidence {
+        alternation: 0.0,
+        on_mean: 0.0,
+        off_mean: 0.0,
+        alternates: false,
+    };
+    if frames.len() < 4 {
+        return none;
+    }
+
+    let means: Vec<f64> = frames.iter().map(|f| luma_stats(f).mean).collect();
+
+    // Alternation implies consecutive deltas flip sign; a ramp does not.
+    let signs: Vec<i8> = means
+        .windows(2)
+        .map(|w| (w[1] - w[0]).signum() as i8)
+        .collect();
+    let flips = signs.windows(2).filter(|s| s[0] != s[1] && s[0] != 0).count();
+    let alternating_shape = flips >= signs.len().saturating_sub(2).max(1);
+
+    let overall = means.iter().sum::<f64>() / means.len() as f64;
+    let bright: Vec<f64> = means.iter().copied().filter(|m| *m >= overall).collect();
+    let dark: Vec<f64> = means.iter().copied().filter(|m| *m < overall).collect();
+
+    if bright.is_empty() || dark.is_empty() {
+        return none;
+    }
+
+    let on_mean = bright.iter().sum::<f64>() / bright.len() as f64;
+    let off_mean = dark.iter().sum::<f64>() / dark.len() as f64;
+    let alternation = on_mean - off_mean;
+
+    AlternationEvidence {
+        alternation,
+        on_mean,
+        off_mean,
+        alternates: alternating_shape && alternation >= ALTERNATION_THRESHOLD,
+    }
+}
+```
+
+Add this accessor to `SafeXu` in `crates/namtor-uvc/src/probe.rs`, so mode discovery can issue read queries without duplicating the transport:
+
+```rust
+impl<T: XuTransport> SafeXu<T> {
+    /// Issues a **read-only** query directly against the transport.
+    ///
+    /// Panics in debug builds if given a write query: writes must go through
+    /// [`SafeXu::try_write`], which enforces the probe safety rules.
+    pub fn transport_query(
+        &self,
+        unit: u8,
+        selector: u8,
+        query: Query,
+        buf: &mut [u8],
+    ) -> Result<(), XuError> {
+        debug_assert!(!query.is_write(), "writes must use try_write");
+        if query.is_write() {
+            return Err(XuError::NoSetSupport { unit, selector });
+        }
+        self.transport.query(unit, selector, query, buf)
+    }
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cargo test -p namtor-uvc mode::`
+Expected: PASS — 8 tests.
+
+- [ ] **Step 5: Add the `modes` subcommand to the spike CLI**
+
+Add to `crates/namtor-uvc/src/bin/namtor-spike.rs`:
+
+```rust
+fn cmd_modes(
+    device: PathBuf,
+    descriptors: PathBuf,
+    ir_vc_interface: u8,
+    assume_yes: bool,
+) -> ExitCode {
+    if !assume_yes {
+        println!(
+            "This sets the camera's MSXU mode control to each value it accepts,\n\
+             capturing a burst after each to detect firmware-driven strobing.\n\
+             Every value is restored after testing. A non-compliant device may\n\
+             still need a USB replug.\n\
+             Continue? [y/N] "
+        );
+        let _ = std::io::stdout().flush();
+        let mut answer = String::new();
+        if std::io::stdin().read_line(&mut answer).is_err()
+            || !answer.trim().eq_ignore_ascii_case("y")
+        {
+            println!("aborted");
+            return ExitCode::SUCCESS;
+        }
+    }
+
+    let blob = match std::fs::read(&descriptors) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: read {}: {e}", descriptors.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let units: Vec<_> = parse_descriptors(&blob)
+        .extension_units
+        .into_iter()
+        .filter(|xu| xu.interface == ir_vc_interface)
+        .collect();
+
+    let transport = match V4l2Device::open(&device) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut xu = SafeXu::new(transport);
+    let mut sampler = V4l2CtlSampler {
+        device: device.clone(),
+        width: 640,
+        height: 360,
+        started: Instant::now(),
+        scratch: std::env::temp_dir().join("namtor-spike-modes.raw"),
+    };
+
+    let controls = find_mode_controls(&mut xu, &units);
+    println!("mode-like controls found: {}", controls.len());
+
+    let mut winners = Vec::new();
+
+    for ctrl in &controls {
+        println!(
+            "\nunit {} selector {} len {}  CUR {:02x?}  MAX {:02x?}",
+            ctrl.unit, ctrl.selector, ctrl.len, ctrl.current, ctrl.max
+        );
+
+        // Baseline at the current value, so a device that already alternates
+        // is not credited to a mode change.
+        match sampler.sample(16) {
+            Ok(f) => {
+                let ev = measure_alternation(&f);
+                println!(
+                    "  baseline           alternation={:.1} alternates={}",
+                    ev.alternation, ev.alternates
+                );
+            }
+            Err(e) => println!("  baseline capture failed: {e}"),
+        }
+
+        for payload in ctrl.mode_candidates() {
+            let Ok(restorer) = xu.try_write(ctrl.unit, ctrl.selector, &payload) else {
+                println!("  {payload:02x?}  rejected by device");
+                continue;
+            };
+
+            let frames = sampler.sample(16).unwrap_or_default();
+            drop(restorer); // restores the previous value
+
+            if frames.is_empty() {
+                println!("  {payload:02x?}  no frames captured");
+                continue;
+            }
+
+            let ev = measure_alternation(&frames);
+            let luma = frames
+                .iter()
+                .map(|f| namtor_uvc::emitter::luma_stats(f).mean)
+                .sum::<f64>()
+                / frames.len() as f64;
+
+            println!(
+                "  {payload:02x?}  mean={luma:.1} alternation={:.1} on={:.1} off={:.1} \
+                 alternates={}",
+                ev.alternation, ev.on_mean, ev.off_mean, ev.alternates
+            );
+
+            if ev.alternates {
+                winners.push((ctrl.clone(), payload.clone(), ev));
+            }
+        }
+    }
+
+    println!("\n=== TIER 0: device-driven illumination ===");
+    if winners.is_empty() {
+        println!("No mode produced firmware alternation.");
+        println!("Fall back to Tier 1 (`namtor-spike emitter`): userspace strobe.");
+        return ExitCode::SUCCESS;
+    }
+    for (ctrl, payload, ev) in &winners {
+        println!(
+            "TIER-0-PASS  unit {} selector {} payload {:02x?}  \
+             alternation={:.1} (on {:.1} / off {:.1})",
+            ctrl.unit, ctrl.selector, payload, ev.alternation, ev.on_mean, ev.off_mean
+        );
+    }
+    println!("\nThe camera strobes the emitter itself, as it does for Windows Hello.");
+    println!("Torn-frame handling (spec §4.4) is unnecessary and risk R2 is void.");
+    ExitCode::SUCCESS
+}
+```
+
+Wire it into `main`, alongside `descriptors` and `emitter`:
+
+```rust
+        "modes" => cmd_modes(
+            device.unwrap_or_else(|| usage()),
+            descriptors.unwrap_or_else(|| usage()),
+            ir_vc_interface,
+            assume_yes,
+        ),
+```
+
+and extend `usage()`:
+
+```rust
+         namtor-spike modes --device <node> --descriptors <file> \
+         [--ir-vc-interface N] [--yes]\n
+```
+
+- [ ] **Step 6: Run it against the real camera**
+
+**Run this before `namtor-spike emitter`.** If Tier 0 works, Tier 1 is unnecessary.
+
+```bash
+cargo run -p namtor-uvc --bin namtor-spike -- \
+    modes --device /dev/video2 \
+          --descriptors /sys/bus/usb/devices/3-8/descriptors
+```
+
+Expected on the reference camera: selector 6 offers mode-field values 0, 2 and 3 (current is 1), and selector 9 offers `00 00 00 00`. Watch for a payload whose burst reports `alternates=true`.
+
+**Record the output verbatim.** A `TIER-0-PASS` line is the best possible outcome in M1: it means the camera does what it does for Hello, and several sections of the spec become unnecessary rather than merely satisfied.
+
+If every mode reports `alternates=false` but some raise mean luminance substantially, that mode is a **plain emitter enable** — Tier 1. Feed it to `namtor-spike emitter` as a known-good starting point.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add crates/namtor-uvc/src/mode.rs crates/namtor-uvc/src/lib.rs \
+        crates/namtor-uvc/src/probe.rs crates/namtor-uvc/src/bin/namtor-spike.rs
+git commit -m "feat(uvc): tier-0 device-driven illumination discovery"
+```
+
+---
+
+### Task 15: Spike report and quirks entry #1
 
 **Files:**
 - Create: `docs/spikes/2026-08-04-m1-hardware-findings.md`
@@ -3071,6 +3615,35 @@ Create `docs/spikes/2026-08-04-m1-hardware-findings.md`, filling every `<paste>`
 Date: <date run>
 Machine: ASUS ROG Flow X16 GV601VI, Arch Linux, kernel <uname -r>
 Camera: Sonix 3277:0018, USB 3-8
+
+## Tier 0 — device-driven illumination
+
+Command:
+```
+cargo run -p namtor-uvc --bin namtor-spike -- \
+    modes --device /dev/video2 --descriptors /sys/bus/usb/devices/3-8/descriptors
+```
+
+Output:
+```
+<paste verbatim>
+```
+
+**Verdict:** TIER-0-PASS / TIER-0-FAIL
+
+**If PASS:** the camera strobes the emitter itself, as it does for Windows
+Hello. Torn-frame handling (spec §4.4) becomes unnecessary, risk R2 is void, and
+per-device strobe timing disappears. Record the winning unit, selector, and
+payload in the quirks entry and skip the Tier 1 emitter search entirely.
+
+**If FAIL:** proceed to Tier 1 below. If a mode raised mean luminance without
+alternating, it is a plain emitter enable — feed it to `namtor-spike emitter` as
+a known-good starting point rather than letting the search rediscover it.
+
+Also record: does the IR metadata node offer `V4L2_META_FMT_UVC_MSXU_1_5` in
+addition to `UVCH`? Check with `v4l2-ctl -d /dev/video3 --list-formats-meta`.
+Spec §4.11.1 — MSXU 1.5 metadata may carry per-frame illumination tagging, and
+its absence is a candidate upstream `uvcvideo` patch.
 
 ## R9 — Emitter idle baseline
 
@@ -3260,7 +3833,8 @@ git commit -m "docs: M1 spike findings and quirks database entry #1"
 - [ ] `./scripts/check-spdx.sh` passes
 - [ ] Descriptor parsing tests pass against the **real** reference fixture, proving the L8 IR detection claim (spec §4.1)
 - [ ] `scripts/spike-emitter-idle.sh` has been run **first**, before any emitter probing, and its verdict recorded
-- [ ] `namtor-spike emitter` has been run against the real camera and its output recorded
+- [ ] `namtor-spike modes` has been run — **before** `namtor-spike emitter` — and its Tier 0 verdict recorded
+- [ ] `namtor-spike emitter` has been run against the real camera and its output recorded (skip only if Tier 0 passed)
 - [ ] `scripts/spike-dual-stream.sh` has been run and its verdict recorded
 - [ ] `scripts/spike-ae-hunting.sh` has been run and its verdict recorded
 - [ ] `docs/spikes/2026-08-04-m1-hardware-findings.md` contains verbatim output, not summaries

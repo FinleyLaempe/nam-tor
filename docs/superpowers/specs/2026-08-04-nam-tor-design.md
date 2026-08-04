@@ -280,16 +280,69 @@ is last-resort and always reported as such in diagnostics.
 
 ### 4.2 Emitter discovery
 
-Two paths, tried in order:
+**Windows Hello does not strobe the emitter from userspace.** It asks the camera
+to do it: MSXU carries a face-authentication mode control, and once set, the
+*firmware* alternates illuminated and clean IR frames and tags them. That is why
+Hello has no torn frames, no auto-exposure fight, and no per-device strobe
+timing to tune.
 
-1. **MSXU** (`{0f3f95dc-…}`, unit 4 on the IR VideoControl interface).
-   Standardised, so probing is silent (§4.10.1). **On the reference device this
-   is the expected path**: it advertises `bmControls 20 01`, i.e. selectors 6
-   and 9. Probing begins with the advertised selectors, then widens.
-2. **Vendor XU** (`{28f03370-…}`, unit 3). On the reference IR interface it
-   advertises `00`, but vendors under-declare routinely, so it remains a
-   fallback — behind the tier-2 consent gate, since payload search on a vendor
-   unit is a genuinely blind write.
+Nam-tor therefore tries the same thing first, and only hand-rolls a strobe if
+the device cannot do it itself. Four paths, in order:
+
+**Tier 0 — device-driven illumination (what Windows actually does)**
+
+Set the MSXU mode control and let the firmware alternate. Frames arrive already
+paired and tagged; §4.4's torn-frame machinery becomes unnecessary, and R2
+(auto-exposure hunting) disappears because the firmware owns both the emitter
+and the exposure.
+
+Measured on the reference camera, read-only, on 2026-08-04:
+
+| Unit | Sel | Len | Info | CUR | MAX | DEF |
+|---|---|---|---|---|---|---|
+| 4 (MSXU) | 6 | 9 | `0x03` GET+SET | `01 03 01 00…` | `01 03 03 00…` | `01 03 01 00…` |
+| 4 (MSXU) | 9 | 4 | `0x03` GET+SET | `01 00 00 00` | `01 00 00 00` | `00 00 00 00` |
+| 3 (vendor) | — | — | — | *no control responds* | | |
+
+Reading of selector 6: byte 1 is fixed at `0x03` across CUR, MAX and DEF — a
+**capability bitmask advertising two supported modes**. Byte 2 is the live mode
+field, currently `1` with a maximum of `3`. **Mode 2 exists and has never been
+selected on this machine.** This is the shape of a mode control, and switching
+it is the operation Hello performs.
+
+Selector 9 is boolean, default `0`, currently `1` — something already enabled
+it, plausibly the metadata stream.
+
+Exact MSXU control semantics are **not assumed**. Discovery determines them
+empirically: for each mode value the device accepts, capture a burst and
+measure whether frames alternate in luminance (§4.4). A mode that produces
+clean alternation *is* device-driven illumination, whatever it is nominally
+called. Behaviour is recorded in the quirks entry rather than inferred from a
+specification we cannot verify.
+
+**Tier 1 — MSXU direct emitter control**
+
+If no mode yields firmware alternation, use MSXU controls to toggle the emitter
+ourselves, driving the strobe from userspace per §4.4. Still silent (§4.10.1),
+since MSXU semantics are published.
+
+**Tier 2 — vendor extension unit**
+
+`{28f03370-…}`, unit 3. On the reference IR interface it advertises `00` and no
+control responds to `GET_LEN`, but vendors under-declare routinely, so it
+remains a fallback. Behind the consent gate, because payload search on a vendor
+unit is a genuinely blind write.
+
+**Tier 3 — manual**, from a user-supplied report.
+
+Access privilege, measured: `UVCIOC_CTRL_QUERY` on unmapped MSXU controls
+succeeded **as an ordinary desktop user**, with no `CAP_SYS_ADMIN` and no root.
+The daemon therefore needs only `video` group membership, not elevated
+capabilities.
+
+Discovery always targets extension units on the **IR sensor's own
+VideoControl interface**. The colour sensor declares its own instances of both
+units with different control bitmaps; probing those would poke the wrong device.
 
 Discovery always targets the extension units **on the IR sensor's own
 VideoControl interface**. The colour sensor declares its own instances of both
@@ -491,7 +544,8 @@ Probing is therefore tiered:
 
 | Tier | Scope | User interaction |
 |---|---|---|
-| **1 — MSXU** | Standardised controls on `{0f3f95dc-…}` | **None.** Runs silently at first use. |
+| **0 — MSXU device-driven** | Mode control on `{0f3f95dc-…}`; firmware alternates illumination | **None.** What Windows Hello does. |
+| **1 — MSXU direct** | MSXU emitter toggle, userspace-driven strobe | **None.** Runs silently at first use. |
 | **2 — Vendor XU** | Selector and payload search on vendor GUIDs | Explicit confirmation with the risk stated |
 | **3 — Manual** | User supplies parameters from a report | Explicit, documented |
 
@@ -562,10 +616,20 @@ surfaced in the UI rather than assumed.
 
 **Measured on the reference camera (2026-08-04):** 60 consecutive IR frames at
 640×360 showed mean luminance 0.0–0.5 of 255, with an even/odd frame difference
-of 0.01. There is no firmware strobing, and the emitter is not energised by
-streaming alone. The reference device is therefore not always-on, and its IR
-sensor produces no usable image without emitter control — which is why R3 is
-the project's defining risk rather than merely an important one.
+of 0.01. The device is therefore not always-on, and its IR sensor produces no
+usable image without emitter control — which is why R3 is the project's
+defining risk rather than merely an important one.
+
+**Important qualification.** That capture was taken with the MSXU mode control
+at its default value of `1`. It shows only that the camera does not strobe *in
+its default mode* — it does **not** rule out firmware strobing, because Hello's
+alternating illumination only begins once face-authentication mode is selected.
+Mode 2 has never been tried on this machine.
+
+The idle baseline must therefore be measured **per mode**, not once: capture at
+the default, then at each accepted mode value, comparing alternation. Concluding
+"no firmware strobing" from a default-mode capture alone would discard the
+Tier 0 path — the one that would make this work exactly as Hello does.
 
 ### 4.11 Upstream path
 
@@ -583,6 +647,66 @@ afterthought:
   would require.
 - Where a device-specific quirk proves general, it belongs in `uvcvideo`
   rather than in our database.
+
+### 4.11.1 The kernel already has the hooks
+
+Inspection of `uvcvideo` 1.1.1 on kernel 7.1.4 (2026-08-04) found:
+
+```
+uvc_msxu_guid                              MSXU GUID is already known
+V4L2_META_FMT_UVC_MSXU_1_5                 an MSXU 1.5 metadata format exists
+dev->info->meta_format == V4L2_META_FMT_UVC_MSXU_1_5
+```
+
+**MSXU is not a foreign concept to the kernel — it is already supported for
+metadata.** The metadata format is chosen by a per-device entry in `uvcvideo`'s
+device info table, and the reference camera is absent from it: its IR metadata
+node reports plain `UVCH`, not the MSXU 1.5 format.
+
+Two consequences:
+
+1. **The upstream contribution is small and precedented.** Adding a device to an
+   existing table is an ordinary patch, not a new subsystem. The road is much
+   shorter than "teach the kernel about MSXU".
+2. **MSXU 1.5 metadata may carry per-frame illumination tagging** — the signal
+   Windows Hello uses to pair illuminated and clean frames. If so, enabling it
+   for a device supplies frame tagging directly, and §4.4's timing-based
+   inference becomes a fallback for devices that lack it rather than the primary
+   mechanism.
+
+Tier 0 discovery (§4.2) should therefore check whether the IR metadata node
+offers `V4L2_META_FMT_UVC_MSXU_1_5` in addition to `UVCH`, and record the answer
+in the quirks entry.
+
+### 4.11.2 Why not write our own driver
+
+Considered and rejected. The evidence against it is the measurement that
+prompted the question: `UVCIOC_CTRL_QUERY` on unmapped MSXU controls **succeeded
+as an ordinary desktop user**, with no root and no `CAP_SYS_ADMIN`. Access is
+not the problem, so a driver would buy access we already have.
+
+What it would cost:
+
+| Cost | Detail |
+|---|---|
+| **Contradicts "just works"** | An out-of-tree module means DKMS, rebuilds on every kernel update, and either disabling Secure Boot or signing the module. That is a worse setup experience than the manual configuration we are eliminating. |
+| **Architecturally backwards** | This project's central security argument is privilege separation — inference confined to a sandboxed `nobody` process. Adding ring-0 code to an authentication system inverts that. |
+| **Unmaintainable at this scale** | Out-of-tree modules track a moving internal ABI. For a solo maintainer with no budget it is the highest-maintenance artifact available. |
+| **Undistributable** | No distribution will package an out-of-tree kernel module for a face-authentication tool. |
+
+What it would buy — frame-synchronous emitter toggling — is precisely what
+Tier 0 obtains from the *firmware* when the device supports it, and what an
+upstream `uvcvideo` patch obtains for everyone when it does not.
+
+**The correct sequence is userspace first, upstream second, and never
+out-of-tree.** A credible `uvcvideo` patch needs a device corpus demonstrating
+the problem is general rather than one laptop's quirk — and that corpus only
+exists once the userspace tool ships and users contribute (§4.6). Writing kernel
+code first would mean arriving upstream with no evidence.
+
+A libusb userspace driver, detaching `uvcvideo` entirely, is likewise
+unnecessary: it would forfeit V4L2 streaming, metadata, and buffer management to
+solve a problem we do not have.
 
 Success here would make parts of this specification obsolete. That is the
 intended outcome.
