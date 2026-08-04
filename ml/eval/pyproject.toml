@@ -1,0 +1,17 @@
+[project]
+name = "namtor-eval"
+version = "0.1.0"
+description = "Evaluation harness for Nam-tor"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-only" }
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["namtor_eval*"]

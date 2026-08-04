@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-only
+/target
+__pycache__/
+*.pyc
+.pytest_cache/
+/ml/**/data/
+/ml/**/weights/
+/fixtures/large/
+
+# opencode internal
+/.omo/
+# python build artifacts
+ml/eval/namtor_eval.egg-info/
+ml/.venv/
