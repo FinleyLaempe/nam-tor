@@ -5,6 +5,23 @@
 # Emitter values below are MEASURED, not inferred. Each mode value was written
 # to the control, a 40-frame burst captured, and the original value restored
 # with restoration verified. See docs/spikes/ for the full record.
+#
+# Fields codified by the M1 `namtor-uvc` crate (docs/m1-spike-report.md):
+#   [nodes].ir_vc_interface, ir_streaming, rgb_*, ir_format_guid
+#       <- namtor-uvc::descriptors (parse_descriptors, is_l8_ir_format,
+#          format_guid; fixture fixtures/descriptors/3277-0018.bin)
+#   [emitter].method/unit/selector/length/payload_on/payload_off
+#       <- namtor-uvc::mode (ModeControl, find_mode_controls, mode_candidates)
+#          + namtor-uvc::probe (SafeXu enforces probe-safety rules §4.3)
+#   [emitter.strobe].illuminated_mean/clean_mean
+#       <- namtor-uvc::mode::measure_alternation (parity classification)
+#   [emitter.idle].verdict/mean_luma/alternation
+#       <- scripts/spike-emitter-idle.sh
+#   [bandwidth].concurrent_ir_rgb  <- scripts/spike-dual-stream.sh (R1)
+#   [exposure].ae_hunts            <- scripts/spike-ae-hunting.sh (R2)
+#   [access].requires_root         <- namtor-uvc::device (UVCIOC_CTRL_QUERY)
+#   [upstream].msxu_metadata_available
+#       <- namtor-uvc::metadata (V4L2_META_FMT_UVC parse_meta)
 
 [device]
 vid_pid     = "3277:0018"
