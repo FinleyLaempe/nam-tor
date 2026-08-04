@@ -12,3 +12,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[[bin]]
+name = "namtor-spike"
+path = "src/bin/namtor-spike.rs"
