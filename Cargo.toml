@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/namtor-camera",
     "crates/namtor-capture",
+    "crates/namtor-cli",
     "crates/namtor-eval",
     "crates/namtor-hwdb",
     "crates/namtor-probe",

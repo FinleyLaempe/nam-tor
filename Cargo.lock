@@ -553,6 +553,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "namtor-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "namtor-camera",
+ "namtor-hwdb",
+ "tempfile",
+]
+
+[[package]]
 name = "namtor-eval"
 version = "0.1.0"
 dependencies = [
