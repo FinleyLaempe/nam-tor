@@ -4,6 +4,7 @@ members = [
     "crates/namtor-capture",
     "crates/namtor-eval",
     "crates/namtor-hwdb",
+    "crates/namtor-probe",
     "crates/namtor-uvc",
 ]
 
