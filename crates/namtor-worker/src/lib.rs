@@ -15,6 +15,9 @@
 //!
 //! [`namtor-daemon`]: https://github.com/finley/nam-tor
 
+pub mod infer;
+#[cfg(not(feature = "mock-infer"))]
+pub mod infer_onnx;
 pub mod pipe;
 
 use thiserror::Error;
