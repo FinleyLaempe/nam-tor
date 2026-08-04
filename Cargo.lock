@@ -598,6 +598,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "namtor-proto"
+version = "0.1.0"
+dependencies = [
+ "namtor-capture",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "namtor-uvc"
 version = "0.1.0"
 dependencies = [
