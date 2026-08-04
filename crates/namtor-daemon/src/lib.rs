@@ -7,6 +7,7 @@
 //! cold-camera lifecycle (spec §5.5).
 
 pub mod acl;
+pub mod daemon;
 pub mod licence;
 pub mod lifecycle;
 pub mod listener;
