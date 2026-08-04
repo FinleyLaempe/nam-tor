@@ -3,3 +3,4 @@
 //! multi-camera selection. Sits between the daemon and the capture layer.
 
 pub mod emitter_ctrl;
+pub mod watchdog;

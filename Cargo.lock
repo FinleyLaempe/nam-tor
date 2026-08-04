@@ -210,6 +210,7 @@ dependencies = [
  "namtor-uvc",
  "tempfile",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

@@ -9,6 +9,11 @@ namtor-uvc = { path = "../namtor-uvc" }
 namtor-hwdb = { path = "../namtor-hwdb" }
 namtor-capture = { path = "../namtor-capture" }
 thiserror = { workspace = true }
+toml = "0.8"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[[bin]]
+name = "namtor-camera-emitter-off"
+path = "src/bin/namtor-camera-emitter-off.rs"
