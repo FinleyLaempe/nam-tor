@@ -320,6 +320,49 @@ clean alternation *is* device-driven illumination, whatever it is nominally
 called. Behaviour is recorded in the quirks entry rather than inferred from a
 specification we cannot verify.
 
+#### Tier 0 confirmed on the reference camera, 2026-08-04
+
+Each accepted mode value was written to selector 6, a 40-frame burst captured,
+and the original value restored. Restoration verified after every write.
+
+| `sel 6` payload | Mode | Mean | Alternation | Verdict |
+|---|---|---|---|---|
+| `01 03 00 …` | 0 | 0.66 | 0.08 | inert |
+| `01 03 01 …` | 1 (default) | 0.55 | 0.01 | plain IR, emitter off |
+| **`01 03 02 …`** | **2** | **41.02** | **81.78** | **device-driven illumination** |
+| `01 03 03 …` | 3 | 0.43 | 0.48 | inert |
+
+Selector 9 produced no luminance change and is unrelated to the emitter.
+
+**Mode 2 makes the firmware strobe its own emitter.** Per-frame means across
+40 consecutive frames:
+
+```
+  0.4  217.6    0.4  216.8    0.4  115.6    0.0  115.0    0.0   69.7
+  0.0   69.3    0.0   54.0    0.0   53.5    0.0   50.0    0.0   49.8
+  0.0   46.8    0.0   46.5    0.0   46.1    0.0   45.8    0.0   45.5
+  0.0   45.4    0.0   45.4    0.0   45.3    0.0   45.3    0.0   45.3
+```
+
+Strict 1:1 alternation, 50% duty cycle, sustained for the whole burst. This is
+the mechanism Windows Hello uses, reached from Linux userspace with a single
+`SET_CUR` and no elevated privilege.
+
+Consequences, which simplify several later sections:
+
+- **Risk R3 is resolved.** The emitter is controllable, by the standardised
+  path, with zero user interaction — so gate G1.4 is satisfiable on this class
+  of hardware.
+- **§4.4's torn-frame machinery is not needed** when Tier 0 applies. The
+  firmware pairs frames; there is no userspace toggle to land mid-exposure. It
+  remains the Tier 1 and Tier 2 fallback.
+- **Ambient IR indoors is effectively zero** (clean frames read 0.0), so the
+  differential is very nearly the illuminated frame itself. Subtraction still
+  matters outdoors and under incandescent light, where it is doing real work.
+- **The mode is not persistent.** It reverts on restore and is not retained
+  across device reset, so the daemon must set it per capture session — which is
+  also why §4.10.3's resume handling is required.
+
 **Tier 1 — MSXU direct emitter control**
 
 If no mode yields firmware alternation, use MSXU controls to toggle the emitter
@@ -406,18 +449,34 @@ never wrong.
 ### 4.5 Auto-exposure interaction — open risk
 
 The IR node exposes no exposure or gain controls, so firmware auto-exposure is in
-control. AE may hunt against the strobe: a bright frame triggers exposure
-reduction, the following dark frame is under-exposed, and the loop oscillates.
+control. The concern was that AE would hunt against the strobe: a bright frame
+triggers exposure reduction, the following dark frame is under-exposed, and the
+loop oscillates.
 
-Mitigations, in order of preference:
+**Measured under Tier 0 on 2026-08-04. AE acts, but benignly.** From the
+40-frame burst in §4.2, illuminated frames decay 217.6 → 45.3 and then hold
+steady (45.4, 45.4, 45.3, 45.3, 45.3), settling after roughly 15 pairs — about
+one second. Two properties make this harmless:
 
-1. Locate exposure control via MSXU or vendor XU and pin it.
-2. Choose strobe periods short enough that AE cannot track.
-3. Software normalisation of the differential, accepting added noise.
+1. **AE affects only the illuminated frames.** Clean frames stay at 0.0
+   throughout. The pairing and the differential remain valid during settling.
+2. **The first pair has the best signal-to-noise ratio** (217.2), not the worst.
+   Early exit (§6.7) therefore benefits rather than suffers.
 
-**Must be measured in M1.** If AE hunting proves unfixable, strobe-derived
-liveness weakens and the learned PAD model carries proportionally more weight.
-This is tracked as risk R2 (§13).
+Design response, replacing the earlier mitigation list:
+
+- **Normalise each differential per pair** rather than assuming a stable
+  absolute scale. This absorbs AE drift completely and costs one division.
+- **Do not wait for AE to settle.** Waiting would add ~1 s to every
+  authentication and put gate G2.1 at risk, for a pair that is *worse* than the
+  one available immediately.
+- Analytic PAD thresholds (§6.4) must be defined on **normalised** statistics,
+  or they will drift with exposure. This is a calibration requirement, recorded
+  in the M6 plan.
+
+Residual risk applies to Tier 1 and Tier 2 devices, where userspace drives the
+strobe and AE may genuinely oscillate. R2 remains open for those (§13); it is
+resolved for Tier 0.
 
 ### 4.6 Quirks database
 
@@ -1510,8 +1569,8 @@ invalidate design sections.
 | ID | Risk | Impact if realised | Resolution |
 |---|---|---|---|
 | **R1** | UVC refuses simultaneous IR + RGB streams (§4.8) | Dual-camera fusion (§6.5) must fall back to alternating bursts, adding latency | M1 hardware spike |
-| **R2** | Firmware AE hunts against the strobe (§4.5) | Strobe differential degrades; learned PAD carries more weight; G4 harder | M1 hardware spike. **Preliminary evidence is favourable:** reference-camera AE was observed ramping over ~2.4 s, orders of magnitude slower than a 33 ms strobe period, so it is unlikely to track the strobe. Not conclusive — behaviour may differ once the sensor receives real signal. |
-| **R3** | Neither MSXU nor vendor XU yields emitter control on the reference device | The entire liveness approach requires rework; project premise at risk | M1 hardware spike |
+| **R2** | Firmware AE hunts against the strobe (§4.5) | Strobe differential degrades; learned PAD carries more weight; G4 harder | **RESOLVED for Tier 0, 2026-08-04.** AE settles in ~15 pairs and affects only illuminated frames; clean frames hold at 0.0. Per-pair normalisation absorbs it, and the first pair has the best SNR. **Remains open for Tier 1 and Tier 2 devices**, where userspace drives the strobe. |
+| ~~**R3**~~ | ~~Neither MSXU nor vendor XU yields emitter control~~ | — | **RESOLVED PASS, 2026-08-04.** MSXU unit 4 selector 6 mode 2 makes the firmware strobe its own emitter: strict 1:1 alternation, illuminated 81.9 vs clean 0.13. Reached with one `SET_CUR`, no elevated privilege, no user interaction (§4.2). |
 | **R4** | INT8 degrades embedding quality beyond tolerance (§10.6) | Fall back to FP16; latency budget tightens but G2 likely still met | M0 eval harness |
 | **R5** | Normalisation cohort cannot be sourced without licence ambiguity (§6.6) | Synthetic cohort, or contributed cohort via `namtor-collect`; possible accuracy cost | M3 |
 | **R6** | PAD generalisation from few subjects is inadequate (§10.3) | G4 met on reference hardware only; claim scoped accordingly | M6, ongoing |

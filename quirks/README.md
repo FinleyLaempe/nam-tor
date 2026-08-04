@@ -51,11 +51,14 @@ One TOML file per device under `devices/`, named `VID-PID.toml`.
 
 | Value | Meaning | Probing tier |
 |---|---|---|
-| `msxu` | Microsoft's standardised extension unit | **Tier 1 — silent, no prompt** |
+| `msxu_mode` | MSXU mode control; **firmware strobes the emitter itself**, as it does for Windows Hello | **Tier 0 — silent, no prompt** |
+| `msxu` | MSXU direct emitter toggle, userspace-driven strobe | **Tier 1 — silent, no prompt** |
 | `vendor_xu` | Vendor-specific extension unit | Tier 2 — requires consent |
 | `always_on` | Emitter energised by streaming; no off control | — |
-| `firmware_strobed` | Device strobes the emitter itself | — |
+| `firmware_strobed` | Device strobes unprompted, with no control set at all | — |
 | `unknown` | Nothing found | — |
+
+`msxu_mode` and `firmware_strobed` are both firmware-driven, and the distinction is worth keeping: `firmware_strobed` alternates with **no control set**, while `msxu_mode` alternates **only after a mode is selected** and reverts when it is not. The latter is what the reference camera does, and it is why the daemon must set the mode per capture session rather than once at install.
 
 `always_on` matters: strobe differential is impossible on such devices, so liveness falls back to non-differential signals and gate G4 is evaluated separately. It is recorded rather than hidden.
 

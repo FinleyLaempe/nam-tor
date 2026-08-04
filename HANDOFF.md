@@ -40,7 +40,9 @@ Branch `main`. All commits are documentation and scaffolding.
 
 It reports what your machine is missing and which milestone each gap blocks. On the reference machine it exits 0 with no blocking items.
 
-**Then execute M1 first, not M0**, despite the numbering — *if* you are at the reference machine. M1 answers three questions that can invalidate large parts of the design, and it needs physical hardware. M0 is pure software and can be done any time.
+**Then execute M1 first, not M0**, despite the numbering — *if* you are at the reference machine. M1 needs physical hardware; M0 is pure software and can be done any time.
+
+R3, the risk that could have invalidated the design, is **already resolved PASS** (below), so M1 is now confirmation plus the two remaining unknowns — R1 (dual-stream bandwidth) and R2 for Tier 1/2 devices — rather than a make-or-break gate.
 
 If you are not at the reference machine, do M0.
 
@@ -50,35 +52,64 @@ Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` o
 
 ---
 
-## The three questions that decide the project
+## R3 is already resolved — PASS
 
-Ranked by consequence. All answered by M1, in days.
+**The project's defining risk was answered on 2026-08-04, before any implementation.**
+
+`MSXU unit 4, selector 6, mode 2` makes the camera **strobe its own IR emitter**, which is the mechanism Windows Hello uses. One `SET_CUR`, no elevated privilege, no user interaction.
+
+```
+mode 0  mean  0.66  alternation  0.08   inert
+mode 1  mean  0.55  alternation  0.01   plain IR, emitter off (default)
+mode 2  mean 41.02  alternation 81.78   ALTERNATING ILLUMINATION  <-
+mode 3  mean  0.43  alternation  0.48   inert
+
+per-frame means under mode 2, 40 consecutive frames:
+  0.4 217.6   0.4 216.8   0.4 115.6   0.0 115.0   0.0  69.7
+  0.0  69.3   0.0  54.0   0.0  53.5   0.0  50.0   0.0  49.8
+  0.0  46.8   0.0  46.5   0.0  46.1   0.0  45.8   0.0  45.5
+  0.0  45.4   0.0  45.4   0.0  45.3   0.0  45.3   0.0  45.3
+```
+
+Strict 1:1 alternation, 50% duty cycle, sustained. Every control was restored and restoration verified.
+
+Full parameters are in `quirks/devices/3277-0018.toml`, already committed.
+
+**What this changes:**
+
+- Torn-frame handling (spec §4.4) is **unnecessary** on Tier 0 devices — the firmware pairs frames. It remains the Tier 1/2 fallback.
+- Gate G1.4 (zero user interaction) is satisfiable on this hardware.
+- **The mode is not persistent.** It reverts and does not survive device reset, so the daemon must set it per capture session — which is also why resume handling (§4.10.3) is mandatory, not optional.
+
+### Remaining open risks
 
 | Risk | Question | If it fails |
 |---|---|---|
-| **R3** | Can the IR emitter be controlled via UVC extension units at all? | **Project-defining.** No strobing → no differential liveness → roughly Howdy's position. M1's plan ends with a hard stop and three named fallbacks. Do not plan M2 against a falsified premise. **Odds improved:** the IR MSXU advertises selectors 6 and 9, so there is a declared, standardised control to try first. |
-| **R1** | Will UVC allow simultaneous IR + RGB streams? | Dual-camera fusion falls back to alternating bursts. Adds ~100 ms. Fusion is not lost. |
-| **R2** | Does firmware auto-exposure hunt against the strobe? | Strobe differential weakens; the learned PAD model carries more of gate G4. Three mitigations in spec §4.5. **Preliminary evidence is favourable** — see below. |
+| **R1** | Will UVC allow simultaneous IR + RGB streams? | Dual-camera fusion falls back to alternating bursts. Adds ~100 ms. Fusion is not lost. **Still untested** — `scripts/spike-dual-stream.sh`. |
+| **R2** | Does firmware auto-exposure hunt against the strobe? | **Resolved for Tier 0, still open for Tier 1/2.** See below. |
 
-### Already measured on the reference camera, 2026-08-04
+### Auto-exposure, measured under mode 2
 
-60 IR frames captured with no emitter control applied:
+Illuminated frames decay `217.6 → 45.3` and then hold steady, settling after ~15 pairs (~1 s). **Clean frames stay at 0.0 throughout.**
+
+Two properties make this harmless, and one design rule follows:
+
+1. AE touches **only** the illuminated phase, so pairing and the differential stay valid while it settles.
+2. **The first pair has the best SNR** (217.2), not the worst.
+
+→ **Normalise each differential per pair, and do not wait for AE to settle.** Waiting would add ~1 s to every authentication and put gate G2.1 at risk, in exchange for a pair that is *worse* than the one available immediately. Analytic PAD thresholds must be defined on normalised statistics or they will drift with exposure.
+
+### One algorithm correction worth carrying forward
+
+Classifying illuminated vs clean frames by a **global brightness threshold is wrong.** It nearly misclassified the settled tail above (45.3 against a burst mean of ~35) and would fail outright if AE settled lower. Classify by **frame parity** after verifying the alternation shape via sign-flips in consecutive deltas. M1 Task 14 has this fixed, with the real decay sequence as a test fixture.
+
+### Idle baseline, no control set
 
 ```
-means: 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.4 0.4 ... 0.5 0.5   (of 255)
-even-idx mean=0.38  odd-idx mean=0.40  alternation=0.01
-brightest frame: centre-strip=0.6  edge-strip=0.6
+means: 0.0 … 0.4 … 0.5 (of 255)   alternation=0.01
 ```
 
-Three conclusions, all recorded in spec §4.10.5:
-
-1. **The IR sensor is black without the emitter.** Not merely degraded — unusable. This is what makes R3 project-defining rather than important.
-2. **No firmware strobing *in the default mode*** (alternation 0.01). Read the qualification below before concluding anything from this — it does **not** rule out device-driven illumination.
-3. **Auto-exposure is slow.** The `0.0 → 0.5` ramp is AE searching for light over ~2.4 s, orders of magnitude slower than a 33 ms strobe period. **R2 looks much smaller than feared.** Not conclusive — behaviour may differ once the sensor receives real signal.
-
-**Qualification on point 2, and it matters.** That capture was taken with the MSXU mode control at its default value of `1`. Windows Hello's alternating illumination only begins once face-authentication mode is selected — and mode 2 has never been tried on this machine. Measure the idle baseline **per mode**, not once. Concluding "userspace must drive the strobe" from a default-mode capture would discard the Tier 0 path entirely.
-
-M1 Task 13 scripts this measurement so it is reproducible on other devices. Run it **before** emitter probing: an `always_on` or `firmware_strobed` device changes what probing means.
+The IR sensor is **black without the emitter** — not degraded, unusable. Recorded in spec §4.10.5. M1 Task 13 scripts this so it is reproducible on other devices; run it **before** emitter probing, since an `always_on` or `firmware_strobed` device changes what probing means. Measure it **per mode**, not once.
 
 M1 Task 4 is a falsifier for the spec's central detection claim: it parses the real USB descriptor blob and asserts an L8 format GUID exists. If spec §4.1 is wrong, that test fails in hour one.
 

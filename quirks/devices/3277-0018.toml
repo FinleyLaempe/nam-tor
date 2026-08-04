@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Nam-tor quirks entry #1 — the reference development device.
+#
+# Emitter values below are MEASURED, not inferred. Each mode value was written
+# to the control, a 40-frame burst captured, and the original value restored
+# with restoration verified. See docs/spikes/ for the full record.
+
+[device]
+vid_pid     = "3277:0018"
+name        = "Sonix USB2.0 FHD UVC WebCam"
+laptop      = "ASUS ROG Flow X16 GV601VI"
+uvc_version = "1.00"
+
+[nodes]
+# USB interface numbers, never /dev/videoN — node numbering is allocation-order
+# dependent and changes between boots.
+#
+# This camera has TWO VideoControl interfaces, one per sensor, each declaring
+# both extension units. Filter by interface before probing or you will poke the
+# colour sensor's controls.
+ir_vc_interface  = 2   # IR sensor's VideoControl interface (extension units)
+ir_streaming     = 3   # IR sensor's VideoStreaming interface (L8 format)
+rgb_vc_interface = 0
+rgb_streaming    = 1
+ir_format_guid   = "00000032-0002-0010-8000-00aa00389b71"  # MFVideoFormat_L8
+ir_resolution    = "640x360@30"
+metadata_node    = true   # UVCH; NOT V4L2_META_FMT_UVC_MSXU_1_5 — see below
+depth            = false  # no depth format anywhere in the descriptors
+
+[emitter]
+# TIER 0: the firmware strobes its own emitter once this mode is selected,
+# which is the mechanism Windows Hello uses. No userspace strobe needed.
+method       = "msxu_mode"
+guid         = "0f3f95dc-2632-4c4e-92c9-a04782f43bc8"
+vc_interface = 2
+unit         = 4
+selector     = 6
+length       = 9
+payload_on   = "010302000000000000"   # mode 2 — alternating illumination
+payload_off  = "010301000000000000"   # mode 1 — plain IR, emitter off (default)
+
+# Byte 1 (0x03) is a capability bitmask and must be preserved. Byte 2 is the
+# mode field. Measured behaviour of every accepted value:
+#   mode 0  mean  0.66  alternation  0.08  inert
+#   mode 1  mean  0.55  alternation  0.01  plain IR, emitter off (default)
+#   mode 2  mean 41.02  alternation 81.78  ALTERNATING ILLUMINATION
+#   mode 3  mean  0.43  alternation  0.48  inert
+#
+# Selector 9 (len 4, GET+SET, CUR 01 00 00 00, DEF 00 00 00 00) produced no
+# luminance change. Not emitter-related.
+#
+# The Sonix vendor XU (unit 3) on this interface advertises bmControls 00 and
+# no control responds to GET_LEN. The colour sensor's instance advertises bf —
+# do not confuse them.
+
+[emitter.strobe]
+# Measured under mode 2: strict 1:1 alternation, sustained across the burst.
+pattern           = "1:1"
+duty_cycle        = 0.5
+illuminated_mean  = 81.9
+clean_mean        = 0.13
+# The mode is NOT persistent: it reverts on restore and does not survive device
+# reset, so the daemon sets it per capture session. This is also why resume
+# handling (spec §4.10.3) is required.
+persistent        = false
+
+[emitter.idle]
+# With no control set. Confirms the sensor is unusable without the emitter.
+verdict     = "idle_dark"
+mean_luma   = 0.4
+alternation = 0.01
+
+[emitter.lifecycle]
+max_on_ms = 2000
+
+[exposure]
+# Firmware AE acts on the ILLUMINATED frames only: they decay 217.6 -> 45.3 and
+# then hold steady, settling after ~15 pairs (~1 s). Clean frames stay at 0.0
+# throughout, so pairing and the differential remain valid while settling.
+#
+# Do NOT wait for settling: the first pair has the best SNR (217.2), and waiting
+# would add ~1 s to every authentication, putting gate G2.1 at risk. Normalise
+# each differential per pair instead.
+ae_hunts             = false
+ae_affects           = "illuminated_only"
+ae_settle_pairs      = 15
+requires_per_pair_norm = true
+
+[bandwidth]
+# From scripts/spike-dual-stream.sh — not yet run.
+concurrent_ir_rgb = "untested"
+
+[access]
+# UVCIOC_CTRL_QUERY on unmapped MSXU controls succeeded as an ordinary desktop
+# user: no root, no CAP_SYS_ADMIN. The daemon needs only `video` group
+# membership.
+requires_root = false
+
+[upstream]
+# uvcvideo already knows MSXU (uvc_msxu_guid, V4L2_META_FMT_UVC_MSXU_1_5), but
+# this device is absent from the driver's info table, so its metadata node
+# reports plain UVCH. Adding it is a small, precedented upstream patch and may
+# yield per-frame illumination tagging directly. See spec §4.11.1.
+msxu_metadata_available = false
+candidate_kernel_patch  = true
+
+[meta]
+verified_by = "finley"
+verified_on = "2026-08-04"
+kernel      = "7.1.4"
+method_note = "read-only probe, then per-mode write with verified restore"

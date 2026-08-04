@@ -3019,7 +3019,8 @@ elif overall > 30.0:
 else:
     print("idle_dark: the emitter is not energised by streaming.")
     print("Emitter control is REQUIRED; the sensor is unusable without it.")
-    print("This makes R3 project-defining rather than merely important.")
+    print("Emitter control is mandatory. On the reference camera this is\n"
+          "supplied by MSXU mode 2 (Tier 0) -- see quirks/devices/3277-0018.toml.")
 
 if abs(ramp) > 0.2 and overall < 5.0:
     print(f"\nNote: a slow monotonic ramp ({ramp:+.2f} over {n} frames) is")
@@ -3139,12 +3140,31 @@ mod tests {
     }
 
     #[test]
-    fn on_and_off_are_assigned_by_brightness_not_by_index() {
-        // The first frame of a burst may be either phase. Assigning by parity
-        // would invert the pairing half the time.
-        let ev = measure_alternation(&frames(&[40, 200, 40, 200]));
-        assert!(ev.alternates);
-        assert!(ev.on_mean > ev.off_mean);
+    fn either_phase_may_come_first() {
+        // The burst may start on either phase; both must classify correctly.
+        for seq in [[40u8, 200, 40, 200], [200, 40, 200, 40]] {
+            let ev = measure_alternation(&frames(&seq));
+            assert!(ev.alternates, "sequence {seq:?} should alternate");
+            assert!(ev.on_mean > ev.off_mean);
+        }
+    }
+
+    #[test]
+    fn decaying_illuminated_frames_still_classify_correctly() {
+        // Real reference-camera data: auto-exposure decays the illuminated
+        // phase 217 -> 45 while clean frames hold at 0. A global brightness
+        // threshold derived from the burst mean nearly misclassifies the
+        // settled tail and would fail outright if AE settled lower.
+        let seq: Vec<u8> = vec![
+            0, 217, 0, 216, 0, 115, 0, 115, 0, 69,
+            0, 69, 0, 54, 0, 53, 0, 50, 0, 49,
+            0, 46, 0, 46, 0, 46, 0, 45, 0, 45,
+        ];
+        let ev = measure_alternation(&frames(&seq));
+
+        assert!(ev.alternates, "strict alternation must survive AE decay");
+        assert!(ev.off_mean < 1.0, "clean phase should stay near zero");
+        assert!(ev.on_mean > 40.0, "illuminated phase should stay well above it");
     }
 
     #[test]
@@ -3340,10 +3360,15 @@ const ALTERNATION_THRESHOLD: f64 = 20.0;
 
 /// Detects firmware-driven strobing in a captured burst.
 ///
-/// Phases are assigned by **brightness, not frame parity** — the first frame
-/// of a burst may be either phase, and parity would invert the pairing half
-/// the time. A monotonic ramp (auto-exposure hunting) must not be mistaken
-/// for alternation, so consecutive differences must change sign.
+/// **Classification is by frame parity, not by a global brightness
+/// threshold.** Measured reference data shows illuminated frames decaying
+/// 217.6 → 45.3 under auto-exposure while clean frames hold at 0.0. A global
+/// threshold derived from the burst mean nearly misclassifies the settled
+/// illuminated frames, and would fail outright if AE settled lower.
+///
+/// The shape check comes first: strict 1:1 alternation means consecutive
+/// deltas flip sign at nearly every step. A monotonic ramp — AE hunting with
+/// no strobe — never does, and must not be reported as alternation.
 pub fn measure_alternation(frames: &[Frame]) -> AlternationEvidence {
     let none = AlternationEvidence {
         alternation: 0.0,
@@ -3357,24 +3382,33 @@ pub fn measure_alternation(frames: &[Frame]) -> AlternationEvidence {
 
     let means: Vec<f64> = frames.iter().map(|f| luma_stats(f).mean).collect();
 
-    // Alternation implies consecutive deltas flip sign; a ramp does not.
+    // Strict alternation flips the sign of the delta at (almost) every step.
     let signs: Vec<i8> = means
         .windows(2)
         .map(|w| (w[1] - w[0]).signum() as i8)
         .collect();
     let flips = signs.windows(2).filter(|s| s[0] != s[1] && s[0] != 0).count();
-    let alternating_shape = flips >= signs.len().saturating_sub(2).max(1);
+    // Allow two non-flips for noise and for a settled tail.
+    let alternating_shape = flips + 2 >= signs.len().saturating_sub(1);
 
-    let overall = means.iter().sum::<f64>() / means.len() as f64;
-    let bright: Vec<f64> = means.iter().copied().filter(|m| *m >= overall).collect();
-    let dark: Vec<f64> = means.iter().copied().filter(|m| *m < overall).collect();
+    // Split by parity, then decide which parity is the illuminated one.
+    // Robust to the illuminated phase decaying under auto-exposure.
+    let (even, odd): (Vec<f64>, Vec<f64>) = means
+        .iter()
+        .enumerate()
+        .partition_map_parity();
 
-    if bright.is_empty() || dark.is_empty() {
+    if even.is_empty() || odd.is_empty() {
         return none;
     }
+    let even_mean = even.iter().sum::<f64>() / even.len() as f64;
+    let odd_mean = odd.iter().sum::<f64>() / odd.len() as f64;
 
-    let on_mean = bright.iter().sum::<f64>() / bright.len() as f64;
-    let off_mean = dark.iter().sum::<f64>() / dark.len() as f64;
+    let (on_mean, off_mean) = if odd_mean >= even_mean {
+        (odd_mean, even_mean)
+    } else {
+        (even_mean, odd_mean)
+    };
     let alternation = on_mean - off_mean;
 
     AlternationEvidence {
@@ -3382,6 +3416,26 @@ pub fn measure_alternation(frames: &[Frame]) -> AlternationEvidence {
         on_mean,
         off_mean,
         alternates: alternating_shape && alternation >= ALTERNATION_THRESHOLD,
+    }
+}
+
+/// Splits an indexed iterator of means into (even-index, odd-index) vectors.
+trait ParityPartition {
+    fn partition_map_parity(self) -> (Vec<f64>, Vec<f64>);
+}
+
+impl<'a, I: Iterator<Item = (usize, &'a f64)>> ParityPartition for I {
+    fn partition_map_parity(self) -> (Vec<f64>, Vec<f64>) {
+        let mut even = Vec::new();
+        let mut odd = Vec::new();
+        for (i, v) in self {
+            if i % 2 == 0 {
+                even.push(*v);
+            } else {
+                odd.push(*v);
+            }
+        }
+        (even, odd)
     }
 }
 ```
@@ -3413,7 +3467,7 @@ impl<T: XuTransport> SafeXu<T> {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p namtor-uvc mode::`
-Expected: PASS — 8 tests.
+Expected: PASS — 9 tests.
 
 - [ ] **Step 5: Add the `modes` subcommand to the spike CLI**
 
@@ -3631,6 +3685,11 @@ Output:
 
 **Verdict:** TIER-0-PASS / TIER-0-FAIL
 
+**Already answered on the reference camera (2026-08-04): TIER-0-PASS.**
+`sel 6` mode 2 (`01 03 02 00 00 00 00 00 00`) produces strict 1:1 alternation,
+illuminated 81.9 vs clean 0.13. Modes 0, 1 and 3 are inert; selector 9 is
+unrelated to the emitter. Re-run to reproduce, and confirm restoration.
+
 **If PASS:** the camera strobes the emitter itself, as it does for Windows
 Hello. Torn-frame handling (spec §4.4) becomes unnecessary, risk R2 is void, and
 per-device strobe timing disappears. Record the winning unit, selector, and
@@ -3727,9 +3786,11 @@ gate G4.
 
 No changes needed unless your device exercises a case the README does not describe, in which case extend the README too.
 
-- [ ] **Step 3: Write quirks entry #1**
+- [ ] **Step 3: Verify and extend quirks entry #1**
 
-Create `quirks/devices/3277-0018.toml`, substituting the emitter values measured in Task 10. If R3 failed, set `method = "unknown"` and leave the parameters empty rather than guessing.
+`quirks/devices/3277-0018.toml` **already exists** with measured Tier 0 values from 2026-08-04. Verify your run reproduces them, then fill the fields still marked `untested` — notably `[bandwidth].concurrent_ir_rgb` from Task 11. Do not overwrite measured values with guesses; if your measurement differs, record both and note the conditions.
+
+The committed entry, for reference:
 
 ```toml
 # SPDX-License-Identifier: Apache-2.0
