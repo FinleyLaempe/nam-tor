@@ -5,5 +5,6 @@
 //! Licensed Apache-2.0 so any project can consume the hardware database this
 //! crate underpins. IR camera detection is a Linux-wide problem.
 
+pub mod descriptors;
 pub mod probe;
 pub mod xu;
