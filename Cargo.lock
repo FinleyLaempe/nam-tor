@@ -95,6 +95,7 @@ dependencies = [
 name = "namtor-uvc"
 version = "0.1.0"
 dependencies = [
+ "namtor-capture",
  "nix",
  "serde",
  "tempfile",

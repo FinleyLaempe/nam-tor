@@ -8,4 +8,5 @@
 pub mod descriptors;
 pub mod metadata;
 pub mod probe;
+pub mod strobe;
 pub mod xu;
