@@ -2,4 +2,5 @@
 //! Sandbox: seccomp + landlock self-applied by the worker before its request
 //! loop.
 
+pub mod landlock;
 pub mod seccomp;
