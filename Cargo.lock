@@ -92,6 +92,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "namtor-hwdb"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "namtor-uvc"
 version = "0.1.0"
 dependencies = [
