@@ -7,6 +7,7 @@
 
 pub mod descriptors;
 pub mod device;
+pub mod discover;
 pub mod emitter;
 pub mod metadata;
 pub mod probe;
