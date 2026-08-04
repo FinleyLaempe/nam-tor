@@ -95,6 +95,7 @@ dependencies = [
 name = "namtor-hwdb"
 version = "0.1.0"
 dependencies = [
+ "namtor-uvc",
  "serde",
  "tempfile",
  "thiserror",
