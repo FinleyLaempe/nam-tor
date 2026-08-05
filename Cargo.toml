@@ -9,6 +9,8 @@ members = [
     "crates/namtor-hwdb",
     "crates/namtor-probe",
     "crates/namtor-proto",
+    "crates/namtor-recog",
+    "crates/namtor-store",
     "crates/namtor-uvc",
 ]
 

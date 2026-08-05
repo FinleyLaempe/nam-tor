@@ -12,3 +12,5 @@ __pycache__/
 # python build artifacts
 ml/eval/namtor_eval.egg-info/
 ml/.venv/
+var/
+ml/eval/build/
