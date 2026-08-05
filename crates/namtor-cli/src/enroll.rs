@@ -80,12 +80,76 @@ pub fn run_enroll(
     );
 
     let mut pipeline = match RecognitionPipeline::new(&yunet, &sface, (640, 640)) {
-        Ok(p) => p,
+        Ok(p) => {
+            let mut p = p;
+            p.detector = p.detector.with_thresholds(0.3, 0.4);
+            p
+        }
         Err(e) => {
             eprintln!("pipeline init failed: {e}");
             return ExitCode::FAILURE;
         }
     };
+
+    // Save first frame for debugging
+    if let Some(f) = frame_data.first() {
+        let raw_path = "/tmp/namtor-enroll-frame.raw";
+        let _ = std::fs::write(raw_path, &f.data);
+        eprintln!("debug: saved first frame ({}) to {raw_path}", f.data.len());
+
+        // Run detection with score=0.01 to see raw scores
+        let mut debug_detector = match namtor_recog::detect::FaceDetector::new(&yunet, (640, 640)) {
+            Ok(d) => d.with_thresholds(0.01, 0.4),
+            Err(e) => {
+                eprintln!("debug detector init failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        match debug_detector.detect(&f.data, f.width, f.height) {
+            Ok(dets) => {
+                eprintln!("debug: {} detections at threshold 0.01", dets.len());
+                for (i, d) in dets.iter().take(5).enumerate() {
+                    eprintln!(
+                        "  det[{i}]: score={:.4} box=({:.1},{:.1},{:.1},{:.1})",
+                        d.box_.score, d.box_.x, d.box_.y, d.box_.w, d.box_.h
+                    );
+                }
+            }
+            Err(e) => eprintln!("debug detection error: {e}"),
+        }
+
+        // Print raw YuNet output stats
+        use namtor_proto::worker::{ModelSpec, Quant};
+        let mut backend = namtor_worker::infer_onnx::OnnxCpu::new(1);
+        let spec = ModelSpec {
+            id: "yunet".into(),
+            quant: Quant::Fp32,
+            sha256: [0; 32],
+        };
+        if let Ok(loaded) = backend.load_file(&yunet, &spec) {
+            let input = namtor_recog::detect::preprocess(&f.data, f.width, f.height, 640, 640);
+            if let Ok(outs) = backend.run_multi(&loaded, &input) {
+                for stride in [8, 16, 32] {
+                    let cls = outs
+                        .get(&format!("cls_{stride}"))
+                        .map(|v| (v.to_vec(), v.len()))
+                        .unwrap_or_default();
+                    let obj = outs
+                        .get(&format!("obj_{stride}"))
+                        .map(|v| (v.to_vec(), v.len()))
+                        .unwrap_or_default();
+                    if !cls.0.is_empty() {
+                        let cls_max = cls.0.iter().cloned().fold(f32::MIN, f32::max);
+                        let obj_max = obj.0.iter().cloned().fold(f32::MIN, f32::max);
+                        let scores: Vec<f32> =
+                            cls.0.iter().zip(obj.0.iter()).map(|(c, o)| c * o).collect();
+                        let score_max = scores.iter().cloned().fold(f32::MIN, f32::max);
+                        eprintln!("  stride {stride}: count={} cls_max={:.4} obj_max={:.4} score_max={:.4}", cls.1, cls_max, obj_max, score_max);
+                    }
+                }
+            }
+        }
+    }
 
     let mut templates: Vec<Template> = Vec::new();
     for (i, frame) in frame_data.iter().enumerate() {

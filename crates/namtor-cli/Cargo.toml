@@ -12,6 +12,7 @@ namtor-proto = { path = "../namtor-proto" }
 namtor-store = { path = "../namtor-store" }
 namtor-recog = { path = "../namtor-recog" }
 namtor-uvc = { path = "../namtor-uvc" }
+namtor-worker = { path = "../namtor-worker" }
 clap = { version = "4", features = ["derive"] }
 nix = { version = "0.29", features = ["user"] }
 

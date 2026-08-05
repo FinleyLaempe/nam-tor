@@ -15,7 +15,7 @@ pub struct PipelineResult {
 }
 
 pub struct RecognitionPipeline {
-    detector: FaceDetector,
+    pub detector: FaceDetector,
     embedder: FaceEmbedder,
 }
 

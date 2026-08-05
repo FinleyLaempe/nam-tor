@@ -87,7 +87,7 @@ impl FaceDetector {
     }
 }
 
-fn preprocess(frame: &[u8], width: u32, height: u32, iw: usize, ih: usize) -> Vec<u8> {
+pub fn preprocess(frame: &[u8], width: u32, height: u32, iw: usize, ih: usize) -> Vec<u8> {
     let mut input = vec![0f32; 3 * iw * ih];
     let sx = width as f32 / iw as f32;
     let sy = height as f32 / ih as f32;
