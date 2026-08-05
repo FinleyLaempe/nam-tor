@@ -46,18 +46,13 @@ pub struct FaceDetector {
 
 impl FaceDetector {
     pub fn new(model_path: &std::path::Path, input_size: (u32, u32)) -> Result<Self, WorkerError> {
-        let mut backend = namtor_worker::infer_onnx::OnnxCpu::new(1).with_root(
-            model_path
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .to_path_buf(),
-        );
+        let mut backend = namtor_worker::infer_onnx::OnnxCpu::new(1);
         let spec = ModelSpec {
             id: "yunet".into(),
             quant: Quant::Fp32,
             sha256: [0; 32],
         };
-        let loaded = backend.load(&spec)?;
+        let loaded = backend.load_file(model_path, &spec)?;
         Ok(Self {
             backend: Box::new(backend),
             loaded,

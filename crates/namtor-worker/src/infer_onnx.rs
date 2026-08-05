@@ -44,7 +44,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use namtor_proto::worker::{FrameRef, Loaded, ModelSpec, Quant};
 use ort::session::builder::GraphOptimizationLevel;
@@ -102,20 +102,29 @@ impl OnnxCpu {
     fn model_path(&self, spec: &ModelSpec) -> PathBuf {
         self.root.join(&spec.id).join(Self::quant_file(spec.quant))
     }
-}
 
-impl InferenceBackend for OnnxCpu {
-    fn load(&mut self, spec: &ModelSpec) -> Result<Loaded, WorkerError> {
-        let path = self.model_path(spec);
-        let bytes = std::fs::read(&path)
+    /// Load a model directly from a file path, bypassing the
+    /// `<root>/<id>/<quant>.onnx` convention. The `spec.id` is used only
+    /// as the session key and metadata label.
+    pub fn load_file(&mut self, path: &Path, spec: &ModelSpec) -> Result<Loaded, WorkerError> {
+        let bytes = std::fs::read(path)
             .map_err(|e| WorkerError::Infer(format!("read {}: {e}", path.display())))?;
+        self.load_bytes(path, &bytes, spec)
+    }
+
+    fn load_bytes(
+        &mut self,
+        path: &Path,
+        bytes: &[u8],
+        spec: &ModelSpec,
+    ) -> Result<Loaded, WorkerError> {
         let session = Session::builder()
             .map_err(|e| WorkerError::Infer(format!("ort builder: {e}")))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(|e| WorkerError::Infer(format!("opt level: {e}")))?
             .with_intra_threads(self.threads)
             .map_err(|e| WorkerError::Infer(format!("intra threads: {e}")))?
-            .commit_from_memory(&bytes)
+            .commit_from_memory(bytes)
             .map_err(|e| WorkerError::Infer(format!("commit {}: {e}", path.display())))?;
         let input_shape = session
             .inputs()
@@ -135,6 +144,15 @@ impl InferenceBackend for OnnxCpu {
             input_shape,
             output_shape,
         })
+    }
+}
+
+impl InferenceBackend for OnnxCpu {
+    fn load(&mut self, spec: &ModelSpec) -> Result<Loaded, WorkerError> {
+        let path = self.model_path(spec);
+        let bytes = std::fs::read(&path)
+            .map_err(|e| WorkerError::Infer(format!("read {}: {e}", path.display())))?;
+        self.load_bytes(&path, &bytes, spec)
     }
 
     fn run(
