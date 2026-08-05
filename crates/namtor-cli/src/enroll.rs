@@ -91,74 +91,6 @@ pub fn run_enroll(
         }
     };
 
-    // Save first frame for debugging
-    // Debug: analyze brightest frame
-    let brightest_idx = frame_data
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, f)| f.data.iter().map(|&b| b as u32).sum::<u32>())
-        .map(|(i, _)| i);
-    if let Some(i) = brightest_idx {
-        let f = &frame_data[i];
-        let mean = f.data.iter().map(|&b| b as f32).sum::<f32>() / f.data.len() as f32;
-        eprintln!("debug: analyzing frame {i} (mean={mean:.1})");
-        let raw_path = "/tmp/namtor-enroll-frame.raw";
-        let _ = std::fs::write(raw_path, &f.data);
-
-        // Run detection with score=0.01 to see raw scores
-        let mut debug_detector = match namtor_recog::detect::FaceDetector::new(&yunet, (640, 640)) {
-            Ok(d) => d.with_thresholds(0.01, 0.4),
-            Err(e) => {
-                eprintln!("debug detector init failed: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-        match debug_detector.detect(&f.data, f.width, f.height) {
-            Ok(dets) => {
-                eprintln!("debug: {} detections at threshold 0.01", dets.len());
-                for (i, d) in dets.iter().take(5).enumerate() {
-                    eprintln!(
-                        "  det[{i}]: score={:.4} box=({:.1},{:.1},{:.1},{:.1})",
-                        d.box_.score, d.box_.x, d.box_.y, d.box_.w, d.box_.h
-                    );
-                }
-            }
-            Err(e) => eprintln!("debug detection error: {e}"),
-        }
-
-        // Print raw YuNet output stats
-        use namtor_proto::worker::{ModelSpec, Quant};
-        let mut backend = namtor_worker::infer_onnx::OnnxCpu::new(1);
-        let spec = ModelSpec {
-            id: "yunet".into(),
-            quant: Quant::Fp32,
-            sha256: [0; 32],
-        };
-        if let Ok(loaded) = backend.load_file(&yunet, &spec) {
-            let input = namtor_recog::detect::preprocess(&f.data, f.width, f.height, 640, 640);
-            if let Ok(outs) = backend.run_multi(&loaded, &input) {
-                for stride in [8, 16, 32] {
-                    let cls = outs
-                        .get(&format!("cls_{stride}"))
-                        .map(|v| (v.to_vec(), v.len()))
-                        .unwrap_or_default();
-                    let obj = outs
-                        .get(&format!("obj_{stride}"))
-                        .map(|v| (v.to_vec(), v.len()))
-                        .unwrap_or_default();
-                    if !cls.0.is_empty() {
-                        let cls_max = cls.0.iter().cloned().fold(f32::MIN, f32::max);
-                        let obj_max = obj.0.iter().cloned().fold(f32::MIN, f32::max);
-                        let scores: Vec<f32> =
-                            cls.0.iter().zip(obj.0.iter()).map(|(c, o)| c * o).collect();
-                        let score_max = scores.iter().cloned().fold(f32::MIN, f32::max);
-                        eprintln!("  stride {stride}: count={} cls_max={:.4} obj_max={:.4} score_max={:.4}", cls.1, cls_max, obj_max, score_max);
-                    }
-                }
-            }
-        }
-    }
-
     let mut templates: Vec<Template> = Vec::new();
     for (i, frame) in frame_data.iter().enumerate() {
         match pipeline.process_frame(&frame.data, frame.width, frame.height) {
@@ -295,7 +227,6 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
         eprintln!("capturing without IR illumination (faces may not be visible)");
         EmitterGuard { xu: None }
     });
-
     let streamer = V4l2IrStream::open(
         std::path::Path::new(dev),
         if std::path::Path::new(meta_dev).exists() {
@@ -327,19 +258,11 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
     }
 
     let mut frames = Vec::new();
-    let mut frame_idx = 0u32;
     while frames.len() < n_frames {
         match source.next_frame() {
             Ok(Some(frame)) => {
                 let mean =
                     frame.data.iter().map(|&b| b as f32).sum::<f32>() / frame.data.len() as f32;
-                if frame_idx < 5 {
-                    eprintln!(
-                        "  raw frame {frame_idx}: mean={mean:.1} emitter={:?}",
-                        frame.emitter
-                    );
-                }
-                // Only keep illuminated (ON) frames — mean > 20 indicates emitter is on
                 if mean > 20.0 {
                     frames.push(CapturedFrame {
                         data: frame.data,
@@ -347,7 +270,6 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
                         height,
                     });
                 }
-                frame_idx += 1;
             }
             Ok(None) => break,
             Err(e) => {
@@ -355,21 +277,6 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
                 break;
             }
         }
-    }
-    eprintln!(
-        "captured {} illuminated frames (from {frame_idx} total)",
-        frames.len()
-    );
-
-    // Save brightest frame for debugging
-    if let Some(brightest) = frames
-        .iter()
-        .max_by_key(|f| f.data.iter().map(|&b| b as u32).sum::<u32>())
-    {
-        let mean =
-            brightest.data.iter().map(|&b| b as f32).sum::<f32>() / brightest.data.len() as f32;
-        eprintln!("debug: brightest frame mean={mean:.1}, saving to /tmp/namtor-enroll-bright.raw");
-        let _ = std::fs::write("/tmp/namtor-enroll-bright.raw", &brightest.data);
     }
 
     source.stop();
@@ -403,7 +310,6 @@ fn emitter_cfg() -> Option<namtor_hwdb::quirks::EmitterCfg> {
     for dir in &candidates {
         if let Ok(db) = namtor_hwdb::quirks::load_quirks_dir(dir) {
             if let Some(e) = db.entries.get("3277:0018") {
-                eprintln!("emitter: loaded quirk from {}", dir.display());
                 return Some(e.emitter.clone());
             }
         }
@@ -417,11 +323,6 @@ fn activate_emitter(dev: &str) -> Result<EmitterGuard, String> {
 
     let cfg = emitter_cfg().ok_or_else(|| "no quirk entry for 3277:0018".to_string())?;
 
-    eprintln!(
-        "emitter: unit={:?} selector={:?} payload_on={:02x?}",
-        cfg.unit, cfg.selector, cfg.payload_on
-    );
-
     let v4l2_dev = V4l2Device::open(std::path::Path::new(dev))
         .map_err(|e| format!("open {dev} for XU control: {e}"))?;
 
@@ -430,23 +331,13 @@ fn activate_emitter(dev: &str) -> Result<EmitterGuard, String> {
     let unit = cfg.unit.ok_or("emitter cfg missing unit")?;
     let selector = cfg.selector.ok_or("emitter cfg missing selector")?;
 
-    eprintln!("emitter: probing unit {unit} selector {selector}...");
-    match xu.probe_control(unit, selector) {
-        Ok(profile) => eprintln!(
-            "emitter: probe ok len={} info={:?} current={:02x?}",
-            profile.len, profile.info, profile.current
-        ),
-        Err(e) => {
-            return Err(format!("emitter probe failed: {e}"));
-        }
-    }
+    xu.probe_control(unit, selector)
+        .map_err(|e| format!("emitter probe failed: {e}"))?;
 
-    eprintln!("emitter: writing payload_on={:02x?}...", cfg.payload_on);
     let restorer = xu
         .try_write(unit, selector, &cfg.payload_on)
         .map_err(|e| format!("emitter write failed: {e}"))?;
     restorer.keep();
-    eprintln!("emitter: ON (mode 2 strobe activated)");
 
     Ok(EmitterGuard { xu: Some(xu) })
 }
