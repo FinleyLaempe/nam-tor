@@ -28,7 +28,7 @@ pub const V4L2_PIX_FMT_GREY: PixFmtFourCC = u32::from_le_bytes(*b"GREY");
 pub const V4L2_PIX_FMT_YUYV: PixFmtFourCC = u32::from_le_bytes(*b"YUYV");
 
 const V4L2_BUF_TYPE_VIDEO_CAPTURE: u32 = 1;
-const V4L2_BUF_TYPE_META_CAPTURE: u32 = 0x00800000;
+const V4L2_BUF_TYPE_META_CAPTURE: u32 = 13;
 const V4L2_MEMORY_MMAP: u32 = 1;
 const V4L2_FIELD_NONE: u32 = 1;
 
