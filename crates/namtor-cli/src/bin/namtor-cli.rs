@@ -18,30 +18,32 @@ struct Cli {
 enum Command {
     /// Report the selected device, stream state, and protection level.
     Status,
-    /// Enroll a face template for the current user.
+    /// Enroll a face template. Use --user to enroll another user (requires root).
     Enroll {
-        #[arg(long, default_value = "var/lib/namtor/models")]
+        #[arg(long, default_value = "/var/lib/namtor/models")]
         models_dir: PathBuf,
-        #[arg(long, default_value = "var/lib/namtor/templates")]
+        #[arg(long, default_value = "/var/lib/namtor/templates")]
         templates_dir: PathBuf,
-        #[arg(long, default_value = "var/lib/namtor/key")]
+        #[arg(long, default_value = "/var/lib/namtor/templates.key")]
         key_path: PathBuf,
         #[arg(long)]
         device: Option<String>,
+        #[arg(long)]
+        user: Option<String>,
     },
     /// List enrolled users.
     List {
-        #[arg(long, default_value = "var/lib/namtor/templates")]
+        #[arg(long, default_value = "/var/lib/namtor/templates")]
         templates_dir: PathBuf,
-        #[arg(long, default_value = "var/lib/namtor/key")]
+        #[arg(long, default_value = "/var/lib/namtor/templates.key")]
         key_path: PathBuf,
     },
     /// Remove an enrollment.
     Remove {
         uid: u32,
-        #[arg(long, default_value = "var/lib/namtor/templates")]
+        #[arg(long, default_value = "/var/lib/namtor/templates")]
         templates_dir: PathBuf,
-        #[arg(long, default_value = "var/lib/namtor/key")]
+        #[arg(long, default_value = "/var/lib/namtor/templates.key")]
         key_path: PathBuf,
     },
 }
@@ -55,7 +57,8 @@ fn main() -> ExitCode {
             templates_dir,
             key_path,
             device,
-        } => namtor_cli::enroll::run_enroll(&models_dir, &templates_dir, &key_path, device),
+            user,
+        } => namtor_cli::enroll::run_enroll(&models_dir, &templates_dir, &key_path, device, user),
         Command::List {
             templates_dir,
             key_path,

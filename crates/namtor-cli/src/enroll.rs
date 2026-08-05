@@ -20,6 +20,7 @@ pub fn run_enroll(
     templates_dir: &Path,
     key_path: &Path,
     _device: Option<String>,
+    user: Option<String>,
 ) -> ExitCode {
     let yunet = models_dir.join("yunet_2023mar.onnx");
     let sface = models_dir.join("sface_2021dec.onnx");
@@ -35,12 +36,27 @@ pub fn run_enroll(
         return ExitCode::FAILURE;
     }
 
-    let uid = nix::unistd::getuid().as_raw();
-    let username = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
-        .ok()
-        .flatten()
-        .map(|u| u.name)
-        .unwrap_or_else(|| format!("uid-{uid}"));
+    let (uid, username) = match &user {
+        Some(name) => {
+            let u = nix::unistd::User::from_name(name)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| {
+                    eprintln!("error: user '{name}' not found");
+                    std::process::exit(1);
+                });
+            (u.uid.as_raw(), u.name)
+        }
+        None => {
+            let uid = nix::unistd::getuid().as_raw();
+            let username = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+                .ok()
+                .flatten()
+                .map(|u| u.name)
+                .unwrap_or_else(|| format!("uid-{uid}"));
+            (uid, username)
+        }
+    };
 
     eprintln!("enrolling uid={uid} ({username})...");
     eprintln!("opening IR camera /dev/video2...");
