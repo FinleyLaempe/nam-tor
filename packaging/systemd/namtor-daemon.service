@@ -9,6 +9,7 @@ Type=simple
 User=namtor
 Group=namtor
 SupplementaryGroups=video tss
+Environment=NAMTOR_WORKER_BIN=/usr/lib/namtor/namtor-worker
 ExecStart=/usr/lib/namtor/namtor-daemon
 ExecStopPost=/usr/lib/namtor/namtor-camera-emitter-off /dev/video2
 NoNewPrivileges=true

@@ -8,3 +8,4 @@
 pub mod enroll;
 pub mod list;
 pub mod status;
+pub mod verify;

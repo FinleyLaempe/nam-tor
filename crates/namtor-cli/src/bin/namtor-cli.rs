@@ -31,6 +31,11 @@ enum Command {
         #[arg(long)]
         user: Option<String>,
     },
+    /// Verify a face against enrolled templates via the daemon socket.
+    Verify {
+        #[arg(long)]
+        user: Option<String>,
+    },
     /// List enrolled users.
     List {
         #[arg(long, default_value = "/var/lib/namtor/templates")]
@@ -59,6 +64,7 @@ fn main() -> ExitCode {
             device,
             user,
         } => namtor_cli::enroll::run_enroll(&models_dir, &templates_dir, &key_path, device, user),
+        Command::Verify { user } => namtor_cli::verify::run_verify(user),
         Command::List {
             templates_dir,
             key_path,

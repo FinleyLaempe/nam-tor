@@ -1447,6 +1447,7 @@ dependencies = [
  "namtor-camera",
  "namtor-capture",
  "namtor-hwdb",
+ "namtor-pam",
  "namtor-proto",
  "namtor-recog",
  "namtor-store",
