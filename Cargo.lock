@@ -1037,6 +1037,7 @@ version = "0.1.0"
 dependencies = [
  "namtor-camera",
  "namtor-capture",
+ "namtor-eval",
  "namtor-hwdb",
  "namtor-proto",
  "namtor-worker",

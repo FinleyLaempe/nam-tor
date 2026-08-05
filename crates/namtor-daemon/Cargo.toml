@@ -26,6 +26,10 @@ reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-fea
 [dev-dependencies]
 tempfile = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+namtor-eval = { path = "../namtor-eval" }
+namtor-worker = { path = "../namtor-worker", features = ["onnx"] }
+namtor-capture = { path = "../namtor-capture" }
+namtor-proto = { path = "../namtor-proto" }
 
 [[bin]]
 name = "namtor-daemon"
