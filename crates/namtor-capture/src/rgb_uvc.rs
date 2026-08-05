@@ -56,6 +56,7 @@ impl<S: Streamer> CaptureSource for RgbUvc<S> {
     }
 
     fn start(&mut self) -> Result<(), CaptureError> {
+        self.streamer.start(4)?;
         self.started = true;
         Ok(())
     }
@@ -69,6 +70,7 @@ impl<S: Streamer> CaptureSource for RgbUvc<S> {
     }
 
     fn stop(&mut self) {
+        self.streamer.stop();
         self.started = false;
     }
 }
@@ -149,6 +151,17 @@ impl V4l2RgbStream {
 }
 
 impl Streamer for V4l2RgbStream {
+    fn start(&mut self, buffer_count: u32) -> Result<(), CaptureError> {
+        self.start_streaming(buffer_count)
+    }
+
+    fn stop(&mut self) {
+        let _ = self.rgb.streamoff().map_err(v4l2_err_to_capture);
+        if let Some(m) = self.meta.as_mut() {
+            let _ = m.streamoff().map_err(v4l2_err_to_capture);
+        }
+    }
+
     fn next_raw(&mut self) -> Result<RawFrame, CaptureError> {
         let (idx, ts) = self.rgb.dequeue().map_err(v4l2_err_to_capture)?;
         let buf = self.rgb.read_buffer(idx).map_err(v4l2_err_to_capture)?;

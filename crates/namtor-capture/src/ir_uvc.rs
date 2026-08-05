@@ -28,6 +28,16 @@ pub struct RawFrame {
 
 /// Abstracts the streaming layer so `IrUvc` is unit-testable without a device.
 pub trait Streamer: Send {
+    /// Requests and queues `buffer_count` MMAP buffers and starts streaming.
+    /// Default is a no-op for mock streamers.
+    fn start(&mut self, buffer_count: u32) -> Result<(), CaptureError> {
+        let _ = buffer_count;
+        Ok(())
+    }
+
+    /// Stops streaming and releases buffers. Default is a no-op.
+    fn stop(&mut self) {}
+
     fn next_raw(&mut self) -> Result<RawFrame, CaptureError>;
 }
 
@@ -104,6 +114,7 @@ impl<S: Streamer, P: EmitterPolicy> CaptureSource for IrUvc<S, P> {
     }
 
     fn start(&mut self) -> Result<(), CaptureError> {
+        self.streamer.start(4)?;
         self.started = true;
         Ok(())
     }
@@ -117,6 +128,7 @@ impl<S: Streamer, P: EmitterPolicy> CaptureSource for IrUvc<S, P> {
     }
 
     fn stop(&mut self) {
+        self.streamer.stop();
         self.started = false;
     }
 }
@@ -200,6 +212,17 @@ impl V4l2IrStream {
 }
 
 impl Streamer for V4l2IrStream {
+    fn start(&mut self, buffer_count: u32) -> Result<(), CaptureError> {
+        self.start_streaming(buffer_count)
+    }
+
+    fn stop(&mut self) {
+        let _ = self.ir.streamoff().map_err(v4l2_err_to_capture);
+        if let Some(m) = self.meta.as_mut() {
+            let _ = m.streamoff().map_err(v4l2_err_to_capture);
+        }
+    }
+
     fn next_raw(&mut self) -> Result<RawFrame, CaptureError> {
         let (idx, ts) = self.ir.dequeue().map_err(v4l2_err_to_capture)?;
         let buf = self.ir.read_buffer(idx).map_err(v4l2_err_to_capture)?;
