@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 
-use namtor_pam::client::{authenticate, AuthConfig, ClientError};
+use namtor_pam::client::{authenticate, AuthConfig};
 use namtor_proto::pam::Verdict;
 
 pub fn run_verify(user: Option<String>) -> ExitCode {
