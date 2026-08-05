@@ -28,6 +28,7 @@ pub const V4L2_PIX_FMT_GREY: PixFmtFourCC = u32::from_le_bytes(*b"GREY");
 pub const V4L2_PIX_FMT_YUYV: PixFmtFourCC = u32::from_le_bytes(*b"YUYV");
 
 const V4L2_BUF_TYPE_VIDEO_CAPTURE: u32 = 1;
+const V4L2_BUF_TYPE_META_CAPTURE: u32 = 0x00800000;
 const V4L2_MEMORY_MMAP: u32 = 1;
 const V4L2_FIELD_NONE: u32 = 1;
 
@@ -75,11 +76,19 @@ pub struct V4l2Stream {
     buffers: Vec<Option<MmapBuffer>>,
     format: Option<V4l2Format>,
     started: bool,
+    buf_type: u32,
 }
 
 impl V4l2Stream {
-    /// Opens a V4L2 device node for read/write ioctl access.
     pub fn open(path: &Path) -> Result<Self, V4l2Error> {
+        Self::open_with_type(path, V4L2_BUF_TYPE_VIDEO_CAPTURE)
+    }
+
+    pub fn open_meta(path: &Path) -> Result<Self, V4l2Error> {
+        Self::open_with_type(path, V4L2_BUF_TYPE_META_CAPTURE)
+    }
+
+    fn open_with_type(path: &Path, buf_type: u32) -> Result<Self, V4l2Error> {
         let meta = std::fs::metadata(path)?;
         if !meta.file_type().is_char_device() {
             return Err(V4l2Error::NotCharDevice(path.display().to_string()));
@@ -94,6 +103,7 @@ impl V4l2Stream {
             buffers: Vec::new(),
             format: None,
             started: false,
+            buf_type,
         })
     }
 
@@ -106,7 +116,7 @@ impl V4l2Stream {
         pixelformat: PixFmtFourCC,
     ) -> Result<V4l2Format, V4l2Error> {
         let mut fmt = V4l2FormatStruct::zeroed();
-        fmt.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        fmt.type_ = self.buf_type;
         fmt.fmt.pix.width = width;
         fmt.fmt.pix.height = height;
         fmt.fmt.pix.pixelformat = pixelformat;
@@ -133,7 +143,7 @@ impl V4l2Stream {
     pub fn request_buffers(&mut self, count: u32) -> Result<u32, V4l2Error> {
         let mut rb = V4l2Requestbuffers {
             count,
-            type_: V4L2_BUF_TYPE_VIDEO_CAPTURE,
+            type_: self.buf_type,
             memory: V4L2_MEMORY_MMAP,
             ..Default::default()
         };
@@ -154,7 +164,7 @@ impl V4l2Stream {
         for idx in 0..self.buffers.len() as u32 {
             let mut buf = V4l2Buffer::zeroed();
             buf.index = idx;
-            buf.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            buf.type_ = self.buf_type;
             buf.memory = V4L2_MEMORY_MMAP;
 
             // SAFETY: VIDIOC_QUERYBUF is _IOWR('V', 9, struct v4l2_buffer).
@@ -196,7 +206,7 @@ impl V4l2Stream {
         if self.started {
             return Ok(());
         }
-        let ty: i32 = V4L2_BUF_TYPE_VIDEO_CAPTURE as i32;
+        let ty: i32 = self.buf_type as i32;
         // SAFETY: VIDIOC_STREAMON is _IOW('V', 18, int); `ty` is the buffer
         // type passed by value through the ioctl.
         unsafe { vidioc_streamon(self.file.as_raw_fd(), &ty) }
@@ -212,7 +222,7 @@ impl V4l2Stream {
             return Err(V4l2Error::NotStreaming);
         }
         let mut buf = V4l2Buffer::zeroed();
-        buf.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.type_ = self.buf_type;
         buf.memory = V4L2_MEMORY_MMAP;
 
         // SAFETY: VIDIOC_DQBUF is _IOWR('V', 17, struct v4l2_buffer).
@@ -228,7 +238,7 @@ impl V4l2Stream {
     pub fn requeue(&mut self, idx: usize) -> Result<(), V4l2Error> {
         let mut buf = V4l2Buffer::zeroed();
         buf.index = idx as u32;
-        buf.type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.type_ = self.buf_type;
         buf.memory = V4L2_MEMORY_MMAP;
 
         // SAFETY: VIDIOC_QBUF is _IOWR('V', 15, struct v4l2_buffer).
@@ -242,7 +252,7 @@ impl V4l2Stream {
         if !self.started {
             return Ok(());
         }
-        let ty: i32 = V4L2_BUF_TYPE_VIDEO_CAPTURE as i32;
+        let ty: i32 = self.buf_type as i32;
         // SAFETY: VIDIOC_STREAMOFF is _IOW('V', 19, int).
         unsafe { vidioc_streamoff(self.file.as_raw_fd(), &ty) }
             .map_err(|e| V4l2Error::Ioctl(format!("VIDIOC_STREAMOFF: {e}")))?;

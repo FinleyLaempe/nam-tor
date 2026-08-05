@@ -159,7 +159,7 @@ impl V4l2IrStream {
 
         let meta = match metadata_node {
             Some(p) => {
-                let m = V4l2Stream::open(p).map_err(v4l2_err_to_capture)?;
+                let m = V4l2Stream::open_meta(p).map_err(v4l2_err_to_capture)?;
                 Some(m)
             }
             None => None,

@@ -103,7 +103,7 @@ impl V4l2RgbStream {
             })?;
 
         let meta = metadata_node
-            .map(|p| V4l2Stream::open(p).map_err(v4l2_err_to_capture))
+            .map(|p| V4l2Stream::open_meta(p).map_err(v4l2_err_to_capture))
             .transpose()?;
 
         Ok(Self {
