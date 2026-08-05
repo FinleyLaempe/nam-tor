@@ -1450,6 +1450,7 @@ dependencies = [
  "namtor-proto",
  "namtor-recog",
  "namtor-store",
+ "namtor-uvc",
  "nix",
  "tempfile",
 ]

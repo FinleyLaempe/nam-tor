@@ -213,8 +213,13 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
     let n_frames = 25usize;
 
     use namtor_capture::frame::PixFmt;
-    use namtor_capture::ir_uvc::{IrUvc, V4l2IrStream};
+    use namtor_capture::ir_uvc::{IrUvc, ParityPolicy, V4l2IrStream};
     use namtor_capture::source::CaptureSource;
+
+    // Activate the IR emitter via MSXU mode 2 (firmware-strobed alternating
+    // illumination) before opening the V4L2 stream. The quirk DB has the
+    // exact unit/selector/payload for this device (3277:0018).
+    let emitter = activate_emitter(dev)?;
 
     let streamer = V4l2IrStream::open(
         std::path::Path::new(dev),
@@ -237,15 +242,14 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
         has_metadata: true,
     };
 
-    struct UnknownPolicy;
-    impl namtor_capture::ir_uvc::EmitterPolicy for UnknownPolicy {
-        fn tag(&self, _frame_index: u64) -> namtor_capture::frame::EmitterState {
-            namtor_capture::frame::EmitterState::Unknown
-        }
-    }
-
-    let mut source = IrUvc::new(streamer, UnknownPolicy, caps);
+    let mut source = IrUvc::new(streamer, ParityPolicy, caps);
     source.start().map_err(|e| format!("start: {e}"))?;
+
+    // Discard the first few frames while the strobe settles (~6 ms, but
+    // the AE loop takes ~1 s / 15 pairs to stabilise per the quirk DB).
+    for _ in 0..6 {
+        let _ = source.next_frame();
+    }
 
     let mut frames = Vec::new();
     while frames.len() < n_frames {
@@ -266,7 +270,49 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
     }
 
     source.stop();
+    drop(emitter);
     Ok(frames)
+}
+
+/// RAII guard that activates the IR emitter and turns it off on drop.
+struct EmitterGuard {
+    xu: Option<Box<namtor_uvc::probe::SafeXu<namtor_uvc::device::V4l2Device>>>,
+}
+
+impl Drop for EmitterGuard {
+    fn drop(&mut self) {
+        if let Some(mut xu) = self.xu.take() {
+            let cfg = emitter_cfg();
+            if let Some(cfg) = cfg {
+                let mut ctrl = namtor_camera::emitter_ctrl::EmitterController::new(&mut xu, &cfg);
+                let _ = ctrl.off();
+            }
+        }
+    }
+}
+
+fn emitter_cfg() -> Option<namtor_hwdb::quirks::EmitterCfg> {
+    let quirks_dir = std::path::Path::new("quirks/devices");
+    let db = namtor_hwdb::quirks::load_quirks_dir(quirks_dir).ok()?;
+    db.entries.get("3277:0018").map(|e| e.emitter.clone())
+}
+
+fn activate_emitter(dev: &str) -> Result<EmitterGuard, String> {
+    use namtor_camera::emitter_ctrl::EmitterController;
+    use namtor_uvc::device::V4l2Device;
+    use namtor_uvc::probe::SafeXu;
+
+    let cfg = emitter_cfg().ok_or_else(|| "no quirk entry for 3277:0018".to_string())?;
+
+    let v4l2_dev = V4l2Device::open(std::path::Path::new(dev))
+        .map_err(|e| format!("open {dev} for XU control: {e}"))?;
+
+    let mut xu = Box::new(SafeXu::new(v4l2_dev));
+    let mut ctrl = EmitterController::new(&mut xu, &cfg);
+    ctrl.apply_on().map_err(|e| format!("emitter on: {e}"))?;
+    drop(ctrl);
+
+    Ok(EmitterGuard { xu: Some(xu) })
 }
 
 fn variance_of_laplacian(data: &[u8], width: u32, height: u32) -> f32 {
