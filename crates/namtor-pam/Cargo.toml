@@ -1,0 +1,17 @@
+[package]
+name = "namtor-pam"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "PAM module for Nam-tor face authentication — fail-closed, no ML"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+namtor-proto = { path = "../namtor-proto" }
+libc = "0.2"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

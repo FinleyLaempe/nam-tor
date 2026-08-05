@@ -1163,6 +1163,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "namtor-pam"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "namtor-proto",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "namtor-probe"
 version = "0.1.0"
 dependencies = [
