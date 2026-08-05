@@ -285,10 +285,10 @@ struct EmitterGuard {
 impl Drop for EmitterGuard {
     fn drop(&mut self) {
         if let Some(mut xu) = self.xu.take() {
-            let cfg = emitter_cfg();
-            if let Some(cfg) = cfg {
-                let mut ctrl = namtor_camera::emitter_ctrl::EmitterController::new(&mut xu, &cfg);
-                let _ = ctrl.off();
+            if let Some(cfg) = emitter_cfg() {
+                let unit = cfg.unit.unwrap_or(0);
+                let selector = cfg.selector.unwrap_or(0);
+                let _ = xu.try_write(unit, selector, &cfg.payload_off);
             }
         }
     }
@@ -312,19 +312,41 @@ fn emitter_cfg() -> Option<namtor_hwdb::quirks::EmitterCfg> {
 }
 
 fn activate_emitter(dev: &str) -> Result<EmitterGuard, String> {
-    use namtor_camera::emitter_ctrl::EmitterController;
     use namtor_uvc::device::V4l2Device;
     use namtor_uvc::probe::SafeXu;
 
     let cfg = emitter_cfg().ok_or_else(|| "no quirk entry for 3277:0018".to_string())?;
 
+    eprintln!(
+        "emitter: unit={:?} selector={:?} payload_on={:02x?}",
+        cfg.unit, cfg.selector, cfg.payload_on
+    );
+
     let v4l2_dev = V4l2Device::open(std::path::Path::new(dev))
         .map_err(|e| format!("open {dev} for XU control: {e}"))?;
 
     let mut xu = Box::new(SafeXu::new(v4l2_dev));
-    let mut ctrl = EmitterController::new(&mut xu, &cfg);
-    ctrl.apply_on().map_err(|e| format!("emitter on: {e}"))?;
-    drop(ctrl);
+
+    let unit = cfg.unit.ok_or("emitter cfg missing unit")?;
+    let selector = cfg.selector.ok_or("emitter cfg missing selector")?;
+
+    eprintln!("emitter: probing unit {unit} selector {selector}...");
+    match xu.probe_control(unit, selector) {
+        Ok(profile) => eprintln!(
+            "emitter: probe ok len={} info={:?} current={:02x?}",
+            profile.len, profile.info, profile.current
+        ),
+        Err(e) => {
+            return Err(format!("emitter probe failed: {e}"));
+        }
+    }
+
+    eprintln!("emitter: writing payload_on={:02x?}...", cfg.payload_on);
+    let restorer = xu
+        .try_write(unit, selector, &cfg.payload_on)
+        .map_err(|e| format!("emitter write failed: {e}"))?;
+    restorer.keep();
+    eprintln!("emitter: ON (mode 2 strobe activated)");
 
     Ok(EmitterGuard { xu: Some(xu) })
 }
