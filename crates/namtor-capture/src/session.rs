@@ -101,8 +101,12 @@ mod tests {
                     has_metadata: false,
                 }
             }
-            fn start(&mut self) -> Result<(), CaptureError> { Ok(()) }
-            fn next_frame(&mut self) -> Result<Option<Frame>, CaptureError> { Ok(None) }
+            fn start(&mut self) -> Result<(), CaptureError> {
+                Ok(())
+            }
+            fn next_frame(&mut self) -> Result<Option<Frame>, CaptureError> {
+                Ok(None)
+            }
             fn stop(&mut self) {
                 *self.stopped.lock().unwrap() = true;
             }
@@ -112,13 +116,23 @@ mod tests {
         let rgb_flag = Arc::new(Mutex::new(false));
 
         {
-            let ir = ArcMock { stopped: Arc::clone(&ir_flag) };
-            let rgb = ArcMock { stopped: Arc::clone(&rgb_flag) };
+            let ir = ArcMock {
+                stopped: Arc::clone(&ir_flag),
+            };
+            let rgb = ArcMock {
+                stopped: Arc::clone(&rgb_flag),
+            };
             let _session = CaptureSession::new(Box::new(ir), Some(Box::new(rgb)));
         }
 
-        assert!(*ir_flag.lock().unwrap(), "IR stream must be stopped on Drop");
-        assert!(*rgb_flag.lock().unwrap(), "RGB stream must be stopped on Drop");
+        assert!(
+            *ir_flag.lock().unwrap(),
+            "IR stream must be stopped on Drop"
+        );
+        assert!(
+            *rgb_flag.lock().unwrap(),
+            "RGB stream must be stopped on Drop"
+        );
     }
 
     #[test]
@@ -137,8 +151,12 @@ mod tests {
                     has_metadata: false,
                 }
             }
-            fn start(&mut self) -> Result<(), CaptureError> { Ok(()) }
-            fn next_frame(&mut self) -> Result<Option<Frame>, CaptureError> { Ok(None) }
+            fn start(&mut self) -> Result<(), CaptureError> {
+                Ok(())
+            }
+            fn next_frame(&mut self) -> Result<Option<Frame>, CaptureError> {
+                Ok(None)
+            }
             fn stop(&mut self) {
                 *self.stopped.lock().unwrap() = true;
             }
@@ -146,10 +164,15 @@ mod tests {
 
         let ir_flag = Arc::new(Mutex::new(false));
         {
-            let ir = ArcMock { stopped: Arc::clone(&ir_flag) };
+            let ir = ArcMock {
+                stopped: Arc::clone(&ir_flag),
+            };
             let _session = CaptureSession::new(Box::new(ir), None);
         }
-        assert!(*ir_flag.lock().unwrap(), "IR stream must be stopped on Drop");
+        assert!(
+            *ir_flag.lock().unwrap(),
+            "IR stream must be stopped on Drop"
+        );
     }
 
     #[test]

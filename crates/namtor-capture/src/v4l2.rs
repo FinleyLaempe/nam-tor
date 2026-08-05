@@ -305,6 +305,9 @@ struct V4l2PixFormat {
 #[repr(C)]
 struct V4l2FormatUnion {
     pix: V4l2PixFormat,
+    // The kernel's v4l2_format union is 200 bytes (raw[200] is the largest
+    // member). V4l2PixFormat is only 48 bytes, so pad to 200 to match.
+    _pad: [u8; 152],
 }
 
 #[repr(C)]
@@ -319,6 +322,7 @@ impl V4l2FormatStruct {
             type_: 0,
             fmt: V4l2FormatUnion {
                 pix: V4l2PixFormat::default(),
+                _pad: [0; 152],
             },
         }
     }
