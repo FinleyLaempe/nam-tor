@@ -272,6 +272,8 @@ impl From<StoreError> for VerifyError {
     }
 }
 
+impl std::error::Error for VerifyError {}
+
 impl From<VerifyError> for DaemonError {
     fn from(e: VerifyError) -> Self {
         match e {

@@ -36,4 +36,6 @@ pub enum DaemonError {
     Json(#[from] serde_json::Error),
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("capture error: {0}")]
+    Capture(String),
 }
