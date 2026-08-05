@@ -167,7 +167,10 @@ impl InferenceBackend for OnnxCpu {
             .get(&key)
             .ok_or_else(|| WorkerError::Infer(format!("model not loaded: {key}")))?;
         let mut session = cell.borrow_mut();
-        let input_vec: Vec<f32> = frame.iter().map(|&b| b as f32).collect();
+        let input_vec: Vec<f32> = frame
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
         let input_name = session
             .inputs()
             .first()
@@ -178,7 +181,18 @@ impl InferenceBackend for OnnxCpu {
             .first()
             .map(|o| o.name().to_string())
             .ok_or_else(|| WorkerError::Infer("model has no outputs".into()))?;
-        let tensor = Tensor::from_array(([1usize, frame.len()], input_vec))
+        let shape: Vec<i64> = loaded
+            .input_shape
+            .iter()
+            .map(|&d| {
+                if d == 0 {
+                    input_vec.len() as i64
+                } else {
+                    d as i64
+                }
+            })
+            .collect();
+        let tensor = Tensor::from_array((shape.as_slice(), input_vec))
             .map_err(|e| WorkerError::Infer(format!("tensor: {e}")))?;
         let outputs = session
             .run(ort::inputs![input_name.as_str() => tensor])
@@ -246,13 +260,14 @@ mod tests {
         let loaded = backend.load(&spec).unwrap();
         assert_eq!(loaded.model_id, "identity");
         // Identity fixture: input [1, N] → output [1, N].
-        let frame = [1.0_f32 as u8, 2, 3];
+        // Pass f32 values as LE bytes (the contract: frame is preprocessed f32 data).
+        let vals = [1.0_f32, 2.0, 3.0];
+        let frame: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
         let out = backend
-            .run(&loaded, &frame, &frame_ref(frame.len() as u32))
+            .run(&loaded, &frame, &frame_ref(vals.len() as u32))
             .unwrap();
-        assert_eq!(out.len(), frame.len());
-        for (i, (got, want)) in out.iter().zip(frame.iter()).enumerate() {
-            let want = *want as f32;
+        assert_eq!(out.len(), vals.len());
+        for (i, (got, want)) in out.iter().zip(vals.iter()).enumerate() {
             assert!((got - want).abs() < 1e-5, "out[{i}] = {got}, want {want}");
         }
     }

@@ -79,7 +79,7 @@ pub fn run_enroll(
         frame_data.len()
     );
 
-    let mut pipeline = match RecognitionPipeline::new(&yunet, &sface, (640, 360)) {
+    let mut pipeline = match RecognitionPipeline::new(&yunet, &sface, (640, 640)) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("pipeline init failed: {e}");

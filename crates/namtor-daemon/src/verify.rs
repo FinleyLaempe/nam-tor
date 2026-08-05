@@ -88,7 +88,7 @@ impl VerifyEngine {
         store_dir: &Path,
         key_path: &Path,
     ) -> Result<Self, VerifyError> {
-        let pipeline = RecognitionPipeline::new(yunet_path, sface_path, (640, 360))?;
+        let pipeline = RecognitionPipeline::new(yunet_path, sface_path, (640, 640))?;
         let store = TemplateStore::open(store_dir, key_path)?;
         Ok(Self {
             pipeline,
