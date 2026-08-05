@@ -168,7 +168,7 @@ pub fn run_enroll(
                     continue;
                 }
                 let blur = variance_of_laplacian(&frame.data, frame.width, frame.height);
-                if blur < 50.0 {
+                if blur < 3.0 {
                     eprintln!("  frame {i}: skipped (blur={blur:.1})");
                     continue;
                 }
