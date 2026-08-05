@@ -95,7 +95,7 @@ impl ChildSupervisor {
         // Create the frame memfd (64 MiB region).
         let memfd_name = std::ffi::CString::new("namtor-frames")
             .map_err(|e| DaemonError::Worker(format!("memfd name: {e}")))?;
-        let frame_memfd = memfd_create(&memfd_name, MemFdCreateFlag::MFD_CLOEXEC)
+        let frame_memfd = memfd_create(&memfd_name, MemFdCreateFlag::empty())
             .map_err(|e| DaemonError::Worker(format!("memfd_create: {e}")))?;
         // Size it to 64 MiB.
         nix::unistd::ftruncate(&frame_memfd, 64 * 1024 * 1024)

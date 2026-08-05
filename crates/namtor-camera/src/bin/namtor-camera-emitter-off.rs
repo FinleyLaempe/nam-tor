@@ -22,7 +22,7 @@ fn main() -> ExitCode {
     // the repo's reference entry.
     let quirks_path = std::env::var("NAMTOR_QUIRKS")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("quirks/devices/3277-0018.toml"));
+        .unwrap_or_else(|_| PathBuf::from("/usr/share/namtor/quirks/devices/3277-0018.toml"));
 
     let text = match std::fs::read_to_string(&quirks_path) {
         Ok(t) => t,
