@@ -92,10 +92,18 @@ pub fn run_enroll(
     };
 
     // Save first frame for debugging
-    if let Some(f) = frame_data.first() {
+    // Debug: analyze brightest frame
+    let brightest_idx = frame_data
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, f)| f.data.iter().map(|&b| b as u32).sum::<u32>())
+        .map(|(i, _)| i);
+    if let Some(i) = brightest_idx {
+        let f = &frame_data[i];
+        let mean = f.data.iter().map(|&b| b as f32).sum::<f32>() / f.data.len() as f32;
+        eprintln!("debug: analyzing frame {i} (mean={mean:.1})");
         let raw_path = "/tmp/namtor-enroll-frame.raw";
         let _ = std::fs::write(raw_path, &f.data);
-        eprintln!("debug: saved first frame ({}) to {raw_path}", f.data.len());
 
         // Run detection with score=0.01 to see raw scores
         let mut debug_detector = match namtor_recog::detect::FaceDetector::new(&yunet, (640, 640)) {
@@ -319,14 +327,27 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
     }
 
     let mut frames = Vec::new();
+    let mut frame_idx = 0u32;
     while frames.len() < n_frames {
         match source.next_frame() {
             Ok(Some(frame)) => {
-                frames.push(CapturedFrame {
-                    data: frame.data,
-                    width,
-                    height,
-                });
+                let mean =
+                    frame.data.iter().map(|&b| b as f32).sum::<f32>() / frame.data.len() as f32;
+                if frame_idx < 5 {
+                    eprintln!(
+                        "  raw frame {frame_idx}: mean={mean:.1} emitter={:?}",
+                        frame.emitter
+                    );
+                }
+                // Only keep illuminated (ON) frames — mean > 20 indicates emitter is on
+                if mean > 20.0 {
+                    frames.push(CapturedFrame {
+                        data: frame.data,
+                        width,
+                        height,
+                    });
+                }
+                frame_idx += 1;
             }
             Ok(None) => break,
             Err(e) => {
@@ -334,6 +355,21 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
                 break;
             }
         }
+    }
+    eprintln!(
+        "captured {} illuminated frames (from {frame_idx} total)",
+        frames.len()
+    );
+
+    // Save brightest frame for debugging
+    if let Some(brightest) = frames
+        .iter()
+        .max_by_key(|f| f.data.iter().map(|&b| b as u32).sum::<u32>())
+    {
+        let mean =
+            brightest.data.iter().map(|&b| b as f32).sum::<f32>() / brightest.data.len() as f32;
+        eprintln!("debug: brightest frame mean={mean:.1}, saving to /tmp/namtor-enroll-bright.raw");
+        let _ = std::fs::write("/tmp/namtor-enroll-bright.raw", &brightest.data);
     }
 
     source.stop();
