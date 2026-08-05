@@ -339,9 +339,10 @@ struct V4l2Requestbuffers {
     reserved: [u8; 3],
 }
 
-#[repr(C)]
+#[repr(C, align(8))]
 struct V4l2BufferM {
     offset: u32,
+    _pad: [u8; 4],
 }
 
 #[repr(C)]
@@ -376,7 +377,10 @@ impl V4l2Buffer {
             timecode: V4l2Timecode::default(),
             sequence: 0,
             memory: 0,
-            m: V4l2BufferM { offset: 0 },
+            m: V4l2BufferM {
+                offset: 0,
+                _pad: [0; 4],
+            },
             length: 0,
             reserved2: 0,
             request_fd: 0,
@@ -410,6 +414,12 @@ nix::ioctl_readwrite!(vidioc_dqbuf, b'V', 17, V4l2Buffer);
 nix::ioctl_write_ptr!(vidioc_streamon, b'V', 18, std::os::raw::c_int);
 // VIDIOC_STREAMOFF = _IOW('V', 19, int)
 nix::ioctl_write_ptr!(vidioc_streamoff, b'V', 19, std::os::raw::c_int);
+
+const _: () = {
+    assert!(size_of::<V4l2FormatStruct>() == 208);
+    assert!(size_of::<V4l2Requestbuffers>() == 20);
+    assert!(size_of::<V4l2Buffer>() == 88);
+};
 
 #[cfg(test)]
 mod tests {
