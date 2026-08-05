@@ -13,6 +13,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
+      - name: G5.1 — namtor-proto carries no ML deps
+        run: cargo tree -p namtor-proto --no-default-features | grep -E ' ort | onnxruntime | opencv | image | ndarray | tch ' && exit 1 || exit 0
 
   python:
     runs-on: ubuntu-latest
