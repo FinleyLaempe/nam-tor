@@ -1,0 +1,16 @@
+[package]
+name = "namtor-collect"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Consent-gated PAD data collection tool for Nam-tor"
+
+[dependencies]
+namtor-capture = { path = "../namtor-capture" }
+namtor-pad = { path = "../namtor-pad" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

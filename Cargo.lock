@@ -1110,6 +1110,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "namtor-collect"
+version = "0.1.0"
+dependencies = [
+ "namtor-capture",
+ "namtor-pad",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "namtor-daemon"
 version = "0.1.0"
 dependencies = [
