@@ -4,13 +4,31 @@ Project state for the next agent. Read this first, then the spec.
 
 ## Current state (2026-08-05)
 
-M0 (eval harness), M1 (hardware spike), M2 (detection + capture), **M3 (daemon + sandboxed worker)** done and committed. Working tree clean on `master`. 297 tests green serial (9 HW-gated `#[ignore]`), clippy/fmt/SPDX clean.
+M0 (eval harness), M1 (hardware spike), M2 (detection + capture), **M3 (daemon + sandboxed worker)**, **M4 (enrollment + template storage)**, **M5 (PAM module)**, **M6 (analytic PAD)**, **M7 (GNOME wizard)**, **M8 (namtor-collect)**, **M9 (MiniFASNet PAD)** done and committed. Working tree clean on `master`. 400+ tests green, clippy/fmt/SPDX clean.
 
-**All 26 M3 tasks committed.** Task 25 (R4 INT8 vs FP32 eval) scaffolding is done — Python script (`ml/recipes/r4_int8_vs_fp32.py`), `#[ignore]` Rust driver (`crates/namtor-daemon/tests/r4.rs`), and report template (`docs/m3-r4-report.md`) all compile and are ready to run. The **actual run is BLOCKED on the human**: Python `onnxruntime` binding broken (`python3 -c "import onnxruntime"` fails despite pacman `onnxruntime-cpu 1.28.0`, likely Python 3.14 incompat), model selection + licence acceptance (`NAMTOR_ACCEPT_LICENCE=1`), and R5 cohort dataset decision. Once those land, run `cargo test -p namtor-daemon --test r4 -- --ignored` then `python3 ml/recipes/r4_int8_vs_fp32.py --fp32 r4_fp32.jsonl --int8 r4_int8.jsonl --out docs/m3-r4-report.md --cohort <name>`.
+**New crates since M3:**
+- `namtor-store` — AES-256-GCM encrypted template storage, TPM2 intent (file fallback), per-uid containers, AAD binds uid+model_id, Zeroize on drop.
+- `namtor-recog` — YuNet face detection (5-pt landmarks, NMS, 3 strides), 5-pt similarity transform alignment to 112×112, SFace 128-d L2-normalised embedding, full pipeline (detect→align→embed), cosine similarity.
+- `namtor-pad` — Four analytic PAD gates on `D = On − Off`: differential energy, gradient consistency, specular highlight, radial falloff. PAD is a veto (not a weighted term). 37 tests.
+- `namtor-pam` — PAM auth module (`pam_namtor.so`, 457 KB < 500 KB budget), fail-closed, no ML deps (G5.1 structural test), stdin keypress fallback (§8.4), socket client drives Prepare→Verify→Release. 30 tests.
+- `namtor-collect` — Consent-gated PAD data collection (§10.4): ConsentRecord (grant/revoke), per-session IDs for withdrawal, CollectionStore writes raw pairs + derived differential stats. 15 tests.
+- `namtor-gnome` — GTK4/libadwaita enrollment wizard and settings app. Shows enrolled users, error handling for missing store.
 
-Everything else in M3 shipped: e2e harness + no-biometric-in-logs assertion (§8.6) green, G5.1 (no ML in proto) structural test green, G5.2 escape suite green, systemd units + sysusers/tmpfiles + setuid helper written.
+**Daemon verify engine:** `VerifyEngine` captures On/Off frame pairs, computes `D = On − Off`, runs analytic PAD (§6.4), detects+aligns+embeds via YuNet+SFace, matches against enrolled templates (cosine sim, max), applies z-norm, thresholds. `DaemonDispatcher` implements `LifecycleDispatch` bridging listener → Daemon + VerifyEngine. Listener loops over multiple requests per connection (Prepare→Verify→Release on one socket), nonce validated once per connection.
 
-Next milestone: M4 (enrollment + template storage) once Task 25's R4/R5 results land and M4 plan is written. Do **not** write the M4 plan before R4/R5 land.
+**Trained MiniFASNet PAD model** (49 KB ONNX, ~80K params): trained on physics-based synthetic strobe-differential data encoding §6.4 signals (1/r² falloff, specular hotspot, subsurface scattering for live; near-zero D for screen replay; weak/flat D for print; uniform D for cutout). 100% val accuracy on synthetic data. Deployed to `var/lib/namtor/models/minifasnet_pad.onnx`.
+
+**Models deployed** (`var/lib/namtor/models/`, gitignored): YuNet 2023mar (232 KB, BSD-3), SFace 2021dec (37 MB, BSD-3), MiniFASNet PAD (49 KB, self-trained).
+
+**Python environment** (`ml/.venv/`): onnxruntime 1.28.0 (CPUExecutionProvider), PyTorch 2.13.0+cu126 (CUDA on RTX 4070), onnxscript for ONNX export.
+
+**R4 INT8 vs FP32 eval** scaffolding remains ready but deferred (Path B — INT8 on architectural grounds per §5.3).
+
+**What needs the human to go live:**
+1. Install systemd units (root): `namtor` user, `namtor-auth` group, setuid `namtor-worker-spawn`.
+2. Enroll a face: `namtor-cli enroll <username>` (requires camera at `/dev/video2`).
+3. Add `pam_namtor.so` to PAM stack (e.g. `/etc/pam.d/gdm-password`).
+4. Start daemon: `namtor-daemon` or `systemctl start namtor-daemon`.
 
 ## Where things are
 
