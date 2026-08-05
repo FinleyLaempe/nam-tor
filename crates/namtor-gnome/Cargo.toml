@@ -1,0 +1,19 @@
+[package]
+name = "namtor-gnome"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "GNOME enrollment wizard and settings for Nam-tor"
+
+[dependencies]
+namtor-store = { path = "../namtor-store" }
+namtor-proto = { path = "../namtor-proto" }
+gtk4 = "0.9"
+libadwaita = { version = "0.7", features = ["v1_5"] }
+gio = "0.20"
+glib = "0.20"
+serde_json = { workspace = true }
+
+[[bin]]
+name = "namtor-enroll-wizard"
+path = "src/bin/wizard.rs"
