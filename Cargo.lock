@@ -1153,6 +1153,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "namtor-pad"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "namtor-probe"
 version = "0.1.0"
 dependencies = [
@@ -1183,7 +1193,6 @@ dependencies = [
  "namtor-capture",
  "namtor-proto",
  "namtor-worker",
- "ndarray 0.16.1",
  "serde",
  "serde_json",
  "tempfile",
@@ -1230,21 +1239,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
-]
-
-[[package]]
-name = "ndarray"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "882ed72dce9365842bf196bdeedf5055305f11fc8c03dee7bb0194a6cad34841"
-dependencies = [
- "matrixmultiply",
- "num-complex",
- "num-integer",
- "num-traits",
- "portable-atomic",
- "portable-atomic-util",
- "rawpointer",
 ]
 
 [[package]]
@@ -1345,7 +1339,7 @@ version = "2.0.0-rc.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4336a1e2b38848325241c72889086886004e589b7c74f335e60a8e8db5138a0b"
 dependencies = [
- "ndarray 0.17.2",
+ "ndarray",
  "ort-sys",
  "smallvec",
  "tracing",

@@ -7,6 +7,7 @@ members = [
     "crates/namtor-daemon",
     "crates/namtor-eval",
     "crates/namtor-hwdb",
+    "crates/namtor-pad",
     "crates/namtor-probe",
     "crates/namtor-proto",
     "crates/namtor-recog",
