@@ -217,9 +217,12 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
     use namtor_capture::source::CaptureSource;
 
     // Activate the IR emitter via MSXU mode 2 (firmware-strobed alternating
-    // illumination) before opening the V4L2 stream. The quirk DB has the
-    // exact unit/selector/payload for this device (3277:0018).
-    let emitter = activate_emitter(dev)?;
+    // illumination) before opening the V4L2 stream.
+    let emitter = activate_emitter(dev).unwrap_or_else(|e| {
+        eprintln!("warning: emitter activation failed: {e}");
+        eprintln!("capturing without IR illumination (faces may not be visible)");
+        EmitterGuard { xu: None }
+    });
 
     let streamer = V4l2IrStream::open(
         std::path::Path::new(dev),
@@ -292,9 +295,20 @@ impl Drop for EmitterGuard {
 }
 
 fn emitter_cfg() -> Option<namtor_hwdb::quirks::EmitterCfg> {
-    let quirks_dir = std::path::Path::new("quirks/devices");
-    let db = namtor_hwdb::quirks::load_quirks_dir(quirks_dir).ok()?;
-    db.entries.get("3277:0018").map(|e| e.emitter.clone())
+    let candidates = [
+        std::path::PathBuf::from("/usr/share/namtor/quirks/devices"),
+        std::path::PathBuf::from("quirks/devices"),
+        std::path::PathBuf::from("../quirks/devices"),
+    ];
+    for dir in &candidates {
+        if let Ok(db) = namtor_hwdb::quirks::load_quirks_dir(dir) {
+            if let Some(e) = db.entries.get("3277:0018") {
+                eprintln!("emitter: loaded quirk from {}", dir.display());
+                return Some(e.emitter.clone());
+            }
+        }
+    }
+    None
 }
 
 fn activate_emitter(dev: &str) -> Result<EmitterGuard, String> {
