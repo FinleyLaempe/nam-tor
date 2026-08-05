@@ -27,13 +27,13 @@ pub struct RawFrame {
 }
 
 /// Abstracts the streaming layer so `IrUvc` is unit-testable without a device.
-pub trait Streamer {
+pub trait Streamer: Send {
     fn next_raw(&mut self) -> Result<RawFrame, CaptureError>;
 }
 
 /// Tags each frame's emitter state. `Parity` for MSXU-mode firmware strobing;
 /// `Constant(Unknown)` when the caller has not classified the strobe yet.
-pub trait EmitterPolicy {
+pub trait EmitterPolicy: Send {
     fn tag(&self, frame_index: u64) -> EmitterState;
 }
 

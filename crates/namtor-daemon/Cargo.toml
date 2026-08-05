@@ -14,6 +14,9 @@ namtor-capture = { path = "../namtor-capture" }
 namtor-camera = { path = "../namtor-camera" }
 namtor-hwdb = { path = "../namtor-hwdb" }
 namtor-worker = { path = "../namtor-worker", default-features = false }
+namtor-store = { path = "../namtor-store" }
+namtor-pad = { path = "../namtor-pad" }
+namtor-recog = { path = "../namtor-recog" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

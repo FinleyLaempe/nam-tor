@@ -96,6 +96,10 @@ impl<S: WorkerSupervisor, C: Clock> Daemon<S, C> {
     pub fn supervisor_mut(&mut self) -> &mut S {
         &mut self.supervisor
     }
+
+    pub fn capture_mut(&mut self) -> Option<&mut Box<dyn namtor_capture::source::CaptureSource>> {
+        self.capture.as_mut()
+    }
 }
 
 #[cfg(test)]

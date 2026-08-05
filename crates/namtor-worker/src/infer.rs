@@ -18,7 +18,7 @@ use namtor_proto::worker::{FrameRef, Loaded, ModelSpec};
 use crate::WorkerError;
 
 /// A loaded model handle and its observed input/output shapes.
-pub trait InferenceBackend {
+pub trait InferenceBackend: Send {
     /// Resolve and load `spec`; return the shapes the backend observed.
     fn load(&mut self, spec: &ModelSpec) -> Result<Loaded, WorkerError>;
     /// Run inference on `frame` (raw pixel bytes from the memfd region)

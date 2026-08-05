@@ -42,7 +42,7 @@ pub enum CaptureError {
 /// Pull-based: callers drive the stream with [`CaptureSource::next_frame`],
 /// which returns `Ok(None)` once the stream is exhausted. Live device sources
 /// block until the next frame arrives and never return `Ok(None)` until stopped.
-pub trait CaptureSource {
+pub trait CaptureSource: Send {
     fn caps(&self) -> SourceCaps;
     fn start(&mut self) -> Result<(), CaptureError>;
     fn next_frame(&mut self) -> Result<Option<Frame>, CaptureError>;
