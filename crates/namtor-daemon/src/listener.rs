@@ -110,15 +110,14 @@ impl Listener {
         self.listener.set_nonblocking(false).ok();
         let (stream, _) = self.listener.accept()?;
 
-        // SO_PEERCRED on every connection (spec §3.2).
         let creds = get_peer_creds(&stream)?;
+        tracing::debug!(peer_uid = creds.uid, peer_gid = creds.gid, "connection");
         if !authorise(&creds, self.auth_gid) {
-            // Deny: close, no reply (fail-closed).
+            tracing::warn!(peer_uid = creds.uid, "unauthorised connection refused");
             drop(stream);
             return Ok(());
         }
 
-        // Issue nonce + send HelloMsg.
         let nonce = self.nonce.issue();
         let hello = HelloMsg {
             server_version: 1,
@@ -129,7 +128,6 @@ impl Listener {
         encode(&hello, &mut writer)?;
         writer.flush()?;
 
-        // Read AuthRequest.
         let reader = stream.try_clone()?;
         let mut reader = std::io::BufReader::new(reader);
         let value = decode(&mut reader)?;
@@ -137,13 +135,14 @@ impl Listener {
 
         match req {
             AuthRequest::Status => {
+                tracing::debug!(peer_uid = creds.uid, "status request");
                 let status = self.dispatcher.snapshot();
                 encode(&status, &mut writer)?;
                 writer.flush()?;
             }
             AuthRequest::Auth(body) => {
-                // rhost set → Refused (spec §8.2).
                 if body.rhost.is_some() {
+                    tracing::warn!(peer_uid = creds.uid, "rhost set — refused");
                     let reply = AuthReply {
                         nonce: body.nonce,
                         verdict: Verdict::Refused,
@@ -155,23 +154,33 @@ impl Listener {
                     return Ok(());
                 }
 
-                // Validate nonce (anti-replay).
                 if let Err(e) = self.nonce.validate_reply(nonce, body.nonce) {
-                    // Replay or mismatch: close, log.
+                    tracing::warn!(peer_uid = creds.uid, error = %e, "nonce validation failed");
                     drop(stream);
                     return Err(e);
                 }
 
-                // Acquire camera_lock (serialised; spec §3.2).
+                tracing::debug!(
+                    peer_uid = creds.uid,
+                    target_uid = body.target_uid,
+                    "auth request"
+                );
                 let _lock = self.camera_lock.lock().expect("camera_lock poisoned");
 
-                // Dispatch to lifecycle.
                 match self.dispatcher.dispatch(&body) {
                     Ok(reply) => {
+                        tracing::info!(
+                            peer_uid = creds.uid,
+                            target_uid = body.target_uid,
+                            verdict = ?reply.verdict,
+                            score = reply.score,
+                            "auth complete"
+                        );
                         encode(&reply, &mut writer)?;
                         writer.flush()?;
                     }
                     Err(e) => {
+                        tracing::error!(peer_uid = creds.uid, error = %e, "dispatch error");
                         let reply = AuthReply {
                             nonce: body.nonce,
                             verdict: Verdict::Unavailable,
