@@ -101,9 +101,8 @@ pub fn preprocess(frame: &[u8], width: u32, height: u32, iw: usize, ih: usize) -
             } else {
                 0.0
             };
-            let normalized = (gray - 127.5) / 128.0;
             for c in 0..3 {
-                input[c * iw * ih + y * iw + x] = normalized;
+                input[c * iw * ih + y * iw + x] = gray;
             }
         }
     }
