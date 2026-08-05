@@ -61,18 +61,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let model_specs = vec![
         namtor_proto::worker::ModelSpec {
-            id: "yunet".into(),
+            id: "yunet_2023mar".into(),
             quant: namtor_proto::worker::Quant::Fp32,
             sha256: [0; 32],
         },
         namtor_proto::worker::ModelSpec {
-            id: "sface".into(),
+            id: "sface_2021dec".into(),
             quant: namtor_proto::worker::Quant::Fp32,
             sha256: [0; 32],
         },
     ];
     let mock_infer = std::env::var("NAMTOR_MOCK_INFER").is_ok();
-    let supervisor = ChildSupervisor::spawn(&worker_bin, &model_specs, mock_infer)?;
+    let supervisor = ChildSupervisor::spawn(&worker_bin, &model_specs, mock_infer, &models_dir)?;
 
     let verify = VerifyEngine::new(&yunet_path, &sface_path, &store_dir, &key_path)?;
 

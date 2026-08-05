@@ -30,12 +30,13 @@ fn main() -> ExitCode {
         i += 1;
     }
 
-    // Normal worker mode: parse --read-fd, --write-fd, --frame-memfd, --frame-len.
+    // Normal worker mode: parse --read-fd, --write-fd, --frame-memfd, --frame-len, --models-dir.
     let mut read_fd: Option<i32> = None;
     let mut write_fd: Option<i32> = None;
     let mut frame_memfd: Option<i32> = None;
     let mut frame_len: u64 = 0;
     let mut apply_sbx = false;
+    let mut models_dir: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -59,6 +60,10 @@ fn main() -> ExitCode {
                 apply_sbx = true;
                 i += 1;
             }
+            "--models-dir" if i + 1 < args.len() => {
+                models_dir = Some(args[i + 1].clone());
+                i += 2;
+            }
             other => {
                 eprintln!("namtor-worker: unknown arg {other}");
                 return ExitCode::from(2);
@@ -75,6 +80,12 @@ fn main() -> ExitCode {
     };
 
     let backend = namtor_worker::infer::default_backend();
+    let backend: Box<dyn namtor_worker::infer::InferenceBackend> = match &models_dir {
+        Some(dir) => Box::new(
+            namtor_worker::infer_onnx::OnnxCpu::new(1).with_root(std::path::PathBuf::from(dir)),
+        ),
+        None => backend,
+    };
     match namtor_worker::run_main(
         read_fd,
         write_fd,

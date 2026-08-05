@@ -88,6 +88,7 @@ impl ChildSupervisor {
         worker_bin: &Path,
         models: &[ModelSpec],
         mock_infer: bool,
+        models_dir: &Path,
     ) -> Result<Self, DaemonError> {
         use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
         use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
@@ -134,7 +135,9 @@ impl ChildSupervisor {
             .arg("--frame-memfd")
             .arg(frame_memfd_raw.to_string())
             .arg("--frame-len")
-            .arg((64 * 1024 * 1024).to_string());
+            .arg((64 * 1024 * 1024).to_string())
+            .arg("--models-dir")
+            .arg(models_dir);
         if mock_infer {
             cmd.env("NAMTOR_WORKER_FEATURES", "mock-infer");
         }
@@ -286,8 +289,13 @@ mod tests {
             sha256: [0; 32],
         }];
 
-        let mut sup = ChildSupervisor::spawn(std::path::Path::new(&worker_bin), &models, true)
-            .expect("spawn");
+        let mut sup = ChildSupervisor::spawn(
+            std::path::Path::new(&worker_bin),
+            &models,
+            true,
+            std::path::Path::new("."),
+        )
+        .expect("spawn");
 
         let loaded = sup.load_all(&models).expect("load_all");
         assert_eq!(loaded.len(), 1);
