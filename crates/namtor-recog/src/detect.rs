@@ -5,12 +5,8 @@
 //! Post-processing: score threshold → NMS → coordinate transform back to
 //! original image space.
 
-use namtor_proto::worker::{FrameRef, ModelSpec, Quant};
-use namtor_worker::infer::InferenceBackend;
+use namtor_proto::worker::{ModelSpec, Quant};
 use namtor_worker::WorkerError;
-
-use namtor_capture::frame::{EmitterState, PixFmt};
-use namtor_capture::source::Spectrum;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FaceBox {
@@ -37,7 +33,7 @@ pub struct Detection {
 }
 
 pub struct FaceDetector {
-    backend: Box<dyn InferenceBackend>,
+    backend: namtor_worker::infer_onnx::OnnxCpu,
     loaded: namtor_proto::worker::Loaded,
     score_threshold: f32,
     nms_threshold: f32,
@@ -54,7 +50,7 @@ impl FaceDetector {
         };
         let loaded = backend.load_file(model_path, &spec)?;
         Ok(Self {
-            backend: Box::new(backend),
+            backend,
             loaded,
             score_threshold: 0.6,
             nms_threshold: 0.3,
@@ -77,19 +73,8 @@ impl FaceDetector {
         let (iw, ih) = (self.input_size.0 as usize, self.input_size.1 as usize);
         let input = preprocess(frame, width, height, iw, ih);
 
-        let frame_ref = FrameRef {
-            offset: 0,
-            len: input.len() as u32,
-            emitter: EmitterState::On,
-            spectrum: Spectrum::Ir,
-            pix_fmt: PixFmt::Grey8,
-            w: iw as u32,
-            h: ih as u32,
-            ts_us: 0,
-        };
-
-        let outputs = self.backend.run(&self.loaded, &input, &frame_ref)?;
-        let detections = postprocess(
+        let outputs = self.backend.run_multi(&self.loaded, &input)?;
+        let detections = postprocess_multi(
             &outputs,
             iw,
             ih,
@@ -129,8 +114,8 @@ fn preprocess(frame: &[u8], width: u32, height: u32, iw: usize, ih: usize) -> Ve
     bytes
 }
 
-fn postprocess(
-    outputs: &[f32],
+fn postprocess_multi(
+    outputs: &std::collections::HashMap<String, Vec<f32>>,
     iw: usize,
     ih: usize,
     orig_w: u32,
@@ -138,78 +123,103 @@ fn postprocess(
     score_thr: f32,
     nms_thr: f32,
 ) -> Vec<Detection> {
-    let strides = [8, 16, 32];
+    let strides = [8usize, 16, 32];
     let mut candidates: Vec<Detection> = Vec::new();
 
-    let mut offset = 0;
     for &stride in &strides {
         let gw = iw / stride;
         let gh = ih / stride;
         let count = gw * gh;
+        let s = stride as f32;
 
-        let cls_off = offset;
-        let bbox_off = cls_off + count * 2;
-        let kps_off = bbox_off + count * 4 * 2;
-        offset = kps_off + count * 10 * 2;
+        let cls_key = format!("cls_{stride}");
+        let obj_key = format!("obj_{stride}");
+        let bbox_key = format!("bbox_{stride}");
+        let kps_key = format!("kps_{stride}");
+
+        let cls = outputs.get(&cls_key);
+        let obj = outputs.get(&obj_key);
+        let bbox = outputs.get(&bbox_key);
+        let kps = outputs.get(&kps_key);
+
+        if cls.is_none() || obj.is_none() || bbox.is_none() {
+            continue;
+        }
+
+        let cls = cls.unwrap();
+        let obj = obj.unwrap();
+        let bbox = bbox.unwrap();
 
         for i in 0..count {
-            let cls_score = outputs[cls_off + i * 2 + 1];
-            if cls_score < score_thr {
+            let cls_val = cls[i];
+            let obj_val = obj[i];
+            let score = cls_val * obj_val;
+            if score < score_thr {
                 continue;
             }
-            let cx = (i % gw) as f32 * stride as f32;
-            let cy = (i / gw) as f32 * stride as f32;
 
-            let bx = (outputs[bbox_off + i * 8] * stride as f32) + cx;
-            let by = (outputs[bbox_off + i * 8 + 1] * stride as f32) + cy;
-            let bw = outputs[bbox_off + i * 8 + 2] * stride as f32;
-            let bh = outputs[bbox_off + i * 8 + 3] * stride as f32;
+            let cx = (i % gw) as f32 * s;
+            let cy = (i / gw) as f32 * s;
 
-            let x = (bx - bw / 2.0) / iw as f32 * orig_w as f32;
-            let y = (by - bh / 2.0) / ih as f32 * orig_h as f32;
-            let w = bw / iw as f32 * orig_w as f32;
-            let h = bh / ih as f32 * orig_h as f32;
+            let l = bbox[i * 4] * s;
+            let t = bbox[i * 4 + 1] * s;
+            let r = bbox[i * 4 + 2] * s;
+            let b = bbox[i * 4 + 3] * s;
 
-            let kps = [
-                (
-                    outputs[kps_off + i * 10] * stride as f32 + cx,
-                    outputs[kps_off + i * 10 + 1] * stride as f32 + cy,
-                ),
-                (
-                    outputs[kps_off + i * 10 + 2] * stride as f32 + cx,
-                    outputs[kps_off + i * 10 + 3] * stride as f32 + cy,
-                ),
-                (
-                    outputs[kps_off + i * 10 + 4] * stride as f32 + cx,
-                    outputs[kps_off + i * 10 + 5] * stride as f32 + cy,
-                ),
-                (
-                    outputs[kps_off + i * 10 + 6] * stride as f32 + cx,
-                    outputs[kps_off + i * 10 + 7] * stride as f32 + cy,
-                ),
-                (
-                    outputs[kps_off + i * 10 + 8] * stride as f32 + cx,
-                    outputs[kps_off + i * 10 + 9] * stride as f32 + cy,
-                ),
-            ];
-            let scale_x = orig_w as f32 / iw as f32;
-            let scale_y = orig_h as f32 / ih as f32;
-            let landmarks = Landmarks {
-                right_eye: (kps[0].0 * scale_x, kps[0].1 * scale_y),
-                left_eye: (kps[1].0 * scale_x, kps[1].1 * scale_y),
-                nose: (kps[2].0 * scale_x, kps[2].1 * scale_y),
-                right_mouth: (kps[3].0 * scale_x, kps[3].1 * scale_y),
-                left_mouth: (kps[4].0 * scale_x, kps[4].1 * scale_y),
+            let x1 = cx - l;
+            let y1 = cy - t;
+            let x2 = cx + r;
+            let y2 = cy + b;
+
+            let x = x1 / iw as f32 * orig_w as f32;
+            let y = y1 / ih as f32 * orig_h as f32;
+            let w = (x2 - x1) / iw as f32 * orig_w as f32;
+            let h = (y2 - y1) / ih as f32 * orig_h as f32;
+
+            let mut landmarks = Landmarks {
+                right_eye: (0.0, 0.0),
+                left_eye: (0.0, 0.0),
+                nose: (0.0, 0.0),
+                right_mouth: (0.0, 0.0),
+                left_mouth: (0.0, 0.0),
             };
 
+            if let Some(kps) = kps {
+                let scale_x = orig_w as f32 / iw as f32;
+                let scale_y = orig_h as f32 / ih as f32;
+                let points: [(f32, f32); 5] = [
+                    (
+                        (cx + kps[i * 10] * s) * scale_x,
+                        (cy + kps[i * 10 + 1] * s) * scale_y,
+                    ),
+                    (
+                        (cx + kps[i * 10 + 2] * s) * scale_x,
+                        (cy + kps[i * 10 + 3] * s) * scale_y,
+                    ),
+                    (
+                        (cx + kps[i * 10 + 4] * s) * scale_x,
+                        (cy + kps[i * 10 + 5] * s) * scale_y,
+                    ),
+                    (
+                        (cx + kps[i * 10 + 6] * s) * scale_x,
+                        (cy + kps[i * 10 + 7] * s) * scale_y,
+                    ),
+                    (
+                        (cx + kps[i * 10 + 8] * s) * scale_x,
+                        (cy + kps[i * 10 + 9] * s) * scale_y,
+                    ),
+                ];
+                landmarks = Landmarks {
+                    right_eye: points[0],
+                    left_eye: points[1],
+                    nose: points[2],
+                    right_mouth: points[3],
+                    left_mouth: points[4],
+                };
+            }
+
             candidates.push(Detection {
-                box_: FaceBox {
-                    x,
-                    y,
-                    w,
-                    h,
-                    score: cls_score,
-                },
+                box_: FaceBox { x, y, w, h, score },
                 landmarks,
             });
         }

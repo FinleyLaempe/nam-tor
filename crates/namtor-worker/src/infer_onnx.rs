@@ -207,6 +207,63 @@ impl InferenceBackend for OnnxCpu {
     }
 }
 
+impl OnnxCpu {
+    /// Run inference and return ALL named outputs as a map.
+    /// Needed for models like YuNet that produce multiple output heads.
+    pub fn run_multi(
+        &self,
+        loaded: &Loaded,
+        frame: &[u8],
+    ) -> Result<std::collections::HashMap<String, Vec<f32>>, WorkerError> {
+        let key = format!("{}:{:?}", loaded.model_id, loaded.quant);
+        let cell = self
+            .sessions
+            .get(&key)
+            .ok_or_else(|| WorkerError::Infer(format!("model not loaded: {key}")))?;
+        let mut session = cell.borrow_mut();
+        let input_vec: Vec<f32> = frame
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let input_name = session
+            .inputs()
+            .first()
+            .map(|i| i.name().to_string())
+            .ok_or_else(|| WorkerError::Infer("model has no inputs".into()))?;
+        let shape: Vec<i64> = loaded
+            .input_shape
+            .iter()
+            .map(|&d| {
+                if d == 0 {
+                    input_vec.len() as i64
+                } else {
+                    d as i64
+                }
+            })
+            .collect();
+        let tensor = Tensor::from_array((shape.as_slice(), input_vec))
+            .map_err(|e| WorkerError::Infer(format!("tensor: {e}")))?;
+        let output_names: Vec<String> = session
+            .outputs()
+            .iter()
+            .map(|o| o.name().to_string())
+            .collect();
+        let outputs = session
+            .run(ort::inputs![input_name.as_str() => tensor])
+            .map_err(|e| WorkerError::Infer(format!("run: {e}")))?;
+        let mut result = std::collections::HashMap::new();
+        for name in &output_names {
+            if let Some(val) = outputs.get(name.as_str()) {
+                let view = val
+                    .try_extract_array::<f32>()
+                    .map_err(|e| WorkerError::Infer(format!("extract {name}: {e}")))?;
+                result.insert(name.clone(), view.iter().cloned().collect());
+            }
+        }
+        Ok(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
