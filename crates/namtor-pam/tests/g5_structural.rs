@@ -50,11 +50,16 @@ fn no_ml_or_image_libs_linked() {
     let so = match find_pam_so() {
         Some(p) => p,
         None => {
-            eprintln!("skipped: pam_namtor.so not built (run `cargo build --release -p namtor-pam`)");
+            eprintln!(
+                "skipped: pam_namtor.so not built (run `cargo build --release -p namtor-pam`)"
+            );
             return;
         }
     };
-    let output = Command::new("ldd").arg(&so).output().expect("ldd available");
+    let output = Command::new("ldd")
+        .arg(&so)
+        .output()
+        .expect("ldd available");
     assert!(output.status.success(), "ldd failed on {}", so.display());
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("=== ldd {} ===\n{stdout}", so.display());

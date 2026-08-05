@@ -109,7 +109,8 @@ pub fn authenticate(cfg: &AuthConfig) -> Result<AuthReply, ClientError> {
     let hello: HelloMsg = serde_json::from_value(hello_val).map_err(|_| ClientError::BadHello)?;
     let nonce = hello.nonce;
 
-    // 2. Prepare phase.
+    // 2. Prepare phase. Prepare returns Unavailable as a phase ack — only
+    // the Verify verdict is classified.
     let deadline_us = (cfg.timeout.as_micros() as u64).max(1);
     let prepare = AuthRequest::Auth(AuthBody {
         nonce,
@@ -122,9 +123,9 @@ pub fn authenticate(cfg: &AuthConfig) -> Result<AuthReply, ClientError> {
     let prep_val = decode(&mut stream)?;
     let prep_reply: AuthReply =
         serde_json::from_value(prep_val).map_err(|_| ClientError::BadHello)?;
-    classify(&prep_reply, &nonce)?;
+    check_nonce(&prep_reply, &nonce)?;
 
-    // 3. Verify phase.
+    // 3. Verify phase — the verdict that matters.
     let verify = AuthRequest::Auth(AuthBody {
         nonce,
         target_uid: cfg.target_uid,
@@ -154,10 +155,15 @@ pub fn authenticate(cfg: &AuthConfig) -> Result<AuthReply, ClientError> {
 }
 
 /// Check the nonce echo and map non-Match/NoMatch verdicts to errors.
-fn classify(reply: &AuthReply, expected_nonce: &[u8; 16]) -> Result<(), ClientError> {
+fn check_nonce(reply: &AuthReply, expected_nonce: &[u8; 16]) -> Result<(), ClientError> {
     if reply.nonce != *expected_nonce {
         return Err(ClientError::NonceMismatch);
     }
+    Ok(())
+}
+
+fn classify(reply: &AuthReply, expected_nonce: &[u8; 16]) -> Result<(), ClientError> {
+    check_nonce(reply, expected_nonce)?;
     match reply.verdict {
         Verdict::Match | Verdict::NoMatch => Ok(()),
         Verdict::Refused => Err(ClientError::Refused),

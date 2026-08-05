@@ -104,8 +104,9 @@ impl Listener {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    /// Accept and serve one connection. Returns when the connection closes
-    /// or errors.
+    /// Accept and serve one connection, looping over requests until the
+    /// client closes the connection or an error occurs. The PAM client
+    /// sends Prepare → Verify → Release on a single connection.
     pub fn accept_one(&self) -> Result<(), DaemonError> {
         self.listener.set_nonblocking(false).ok();
         let (stream, _) = self.listener.accept()?;
@@ -130,65 +131,81 @@ impl Listener {
 
         let reader = stream.try_clone()?;
         let mut reader = std::io::BufReader::new(reader);
-        let value = decode(&mut reader)?;
-        let req: AuthRequest = serde_json::from_value(value)?;
 
-        match req {
-            AuthRequest::Status => {
-                tracing::debug!(peer_uid = creds.uid, "status request");
-                let status = self.dispatcher.snapshot();
-                encode(&status, &mut writer)?;
-                writer.flush()?;
-            }
-            AuthRequest::Auth(body) => {
-                if body.rhost.is_some() {
-                    tracing::warn!(peer_uid = creds.uid, "rhost set — refused");
-                    let reply = AuthReply {
-                        nonce: body.nonce,
-                        verdict: Verdict::Refused,
-                        score: 0.0,
-                        reason: Some("remote authentication refused".into()),
-                    };
-                    encode(&reply, &mut writer)?;
+        let mut nonce_validated = false;
+
+        loop {
+            let value = match decode(&mut reader) {
+                Ok(v) => v,
+                Err(namtor_proto::framing::ProtoError::Io(ref e))
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let req: AuthRequest = serde_json::from_value(value)?;
+
+            match req {
+                AuthRequest::Status => {
+                    tracing::debug!(peer_uid = creds.uid, "status request");
+                    let status = self.dispatcher.snapshot();
+                    encode(&status, &mut writer)?;
                     writer.flush()?;
-                    return Ok(());
                 }
-
-                if let Err(e) = self.nonce.validate_reply(nonce, body.nonce) {
-                    tracing::warn!(peer_uid = creds.uid, error = %e, "nonce validation failed");
-                    drop(stream);
-                    return Err(e);
-                }
-
-                tracing::debug!(
-                    peer_uid = creds.uid,
-                    target_uid = body.target_uid,
-                    "auth request"
-                );
-                let _lock = self.camera_lock.lock().expect("camera_lock poisoned");
-
-                match self.dispatcher.dispatch(&body) {
-                    Ok(reply) => {
-                        tracing::info!(
-                            peer_uid = creds.uid,
-                            target_uid = body.target_uid,
-                            verdict = ?reply.verdict,
-                            score = reply.score,
-                            "auth complete"
-                        );
-                        encode(&reply, &mut writer)?;
-                        writer.flush()?;
-                    }
-                    Err(e) => {
-                        tracing::error!(peer_uid = creds.uid, error = %e, "dispatch error");
+                AuthRequest::Auth(body) => {
+                    if body.rhost.is_some() {
+                        tracing::warn!(peer_uid = creds.uid, "rhost set — refused");
                         let reply = AuthReply {
                             nonce: body.nonce,
-                            verdict: Verdict::Unavailable,
+                            verdict: Verdict::Refused,
                             score: 0.0,
-                            reason: Some(e.to_string()),
+                            reason: Some("remote authentication refused".into()),
                         };
                         encode(&reply, &mut writer)?;
                         writer.flush()?;
+                        return Ok(());
+                    }
+
+                    if !nonce_validated {
+                        if let Err(e) = self.nonce.validate_reply(nonce, body.nonce) {
+                            tracing::warn!(peer_uid = creds.uid, error = %e, "nonce validation failed");
+                            drop(stream);
+                            return Err(e);
+                        }
+                        nonce_validated = true;
+                    }
+
+                    tracing::debug!(
+                        peer_uid = creds.uid,
+                        target_uid = body.target_uid,
+                        phase = ?body.phase,
+                        "auth request"
+                    );
+                    let _lock = self.camera_lock.lock().expect("camera_lock poisoned");
+
+                    match self.dispatcher.dispatch(&body) {
+                        Ok(reply) => {
+                            tracing::info!(
+                                peer_uid = creds.uid,
+                                target_uid = body.target_uid,
+                                verdict = ?reply.verdict,
+                                score = reply.score,
+                                "auth phase complete"
+                            );
+                            encode(&reply, &mut writer)?;
+                            writer.flush()?;
+                        }
+                        Err(e) => {
+                            let reply = AuthReply {
+                                nonce: body.nonce,
+                                verdict: Verdict::Unavailable,
+                                score: 0.0,
+                                reason: Some(e.to_string()),
+                            };
+                            encode(&reply, &mut writer)?;
+                            writer.flush()?;
+                        }
                     }
                 }
             }

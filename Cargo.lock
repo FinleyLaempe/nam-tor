@@ -1540,7 +1540,9 @@ name = "namtor-pam"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "namtor-daemon",
  "namtor-proto",
+ "nix",
  "serde_json",
  "tempfile",
 ]
