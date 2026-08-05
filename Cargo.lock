@@ -1100,8 +1100,12 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "namtor-camera",
+ "namtor-capture",
  "namtor-hwdb",
  "namtor-proto",
+ "namtor-recog",
+ "namtor-store",
+ "nix",
  "tempfile",
 ]
 

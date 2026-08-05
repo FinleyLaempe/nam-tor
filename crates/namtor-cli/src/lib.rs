@@ -5,4 +5,6 @@
 //! stream state, and protection level. Enrollment and diagnostics subcommands
 //! arrive in later milestones.
 
+pub mod enroll;
+pub mod list;
 pub mod status;

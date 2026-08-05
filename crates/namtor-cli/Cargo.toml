@@ -6,9 +6,13 @@ license = "GPL-3.0-only"
 
 [dependencies]
 namtor-camera = { path = "../namtor-camera" }
+namtor-capture = { path = "../namtor-capture" }
 namtor-hwdb = { path = "../namtor-hwdb" }
 namtor-proto = { path = "../namtor-proto" }
+namtor-store = { path = "../namtor-store" }
+namtor-recog = { path = "../namtor-recog" }
 clap = { version = "4", features = ["derive"] }
+nix = { version = "0.29", features = ["user"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
