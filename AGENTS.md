@@ -2,11 +2,13 @@
 
 Project state for the next agent. Read this first, then the spec.
 
-## Current state (2026-08-04)
+## Current state (2026-08-05)
 
-M0 (eval harness), M1 (hardware spike), M2 (detection + capture) **done and committed**. Working tree clean on `master`. 173 tests green (6 HW-gated `#[ignore]`), clippy/fmt/SPDX clean.
+M0 (eval harness), M1 (hardware spike), M2 (detection + capture), **M3 (daemon + sandboxed worker)** done and committed. Working tree clean on `master`. 297 tests green serial (8 HW-gated `#[ignore]`), clippy/fmt/SPDX clean.
 
-M3 (daemon + sandboxed worker) plan written at `docs/superpowers/plans/2026-08-04-nam-tor-m3-daemon-worker.md` — reviewed, fixes applied, **ready to execute**.
+**M3 Task 25 (R4 INT8 vs FP32 eval) is the only remaining M3 task — BLOCKED on the human** (Python onnxruntime binding broken: `python3 -c "import onnxruntime"` fails despite pacman `onnxruntime-cpu 1.28.0`, likely Python 3.14 incompat). Needs a compatible Python venv or binding fix + model selection + licence acceptance + R5 cohort dataset decision. Everything else in M3 shipped: 25/26 tasks committed, e2e harness + no-biometric-in-logs assertion (§8.6) green, G5.1 (no ML in proto) structural test green, G5.2 escape suite green, systemd units + sysusers/tmpfiles + setuid helper written.
+
+Next milestone: M4 (enrollment + template storage) once Task 25 lands and M4 plan is written. Do **not** write the M4 plan before R4/R5 land.
 
 ## Where things are
 
@@ -33,9 +35,24 @@ M3 (daemon + sandboxed worker) plan written at `docs/superpowers/plans/2026-08-0
 `namtor_camera::hotplug`: `DeviceEvent`, `trait DeviceEventSource`, `UdevMonitor::new()`, `HotplugState::new()` + `has_device()` + `apply(event)` + `drain(&mut S)`, `FakeEventSource::new(Vec<DeviceEvent>)`.
 `namtor_camera::selection`: `SelectReason`, `SelectedDevice`, `select_camera(candidates:&[V4l2Node], configured:Option<&str>, enrolled:Option<&str>, is_internal:impl Fn(&V4l2Node)->bool) -> Option<SelectedDevice>`.
 `namtor_camera::always_on`: `detect_always_on(idle_baseline:&[Frame], with_emitter_off:&[Frame]) -> bool`, `ProtectionLevel`.
-`namtor_cli::status`: `ProtectionLevel`, `StreamState`, `CameraManager` + `new(..)`, `run_status(&CameraManager) -> String`.
+`namtor_cli::status`: `ProtectionLevel`, `StreamState`, `CameraManager` + `new(..)` + `with_requester(..)` + `from_status_reply(..)`, `run_status(&CameraManager) -> String` (stream open line: `stream: open (requested by uid N "label", warm X.Xs remaining)`).
 `namtor_hwdb::sysfs::enumerate_usb(&Path) -> Result<Vec<UsbDevice>,HwdbError>`, `namtor_hwdb::classify::classify_formats(&DescriptorSet) -> Vec<ClassifiedFormat>`, `namtor_hwdb::classify::classify_guid(&[u8;16]) -> FormatKind`, `QuirksDb`, `QuirksEntry`, `EmitterCfg`, `EmitterMethod`.
 `namtor_eval::score`: `ScoreRecord`, `LatencyBreakdown`, `write_jsonl`, `read_jsonl`.
+
+## M3 shipped API (build on this, don't reimplement)
+
+`namtor_proto::framing`: `encode(&T, &mut impl Write)`, `decode(&mut impl Read) -> Result<serde_json::Value,ProtoError>` (4-byte BE len + JSON).
+`namtor_proto::worker`: `ModelSpec{id,quant,sha256}`, `Quant{Fp32,Int8}`, `FrameRef{offset,len,emitter,spectrum,pix_fmt,w,h,ts_us}`, `WorkerReq{Load(ModelSpec),Infer(FrameRef),Shutdown}`, `WorkerRsp{Loaded(Loaded),Vector{vec:Vec<f32>},Error{msg:String}}`, `Loaded{model_id,quant,input_shape,output_shape}`.
+`namtor_proto::pam`: `AuthPhase{Prepare,Verify,Release}`, `AuthBody{nonce,target_uid,phase,rhost,deadline_us}`, `Requester{uid,label}`, `AuthRequest{Auth(AuthBody),Status}` (tag = "kind", snake_case), `AuthReply{nonce,verdict,score,reason}`, `Verdict{Match,NoMatch,Unavailable,RateLimited,Refused}`, `StatusReply{stream,requester,warm_remaining_ms}`, `StreamState{Closed,Warming,Verifying}`, `HelloMsg{server_version,nonce}`.
+`namtor_worker::infer`: `InferenceBackend` trait (`load`, `run`), `MockBackend::new(dim)`, `OnnxCpu::new(threads)`, `default_backend()` (feature-gated). `namtor_worker::sandbox::apply_sandbox()`, `seccomp::apply_seccomp()`, `landlock::apply_landlock()`. `namtor_worker::run_main(read_fd, write_fd, backend, apply_sbx, frame_memfd, frame_len)`.
+`namtor_daemon::acl`: `PeerCreds{pid,uid,gid}`, `get_peer_creds(&stream)`, `authorise(&creds, namtor_auth_gid)`, `resolve_namtor_auth_gid()`.
+`namtor_daemon::nonce`: `NonceService::new()`, `issue() -> [u8;16]`, `validate_reply(issued, echoed)`.
+`namtor_daemon::listener`: `LifecycleDispatch` trait (`dispatch(&AuthBody)`, `snapshot()`), `Listener::bind(path, auth_gid, dispatcher)`, `Listener::from_fd(fd, path, auth_gid, dispatcher)` (socket activation), `accept_one()`, `shutdown()`, `path()`.
+`namtor_daemon::models`: `ModelFetcher` + `HttpFetch` trait, `ensure_int8(spec)`.
+`namtor_daemon::licence`: `LicenceRecord`, `ensure_licence_accepted(model_dir, model_spec)`.
+`namtor_daemon::lifecycle`: `LcPhase{Cold,Warming,Verifying}`, `Lifecycle<C:Clock>` + `prepare_for_auth`/`verify_start`/`release`/`tick`/`warm_remaining_ms`/`snapshot`, `Clock` trait, `SystemClock`, `MockClock::new(Instant)` + `advance(Duration)` (cloneable, `Arc<Mutex<Instant>>`).
+`namtor_daemon::supervisor`: `WorkerSupervisor` trait (`load_all`, `infer`, `shutdown`), `MockSupervisor::new()`, `ChildSupervisor::spawn(worker_bin, models, mock_infer)` (socketpair + memfd).
+`namtor_daemon::daemon`: `Daemon<S:WorkerSupervisor, C:Clock>` + `new(sup, models, warm_timeout, clock, capture_factory)`, `phase()`, `loaded_models()`, `capture_open()`, `prepare_for_auth`/`verify_start`/`release`/`tick`/`snapshot`, `supervisor_mut()`. `CaptureFactory = Box<dyn FnMut() -> Result<Box<dyn CaptureSource>> + Send>`.
 
 ## Hardware facts (don't re-probe)
 
