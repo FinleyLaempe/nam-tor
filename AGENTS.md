@@ -4,11 +4,13 @@ Project state for the next agent. Read this first, then the spec.
 
 ## Current state (2026-08-05)
 
-M0 (eval harness), M1 (hardware spike), M2 (detection + capture), **M3 (daemon + sandboxed worker)** done and committed. Working tree clean on `master`. 297 tests green serial (8 HW-gated `#[ignore]`), clippy/fmt/SPDX clean.
+M0 (eval harness), M1 (hardware spike), M2 (detection + capture), **M3 (daemon + sandboxed worker)** done and committed. Working tree clean on `master`. 297 tests green serial (9 HW-gated `#[ignore]`), clippy/fmt/SPDX clean.
 
-**M3 Task 25 (R4 INT8 vs FP32 eval) is the only remaining M3 task — BLOCKED on the human** (Python onnxruntime binding broken: `python3 -c "import onnxruntime"` fails despite pacman `onnxruntime-cpu 1.28.0`, likely Python 3.14 incompat). Needs a compatible Python venv or binding fix + model selection + licence acceptance + R5 cohort dataset decision. Everything else in M3 shipped: 25/26 tasks committed, e2e harness + no-biometric-in-logs assertion (§8.6) green, G5.1 (no ML in proto) structural test green, G5.2 escape suite green, systemd units + sysusers/tmpfiles + setuid helper written.
+**All 26 M3 tasks committed.** Task 25 (R4 INT8 vs FP32 eval) scaffolding is done — Python script (`ml/recipes/r4_int8_vs_fp32.py`), `#[ignore]` Rust driver (`crates/namtor-daemon/tests/r4.rs`), and report template (`docs/m3-r4-report.md`) all compile and are ready to run. The **actual run is BLOCKED on the human**: Python `onnxruntime` binding broken (`python3 -c "import onnxruntime"` fails despite pacman `onnxruntime-cpu 1.28.0`, likely Python 3.14 incompat), model selection + licence acceptance (`NAMTOR_ACCEPT_LICENCE=1`), and R5 cohort dataset decision. Once those land, run `cargo test -p namtor-daemon --test r4 -- --ignored` then `python3 ml/recipes/r4_int8_vs_fp32.py --fp32 r4_fp32.jsonl --int8 r4_int8.jsonl --out docs/m3-r4-report.md --cohort <name>`.
 
-Next milestone: M4 (enrollment + template storage) once Task 25 lands and M4 plan is written. Do **not** write the M4 plan before R4/R5 land.
+Everything else in M3 shipped: e2e harness + no-biometric-in-logs assertion (§8.6) green, G5.1 (no ML in proto) structural test green, G5.2 escape suite green, systemd units + sysusers/tmpfiles + setuid helper written.
+
+Next milestone: M4 (enrollment + template storage) once Task 25's R4/R5 results land and M4 plan is written. Do **not** write the M4 plan before R4/R5 land.
 
 ## Where things are
 
