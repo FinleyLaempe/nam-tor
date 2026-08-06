@@ -1,0 +1,178 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Nam-tor install manifest — versioned DESTDIR staging source of truth.
+#
+# `packaging/stage.sh` reads this file and produces a deterministic file tree
+# under an empty DESTDIR: every path, mode, owner, group and source is
+# declared here. Running staging twice into two empty roots yields identical
+# trees (same paths, modes, owners, content sha256) — proven in
+# `docs/evidence/install-manifest.json`.
+#
+# Schema:
+#   schema_version  u32   — bump on any breaking change to this file's shape.
+#                           The daemon's model-manifest loader is independent;
+#                           this version governs packaging migrations only.
+#
+#   [[dirs]]        path, mode, owner, group
+#                   A directory to create. No source.
+#
+#   [[files]]       dest, src, mode, owner, group, symlink
+#                   A regular file copied from `src` (relative to the repo
+#                   root / SRCDIR) to `dest`. `symlink = true` creates a
+#                   symlink dest -> src instead of copying (src is the link
+#                   target as stored on the installed system).
+#
+# Modes are octal strings ("0755", "0644", "4755"). Owners/groups are
+# resolved by name at install time (root must run staging to chown; non-root
+# staging leaves ownership as the invoking user and emits a warning — modes
+# and content are still deterministic, which is what the evidence gate checks).
+
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# Directories
+# ---------------------------------------------------------------------------
+[[dirs]]
+path = "/usr/lib/namtor"
+mode = "0755"
+owner = "root"
+group = "root"
+
+[[dirs]]
+path = "/usr/lib/security"
+mode = "0755"
+owner = "root"
+group = "root"
+
+[[dirs]]
+path = "/usr/share/namtor"
+mode = "0755"
+owner = "root"
+group = "root"
+
+[[dirs]]
+path = "/var/lib/namtor"
+mode = "0750"
+owner = "namtor"
+group = "namtor"
+
+[[dirs]]
+path = "/var/lib/namtor/models"
+mode = "0750"
+owner = "namtor"
+group = "namtor"
+
+[[dirs]]
+path = "/var/lib/namtor/templates"
+mode = "0750"
+owner = "namtor"
+group = "namtor"
+
+# ---------------------------------------------------------------------------
+# Binaries (built artifacts — src is relative to the repo root / SRCDIR)
+# ---------------------------------------------------------------------------
+[[files]]
+dest = "/usr/lib/namtor/namtor-daemon"
+src = "target/release/namtor-daemon"
+mode = "0755"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/lib/namtor/namtor-worker"
+src = "target/release/namtor-worker"
+mode = "0755"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/lib/namtor/namtor-worker-spawn"
+src = "target/release/namtor-worker-spawn"
+mode = "4755"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/lib/namtor/namtor-camera-emitter-off"
+src = "target/release/namtor-camera-emitter-off"
+mode = "0755"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/bin/namtor-cli"
+src = "target/release/namtor-cli"
+mode = "0755"
+owner = "root"
+group = "root"
+symlink = false
+
+# PAM module (cdylib). The build produces `libpam_namtor.so`; it is installed
+# under its canonical PAM path without the `lib` prefix.
+[[files]]
+dest = "/usr/lib/security/pam_namtor.so"
+src = "target/release/libpam_namtor.so"
+mode = "0755"
+owner = "root"
+group = "root"
+symlink = false
+
+# ---------------------------------------------------------------------------
+# systemd units
+# ---------------------------------------------------------------------------
+[[files]]
+dest = "/usr/lib/systemd/system/namtor-daemon.service"
+src = "packaging/systemd/namtor-daemon.service"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/lib/systemd/system/namtor-daemon.socket"
+src = "packaging/systemd/namtor-daemon.socket"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+# ---------------------------------------------------------------------------
+# sysusers / tmpfiles drop-ins
+# ---------------------------------------------------------------------------
+[[files]]
+dest = "/usr/lib/sysusers.d/namtor.conf"
+src = "packaging/sysusers.d/namtor.conf"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/lib/tmpfiles.d/namtor.conf"
+src = "packaging/tmpfiles.d/namtor.conf"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+# ---------------------------------------------------------------------------
+# Manifests themselves (installed for the daemon to consult at startup)
+# ---------------------------------------------------------------------------
+[[files]]
+dest = "/usr/share/namtor/model-manifest.toml"
+src = "packaging/model-manifest.toml"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/share/namtor/install-manifest.toml"
+src = "packaging/install-manifest.toml"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false

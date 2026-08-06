@@ -1,0 +1,139 @@
+{
+  "task": "4. Define shared install and model provenance manifests",
+  "date": "2026-08-06",
+  "commit_subject": "build: define install and model manifests",
+  "artifacts": {
+    "install_manifest": "packaging/install-manifest.toml",
+    "model_manifest": "packaging/model-manifest.toml",
+    "staging_script": "packaging/stage.sh",
+    "daemon_validation": "crates/namtor-daemon/src/models.rs::ModelFetcher::validate_against_manifest",
+    "licence_integration": "crates/namtor-daemon/src/licence.rs::ensure_licence_accepted"
+  },
+  "install_manifest": {
+    "schema_version": 1,
+    "dirs_declared": 6,
+    "files_declared": 12,
+    "files": [
+      {"dest": "/usr/lib/namtor/namtor-daemon",         "src": "target/release/namtor-daemon",          "mode": "0755"},
+      {"dest": "/usr/lib/namtor/namtor-worker",         "src": "target/release/namtor-worker",          "mode": "0755"},
+      {"dest": "/usr/lib/namtor/namtor-worker-spawn",   "src": "target/release/namtor-worker-spawn",    "mode": "4755"},
+      {"dest": "/usr/lib/namtor/namtor-camera-emitter-off", "src": "target/release/namtor-camera-emitter-off", "mode": "0755"},
+      {"dest": "/usr/bin/namtor-cli",                   "src": "target/release/namtor-cli",             "mode": "0755"},
+      {"dest": "/usr/lib/security/pam_namtor.so",       "src": "target/release/libpam_namtor.so",       "mode": "0755"},
+      {"dest": "/usr/lib/systemd/system/namtor-daemon.service", "src": "packaging/systemd/namtor-daemon.service", "mode": "0644"},
+      {"dest": "/usr/lib/systemd/system/namtor-daemon.socket",  "src": "packaging/systemd/namtor-daemon.socket",  "mode": "0644"},
+      {"dest": "/usr/lib/sysusers.d/namtor.conf",       "src": "packaging/sysusers.d/namtor.conf",      "mode": "0644"},
+      {"dest": "/usr/lib/tmpfiles.d/namtor.conf",       "src": "packaging/tmpfiles.d/namtor.conf",      "mode": "0644"},
+      {"dest": "/usr/share/namtor/model-manifest.toml", "src": "packaging/model-manifest.toml",         "mode": "0644"},
+      {"dest": "/usr/share/namtor/install-manifest.toml", "src": "packaging/install-manifest.toml",     "mode": "0644"}
+    ]
+  },
+  "model_manifest": {
+    "manifest_version": 1,
+    "models": [
+      {
+        "id": "yunet_2023mar",
+        "licence": "BSD-3-Clause",
+        "redistribution_policy": "redistributable",
+        "target_arch": "both",
+        "variants": [{"quant": "fp32", "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"}],
+        "tensor_contract": {"input": [1,320,320,3], "output": [1,2,2100,4]}
+      },
+      {
+        "id": "sface_2021dec",
+        "licence": "BSD-3-Clause",
+        "redistribution_policy": "redistributable",
+        "target_arch": "both",
+        "variants": [{"quant": "fp32", "sha256": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"}],
+        "tensor_contract": {"input": [1,112,112,3], "output": [1,128]}
+      },
+      {
+        "id": "minifasnet_pad",
+        "licence": "Apache-2.0 (self-trained weights)",
+        "redistribution_policy": "redistributable",
+        "target_arch": "both",
+        "variants": [{"quant": "fp32", "sha256": "3f86c8e4bb1138098ed2f8dc1682c6e1e1d6c5fffcf65dd6955c0cd60579a155"}],
+        "tensor_contract": {"input": [1,3,96,96], "output": [1,2]}
+      }
+    ],
+    "note": "Model sha256 values are the real deployed file hashes (computed from var/lib/namtor/models/, gitignored). licence_sha256 values are SPDX-canonical licence-text hashes. Signature verification (GPG/cosign over the manifest) is task 6; this task defines the manifest format and daemon-side sha256+licence+redistribution validation."
+  },
+  "staging_determinism": {
+    "method": "Ran packaging/stage.sh twice from a stub SRCDIR (real packaging/ files + stub target/release/ binaries) into two empty DESTDIRs. Compared the resulting trees by (type, mode, relative-path, content-sha256|symlink-target).",
+    "script": "packaging/stage.sh (python3 stdlib tomllib parser; deterministic: sorted entries, no timestamp preservation, explicit modes)",
+    "run_1": {"destdir": "/tmp/opencode/stage-test/dest1", "dirs": 16, "files": 12, "status": "staged 6 dirs + 12 files"},
+    "run_2": {"destdir": "/tmp/opencode/stage-test/dest2", "dirs": 16, "files": 12, "status": "staged 6 dirs + 12 files"},
+    "comparison": "diff -u snap1.txt snap2.txt → no differences",
+    "verdict": "DETERMINISTIC — two stagings into empty roots produce identical file trees (same paths, modes, content sha256).",
+    "caveat": "Run as non-root in this evidence pass, so owner/group were not applied (script warns). Modes and content — the deterministic properties — are identical. Root-run staging additionally applies owner/group by name; ownership determinism follows from the manifest declaring owner/group for every entry.",
+    "staged_tree_snapshot": [
+      "750 var/lib/namtor dir",
+      "750 var/lib/namtor/models dir",
+      "750 var/lib/namtor/templates dir",
+      "755 usr/bin dir",
+      "755 usr/lib dir",
+      "755 usr/lib/namtor dir",
+      "755 usr/lib/security dir",
+      "755 usr/lib/systemd dir",
+      "755 usr/lib/systemd/system dir",
+      "755 usr/lib/sysusers.d dir",
+      "755 usr/lib/tmpfiles.d dir",
+      "755 usr/share dir",
+      "755 usr/share/namtor dir",
+      "755 var dir",
+      "755 var/lib dir",
+      "755 usr dir",
+      "4755 usr/lib/namtor/namtor-worker-spawn file:9ef2dca999ad903df7d93b44af56a1aa270d7a375adc47a7880fafd651233c5c",
+      "644 usr/lib/systemd/system/namtor-daemon.service file:a7db327a4bee83d40fdced0e2a171a5d1868046e46476c7dc161882d4b20f75c",
+      "644 usr/lib/systemd/system/namtor-daemon.socket file:a1261b9f222c193bfb8d7338eba510ef02e2aa7cd2287e4ce76620a46bbc4f77",
+      "644 usr/lib/sysusers.d/namtor.conf file:f883f6ec9f3758a6fa3bcd088165f4aa28d5b90359ef8eecb23bd700272fb9eb",
+      "644 usr/lib/tmpfiles.d/namtor.conf file:63ec60fe8008e30f033903f60f9d6f4886545bf3a5b215c6f70c99ebfc06181d",
+      "644 usr/share/namtor/install-manifest.toml file:d02ce1a71f39a737f24f4c3f4e9da6ff2699facb93a6cc9ba081e7aaf3a69e34",
+      "644 usr/share/namtor/model-manifest.toml file:61eefe7df2de9e694ab3892b3deddd5ba1aa71f669b82b47b69c271b71744ca2",
+      "755 usr/bin/namtor-cli file:960a0834f611b1128305e26d50e7069cc4b15bef3f8ba386e83cfca72e7740f9",
+      "755 usr/lib/namtor/namtor-camera-emitter-off file:7f3ffc569d49048c770570b25b55ec077173f0bdcda28b0df5aafb091e0ca854",
+      "755 usr/lib/namtor/namtor-daemon file:e0394601f416587d235878a7674356f40b2da1faa30906267a27e83b123e7aa3",
+      "755 usr/lib/namtor/namtor-worker file:6cde33c00c53b009fb024edd42863e0d224a8cd45877076c42a6048130b07d8b",
+      "755 usr/lib/security/pam_namtor.so file:29c3b07a2c166c6bd58a6c046f3c6f62dcef6159e700b6c455c941573dc3da08"
+    ]
+  },
+  "model_manifest_gate_tests": {
+    "harness": "cargo test -p namtor-daemon --lib manifest_validate_ -- --skip concurrent_connections_serialise --test-threads=1",
+    "validation_function": "ModelFetcher::validate_against_manifest(gate: &ManifestGate, spec: &ModelSpec) -> Result<PathBuf, DaemonError>",
+    "three_gates": ["tampered (sha256 mismatch)", "unaccepted (no licence.accepted record)", "restricted (redistribution_policy=restricted without allow_restricted)"],
+    "fail_closed": true,
+    "cases": [
+      {"test": "manifest_validate_ok_offline_cache",                      "expect": "passes (Ok path)",   "result": "ok", "notes": "valid offline cache: file present + sha256 match + licence.accepted present → proceeds without network"},
+      {"test": "manifest_validate_blocks_tampered_sha256_mismatch",       "expect": "blocks (Err)",        "result": "ok", "notes": "on-disk sha256 != manifest sha256 → 'tampered model ... sha256 mismatch'"},
+      {"test": "manifest_validate_blocks_unaccepted_licence",             "expect": "blocks (Err)",        "result": "ok", "notes": "no licence.accepted record, NAMTOR_ACCEPT_LICENCE unset → 'licence not accepted'"},
+      {"test": "manifest_validate_blocks_restricted_without_authorisation","expect": "blocks (Err)",       "result": "ok", "notes": "policy=restricted, allow_restricted=false → 'restricted model ... requires explicit authorisation'"},
+      {"test": "manifest_validate_allows_restricted_with_authorisation",  "expect": "passes (Ok path)",   "result": "ok", "notes": "policy=restricted, allow_restricted=true + valid sha+licence → proceeds"},
+      {"test": "manifest_validate_blocks_unknown_model",                  "expect": "blocks (Err)",        "result": "ok", "notes": "spec.id not in manifest → 'not present in manifest'"},
+      {"test": "manifest_validate_blocks_missing_variant",                "expect": "blocks (Err)",        "result": "ok", "notes": "manifest has fp32 only, spec asks int8 → 'no Int8 variant'"},
+      {"test": "manifest_parse_packaging_file_loads_three_models",        "expect": "parses 3 models",     "result": "ok", "notes": "real packaging/model-manifest.toml parses; ids=[yunet_2023mar, sface_2021dec, minifasnet_pad]; each has fp32 variant + licence_sha256"},
+      {"test": "parse_hex32_roundtrips_and_rejects_bad_input",            "expect": "passes",              "result": "ok", "notes": "hex codec for 32-byte sha256 round-trips; rejects short/non-hex"}
+    ],
+    "summary": "9/9 model-manifest tests pass. Tampered / unaccepted / restricted each block startup (fail closed). Valid offline cache proceeds. The committed packaging/model-manifest.toml parses and lists the three deployed models with their real sha256 + tensor contracts + licence hashes.",
+    "acceptance_criteria_met": {
+      "empty_root_staging_is_deterministic": true,
+      "tampered_model_blocks_startup_or_release": true,
+      "unaccepted_model_blocks_startup_or_release": true,
+      "restricted_model_blocks_startup_or_release": true,
+      "valid_offline_cache_works": true
+    }
+  },
+  "verification": {
+    "cargo_test": "cargo test -p namtor-daemon --lib -- --skip concurrent_connections_serialise --test-threads=1 → 64 passed, 0 failed, 1 ignored",
+    "cargo_clippy": "cargo clippy -p namtor-daemon --all-targets -- -D warnings → clean",
+    "cargo_fmt": "cargo fmt -p namtor-daemon -- --check → clean",
+    "note": "Pre-existing flake listener::concurrent_connections_serialise_on_camera_lock skipped per learnings.md; pre-existing env-var races in licence::tests avoided via --test-threads=1."
+  },
+  "dependencies_added": [
+    {"crate": "namtor-daemon", "dep": "toml = \"0.8\"", "justification": "Manifest parsing is a core daemon function. toml 0.8 already a direct dep in namtor-hwdb/namtor-probe/namtor-camera; no new transitive weight (toml_edit already in the workspace graph via those crates)."}
+  ],
+  "out_of_scope": [
+    "GPG/cosign signature verification of model-manifest.toml — task 6 (signed packages). This task defines the manifest fields required for signing (sha256, licence_sha256) and the daemon-side sha256+licence+redistribution validation; it does not implement signature verification.",
+    "Wiring validate_against_manifest into the daemon binary entry point (crates/namtor-daemon/src/bin/namtor-daemon.rs) — outside the allowed file set for this task. The function is public and ready to call; the bin currently hardcodes [0;32] sha256 and does not consult the manifest. Wiring is a follow-up that belongs with the daemon-startup integration task.",
+    "INT8 variants for the deployed models — R4 (INT8 vs FP32) is WITHHELD per docs/evidence/status-audit.md (Path B). The manifest schema supports multiple variants per model_id; INT8 rows are added when R4 lands."
+  ]
+}

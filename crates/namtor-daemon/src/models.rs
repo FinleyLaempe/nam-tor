@@ -15,8 +15,10 @@
 use std::path::{Path, PathBuf};
 
 use namtor_proto::worker::{ModelSpec, Quant};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use crate::licence::ensure_licence_accepted;
 use crate::DaemonError;
 
 /// HTTP download seam. Production uses `ReqwestFetcher`; tests use
@@ -204,6 +206,220 @@ impl ModelFetcher {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+// Model manifest — `packaging/model-manifest.toml`, enforced at startup.
+// allow: SIZE_OK — the manifest subsystem (types + validate_against_manifest)
+// is a distinct responsibility from ModelFetcher and belongs in a sibling
+// `manifest.rs` module, but extracting it requires `pub mod manifest;` in
+// lib.rs, which is outside this task's allowed file set. Follow-up: extract
+// once lib.rs is in scope.
+
+/// Redistribution policy declared in the model manifest.
+///
+/// `Redistributable` models may be shipped in distro packages. `Restricted`
+/// models (e.g. weights derived from a research-only dataset) may not be
+/// redistributed and require explicit operator authorisation to load even
+/// locally — the daemon blocks them unless `ManifestGate::allow_restricted`
+/// is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RedistributionPolicy {
+    Redistributable,
+    Restricted,
+}
+
+/// Target architecture for a manifest model. Most ONNX models are
+/// arch-independent (`Both`); INT8-quantised variants may differ per arch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetArch {
+    X86_64,
+    Aarch64,
+    Both,
+}
+
+/// One I/O tensor of a model's interface contract. Lets a consumer verify a
+/// model matches the expected interface without loading it (model-substitution
+/// detection, INT8/FP32 dispatch — task 19).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TensorIo {
+    pub shape: Vec<u64>,
+    pub dtype: String,
+    /// Short pre-processing tag (e.g. `"bgr_sub_mean_104_177_123"`). Absent
+    /// on output tensors.
+    pub normalisation: Option<String>,
+}
+
+/// Input + output tensor contract for a model.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TensorContract {
+    pub input: TensorIo,
+    pub output: TensorIo,
+}
+
+/// A quantisation variant of a model: the file actually deployed on disk.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ModelVariant {
+    pub quant: Quant,
+    pub source_url: String,
+    /// Hex sha256 of the variant's ONNX file.
+    pub sha256: String,
+}
+
+/// One model entry in the manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ModelEntry {
+    pub id: String,
+    pub licence_url: String,
+    /// Hex sha256 of the licence text the operator reviews at acceptance.
+    pub licence_sha256: String,
+    pub redistribution_policy: RedistributionPolicy,
+    pub target_arch: TargetArch,
+    pub tensor_contract: TensorContract,
+    pub variants: Vec<ModelVariant>,
+}
+
+impl ModelEntry {
+    /// Find the variant for a given quantisation mode.
+    pub fn variant(&self, quant: Quant) -> Option<&ModelVariant> {
+        self.variants.iter().find(|v| v.quant == quant)
+    }
+}
+
+/// Parsed `packaging/model-manifest.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ModelManifest {
+    pub manifest_version: u32,
+    pub models: Vec<ModelEntry>,
+}
+
+impl ModelManifest {
+    /// Parse a model manifest from a TOML file on disk.
+    pub fn parse(path: &Path) -> Result<Self, DaemonError> {
+        let data = std::fs::read_to_string(path)?;
+        toml::from_str(&data).map_err(|e| {
+            DaemonError::State(format!("model manifest parse {}: {e}", path.display()))
+        })
+    }
+
+    /// Find the entry for a model id.
+    pub fn find(&self, id: &str) -> Option<&ModelEntry> {
+        self.models.iter().find(|m| m.id == id)
+    }
+}
+
+/// Authorisation context for manifest validation. Bundled so the validation
+/// method stays under the parameter budget and so the daemon can construct
+/// one gate at startup (e.g. deriving `allow_restricted` from env/config once)
+/// and reuse it across every model.
+#[derive(Debug, Clone)]
+pub struct ManifestGate<'a> {
+    pub manifest: &'a ModelManifest,
+    /// User/account recording the licence acceptance (stamped into
+    /// `licence.accepted`).
+    pub accepted_by: &'a str,
+    /// If false, `redistribution_policy = "restricted"` models block startup.
+    pub allow_restricted: bool,
+}
+
+/// Parse a 64-char hex string into a 32-byte array.
+fn parse_hex32(s: &str) -> Result<[u8; 32], DaemonError> {
+    if s.len() != 64 {
+        return Err(DaemonError::State(format!(
+            "expected 64-char hex sha256, got {len} chars",
+            len = s.len()
+        )));
+    }
+    let mut out = [0u8; 32];
+    let bytes = s.as_bytes();
+    for (i, chunk) in bytes.chunks(2).enumerate() {
+        let hi = hex_nibble(chunk[0])?;
+        let lo = hex_nibble(chunk[1])?;
+        out[i] = (hi << 4) | lo;
+    }
+    Ok(out)
+}
+
+fn hex_nibble(b: u8) -> Result<u8, DaemonError> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => Err(DaemonError::State(format!(
+            "invalid hex digit {b:?} in sha256"
+        ))),
+    }
+}
+
+impl ModelFetcher {
+    /// Validate a deployed model against the manifest before the worker loads
+    /// it. Three gates, all fail-closed:
+    ///
+    /// 1. **Tampered** — the on-disk file's sha256 must equal the manifest
+    ///    variant's sha256.
+    /// 2. **Unaccepted** — the upstream licence must be accepted (on-disk
+    ///    `licence.accepted` record whose sha256 matches the manifest).
+    /// 3. **Restricted** — `redistribution_policy = "restricted"` models
+    ///    require `gate.allow_restricted = true`.
+    ///
+    /// If all gates pass, returns the validated on-disk path. A valid offline
+    /// cache (every model present + accepted) proceeds with no network access.
+    pub fn validate_against_manifest(
+        &self,
+        gate: &ManifestGate,
+        spec: &ModelSpec,
+    ) -> Result<PathBuf, DaemonError> {
+        let entry = gate.manifest.find(&spec.id).ok_or_else(|| {
+            DaemonError::State(format!("model {} not present in manifest", spec.id))
+        })?;
+
+        let variant = entry.variant(spec.quant).ok_or_else(|| {
+            DaemonError::State(format!(
+                "no {:?} variant for model {} in manifest",
+                spec.quant, spec.id
+            ))
+        })?;
+
+        let expected = parse_hex32(&variant.sha256)?;
+        let path = self.quant_file(&spec.id, spec.quant);
+        if !path.exists() {
+            return Err(DaemonError::State(format!(
+                "model file missing: {}",
+                path.display()
+            )));
+        }
+        let actual = Self::sha256_of_file(&path)?;
+        if actual != expected {
+            return Err(DaemonError::State(format!(
+                "tampered model {} ({:?}): sha256 mismatch — expected {}, got {}",
+                spec.id,
+                spec.quant,
+                variant.sha256,
+                hex(&actual)
+            )));
+        }
+
+        let licence_sha = parse_hex32(&entry.licence_sha256)?;
+        ensure_licence_accepted(
+            &self.root,
+            spec,
+            &entry.licence_url,
+            licence_sha,
+            gate.accepted_by,
+        )?;
+
+        if entry.redistribution_policy == RedistributionPolicy::Restricted && !gate.allow_restricted
+        {
+            return Err(DaemonError::State(format!(
+                "restricted model {} requires explicit authorisation \
+                 (ManifestGate.allow_restricted)",
+                spec.id
+            )));
+        }
+
+        Ok(path)
+    }
 }
 
 #[cfg(test)]
@@ -404,5 +620,391 @@ mod tests {
         };
         let err = fetcher.ensure_int8(&spec).unwrap_err();
         assert!(matches!(err, DaemonError::State(_)));
+    }
+
+    // --- model manifest validation ----------------------------------------
+
+    use crate::licence::LicenceRecord;
+
+    /// Write a model file at the fetcher's on-disk layout path.
+    fn write_model_file(root: &Path, id: &str, quant: Quant, data: &[u8]) {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let name = match quant {
+            Quant::Fp32 => "fp32.onnx",
+            Quant::Int8 => "int8.onnx",
+        };
+        std::fs::write(dir.join(name), data).unwrap();
+    }
+
+    /// Pre-place a valid licence.accepted record (no env var needed).
+    fn write_licence_record(root: &Path, id: &str, licence_url: &str, licence_sha: [u8; 32]) {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = LicenceRecord {
+            model_id: id.into(),
+            licence_url: licence_url.into(),
+            licence_sha256: licence_sha,
+            accepted_at_us: 1_700_000_000_000_000,
+            accepted_by: "test".into(),
+        };
+        let json = serde_json::to_string_pretty(&record).unwrap();
+        std::fs::write(dir.join("licence.accepted"), json).unwrap();
+    }
+
+    fn manifest_with(
+        id: &str,
+        sha_hex: &str,
+        policy: RedistributionPolicy,
+        licence_sha_hex: &str,
+    ) -> ModelManifest {
+        ModelManifest {
+            manifest_version: 1,
+            models: vec![ModelEntry {
+                id: id.into(),
+                licence_url: "https://example.com/licence.txt".into(),
+                licence_sha256: licence_sha_hex.into(),
+                redistribution_policy: policy,
+                target_arch: TargetArch::Both,
+                tensor_contract: TensorContract {
+                    input: TensorIo {
+                        shape: vec![1, 112, 112, 3],
+                        dtype: "f32".into(),
+                        normalisation: Some("none".into()),
+                    },
+                    output: TensorIo {
+                        shape: vec![1, 128],
+                        dtype: "f32".into(),
+                        normalisation: None,
+                    },
+                },
+                variants: vec![ModelVariant {
+                    quant: Quant::Fp32,
+                    source_url: "file://local".into(),
+                    sha256: sha_hex.into(),
+                }],
+            }],
+        }
+    }
+
+    const LICENCE_SHA_HEX: &str =
+        "91f6f2043c607e9db392ca6b4fafd56825a2d5ca741cb3a56d8f817d8d9a9753";
+
+    fn licence_sha_bytes() -> [u8; 32] {
+        parse_hex32(LICENCE_SHA_HEX).unwrap()
+    }
+
+    #[test]
+    fn manifest_validate_ok_offline_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"real fp32 weights for offline use";
+        let sha = sha256_bytes(weights);
+        let sha_hex = hex(&sha);
+        write_model_file(&root, "m", Quant::Fp32, weights);
+        write_licence_record(
+            &root,
+            "m",
+            "https://example.com/licence.txt",
+            licence_sha_bytes(),
+        );
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        let manifest = manifest_with(
+            "m",
+            &sha_hex,
+            RedistributionPolicy::Redistributable,
+            LICENCE_SHA_HEX,
+        );
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: sha,
+        };
+        let path = fetcher.validate_against_manifest(&gate, &spec).unwrap();
+        assert!(path.exists());
+        assert_eq!(path, root.join("m/fp32.onnx"));
+    }
+
+    #[test]
+    fn manifest_validate_blocks_tampered_sha256_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"actual on-disk weights";
+        write_model_file(&root, "m", Quant::Fp32, weights);
+        write_licence_record(
+            &root,
+            "m",
+            "https://example.com/licence.txt",
+            licence_sha_bytes(),
+        );
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        // Manifest declares a sha256 that does NOT match the on-disk file.
+        let wrong_hex = hex(&[0xff; 32]);
+        let manifest = manifest_with(
+            "m",
+            &wrong_hex,
+            RedistributionPolicy::Redistributable,
+            LICENCE_SHA_HEX,
+        );
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: [0xff; 32],
+        };
+        let err = fetcher.validate_against_manifest(&gate, &spec).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("tampered"), "msg = {msg}");
+        assert!(msg.contains("sha256 mismatch"), "msg = {msg}");
+    }
+
+    #[test]
+    fn manifest_validate_blocks_unaccepted_licence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"weights whose sha matches the manifest";
+        let sha = sha256_bytes(weights);
+        let sha_hex = hex(&sha);
+        write_model_file(&root, "m", Quant::Fp32, weights);
+        // No licence.accepted record placed.
+        std::env::remove_var("NAMTOR_ACCEPT_LICENCE");
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        let manifest = manifest_with(
+            "m",
+            &sha_hex,
+            RedistributionPolicy::Redistributable,
+            LICENCE_SHA_HEX,
+        );
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: sha,
+        };
+        let err = fetcher.validate_against_manifest(&gate, &spec).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("licence not accepted"), "msg = {msg}");
+    }
+
+    #[test]
+    fn manifest_validate_blocks_restricted_without_authorisation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"restricted weights";
+        let sha = sha256_bytes(weights);
+        let sha_hex = hex(&sha);
+        write_model_file(&root, "m", Quant::Fp32, weights);
+        write_licence_record(
+            &root,
+            "m",
+            "https://example.com/licence.txt",
+            licence_sha_bytes(),
+        );
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        let manifest = manifest_with(
+            "m",
+            &sha_hex,
+            RedistributionPolicy::Restricted,
+            LICENCE_SHA_HEX,
+        );
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: sha,
+        };
+        let err = fetcher.validate_against_manifest(&gate, &spec).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("restricted"), "msg = {msg}");
+        assert!(msg.contains("authorisation"), "msg = {msg}");
+    }
+
+    #[test]
+    fn manifest_validate_allows_restricted_with_authorisation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"restricted weights ok";
+        let sha = sha256_bytes(weights);
+        let sha_hex = hex(&sha);
+        write_model_file(&root, "m", Quant::Fp32, weights);
+        write_licence_record(
+            &root,
+            "m",
+            "https://example.com/licence.txt",
+            licence_sha_bytes(),
+        );
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        let manifest = manifest_with(
+            "m",
+            &sha_hex,
+            RedistributionPolicy::Restricted,
+            LICENCE_SHA_HEX,
+        );
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: true,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: sha,
+        };
+        let path = fetcher.validate_against_manifest(&gate, &spec).unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn manifest_validate_blocks_unknown_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        let manifest = ModelManifest {
+            manifest_version: 1,
+            models: vec![],
+        };
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let spec = ModelSpec {
+            id: "ghost".into(),
+            quant: Quant::Fp32,
+            sha256: [0; 32],
+        };
+        let err = fetcher.validate_against_manifest(&gate, &spec).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not present in manifest"), "msg = {msg}");
+    }
+
+    #[test]
+    fn manifest_validate_blocks_missing_variant() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"fp32 only weights";
+        let sha = sha256_bytes(weights);
+        let sha_hex = hex(&sha);
+        write_model_file(&root, "m", Quant::Fp32, weights);
+        write_licence_record(
+            &root,
+            "m",
+            "https://example.com/licence.txt",
+            licence_sha_bytes(),
+        );
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        // Manifest declares only an fp32 variant; ask for int8.
+        let manifest = manifest_with(
+            "m",
+            &sha_hex,
+            RedistributionPolicy::Redistributable,
+            LICENCE_SHA_HEX,
+        );
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Int8,
+            sha256: [0; 32],
+        };
+        let err = fetcher.validate_against_manifest(&gate, &spec).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no Int8 variant"), "msg = {msg}");
+    }
+
+    #[test]
+    fn manifest_parse_packaging_file_loads_three_models() {
+        let path = Path::new("packaging/model-manifest.toml");
+        if !path.exists() {
+            eprintln!("skipping — manifest not found at repo root (run from repo root)");
+            return;
+        }
+        let manifest = ModelManifest::parse(path).unwrap();
+        assert_eq!(manifest.manifest_version, 1);
+        let ids: Vec<&str> = manifest.models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["yunet_2023mar", "sface_2021dec", "minifasnet_pad"]
+        );
+        for entry in &manifest.models {
+            assert!(
+                entry.variant(Quant::Fp32).is_some(),
+                "model {} missing fp32 variant",
+                entry.id
+            );
+            assert!(!entry.licence_sha256.is_empty());
+            assert!(!entry.variants.is_empty());
+        }
+    }
+
+    #[test]
+    fn parse_hex32_roundtrips_and_rejects_bad_input() {
+        let bytes = [0xab; 32];
+        let s = hex(&bytes);
+        assert_eq!(parse_hex32(&s).unwrap(), bytes);
+        assert!(parse_hex32("ab").is_err());
+        assert!(parse_hex32(&"z".repeat(64)).is_err());
+        assert!(parse_hex32(&"ab".repeat(31)).is_err());
     }
 }
