@@ -3,17 +3,33 @@ name = "namtor-gnome"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "GNOME enrollment wizard and settings for Nam-tor"
+description = "GNOME management UI for Nam-tor — D-Bus client (org.namtor.Manager)"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["dbus"]
+# Live D-Bus client backed by zbus. Off by default in `cargo test` is not
+# possible per-crate, so tests construct `FakeManagerClient` directly and the
+# dbus client is only exercised when a session bus is present.
+dbus = ["dep:zbus"]
 
 [dependencies]
-namtor-store = { path = "../namtor-store" }
 namtor-proto = { path = "../namtor-proto" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 gtk4 = "0.9"
 libadwaita = { version = "0.7", features = ["v1_5"] }
 gio = "0.20"
 glib = "0.20"
-serde_json = { workspace = true }
+zbus = { version = "5.18", features = ["option-as-array"], optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [[bin]]
 name = "namtor-enroll-wizard"
 path = "src/bin/wizard.rs"
+required-features = ["dbus"]

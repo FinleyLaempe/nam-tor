@@ -1525,8 +1525,11 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "namtor-proto",
- "namtor-store",
+ "serde",
  "serde_json",
+ "tempfile",
+ "thiserror",
+ "zbus",
 ]
 
 [[package]]
