@@ -9,6 +9,8 @@
 //! biometric data, and offline disk theft is the primary threat."
 
 pub mod crypto;
+pub mod format;
+pub mod fs_util;
 pub mod store;
 pub mod template;
 

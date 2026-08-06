@@ -62,7 +62,9 @@ impl SealedKey {
             let blob = SealedBlob::decode(&raw)?;
             let backend = selector.open(blob.backend_id())?;
             let key = backend.unseal(&blob)?;
-            return Ok(Self::from_unsealed(key, backend.source()));
+            let mut sk = Self::from_unsealed(key, backend.source());
+            sk.lock_memory();
+            return Ok(sk);
         }
         let mut key = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut key);
@@ -73,7 +75,9 @@ impl SealedKey {
         }
         std::fs::write(key_path, blob.encode())?;
         set_root_only(key_path)?;
-        Ok(Self::from_unsealed(key, backend.source()))
+        let mut sk = Self::from_unsealed(key, backend.source());
+        sk.lock_memory();
+        Ok(sk)
     }
 
     pub fn key(&self) -> &[u8; 32] {
@@ -84,6 +88,15 @@ impl SealedKey {
         self.source
     }
 
+    /// Best-effort `mlock` + `MADV_DONTDUMP` on the key material.
+    ///
+    /// `mlock` requires `CAP_IPC_LOCK` or a generous `RLIMIT_MEMLOCK`; failures
+    /// are silently ignored so the store still works in unprivileged tests and
+    /// CI. The systemd unit grants `CAP_IPC_LOCK` to the daemon in production.
+    pub fn lock_memory(&mut self) {
+        lock_bytes(&self.key);
+    }
+
     fn from_unsealed(key: [u8; 32], source: KeySource) -> Self {
         Self { key, source }
     }
@@ -91,6 +104,7 @@ impl SealedKey {
 
 impl Drop for SealedKey {
     fn drop(&mut self) {
+        unlock_bytes(&self.key);
         self.key.zeroize();
     }
 }
@@ -425,6 +439,53 @@ pub fn derive_nonce(counter: u64) -> [u8; 12] {
     let hash = hasher.finalize();
     nonce.copy_from_slice(&hash[..12]);
     nonce
+}
+
+/// Best-effort `mlock` + `MADV_DONTDUMP` on a contiguous byte region.
+///
+/// Used by [`SealedKey`] and [`crate::template::Template`] to keep
+/// sensitive material out of swap and core dumps. Failures are silently
+/// ignored: `mlock` requires `CAP_IPC_LOCK` (or a raised `RLIMIT_MEMLOCK`)
+/// which is absent in CI and unprivileged tests; the systemd unit grants it
+/// to the daemon in production. `MADV_DONTDUMP` is Linux-specific.
+pub(crate) fn lock_bytes<T>(bytes: &T) {
+    let ptr = (bytes as *const T).cast::<u8>() as *mut libc::c_void;
+    let len = std::mem::size_of::<T>();
+    unsafe {
+        let _ = libc::mlock(ptr, len);
+        #[cfg(target_os = "linux")]
+        let _ = libc::madvise(ptr, len, libc::MADV_DONTDUMP);
+    }
+}
+
+pub(crate) fn lock_slice(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let ptr = bytes.as_ptr() as *mut libc::c_void;
+    unsafe {
+        let _ = libc::mlock(ptr, bytes.len());
+        #[cfg(target_os = "linux")]
+        let _ = libc::madvise(ptr, bytes.len(), libc::MADV_DONTDUMP);
+    }
+}
+
+pub(crate) fn unlock_slice(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let ptr = bytes.as_ptr() as *mut libc::c_void;
+    unsafe {
+        let _ = libc::munlock(ptr, bytes.len());
+    }
+}
+
+pub(crate) fn unlock_bytes<T>(bytes: &T) {
+    let ptr = (bytes as *const T).cast::<u8>() as *mut libc::c_void;
+    let len = std::mem::size_of::<T>();
+    unsafe {
+        let _ = libc::munlock(ptr, len);
+    }
 }
 
 #[allow(dead_code)]

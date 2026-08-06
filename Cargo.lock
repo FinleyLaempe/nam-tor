@@ -1604,6 +1604,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "hmac",
+ "libc",
  "namtor-proto",
  "rand 0.8.7",
  "serde",

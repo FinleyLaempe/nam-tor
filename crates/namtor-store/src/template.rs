@@ -4,6 +4,8 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
+use crate::crypto::{lock_slice, unlock_slice};
+
 /// A single face embedding template (L2-normalised vector).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Template {
@@ -15,8 +17,34 @@ pub struct Template {
     pub is_anchor: bool,
 }
 
+impl Template {
+    /// Best-effort `mlock` + `MADV_DONTDUMP` on the embedding bytes.
+    pub fn lock_memory(&mut self) {
+        // SAFETY: f32 has no internal padding relative to itself, so the
+        // Vec's byte buffer is a contiguous, properly-aligned region.
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                self.vector.as_ptr().cast(),
+                self.vector.len() * std::mem::size_of::<f32>(),
+            )
+        };
+        lock_slice(bytes);
+    }
+
+    fn unlock_memory(&mut self) {
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                self.vector.as_ptr().cast(),
+                self.vector.len() * std::mem::size_of::<f32>(),
+            )
+        };
+        unlock_slice(bytes);
+    }
+}
+
 impl Drop for Template {
     fn drop(&mut self) {
+        self.unlock_memory();
         self.vector.zeroize();
     }
 }
@@ -42,10 +70,11 @@ pub struct TemplateRecord {
     pub templates: Vec<Template>,
 }
 
-impl Drop for TemplateRecord {
-    fn drop(&mut self) {
+impl TemplateRecord {
+    /// Best-effort `mlock` + `MADV_DONTDUMP` on every template's embedding.
+    pub fn lock_memory(&mut self) {
         for t in &mut self.templates {
-            t.vector.zeroize();
+            t.lock_memory();
         }
     }
 }
