@@ -6,6 +6,8 @@
 //! machine is testable without D-Bus by injecting [`SleepEvent`]s directly;
 //! the live [`ResumeMonitor`] wires it to logind's `PrepareForSleep` signal.
 
+use std::path::PathBuf;
+
 /// Suspend/resume events the state machine consumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SleepEvent {
@@ -84,7 +86,27 @@ pub enum PendingState {
     Serviced,
     /// Request was held; will be drained once reconciliation completes.
     Reconciling,
+    /// Queue is full; the request was dropped (caller must fail closed).
+    Dropped,
 }
+
+/// Result of a post-resume re-discovery, recorded by the owner and exposed
+/// via [`Reconciler::last_outcome`] so the daemon can decide whether to
+/// re-open on the same path, re-select after a renumber, or fall back to
+/// password (camera missing).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReconcileOutcome {
+    /// Camera re-discovered at `path` (may differ from the pre-suspend path).
+    Rediscovered { path: PathBuf },
+    /// Camera re-discovered but its node path changed (device renumbered).
+    StaleNode { old: PathBuf, new: PathBuf },
+    /// No camera found after resume — auth must fall back to password.
+    MissingCamera,
+}
+
+/// Default bound on the pending-request queue. Spec §4.10.3: the queue is
+/// bounded so a stuck reconciliation cannot accumulate unbounded work.
+pub const DEFAULT_MAX_PENDING: usize = 16;
 
 /// Owns the resume state machine plus a queue of auth requests. On resume,
 /// re-runs the reconcile callback (re-detect device, re-apply emitter), then
@@ -92,15 +114,23 @@ pub enum PendingState {
 pub struct Reconciler<F: FnMut()> {
     machine: ResumeMachine,
     pending: Vec<Request>,
+    max_pending: usize,
     on_reconcile: F,
+    last_outcome: Option<ReconcileOutcome>,
 }
 
 impl<F: FnMut()> Reconciler<F> {
     pub fn new(on_reconcile: F) -> Self {
+        Self::new_with_capacity(on_reconcile, DEFAULT_MAX_PENDING)
+    }
+
+    pub fn new_with_capacity(on_reconcile: F, max_pending: usize) -> Self {
         Self {
             machine: ResumeMachine::new(),
             pending: Vec::new(),
+            max_pending,
             on_reconcile,
+            last_outcome: None,
         }
     }
 
@@ -112,6 +142,18 @@ impl<F: FnMut()> Reconciler<F> {
         self.pending.len()
     }
 
+    /// The most recent re-discovery outcome, if [`handle`](Self::handle) has
+    /// fired the reconcile callback at least once.
+    pub fn last_outcome(&self) -> Option<&ReconcileOutcome> {
+        self.last_outcome.as_ref()
+    }
+
+    /// Records the result of a post-resume re-discovery so the daemon can
+    /// expose it via [`last_outcome`](Self::last_outcome).
+    pub fn record_rediscovery(&mut self, outcome: ReconcileOutcome) {
+        self.last_outcome = Some(outcome);
+    }
+
     /// Feeds a sleep event. On `Resume`, transitions to `Reconciling` and
     /// fires the reconcile callback directly (re-detect + re-apply emitter).
     pub fn handle(&mut self, event: SleepEvent) {
@@ -121,14 +163,19 @@ impl<F: FnMut()> Reconciler<F> {
         }
     }
 
-    /// Queues a request. Returns `Serviced` if the machine is `Ready`, or
-    /// `Reconciling` if the request is held until reconciliation completes.
+    /// Queues a request. Returns `Serviced` if the machine is `Ready`,
+    /// `Reconciling` if the request is held, or `Dropped` if the bounded
+    /// queue is full (caller must fail closed).
     pub fn queue_request(&mut self, req: Request) -> PendingState {
         match self.machine.state() {
             ResumeState::Ready => PendingState::Serviced,
             ResumeState::Reconciling => {
-                self.pending.push(req);
-                PendingState::Reconciling
+                if self.pending.len() >= self.max_pending {
+                    PendingState::Dropped
+                } else {
+                    self.pending.push(req);
+                    PendingState::Reconciling
+                }
             }
         }
     }
@@ -329,5 +376,65 @@ mod tests {
         rec.handle(SleepEvent::Suspend);
         rec.handle(SleepEvent::Resume);
         assert_eq!(*calls.borrow(), 2);
+    }
+
+    #[test]
+    fn reconciler_drops_when_queue_full() {
+        let mut rec = Reconciler::new_with_capacity(|| {}, 2);
+        rec.handle(SleepEvent::Suspend);
+        assert_eq!(
+            rec.queue_request(Request { user: "a".into() }),
+            PendingState::Reconciling
+        );
+        assert_eq!(
+            rec.queue_request(Request { user: "b".into() }),
+            PendingState::Reconciling
+        );
+        assert_eq!(
+            rec.queue_request(Request { user: "c".into() }),
+            PendingState::Dropped
+        );
+        assert_eq!(rec.pending_count(), 2, "dropped request not enqueued");
+    }
+
+    #[test]
+    fn reconciler_records_and_exposes_rediscovery_outcome() {
+        let mut rec = Reconciler::new(|| {});
+        assert!(rec.last_outcome().is_none());
+        rec.record_rediscovery(ReconcileOutcome::Rediscovered {
+            path: PathBuf::from("/dev/video2"),
+        });
+        assert_eq!(
+            rec.last_outcome(),
+            Some(&ReconcileOutcome::Rediscovered {
+                path: PathBuf::from("/dev/video2")
+            })
+        );
+    }
+
+    #[test]
+    fn reconciler_stale_node_outcome_after_renumber() {
+        let mut rec = Reconciler::new(|| {});
+        rec.record_rediscovery(ReconcileOutcome::StaleNode {
+            old: PathBuf::from("/dev/video2"),
+            new: PathBuf::from("/dev/video4"),
+        });
+        assert_eq!(
+            rec.last_outcome(),
+            Some(&ReconcileOutcome::StaleNode {
+                old: PathBuf::from("/dev/video2"),
+                new: PathBuf::from("/dev/video4")
+            })
+        );
+    }
+
+    #[test]
+    fn reconciler_missing_camera_outcome_signals_password_fallback() {
+        let mut rec = Reconciler::new(|| {});
+        rec.record_rediscovery(ReconcileOutcome::MissingCamera);
+        assert_eq!(rec.last_outcome(), Some(&ReconcileOutcome::MissingCamera));
+        let drained = rec.drain_ready();
+        assert!(drained.is_empty());
+        assert_eq!(rec.state(), ResumeState::Ready);
     }
 }
