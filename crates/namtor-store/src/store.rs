@@ -22,11 +22,27 @@ use std::path::{Path, PathBuf};
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::Aes256Gcm;
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 
 use crate::crypto::SealedKey;
 use crate::format::{aad_v2, decode, encode_v2, Decoded};
 use crate::fs_util::{atomic_write, check_owner, reject_symlink, FileLock};
-use crate::template::TemplateRecord;
+use crate::template::{
+    ProfileEntry, ProfileId, ProfileRecord, Template, TemplateRecord, UserContainer,
+};
+
+/// Tagged envelope for the per-uid container file.
+///
+/// `Profiles` is what current code writes. `Legacy` is kept as an explicit
+/// tag for migration records; on-disk legacy files (pre-profile) have no
+/// `container_kind` field and fall through to a bare `TemplateRecord` parse.
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "container_kind", rename_all = "snake_case")]
+enum ContainerEnvelope {
+    Profiles(UserContainer),
+    #[allow(dead_code)]
+    Legacy(TemplateRecord),
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -54,6 +70,15 @@ pub enum StoreError {
     Lock(String),
     #[error("unsupported store schema version {0}")]
     SchemaVersion(u16),
+    #[error("profile {0} not found")]
+    ProfileNotFound(String),
+    #[error("profile {0} already exists")]
+    ProfileExists(String),
+    #[error("profile uid {profile_uid} does not match container uid {container_uid}")]
+    ProfileUidMismatch {
+        profile_uid: u32,
+        container_uid: u32,
+    },
 }
 
 pub struct TemplateStore {
@@ -281,12 +306,228 @@ impl TemplateStore {
             .decrypt(nonce, payload)
             .map_err(|e| StoreError::Crypto(format!("decrypt: {e}")))
     }
+
+    // ---- Named profile API (task 14) ----
+
+    /// List every profile enrolled for `uid`. Legacy single-record files are
+    /// migrated on read into a one-element container under the default profile.
+    pub fn list_profiles(&self, uid: u32) -> Result<Vec<ProfileEntry>, StoreError> {
+        let path = self.record_path(uid);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let container = self.read_container(&path, uid)?;
+        Ok(container.profiles)
+    }
+
+    /// Append a new profile to `uid`'s container. Fails if the profile id
+    /// already exists, or if `profile.uid != uid`.
+    pub fn create_profile(
+        &self,
+        uid: u32,
+        profile: ProfileRecord,
+        templates: Vec<Template>,
+    ) -> Result<(), StoreError> {
+        if profile.uid != uid {
+            return Err(StoreError::ProfileUidMismatch {
+                profile_uid: profile.uid,
+                container_uid: uid,
+            });
+        }
+        let path = self.record_path(uid);
+        let mut container = self.container_or_new(&path, uid)?;
+        if container
+            .profiles
+            .iter()
+            .any(|p| p.profile.profile_id == profile.profile_id)
+        {
+            return Err(StoreError::ProfileExists(profile.profile_id.0));
+        }
+        container.profiles.push(ProfileEntry { profile, templates });
+        self.write_container(&path, uid, &container)
+    }
+
+    /// Rename an existing profile. Fails if the profile id is absent.
+    pub fn rename_profile(
+        &self,
+        uid: u32,
+        profile_id: &ProfileId,
+        new_name: String,
+    ) -> Result<(), StoreError> {
+        let path = self.record_path(uid);
+        let mut container = self.require_container(&path, uid)?;
+        let entry = container
+            .profiles
+            .iter_mut()
+            .find(|p| p.profile.profile_id == *profile_id)
+            .ok_or_else(|| StoreError::ProfileNotFound(profile_id.0.clone()))?;
+        entry.profile.display_name = new_name;
+        self.write_container(&path, uid, &container)
+    }
+
+    /// Enable or disable a profile. Disabled profiles are excluded from
+    /// [`Self::enabled_gallery`].
+    pub fn enable_profile(
+        &self,
+        uid: u32,
+        profile_id: &ProfileId,
+        enabled: bool,
+    ) -> Result<(), StoreError> {
+        let path = self.record_path(uid);
+        let mut container = self.require_container(&path, uid)?;
+        let entry = container
+            .profiles
+            .iter_mut()
+            .find(|p| p.profile.profile_id == *profile_id)
+            .ok_or_else(|| StoreError::ProfileNotFound(profile_id.0.clone()))?;
+        entry.profile.enabled = enabled;
+        self.write_container(&path, uid, &container)
+    }
+
+    /// Remove a profile from `uid`'s container. Fails if the profile id is
+    /// absent.
+    pub fn delete_profile(&self, uid: u32, profile_id: &ProfileId) -> Result<(), StoreError> {
+        let path = self.record_path(uid);
+        let mut container = self.require_container(&path, uid)?;
+        let before = container.profiles.len();
+        container
+            .profiles
+            .retain(|p| p.profile.profile_id != *profile_id);
+        if container.profiles.len() == before {
+            return Err(StoreError::ProfileNotFound(profile_id.0.clone()));
+        }
+        self.write_container(&path, uid, &container)
+    }
+
+    /// Return the templates of every enabled profile for `uid`, concatenated.
+    pub fn enabled_gallery(&self, uid: u32) -> Result<Vec<Template>, StoreError> {
+        let path = self.record_path(uid);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let container = self.read_container(&path, uid)?;
+        let mut out = Vec::new();
+        for entry in container.profiles {
+            if entry.profile.enabled {
+                out.extend(entry.templates);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Replace the profile if it exists, otherwise append it. Used for
+    /// re-enrollment under an existing profile id.
+    pub fn merge_profile(
+        &self,
+        uid: u32,
+        profile: ProfileRecord,
+        templates: Vec<Template>,
+    ) -> Result<(), StoreError> {
+        if profile.uid != uid {
+            return Err(StoreError::ProfileUidMismatch {
+                profile_uid: profile.uid,
+                container_uid: uid,
+            });
+        }
+        let path = self.record_path(uid);
+        let mut container = self.container_or_new(&path, uid)?;
+        if let Some(entry) = container
+            .profiles
+            .iter_mut()
+            .find(|p| p.profile.profile_id == profile.profile_id)
+        {
+            entry.profile = profile;
+            entry.templates = templates;
+        } else {
+            container.profiles.push(ProfileEntry { profile, templates });
+        }
+        self.write_container(&path, uid, &container)
+    }
+
+    fn require_container(&self, path: &Path, uid: u32) -> Result<UserContainer, StoreError> {
+        if !path.exists() {
+            return Err(StoreError::NotFound(uid));
+        }
+        self.read_container(path, uid)
+    }
+
+    fn container_or_new(&self, path: &Path, uid: u32) -> Result<UserContainer, StoreError> {
+        if !path.exists() {
+            return Ok(UserContainer {
+                schema_version: 1,
+                profiles: Vec::new(),
+            });
+        }
+        self.read_container(path, uid)
+    }
+
+    fn read_container(&self, path: &Path, uid: u32) -> Result<UserContainer, StoreError> {
+        reject_symlink(path)?;
+        check_owner(path, self.expected_owner_uid())?;
+        let raw = std::fs::read(path)?;
+        let frame: Decoded = decode(&raw, uid)?;
+        let plaintext = self.decrypt(&frame.nonce, &frame.ciphertext, &frame.aad)?;
+        match serde_json::from_slice::<ContainerEnvelope>(&plaintext) {
+            Ok(ContainerEnvelope::Profiles(c)) => Ok(c),
+            Ok(ContainerEnvelope::Legacy(record)) => Ok(legacy_to_container(record)),
+            Err(_) => {
+                let record: TemplateRecord = serde_json::from_slice(&plaintext)?;
+                Ok(legacy_to_container(record))
+            }
+        }
+    }
+
+    fn write_container(
+        &self,
+        path: &Path,
+        uid: u32,
+        container: &UserContainer,
+    ) -> Result<(), StoreError> {
+        reject_symlink(path)?;
+        let _guard = FileLock::acquire(&self.lock_path(uid))?;
+        let envelope = ContainerEnvelope::Profiles(container.clone());
+        let json = serde_json::to_vec(&envelope)?;
+        let cipher = Aes256Gcm::new_from_slice(self.key.key())
+            .map_err(|e| StoreError::Crypto(e.to_string()))?;
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
+        let aad = aad_v2(uid, "", "container");
+        let payload = Payload {
+            msg: &json,
+            aad: &aad,
+        };
+        let ciphertext = cipher
+            .encrypt(nonce, payload)
+            .map_err(|e| StoreError::Crypto(e.to_string()))?;
+        let file = encode_v2(&nonce_bytes, "", "container", &ciphertext);
+        atomic_write(path, &file, self.expected_owner_uid())?;
+        Ok(())
+    }
+}
+
+fn legacy_to_container(record: TemplateRecord) -> UserContainer {
+    UserContainer {
+        schema_version: 1,
+        profiles: vec![ProfileEntry {
+            profile: ProfileRecord {
+                profile_id: ProfileId::default(),
+                display_name: record.meta.username.clone(),
+                enabled: true,
+                uid: record.meta.uid,
+                model_id: record.meta.model_id.clone(),
+                created_at_us: record.meta.created_at_us,
+                schema_version: 1,
+            },
+            templates: record.templates,
+        }],
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::template::{EnrollmentMeta, Template};
+    use crate::template::{EnrollmentMeta, ProfileId, ProfileRecord, Template};
 
     fn test_record(uid: u32) -> TemplateRecord {
         TemplateRecord {
@@ -305,6 +546,26 @@ mod tests {
                 quality: 0.9,
                 is_anchor: true,
             }],
+        }
+    }
+
+    fn test_profile(uid: u32, id: &str, enabled: bool) -> ProfileRecord {
+        ProfileRecord {
+            profile_id: ProfileId(id.into()),
+            display_name: id.into(),
+            enabled,
+            uid,
+            model_id: "sface".into(),
+            created_at_us: 1,
+            schema_version: 1,
+        }
+    }
+
+    fn test_template(scale: f32) -> Template {
+        Template {
+            vector: vec![scale; 128],
+            quality: 0.9,
+            is_anchor: true,
         }
     }
 
@@ -408,5 +669,207 @@ mod tests {
         std::fs::write(&path, &raw).unwrap();
         let err = store.load(1000).unwrap_err();
         assert!(matches!(err, StoreError::Crypto(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn legacy_enrollment_survives_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store.store(&test_record(1000)).unwrap();
+
+        let profiles = store.list_profiles(1000).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].profile.profile_id, ProfileId::default());
+        assert!(profiles[0].profile.enabled);
+        assert_eq!(profiles[0].templates.len(), 1);
+    }
+
+    #[test]
+    fn two_profiles_both_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "work", true),
+                vec![test_template(0.1)],
+            )
+            .unwrap();
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "home", true),
+                vec![test_template(0.2)],
+            )
+            .unwrap();
+
+        let gallery = store.enabled_gallery(1000).unwrap();
+        assert_eq!(gallery.len(), 2);
+        assert_eq!(gallery[0].vector, vec![0.1; 128]);
+        assert_eq!(gallery[1].vector, vec![0.2; 128]);
+    }
+
+    #[test]
+    fn disabled_profile_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "work", true),
+                vec![test_template(0.1)],
+            )
+            .unwrap();
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "home", true),
+                vec![test_template(0.2)],
+            )
+            .unwrap();
+        store
+            .enable_profile(1000, &ProfileId("home".into()), false)
+            .unwrap();
+
+        let gallery = store.enabled_gallery(1000).unwrap();
+        assert_eq!(gallery.len(), 1);
+        assert_eq!(gallery[0].vector, vec![0.1; 128]);
+    }
+
+    #[test]
+    fn wrong_uid_isolated() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        let err = store
+            .create_profile(
+                1000,
+                test_profile(2000, "work", true),
+                vec![test_template(0.1)],
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                StoreError::ProfileUidMismatch {
+                    profile_uid: 2000,
+                    container_uid: 1000
+                }
+            ),
+            "got {err:?}"
+        );
+        assert!(store.list_profiles(1000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn rename_preserves_templates() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "work", true),
+                vec![test_template(0.7)],
+            )
+            .unwrap();
+        store
+            .rename_profile(1000, &ProfileId("work".into()), "Work Face".into())
+            .unwrap();
+
+        let profiles = store.list_profiles(1000).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].profile.display_name, "Work Face");
+        assert_eq!(profiles[0].profile.profile_id, ProfileId("work".into()));
+        assert_eq!(profiles[0].templates.len(), 1);
+        assert_eq!(profiles[0].templates[0].vector, vec![0.7; 128]);
+    }
+
+    #[test]
+    fn delete_removes_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "work", true),
+                vec![test_template(0.1)],
+            )
+            .unwrap();
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "home", true),
+                vec![test_template(0.2)],
+            )
+            .unwrap();
+        store
+            .delete_profile(1000, &ProfileId("work".into()))
+            .unwrap();
+
+        let profiles = store.list_profiles(1000).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].profile.profile_id, ProfileId("home".into()));
+    }
+
+    #[test]
+    fn merge_replaces_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "work", true),
+                vec![test_template(0.1)],
+            )
+            .unwrap();
+        let mut replaced = test_profile(1000, "work", false);
+        replaced.display_name = "Work v2".into();
+        store
+            .merge_profile(1000, replaced, vec![test_template(0.9), test_template(0.8)])
+            .unwrap();
+
+        let profiles = store.list_profiles(1000).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].profile.display_name, "Work v2");
+        assert!(!profiles[0].profile.enabled);
+        assert_eq!(profiles[0].templates.len(), 2);
+        assert_eq!(profiles[0].templates[0].vector, vec![0.9; 128]);
+    }
+
+    #[test]
+    fn corrupt_profile_isolated() {
+        let container = UserContainer {
+            schema_version: 1,
+            profiles: vec![
+                ProfileEntry {
+                    profile: test_profile(1000, "work", true),
+                    templates: vec![test_template(0.1)],
+                },
+                ProfileEntry {
+                    profile: test_profile(1000, "home", true),
+                    templates: vec![test_template(0.2)],
+                },
+            ],
+        };
+        let json = serde_json::to_string(&container).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value["profiles"][0]["templates"] = serde_json::json!([]);
+        let corrupted = serde_json::to_string(&value).unwrap();
+        let parsed: UserContainer = serde_json::from_str(&corrupted).unwrap();
+
+        assert_eq!(parsed.profiles.len(), 2);
+        assert!(parsed.profiles[0].templates.is_empty());
+        assert_eq!(parsed.profiles[1].templates.len(), 1);
+        assert_eq!(parsed.profiles[1].templates[0].vector, vec![0.2; 128]);
+        assert_eq!(
+            parsed.profiles[1].profile.profile_id,
+            ProfileId("home".into())
+        );
     }
 }

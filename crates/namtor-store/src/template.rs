@@ -79,6 +79,45 @@ impl TemplateRecord {
     }
 }
 
+/// Identifier of a named face profile within a per-user container.
+///
+/// The default profile id (`"default"`) is used when migrating a legacy
+/// single-record container to the multi-profile schema.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ProfileId(pub String);
+
+impl Default for ProfileId {
+    fn default() -> Self {
+        Self("default".into())
+    }
+}
+
+/// Metadata for a single named face profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileRecord {
+    pub profile_id: ProfileId,
+    pub display_name: String,
+    pub enabled: bool,
+    pub uid: u32,
+    pub model_id: String,
+    pub created_at_us: u64,
+    pub schema_version: u16,
+}
+
+/// A profile plus the templates enrolled under it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileEntry {
+    pub profile: ProfileRecord,
+    pub templates: Vec<Template>,
+}
+
+/// On-disk container holding every profile for a single uid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserContainer {
+    pub schema_version: u16,
+    pub profiles: Vec<ProfileEntry>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

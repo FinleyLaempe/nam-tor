@@ -389,7 +389,8 @@ mod tests {
     use namtor_hwdb::nodes::V4l2Node;
     use namtor_hwdb::sysfs::UsbDevice;
 
-    type OpenFn = Box<dyn FnMut(&DiscoveredCamera) -> Result<Box<dyn CaptureSource>, String> + Send>;
+    type OpenFn =
+        Box<dyn FnMut(&DiscoveredCamera) -> Result<Box<dyn CaptureSource>, String> + Send>;
 
     struct StubSource {
         stopped: bool,

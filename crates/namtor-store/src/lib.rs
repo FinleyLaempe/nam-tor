@@ -18,4 +18,6 @@ pub mod template;
 pub use crypto::Tpm2Backend;
 pub use crypto::{BackendSelector, FileBackend, KeyBackend, KeySource, MockTpm, SealedKey};
 pub use store::{StoreError, TemplateStore};
-pub use template::{EnrollmentMeta, Template, TemplateRecord};
+pub use template::{
+    EnrollmentMeta, ProfileEntry, ProfileId, ProfileRecord, Template, TemplateRecord, UserContainer,
+};
