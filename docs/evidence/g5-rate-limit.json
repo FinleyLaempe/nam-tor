@@ -1,0 +1,92 @@
+[
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::record_failure_locks",
+    "asserts": "a recorded failure locks the uid and reports positive remaining_ms",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::record_success_unlocks",
+    "asserts": "record_success on the same uid clears the lock",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::exponential_growth",
+    "asserts": "delay follows base*mult^attempts (2000, 4000, 8000 ms for base=1000, mult=2)",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::max_cap_enforced",
+    "asserts": "delay is capped at max_ms after many failures",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::per_uid_isolation",
+    "asserts": "a failure on one uid does not lock another uid",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::save_load_preserves_state",
+    "asserts": "save+load round-trips the per-uid attempt count",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::corrupt_state_errors",
+    "asserts": "a tampered JSON file yields Err on load (distinct from missing-file Ok)",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::missing_file_is_ok",
+    "asserts": "a missing state file yields an empty store (Ok) on first boot",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::clock_rollback_still_locked",
+    "asserts": "backoff_until > now is locked regardless of a backward clock jump",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::untrusted_reset_does_not_unlock_other_uid",
+    "asserts": "record_success on a different uid does not unlock the locked uid",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::save_leaves_no_temp",
+    "asserts": "atomic save (temp+fsync+rename) leaves no .tmp file behind",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "backoff::tests::restart_continues_schedule",
+    "asserts": "a loaded store continues the backoff schedule from the persisted attempt count",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "cargo test -p namtor-daemon (full suite)",
+    "asserts": "81 lib + 8 bin + 9 e2e tests pass; 0 failures",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "cargo clippy -p namtor-daemon -- -D warnings",
+    "asserts": "no clippy warnings on the new module",
+    "status": "pass"
+  },
+  {
+    "gate": "G5 rate-limit",
+    "test": "cargo fmt -p namtor-daemon -- --check (backoff.rs, lib.rs)",
+    "asserts": "new files are rustfmt-clean (pre-existing live_capture.rs diff excluded)",
+    "status": "pass"
+  }
+]
