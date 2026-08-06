@@ -88,6 +88,8 @@ camera on USB `3-8`, IR node `/dev/video2`, IR metadata node `/dev/video3`.
 
 ### M0 — Measuring stick
 
+**Status: implemented.** `namtor_eval::score` shipped; harness is a foundation, no G2-G4 production run published. See `docs/evidence/status-audit.md`.
+
 **Plan:** `2026-08-04-nam-tor-m0-eval-harness.md` — **ready to execute**
 
 Cargo workspace, `CaptureSource` abstraction, `FileReplay`, session recording
@@ -104,6 +106,8 @@ reproducible by contributors.
 ---
 
 ### M1 — Hardware spike
+
+**Status: implemented (reference hardware only).** R1/R3 RESOLVED PASS, R2 RESOLVED Tier 0 on Sonix `3277:0018`. R10 (S3) WITHHELD. HW-gated tests `#[ignore]`. See `docs/evidence/status-audit.md`.
 
 **Plan:** `2026-08-04-nam-tor-m1-hardware-spike.md` — **ready to execute**
 
@@ -131,6 +135,8 @@ the in-process camera-open cost (R11).
 
 ### M2 — Detection and capture
 
+**Status: implemented.** `namtor_capture`, `namtor_camera` (emitter_ctrl/watchdog/resume/hotplug/selection/always_on) shipped. See `docs/evidence/status-audit.md`.
+
 **Scope:** `namtor-hwdb` (USB descriptor parsing, format-GUID classification,
 node correlation), `namtor-probe` CLI with contribution flow, quirks database
 schema and loader, production capture layer built on M1's findings.
@@ -157,6 +163,8 @@ actually suspend the machine, so it is hardware-in-the-loop by construction.
 
 ### M3 — Daemon and sandboxed worker
 
+**Status: implemented.** Daemon, worker, sandbox (seccomp+landlock), lifecycle, supervisor shipped. G5.2 structural gate passes. R4 INT8-vs-FP32 WITHHELD (blocked on human). See `docs/evidence/status-audit.md`.
+
 **Scope:** `namtor-daemon`, `namtor-worker`, socket protocol, seccomp + landlock
 sandbox, ONNX CPU inference with stock downloaded weights, model fetcher with
 upstream licence acceptance.
@@ -174,6 +182,8 @@ upstream licence acceptance.
 ---
 
 ### M4 — Enrollment and template storage
+
+**Status: partial.** `namtor_store` (AES-256-GCM) + `namtor_recog` (YuNet+SFace) + CLI enroll shipped. TPM2 sealing stub (file fallback; task 11). z-norm/t-norm unmeasured (task 16). RGB↔IR fusion unmeasured (task 17). See `docs/evidence/status-audit.md`.
 
 **Scope:** `namtor-store`, TPM2 sealing, AEAD template containers, enrollment
 pipeline with quality filtering, per-user score normalisation, cross-sensor
@@ -194,6 +204,8 @@ transform fitting.
 
 ### M5 — PAM integration
 
+**Status: implemented (structural gates).** `pam_namtor.so` 457632 < 512000 bytes, fail-closed, no ML deps. G5.1 structural test passes. Production PAM-stack install owner-gated (WITHHELD). See `docs/evidence/status-audit.md`.
+
 **Scope:** `namtor-pam`, socket client, failure modes, instant keypress fallback,
 rate limiting, audit logging, PAM stack drop-ins.
 
@@ -210,6 +222,8 @@ rate limiting, audit logging, PAM stack drop-ins.
 ---
 
 ### M6 — Liveness, fusion, early exit
+
+**Status: partial.** Four analytic PAD gates shipped as a veto; all UNCALIBRATED (conservative defaults, not tuned against a real attack corpus; calibration is task 21). Fusion and early exit not wired (tasks 17-18). G4 production claim WITHHELD. See `docs/evidence/status-audit.md` and the calibration note below.
 
 **Scope:** analytic PAD gates, dual-camera fusion, cross-sensor geometric
 consistency, multi-frame consensus with temporal coherence, early exit.
@@ -259,6 +273,8 @@ cleanly and the thresholds are more stable across devices.
 
 ### M7 — Desktop integration
 
+**Status: partial.** `namtor_gnome` GTK4/libadwaita enrollment wizard + settings app shipped. KDE KCM not started (task 27). D-Bus `org.namtor.Manager` API not implemented (task 25); GNOME app currently talks to the store directly. See `docs/evidence/status-audit.md`.
+
 **Scope:** D-Bus system service, polkit actions, GNOME settings app and
 enrollment wizard, KDE KCM, GNOME Shell extension.
 
@@ -275,6 +291,8 @@ enrollment wizard, KDE KCM, GNOME Shell extension.
 
 ### M8 — Community data flywheel
 
+**Status: implemented.** `namtor_collect` consent-gated PAD data collection shipped (ConsentRecord, per-session withdrawal IDs, CollectionStore). Production collection campaign (consented subjects + attack props) owner-gated, has not run. See `docs/evidence/status-audit.md`.
+
 **Scope:** `namtor-collect` with consent flow, quirks contribution pipeline,
 contributor documentation.
 
@@ -289,6 +307,8 @@ contributor documentation.
 ---
 
 ### M9 — Trained models and published evidence
+
+**Status: partial (synthetic-only).** MiniFASNet PAD trained on physics-based synthetic strobe differentials, 100% val on synthetic; cannot be production-selected (task 22 needs consented real data). NIR fine-tune recipes, full ablation table, published eval report not produced. G3/G4 at full strength WITHHELD. See `docs/evidence/status-audit.md`.
 
 **Scope:** NIR fine-tune recipes, learned PAD training, full ablation table,
 published eval report.
@@ -305,6 +325,8 @@ published eval report.
 ---
 
 ### M10 — Remaining scope
+
+**Status: not started.** Presence mode, depth path, R100 backbone, optional OpenVino CPU EP. No commits. Production-readiness plan tasks 29-31. See `docs/evidence/status-audit.md`.
 
 **Scope:** presence mode, depth-capable sensor path (`DepthUvc`), additional
 backbones (R100), optional OpenVINO EP.

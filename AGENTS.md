@@ -2,9 +2,11 @@
 
 Project state for the next agent. Read this first, then the spec.
 
-## Current state (2026-08-05)
+## Current state (2026-08-06)
 
 M0 (eval harness), M1 (hardware spike), M2 (detection + capture), **M3 (daemon + sandboxed worker)**, **M4 (enrollment + template storage)**, **M5 (PAM module)**, **M6 (analytic PAD)**, **M7 (GNOME wizard)**, **M8 (namtor-collect)**, **M9 (MiniFASNet PAD)** done and committed. Working tree clean on `master`. 400+ tests green, clippy/fmt/SPDX clean.
+
+**Readiness is NOT claimed.** `implemented` below is a code state, not a gate pass. The authoritative gate-by-gate ledger is [`docs/evidence/status-audit.md`](docs/evidence/status-audit.md). In short: G5.1/G5.2/G5.4 structural CI gates pass; every other G1-G5 production gate is `partial`, `unmeasured`, or `WITHHELD`. Specifically: TPM2 sealing is a stub (file fallback; task 11), RGB↔IR fusion is stub/unmeasured (task 17), z-norm cohort is unmeasured (R5; task 16), analytic PAD gates are UNCALIBRATED (task 21), learned PAD is synthetic-only (task 22), S3 20x HIL is WITHHELD (R10), KDE KCM and D-Bus API are not started (tasks 25/27), and signed packages are not started (task 6). See the ledger for owner-gated inputs blocking each gate.
 
 **New crates since M3:**
 - `namtor-store` — AES-256-GCM encrypted template storage, TPM2 intent (file fallback), per-uid containers, AAD binds uid+model_id, Zeroize on drop.

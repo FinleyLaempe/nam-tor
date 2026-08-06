@@ -1,8 +1,19 @@
 # M3 R4 — INT8 vs FP32 embedding degradation
 
-**Status: PENDING — blocked on human action.**
+**Status: WITHHELD — blocked on owner-gated inputs.**
 
-This report is a placeholder. It is filled by running:
+This report is a placeholder. The measurement is not made until the blocking
+inputs are supplied; per the project's evidence rule, the R4 claim is
+`WITHHELD` rather than `PENDING` so no reader mistakes the absence of a number
+for a pending-but-imminent result. See `docs/evidence/status-audit.md` §3 (R4)
+and §4 (owner-gated inputs).
+
+Path B holds: spec §5.3 commits to CPU INT8 (AVX-VNNI) as the auth-path
+quantisation on architectural grounds, so the INT8 path is the design default
+regardless of the measurement. R4 measures the *degradation* vs FP32 and
+validates the G2/G3 gates; it does not decide the architecture.
+
+It is filled by running:
 
 ```bash
 # 1. Fix Python onnxruntime binding (see AGENTS.md)
@@ -32,7 +43,7 @@ cohort-derived weights or biometric data are committed to the repository.
 
 ### R5 cohort decision
 
-**Cohort: (not yet decided — blocked on human)**
+**Cohort: WITHHELD — blocked on owner-gated dataset selection**
 
 The decision is recorded here once the human verifies a dataset's
 licence and selects it as the normalisation cohort. Candidates from
@@ -52,5 +63,5 @@ licence and selects it as the normalisation cohort. Candidates from
 | Median latency | — | — | — |
 | p95 latency | — | — | — |
 
-Gate G3 (FAR ≤ 0.001% at FRR ≤ 3.000%): **PENDING**
-Gate G2 (median ≤ 500 ms, p95 ≤ 1000 ms): **PENDING**
+Gate G3 (FAR ≤ 0.001% at FRR ≤ 3.000%): **WITHHELD — no lawful cohort, no ≥100k impostor comparison run**
+Gate G2 (median ≤ 500 ms, p95 ≤ 1000 ms): **WITHHELD — no production-path latency distribution published**

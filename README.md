@@ -2,7 +2,7 @@
 
 Infrared face authentication for Linux. A privilege-separated daemon, a PAM module, and native GNOME and KDE integration.
 
-**Status: design and planning complete. No implementation yet.** See [`HANDOFF.md`](HANDOFF.md) if you are picking this up.
+**Status: implementation in progress.** M0-M9 are complete and committed on the reference hardware (400+ tests green, clippy/fmt/SPDX clean, CI security gates enforced). A production-readiness program is underway to close the remaining gates with measured evidence. No gate claim is published unless evidenced. The authoritative readiness ledger is [`docs/evidence/status-audit.md`](docs/evidence/status-audit.md); see also [`HANDOFF.md`](HANDOFF.md) for the cold-start entry point.
 
 ---
 
