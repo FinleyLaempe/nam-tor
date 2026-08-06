@@ -1,0 +1,154 @@
+Wave 1 / Task 1 — Secure and commit the verified live-auth baseline
+====================================================================
+Date: 2026-08-06
+Commit: fix(auth): stabilize live verification baseline
+
+PRESERVED BASELINE FIXES (uncommitted dirty tree, now committed)
+-----------------------------------------------------------------
+(a) verify.rs: illuminated_first() parity fix — orders the brighter frame
+    as `on` regardless of the emitter tag, so an inverted-parity stream
+    still produces a correct strobe differential.
+(b) verify.rs: last_outcome replaces the generic "timeout" return — the
+    engine now returns the last real outcome (e.g. "no face", "below
+    threshold") instead of masking it with "timeout".
+(c) verify.rs: detection moved BEFORE PAD; detection_bbox() clamps the
+    YuNet face box to the frame and passes it to run_analytic_pad so the
+    radial gate crops to the face region.
+(d) radial.rs: monotonic_falloff_score rewrite — annular-bin decreasing-
+    profile statistic replaces the 1/r^2 R^2 fit. Algorithm UNCHANGED in
+    this task (only an UNCALIBRATED label was added; calibration deferred
+    to task 17).
+(e) client.rs: Release phase is always sent — classify() result is bound
+    to `verdict` and the `verdict?` error short-circuit moved to AFTER
+    the Release encode/flush, so every verdict variant (Match, NoMatch,
+    Unavailable, RateLimited, Refused) drives Prepare -> Verify -> Release.
+(f) enroll.rs: when run as root, chown the sealed template file to
+    namtor:namtor so the daemon can read it.
+(g) live_capture.rs: extracted the daemon's capture factory into its own
+    module (src/bin/namtor-daemon/live_capture.rs), with emitter
+    activation + EmitterGuard RAII. Untracked file now `git add`ed.
+
+PAD-VETO REASON SPLIT (new, spec section 8.3)
+---------------------------------------------
+Mechanism: a trust-boundary helper `external_reason(&VerifyOutcome)` in
+namtor-daemon/src/verify.rs maps the internal outcome to the reason
+allowed in the socket AuthReply:
+  - Verdict::NoMatch whose internal reason starts with "pad veto" -> None
+    (generic; gate name + raw scalar stripped).
+  - Other NoMatch reasons ("no face", "below threshold", ...) pass through.
+  - Unavailable / Refused / RateLimited reasons pass through.
+  - Match -> None.
+The daemon dispatcher (dispatch.rs) calls `external_reason(&outcome)` when
+building the AuthReply, so the PAM client and CLI never see "pad veto: ...".
+The detailed reason is recorded INSIDE the daemon at debug level only, via
+`tracing::debug!(target: "namtor::journal", ...)` in dispatch.rs
+(verdict, score, internal_reason). No biometric data is logged — only the
+gate name + scalar raw value, which is permitted.
+
+Defense in depth: namtor-cli/src/verify.rs no longer prints reply.reason
+on NoMatch (prints only "NO MATCH (score=...)"), so a daemon regression
+cannot leak PAD-veto detail through the CLI debug tool.
+
+UNCALIBRATED LABEL (radial.rs)
+------------------------------
+Module doc and `radial_falloff` fn doc now state:
+  "UNCALIBRATED: the threshold (max_deviation) and the annular-bin scoring
+   have NOT been calibrated against real/live/print/replay captures yet.
+   Calibration ... deferred to task 17. Until then the gate runs with a
+   conservative default and its pass/fail boundaries must not be treated
+   as a tuned APCER gate."
+Algorithm unchanged; existing radial tests stay green.
+
+TEMPORARY DIAGNOSTICS REMOVED
+-----------------------------
+Scanned all dirty files + recent `debug(enroll):` commit leftovers for
+temporary eprintln!/println!/dbg!()/commented-out diagnostics. Result:
+NO temp diagnostics found. The `debug(enroll)` leftovers (brightest-frame
+dump, YuNet raw-output stats) were already removed in commit 64c14be
+"cleanup(enroll): remove debug output, unused deps". All remaining
+eprintln!/println! in enroll.rs, the daemon bin, and live_capture.rs are
+legitimate user-facing messages (enrollment progress, model-missing
+errors, daemon startup/accept errors). No dbg!() anywhere.
+
+TESTS ADDED/UPDATED
+-------------------
+verify.rs (namtor-daemon):
+  - external_reason_strips_pad_veto_detail_for_nomatch: internal outcome
+    keeps "pad veto: energy (0.123)"; external_reason() returns None.
+  - external_reason_passes_through_non_pad_nomatch: "no face" /
+    "below threshold" pass through.
+  - external_reason_passes_through_unavailable_and_refused.
+  - external_reason_is_none_for_match.
+  - brighter_frame_is_selected_as_illuminated_when_parity_is_inverted
+    (existing, kept).
+  - detection_bbox_clamps_face_region_to_frame (existing, kept).
+
+client.rs (namtor-pam):
+  - release_phase_sent_for_every_verdict_variant: asserts Prepare ->
+    Verify -> Release are all sent for Match, NoMatch, Unavailable,
+    RateLimited, Refused (via assert_full_lifecycle helper + recording
+    mock daemon). The existing per-verdict tests
+    (authenticate_match_succeeds, authenticate_no_match_is_returned_not_error,
+    authenticate_unavailable_is_error, authenticate_refused_is_error,
+    authenticate_rate_limited_is_error) are kept; the Unavailable test
+    was refactored to use the shared mock_daemon_recording helper.
+
+radial.rs (namtor-pad): existing tests unchanged and green.
+
+VERIFICATION OUTPUT (tail)
+--------------------------
+$ cargo fmt --all -- --check
+(clean, no diff)
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.45s
+(no warnings)
+
+$ cargo test --workspace --lib -- --skip concurrent_connections_serialise --test-threads=1
+namtor_camera:      38 passed; 0 failed
+namtor_capture:     40 passed; 0 failed; 4 ignored
+namtor_cli:          9 passed; 0 failed
+namtor_collect:     15 passed; 0 failed
+namtor_daemon:      55 passed; 0 failed; 1 ignored; 1 filtered
+namtor_eval:         4 passed; 0 failed
+namtor_gnome:        0 passed; 0 failed
+namtor_hwdb:        22 passed; 0 failed
+namtor_pad:         38 passed; 0 failed
+namtor_pam:         19 passed; 0 failed
+namtor_probe:        9 passed; 0 failed
+namtor_proto:       25 passed; 0 failed
+namtor_recog:       10 passed; 0 failed
+namtor_store:       10 passed; 0 failed
+namtor_uvc:         57 passed; 0 failed; 2 ignored
+namtor_worker:      23 passed; 0 failed
+TOTAL (lib):       374 passed; 0 failed; 7 ignored
+
+Integration tests:
+namtor-pam  (e2e_integration + g5_structural): 19 + 2 passed; 0 failed
+namtor-cli:  9 passed; 0 failed
+namtor-daemon --test e2e:  9 passed; 0 failed
+namtor-daemon --test r4:   0 passed; 1 ignored (needs real ONNX weights/HW)
+
+PAD-veto leak check:
+$ grep -rn "pad veto" crates/namtor-pam/ crates/namtor-cli/ crates/namtor-daemon/tests/
+(no matches — "pad veto" appears only in namtor-daemon/src/verify.rs,
+ the internal reason construction + the internal-side test assertion)
+
+PRE-EXISTING ISSUE (out of scope, not caused by this change)
+------------------------------------------------------------
+namtor-daemon/src/listener.rs::concurrent_connections_serialise_on_camera_lock
+hangs (>60s) when run in the default parallel test executor. It hung in the
+baseline run BEFORE any change in this task, lives in listener.rs (untouched
+here), and uses a SlowDispatcher that does not reference verify.rs,
+dispatch.rs, client.rs, or radial.rs. It passes the lib suite when skipped
+(`--skip concurrent_connections_serialise`). Root-cause is a pre-existing
+test-socket/thread race outside this task's scope; flagged for a later wave.
+
+RESIDUAL RISK
+-------------
+- The pre-existing concurrent_connections_serialise_on_camera_lock hang is
+  not addressed (out of scope); CI runs that do not set a per-test timeout
+  will stall on it.
+- The radial gate remains uncalibrated (label added; calibration is task 17).
+- live_capture.rs hardcodes /dev/video2 (acceptable per task brief; auto-
+  selection is task 7).

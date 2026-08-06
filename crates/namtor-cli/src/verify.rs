@@ -47,6 +47,9 @@ pub fn run_verify(user: Option<String>) -> ExitCode {
                 ExitCode::SUCCESS
             }
             Verdict::NoMatch => {
+                // Spec §8.3: do not surface the NoMatch reason — it could
+                // carry PAD-veto detail if the daemon ever regresses. A
+                // plain NoMatch is all the user/attacker should see.
                 println!("NO MATCH (score={:.4})", reply.score);
                 ExitCode::from(1)
             }

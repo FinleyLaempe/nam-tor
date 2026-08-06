@@ -22,6 +22,9 @@ use namtor_daemon::listener::Listener;
 use namtor_daemon::supervisor::ChildSupervisor;
 use namtor_daemon::verify::VerifyEngine;
 
+#[path = "namtor-daemon/live_capture.rs"]
+mod live_capture;
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -76,43 +79,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let verify = VerifyEngine::new(&yunet_path, &sface_path, &store_dir, &key_path)?;
 
-    let capture_factory: Option<namtor_daemon::daemon::CaptureFactory> =
-        if std::env::var("NAMTOR_NO_CAMERA").is_ok() {
-            None
-        } else {
-            Some(Box::new(|| {
-                use namtor_capture::frame::PixFmt;
-                use namtor_capture::ir_uvc::{IrUvc, V4l2IrStream};
-                use namtor_capture::source::{CaptureSource, SourceCaps, Spectrum};
-
-                let streamer = V4l2IrStream::open(
-                    std::path::Path::new("/dev/video2"),
-                    Some(std::path::Path::new("/dev/video3")),
-                    640,
-                    360,
-                )
-                .map_err(|e| namtor_daemon::DaemonError::Capture(e.to_string()))?;
-                let caps = SourceCaps {
-                    spectrum: Spectrum::Ir,
-                    format: PixFmt::Grey8,
-                    width: 640,
-                    height: 360,
-                    fps: 30,
-                    has_metadata: true,
-                };
-                struct UnknownPolicy;
-                impl namtor_capture::ir_uvc::EmitterPolicy for UnknownPolicy {
-                    fn tag(&self, _frame_index: u64) -> namtor_capture::frame::EmitterState {
-                        namtor_capture::frame::EmitterState::Unknown
-                    }
-                }
-                let mut source = IrUvc::new(streamer, UnknownPolicy, caps);
-                source
-                    .start()
-                    .map_err(|e| namtor_daemon::DaemonError::Capture(e.to_string()))?;
-                Ok(Box::new(source) as Box<dyn CaptureSource>)
-            }))
-        };
+    let capture_factory = if std::env::var("NAMTOR_NO_CAMERA").is_ok() {
+        None
+    } else {
+        Some(live_capture::factory())
+    };
 
     let daemon = Daemon::new(
         supervisor,

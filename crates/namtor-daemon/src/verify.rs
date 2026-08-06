@@ -50,6 +50,27 @@ pub struct VerifyOutcome {
     pub reason: Option<String>,
 }
 
+/// Map a `VerifyOutcome`'s internal reason to the reason that may be sent
+/// to the PAM client in an `AuthReply`. Spec §8.3: a PAD veto must be
+/// indistinguishable from a regular `NoMatch` to the user — the detailed
+/// gate name and raw scalar stay inside the daemon (journal/audit log only),
+/// never the socket reply. The internal `VerifyOutcome.reason` keeps the
+/// detail; this function strips it at the trust boundary.
+///
+/// Non-PAD `NoMatch` reasons (e.g. "no face", "below threshold") and all
+/// `Unavailable`/`Refused`/`RateLimited` reasons are passed through, since
+/// they do not reveal PAD internals.
+pub fn external_reason(outcome: &VerifyOutcome) -> Option<String> {
+    match outcome.verdict {
+        Verdict::Match => None,
+        Verdict::NoMatch => match outcome.reason.as_deref() {
+            Some(r) if r.starts_with("pad veto") => None,
+            other => other.map(|s| s.to_string()),
+        },
+        Verdict::Refused | Verdict::RateLimited | Verdict::Unavailable => outcome.reason.clone(),
+    }
+}
+
 impl VerifyOutcome {
     pub fn unavailable(reason: &str) -> Self {
         Self {
@@ -133,6 +154,7 @@ impl VerifyEngine {
         // 2. Capture frame pairs and attempt authentication.
         let mut last_on_frame: Option<Frame> = None;
         let mut last_off_frame: Option<Frame> = None;
+        let mut last_outcome = VerifyOutcome::no_match("timeout");
         let mut attempts = 0usize;
 
         while attempts < MAX_ATTEMPT_FRAMES && Instant::now() < deadline {
@@ -160,6 +182,7 @@ impl VerifyEngine {
 
             // When we have a pair, run the full pipeline.
             if let (Some(on), Some(off)) = (&last_on_frame, &last_off_frame) {
+                let (on, off) = illuminated_first(on, off);
                 let outcome = self.verify_pair(
                     on,
                     off,
@@ -170,13 +193,14 @@ impl VerifyEngine {
                 if outcome.verdict == Verdict::Match || outcome.verdict == Verdict::Refused {
                     return outcome;
                 }
+                last_outcome = outcome;
                 // NoMatch or Unavailable — try more frames.
                 last_on_frame = None;
                 last_off_frame = None;
             }
         }
 
-        VerifyOutcome::no_match("timeout")
+        last_outcome
     }
 
     /// Run the full pipeline on a single On/Off frame pair.
@@ -197,24 +221,30 @@ impl VerifyEngine {
             Err(_) => return VerifyOutcome::unavailable("differential failed"),
         };
 
-        // 2. PAD: analytic gates on D. PAD is a veto (spec §6.6).
-        let on_mean = mean_u8(&on.data);
-        let pad = match run_analytic_pad(&d, w, h, on_mean, None, &self.pad_config) {
-            Ok(p) => p,
-            Err(_) => return VerifyOutcome::unavailable("pad failed"),
-        };
-        if !pad.live {
-            // PAD veto — deliberately indistinguishable from NoMatch to the
-            // user (spec §8.3), but the journal records the true reason.
-            return VerifyOutcome::no_match("pad veto");
-        }
-
-        // 3. Detect + align + embed on the On frame.
         let result = match self.pipeline.process_frame(&on.data, w, h) {
             Ok(Some(r)) => r,
             Ok(None) => return VerifyOutcome::no_match("no face"),
             Err(_) => return VerifyOutcome::unavailable("inference failed"),
         };
+
+        let on_mean = mean_u8(&on.data);
+        let face_bbox = detection_bbox(&result.detection.box_, w, h);
+        let pad = match run_analytic_pad(&d, w, h, on_mean, Some(face_bbox), &self.pad_config) {
+            Ok(p) => p,
+            Err(_) => return VerifyOutcome::unavailable("pad failed"),
+        };
+        if !pad.live {
+            let reason = if !pad.energy.pass {
+                format!("pad veto: energy ({:.3})", pad.energy.raw)
+            } else if !pad.gradient.pass {
+                format!("pad veto: gradient ({:.3})", pad.gradient.raw)
+            } else if !pad.specular.pass {
+                format!("pad veto: specular ({:.3})", pad.specular.raw)
+            } else {
+                format!("pad veto: radial ({:.3})", pad.radial.raw)
+            };
+            return VerifyOutcome::no_match(&reason);
+        }
 
         // 4. Match against enrolled templates (max cosine similarity).
         let mut best_score = -1.0f32;
@@ -243,6 +273,22 @@ impl VerifyEngine {
             VerifyOutcome::no_match("below threshold")
         }
     }
+}
+
+fn illuminated_first<'a>(first: &'a Frame, second: &'a Frame) -> (&'a Frame, &'a Frame) {
+    if mean_u8(&first.data) >= mean_u8(&second.data) {
+        (first, second)
+    } else {
+        (second, first)
+    }
+}
+
+fn detection_bbox(box_: &namtor_recog::detect::FaceBox, w: u32, h: u32) -> (u32, u32, u32, u32) {
+    let x = box_.x.max(0.0).min(w.saturating_sub(1) as f32) as u32;
+    let y = box_.y.max(0.0).min(h.saturating_sub(1) as f32) as u32;
+    let width = box_.w.max(1.0).min(w.saturating_sub(x) as f32) as u32;
+    let height = box_.h.max(1.0).min(h.saturating_sub(y) as f32) as u32;
+    (x, y, width, height)
 }
 
 /// Errors that prevent the verify engine from starting (infrastructure).
@@ -332,6 +378,83 @@ mod tests {
         let threshold = 0.45f32;
         assert!(0.5 >= threshold);
         assert!(0.4 < threshold);
+    }
+
+    #[test]
+    fn brighter_frame_is_selected_as_illuminated_when_parity_is_inverted() {
+        let dark = Frame {
+            data: vec![10; 64],
+            format: PixFmt::Grey8,
+            width: 8,
+            height: 8,
+            ts_mono: std::time::Duration::ZERO,
+            sof: None,
+            emitter: EmitterState::On,
+            quality: None,
+        };
+        let bright = Frame {
+            data: vec![80; 64],
+            emitter: EmitterState::Off,
+            ..dark.clone()
+        };
+
+        let (on, off) = illuminated_first(&dark, &bright);
+
+        assert_eq!(mean_u8(&on.data), 80.0);
+        assert_eq!(mean_u8(&off.data), 10.0);
+    }
+
+    #[test]
+    fn detection_bbox_clamps_face_region_to_frame() {
+        let box_ = namtor_recog::detect::FaceBox {
+            x: -10.0,
+            y: 300.0,
+            w: 700.0,
+            h: 100.0,
+            score: 0.9,
+        };
+
+        let bbox = detection_bbox(&box_, 640, 360);
+
+        assert_eq!(bbox, (0, 300, 640, 60));
+    }
+
+    #[test]
+    fn external_reason_strips_pad_veto_detail_for_nomatch() {
+        // Internal outcome carries the gate detail; external reason is generic.
+        let internal = VerifyOutcome::no_match("pad veto: energy (0.123)");
+        assert_eq!(internal.verdict, Verdict::NoMatch);
+        assert!(
+            internal.reason.as_deref().unwrap().contains("pad veto"),
+            "internal journal keeps the gate detail"
+        );
+        let ext = external_reason(&internal);
+        assert!(
+            ext.is_none(),
+            "external reason must be absent for a PAD veto"
+        );
+    }
+
+    #[test]
+    fn external_reason_passes_through_non_pad_nomatch() {
+        let no_face = VerifyOutcome::no_match("no face");
+        assert_eq!(external_reason(&no_face).as_deref(), Some("no face"));
+        let below = VerifyOutcome::no_match("below threshold");
+        assert_eq!(external_reason(&below).as_deref(), Some("below threshold"));
+    }
+
+    #[test]
+    fn external_reason_passes_through_unavailable_and_refused() {
+        let unavail = VerifyOutcome::unavailable("store error");
+        assert_eq!(external_reason(&unavail).as_deref(), Some("store error"));
+        let refused = VerifyOutcome::refused("rhost set");
+        assert_eq!(external_reason(&refused).as_deref(), Some("rhost set"));
+    }
+
+    #[test]
+    fn external_reason_is_none_for_match() {
+        let m = VerifyOutcome::match_(0.9);
+        assert!(external_reason(&m).is_none());
     }
 
     #[test]

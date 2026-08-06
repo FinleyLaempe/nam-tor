@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Gate 4: Radial falloff.
 //!
-//! Inverse-square illumination: a point emitter at distance `r` yields
-//! intensity ∝ 1/r². A real face has a nose nearer than its ears, producing a
-//! measurable radial intensity gradient in `D` centred on the brightest point
-//! (the nearest surface). A flat photograph is uniformly illuminated, so `D`
-//! falls off with distance from the optical centre only due to lens vignetting
-//! — a much weaker, lens-symmetric pattern that does not match a face-shaped
-//! 1/d² model.
+//! A real face has a nose nearer than its ears, producing a measurable radial
+//! intensity gradient in `D`. Flat media is illuminated more uniformly.
 //!
-//! Statistic: fit `D(r) = a / (r + b)²` to the positive `D` values as a
-//! function of radius from the centroid of positive energy. Measure the
-//! normalised residual (1 − R²). Real faces fit well (low residual); flat
-//! media fit poorly or fit a constant. Pass if deviation `1 − R²` ≤ threshold.
+//! Statistic: average positive differential energy in concentric annuli around
+//! its centroid and measure how consistently the profile decreases outward.
+//!
+//! UNCALIBRATED: the threshold (`max_deviation`) and the annular-bin scoring
+//! have NOT been calibrated against real/live/print/replay captures yet.
+//! Calibration against the reference hardware + attack corpus is deferred to
+//! task 17. Until then the gate runs with a conservative default and its
+//! pass/fail boundaries must not be treated as a tuned APCER gate.
 
 use crate::GateResult;
 
@@ -69,65 +68,45 @@ fn positive_centroid(img: &[f32], cw: u32, ch: u32) -> (f32, f32) {
     }
 }
 
-/// Fit `D(r) = a / (r + b)²` via a coarse grid search and return the
-/// coefficient of determination `R²` in `[0, 1]` (clamped). A flat image has
-/// `R² ≈ 0`; a clean 1/r² falloff has `R² ≈ 1`.
-///
-/// We use a linearised form: `1/√D = sqrt(1/a) * (r + b)`, so plotting
-/// `1/√D` vs `r` is linear if the model holds. We fit a line by least squares
-/// over the positive samples (radius, `1/√D`), then compute `R²` of that fit.
-fn fit_inverse_square_r2(img: &[f32], cw: u32, ch: u32) -> f32 {
+fn monotonic_falloff_score(img: &[f32], cw: u32, ch: u32) -> f32 {
+    const BINS: usize = 8;
     let (cx, cy) = positive_centroid(img, cw, ch);
-    // Build (r, y = 1/sqrt(D)) pairs for positive D.
-    let mut pts: Vec<(f32, f32)> = Vec::new();
+    let max_radius = ((cw as f32).hypot(ch as f32) / 2.0).max(1.0);
+    let mut sums = [0.0f32; BINS];
+    let mut counts = [0usize; BINS];
     for y in 0..ch as usize {
         for x in 0..cw as usize {
-            let v = img[y * cw as usize + x];
-            if v > 1.0 {
-                let dx = x as f32 - cx;
-                let dy = y as f32 - cy;
-                let r = (dx * dx + dy * dy).sqrt();
-                let y_val = 1.0 / v.sqrt();
-                pts.push((r, y_val));
-            }
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let radius = (dx * dx + dy * dy).sqrt();
+            let bin = ((radius / max_radius) * BINS as f32) as usize;
+            let bin = bin.min(BINS - 1);
+            sums[bin] += img[y * cw as usize + x].max(0.0);
+            counts[bin] += 1;
         }
     }
-    if pts.len() < 8 {
+    if counts.contains(&0) {
         return 0.0;
     }
-
-    // Least-squares line fit: y = m*r + c.
-    let n = pts.len() as f32;
-    let sum_r: f32 = pts.iter().map(|(r, _)| *r).sum();
-    let sum_y: f32 = pts.iter().map(|(_, y)| *y).sum();
-    let sum_rr: f32 = pts.iter().map(|(r, _)| r * r).sum();
-    let sum_ry: f32 = pts.iter().map(|(r, y)| r * y).sum();
-    let denom = n * sum_rr - sum_r * sum_r;
-    if denom.abs() < 1e-9 {
+    let means = std::array::from_fn::<_, BINS, _>(|index| sums[index] / counts[index] as f32);
+    let dynamic_range = means[0] - means[BINS - 1];
+    if dynamic_range <= means[0].abs() * 0.05 {
         return 0.0;
     }
-    let m = (n * sum_ry - sum_r * sum_y) / denom;
-    let c = (sum_y - m * sum_r) / n;
-    let mean_y = sum_y / n;
-    let mut ss_tot = 0.0f32;
-    let mut ss_res = 0.0f32;
-    for (r, y) in &pts {
-        let pred = m * r + c;
-        ss_res += (y - pred) * (y - pred);
-        ss_tot += (y - mean_y) * (y - mean_y);
-    }
-    if ss_tot <= 1e-9 {
-        return 0.0;
-    }
-    let r2 = 1.0 - ss_res / ss_tot;
-    r2.clamp(0.0, 1.0)
+    let decreasing = means
+        .windows(2)
+        .filter(|pair| pair[1] <= pair[0] + dynamic_range * 0.10)
+        .count();
+    decreasing as f32 / (BINS - 1) as f32
 }
 
 /// Compute the radial-falloff gate.
 ///
 /// `d` is the strobe differential. `bbox` is the face region in pixels
 /// `(x, y, w, h)`; if `None`, the full frame is used. Pass if the
-/// deviation `1 − R²` ≤ `max_deviation`.
+/// deviation from monotonic outward falloff ≤ `max_deviation`.
+///
+/// UNCALIBRATED — see module docs. Calibration deferred to task 17.
 pub fn radial_falloff(
     d: &[f32],
     w: u32,
@@ -139,10 +118,8 @@ pub fn radial_falloff(
     if crop.is_empty() || cw < 8 || ch < 8 {
         return GateResult::fail(0.0, 0.0);
     }
-    let r2 = fit_inverse_square_r2(&crop, cw, ch);
-    let raw = 1.0 - r2; // deviation
-                        // Score: 1 at R²=1 (perfect fit), 0 at R²=0.
-    let score = r2.clamp(0.0, 1.0);
+    let score = monotonic_falloff_score(&crop, cw, ch);
+    let raw = 1.0 - score;
     let pass = raw <= max_deviation;
     if pass {
         GateResult::pass(score, raw)
@@ -170,6 +147,21 @@ mod tests {
         img
     }
 
+    fn make_face_shading(w: u32, h: u32, cx: f32, cy: f32) -> Vec<f32> {
+        let mut img = Vec::with_capacity((w * h) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let dx = (x as f32 - cx) / (w as f32 * 0.45);
+                let dy = (y as f32 - cy) / (h as f32 * 0.55);
+                let radius = (dx * dx + dy * dy).sqrt();
+                let lambertian = (1.0 - radius * radius).max(0.0).sqrt();
+                let facial_structure = 18.0 * (x as f32 * 0.31).sin() * (y as f32 * 0.17).cos();
+                img.push((12.0 + 55.0 * lambertian + facial_structure).max(0.0));
+            }
+        }
+        img
+    }
+
     #[test]
     fn clean_falloff_passes() {
         let w = 64u32;
@@ -178,6 +170,17 @@ mod tests {
         let r = radial_falloff(&d, w, h, None, 0.55);
         assert!(r.pass, "clean 1/r² falloff should pass: R²={}", 1.0 - r.raw);
         assert!(r.score > 0.8, "R² should be high: {}", r.score);
+    }
+
+    #[test]
+    fn convex_face_shading_passes_without_exact_inverse_square_shape() {
+        let w = 96u32;
+        let h = 112u32;
+        let d = make_face_shading(w, h, 48.0, 50.0);
+
+        let result = radial_falloff(&d, w, h, None, 0.55);
+
+        assert!(result.pass, "convex face shading should pass: {result:?}");
     }
 
     #[test]

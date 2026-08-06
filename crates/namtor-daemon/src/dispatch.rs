@@ -15,7 +15,7 @@ use crate::daemon::Daemon;
 use crate::lifecycle::Clock;
 use crate::listener::LifecycleDispatch;
 use crate::supervisor::WorkerSupervisor;
-use crate::verify::{VerifyEngine, VerifyOutcome};
+use crate::verify::{external_reason, VerifyEngine, VerifyOutcome};
 use crate::DaemonError;
 
 const VERIFY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -67,11 +67,23 @@ impl<S: WorkerSupervisor + Send, C: Clock + Send> LifecycleDispatch for DaemonDi
                 } else {
                     VerifyOutcome::unavailable("no capture source")
                 };
+                // Spec §8.3: the journal records the true reason at debug
+                // level (gate name + scalar — not biometric data); the
+                // AuthReply sent to PAM carries only the generic external
+                // reason so a PAD veto is indistinguishable from NoMatch.
+                tracing::debug!(
+                    target: "namtor::journal",
+                    target_uid = body.target_uid,
+                    verdict = ?outcome.verdict,
+                    score = outcome.score,
+                    internal_reason = outcome.reason.as_deref().unwrap_or(""),
+                    "verify outcome"
+                );
                 Ok(AuthReply {
                     nonce: body.nonce,
                     verdict: outcome.verdict,
                     score: outcome.score,
-                    reason: outcome.reason,
+                    reason: external_reason(&outcome),
                 })
             }
             AuthPhase::Release => {

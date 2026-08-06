@@ -137,7 +137,7 @@ pub fn authenticate(cfg: &AuthConfig) -> Result<AuthReply, ClientError> {
     let ver_val = decode(&mut stream)?;
     let verify_reply: AuthReply =
         serde_json::from_value(ver_val).map_err(|_| ClientError::BadHello)?;
-    classify(&verify_reply, &nonce)?;
+    let verdict = classify(&verify_reply, &nonce);
 
     // 4. Release phase (best-effort; ignore errors here).
     let release = AuthRequest::Auth(AuthBody {
@@ -151,6 +151,7 @@ pub fn authenticate(cfg: &AuthConfig) -> Result<AuthReply, ClientError> {
     let _ = stream.flush();
     // Don't wait for the release reply — the verdict is already in hand.
 
+    verdict?;
     Ok(verify_reply)
 }
 
@@ -182,6 +183,7 @@ mod tests {
     use super::*;
     use namtor_proto::pam::{AuthRequest, HelloMsg};
     use std::os::unix::net::UnixListener;
+    use std::sync::mpsc;
 
     /// A tiny in-process daemon that speaks the protocol and returns a fixed verdict.
     fn mock_daemon(path: &Path, verdict: Verdict) -> std::thread::JoinHandle<std::io::Result<()>> {
@@ -212,6 +214,62 @@ mod tests {
             }
             Ok(())
         })
+    }
+
+    /// In-process daemon that records each received phase on `phase_tx` and
+    /// replies with `verdict`, breaking after Release so the client can
+    /// observe all three phases (Prepare → Verify → Release).
+    fn mock_daemon_recording(
+        listener: UnixListener,
+        verdict: Verdict,
+        phase_tx: mpsc::Sender<AuthPhase>,
+    ) -> std::thread::JoinHandle<std::io::Result<()>> {
+        std::thread::spawn(move || -> std::io::Result<()> {
+            let (mut conn, _) = listener.accept()?;
+            let hello = HelloMsg {
+                server_version: 1,
+                nonce: [0xaa; 16],
+            };
+            encode(&hello, &mut conn).map_err(|e| std::io::Error::other(e.to_string()))?;
+            while let Ok(val) = decode(&mut conn) {
+                let req: AuthRequest = serde_json::from_value(val)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                let AuthRequest::Auth(body) = req else {
+                    continue;
+                };
+                phase_tx
+                    .send(body.phase)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                let reply = AuthReply {
+                    nonce: body.nonce,
+                    verdict,
+                    score: 0.0,
+                    reason: None,
+                };
+                encode(&reply, &mut conn).map_err(|e| std::io::Error::other(e.to_string()))?;
+                if body.phase == AuthPhase::Release {
+                    break;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Assert the client drives Prepare → Verify → Release for `verdict`,
+    /// regardless of whether the verdict is a success or an error variant.
+    fn assert_full_lifecycle(verdict: Verdict) {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("auth.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let (phase_tx, phase_rx) = mpsc::channel();
+        let h = mock_daemon_recording(listener, verdict, phase_tx);
+        let cfg = make_cfg(&sock);
+        let _ = authenticate(&cfg);
+        assert_eq!(phase_rx.recv().unwrap(), AuthPhase::Prepare);
+        assert_eq!(phase_rx.recv().unwrap(), AuthPhase::Verify);
+        assert_eq!(phase_rx.recv().unwrap(), AuthPhase::Release);
+        drop(dir);
+        let _ = h.join();
     }
 
     fn make_cfg(path: &Path) -> AuthConfig {
@@ -251,10 +309,15 @@ mod tests {
     fn authenticate_unavailable_is_error() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("auth.sock");
-        let h = mock_daemon(&sock, Verdict::Unavailable);
+        let listener = UnixListener::bind(&sock).unwrap();
+        let (phase_tx, phase_rx) = mpsc::channel();
+        let h = mock_daemon_recording(listener, Verdict::Unavailable, phase_tx);
         let cfg = make_cfg(&sock);
         let err = authenticate(&cfg).unwrap_err();
         assert!(matches!(err, ClientError::Unavailable));
+        assert_eq!(phase_rx.recv().unwrap(), AuthPhase::Prepare);
+        assert_eq!(phase_rx.recv().unwrap(), AuthPhase::Verify);
+        assert_eq!(phase_rx.recv().unwrap(), AuthPhase::Release);
         drop(dir);
         let _ = h.join();
     }
@@ -281,6 +344,17 @@ mod tests {
         assert!(matches!(err, ClientError::RateLimited));
         drop(dir);
         let _ = h.join();
+    }
+
+    #[test]
+    fn release_phase_sent_for_every_verdict_variant() {
+        // The Release phase must be sent before the verdict is returned to
+        // the caller, for every verdict — including the success variants.
+        assert_full_lifecycle(Verdict::Match);
+        assert_full_lifecycle(Verdict::NoMatch);
+        assert_full_lifecycle(Verdict::Unavailable);
+        assert_full_lifecycle(Verdict::RateLimited);
+        assert_full_lifecycle(Verdict::Refused);
     }
 
     #[test]

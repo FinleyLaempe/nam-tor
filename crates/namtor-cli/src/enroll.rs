@@ -169,6 +169,23 @@ pub fn run_enroll(
 
     match store.update(&record) {
         Ok(()) => {
+            if nix::unistd::geteuid().is_root() {
+                let uid = nix::unistd::User::from_name("namtor")
+                    .ok()
+                    .flatten()
+                    .map(|user| user.uid);
+                let gid = nix::unistd::Group::from_name("namtor")
+                    .ok()
+                    .flatten()
+                    .map(|group| group.gid);
+                if let (Some(owner), Some(group)) = (uid, gid) {
+                    let path = templates_dir.join(format!("{}.sealed", record.meta.uid));
+                    if let Err(e) = nix::unistd::chown(&path, Some(owner), Some(group)) {
+                        eprintln!("store ownership failed: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
             eprintln!("enrolled {username} (uid={uid}): {num_templates} templates stored");
             ExitCode::SUCCESS
         }

@@ -1480,6 +1480,7 @@ dependencies = [
  "namtor-proto",
  "namtor-recog",
  "namtor-store",
+ "namtor-uvc",
  "namtor-worker",
  "nix",
  "rand 0.8.7",
