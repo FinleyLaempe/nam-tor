@@ -4,6 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Real TPM2 backend via the tpm2-tools CLI. Off by default so the default
+# build does not require tpm2-tools at runtime; CI enables it for the
+# hardware-gated TPM tests (NAMTOR_HW_TEST=1).
+tpm2 = []
+
 [dependencies]
 namtor-proto = { path = "../namtor-proto" }
 serde = { workspace = true }
@@ -12,6 +18,7 @@ thiserror = { workspace = true }
 rand = "0.8"
 aes-gcm = "0.10"
 sha2 = "0.10"
+hmac = "0.12"
 zeroize = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
