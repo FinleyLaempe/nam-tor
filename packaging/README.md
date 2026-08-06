@@ -15,6 +15,10 @@ the versioned install + model provenance manifests.
 | `sysusers.d/namtor.conf` | Creates user `namtor` + group `namtor-auth`, adds `namtor` to `video`/`tss` |
 | `tmpfiles.d/namtor.conf` | Creates `/var/lib/namtor` (model store) and `/run/namtor` (socket dir) |
 | `uninstall.sh` | Reverses an install (removes every file the manifest declares). |
+| `pam-preflight.sh` | Pre-install checks: root, target PAM file, pam_namtor.so built, daemon socket, namtor-auth group, DM user membership. Exits non-zero with a specific message if any FATAL check fails, BEFORE any PAM file is touched. |
+| `pam-install.sh` | Transactional PAM integration installer. Inserts a marked `# namtor-begin`/`# namtor-end` block into the target PAM file. Never destructively edits stock lines. Backs up + checksums before editing; rolls back on any failure. Refuses unsafe ordering. |
+| `pam-uninstall.sh` | Transactional PAM removal. Removes only the marked block; optionally restores from backup; verifies password login intact after removal. |
+| `tests/test_pam_install.sh` | Test matrix for the PAM install/uninstall scripts. Runs without root using DESTDIR temp roots. 37 assertions across 8 scenarios. |
 
 The setuid helper binary is `namtor-worker-spawn` (built from
 `crates/namtor-worker/src/bin/namtor-worker-spawn.rs`).
@@ -157,3 +161,114 @@ The comparison (paths, modes, content sha256) is recorded in
   authentication (`PAM_RHOST` set) is always refused (spec §8.2).
 - The model manifest gate is fail-closed: a tampered, unaccepted, or
   restricted model blocks daemon startup rather than degrading silently.
+
+## Transactional PAM integration
+
+The PAM stack is the single most safety-critical integration surface: a bad
+edit can lock the user out of their own machine. `pam-install.sh`,
+`pam-uninstall.sh`, and `pam-preflight.sh` implement a transactional install
+protocol with backup, rollback, and refusal of unsafe ordering. The full
+test matrix and evidence is in
+[`docs/evidence/pam-install-matrix.md`](../docs/evidence/pam-install-matrix.md).
+
+### Safety guarantees
+
+1. **Never destructively edit stock PAM files.** The installer inserts a
+   marked block (`# namtor-begin` ... `# namtor-end`) containing
+   `auth sufficient pam_namtor.so`. Stock lines are never deleted or
+   reordered. The uninstaller removes only the marked block.
+2. **Password preservation.** After install, the PAM file must still have a
+   password-fallback auth line (pam_unix / pam_systemd_home / common-auth /
+   system-auth / password-auth) BELOW the namtor block. The installer
+   verifies this and refuses if the fallback would be lost. If
+   `pam_namtor.so` returns `PAM_AUTHINFO_UNAVAIL` (daemon down, timeout,
+   any error), the `sufficient` control means "this module is unavailable,
+   fall through" — and password auth proceeds.
+3. **Backup/rollback.** Before any edit, the target PAM file is backed up
+   to `<file>.namtor.bak` with a sha256 checksum. If any step after the
+   backup fails, the backup is restored. The checksum guards against a
+   tampered backup being trusted for restore.
+4. **Upgrade migration.** Re-running the installer on an already-installed
+   system removes the old block and inserts the new one in place. The
+   original backup is preserved (not overwritten) so the pre-namtor state
+   is always recoverable. The result is byte-identical to the first install.
+5. **Uninstall restoration.** The uninstaller removes only the marked block
+   and verifies password login is intact. With `--restore-backup` it
+   restores the file from the checksum-verified backup. With
+   `--purge-backup` it cleans up the backup files after a successful
+   removal.
+6. **Unsafe ordering refused.** The installer refuses:
+   - `auth required` / `auth requisite` / `auth [default=bad]` /
+     `auth [default=die]` control fields — a daemon outage with `required`
+     would lock users out (spec §8.3). Only `sufficient` or
+     `[default=ignore]` are accepted.
+   - Insertion after `pam_deny.so` — the block would be unreachable.
+   - `pam_deny.so` between the block and the password fallback — the
+     fall-through would hit `deny` before password.
+
+### Preflight checks
+
+`pam-preflight.sh` runs BEFORE any PAM file is touched. FATAL checks (exit
+non-zero): not root (unless `DESTDIR` is set for testing), target PAM file
+missing, `pam_namtor.so` not built/installed, no password-fallback auth line
+in the target. SOFT checks (warn only): daemon socket not present, namtor-auth
+group not created, display-manager user not in namtor-auth — these may
+legitimately not hold yet during a first install.
+
+### Install
+
+```sh
+# 1. Build and install pam_namtor.so (see install-manifest.toml / stage.sh)
+cargo build --release -p namtor-pam
+sudo install -Dm755 target/release/libpam_namtor.so /usr/lib/security/pam_namtor.so
+
+# 2. Run preflight (optional — pam-install.sh runs it automatically)
+sudo ./packaging/pam-preflight.sh
+
+# 3. Install the PAM integration (default target: /etc/pam.d/gdm-password)
+sudo ./packaging/pam-install.sh
+
+# For a different target (e.g. Arch system-auth, Fedora password-auth):
+sudo ./packaging/pam-install.sh --target /etc/pam.d/system-auth
+```
+
+The installer inserts:
+```
+# namtor-begin
+auth sufficient pam_namtor.so
+# namtor-end
+```
+before the first `auth` line in the target file.
+
+### Uninstall
+
+```sh
+# Remove the marked block only (least destructive)
+sudo ./packaging/pam-uninstall.sh
+
+# Restore the original file from the checksum-verified backup
+sudo ./packaging/pam-uninstall.sh --restore-backup
+
+# Remove the block and purge the backup files
+sudo ./packaging/pam-uninstall.sh --purge-backup
+
+# Different target
+sudo ./packaging/pam-uninstall.sh --target /etc/pam.d/system-auth
+```
+
+### Testing without root
+
+All three scripts honour `DESTDIR` for testing against a fake root:
+
+```sh
+# Run the full test matrix (no root required)
+bash packaging/tests/test_pam_install.sh
+```
+
+The test script builds fake PAM files (Arch-style, Fedora-style, pathological
+deny-first, no-fallback) in `mktemp -d` roots, runs the installer/uninstaller
+with `DESTDIR`, and verifies the file tree. 37 assertions across 8 scenarios:
+install preserves fallback, uninstall restores original, broken module caught
+by preflight, daemon failure leaves PAM intact (stack shape + source-level
+fail-closed contract), upgrade idempotent, unsafe ordering refused, rollback
+restores backup.
