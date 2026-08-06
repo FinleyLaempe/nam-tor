@@ -13,6 +13,37 @@ pub enum SessionKind {
     CutoutMask,
 }
 
+/// Attack/device/environment metadata captured alongside a session
+/// (spec §10.4: labelled sessions with correct metadata). All fields that
+/// describe the *attack presentation* itself are optional for bonafide
+/// sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionMetadata {
+    /// Attack type, if any. `None` for bonafide; otherwise a short label
+    /// such as `"print"`, `"screen_replay"`, `"cutout_mask"`.
+    pub attack_type: Option<String>,
+    /// Camera device model the session was recorded with.
+    pub device_model: String,
+    /// Capture environment description, e.g. `"office"`, `"outdoor"`.
+    pub environment: String,
+    /// Ambient light level in lux, if measured.
+    pub ambient_light_lux: Option<f32>,
+    /// Distance from the face to the camera in centimetres, if measured.
+    pub distance_cm: Option<u32>,
+}
+
+impl Default for CollectionMetadata {
+    fn default() -> Self {
+        Self {
+            attack_type: None,
+            device_model: "sonix_3277_0018".into(),
+            environment: "unknown".into(),
+            ambient_light_lux: None,
+            distance_cm: None,
+        }
+    }
+}
+
 /// Per-session metadata (spec §10.4: per-session identifiers for withdrawal).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
@@ -22,6 +53,15 @@ pub struct SessionMeta {
     pub started_at_us: u64,
     pub device: String,
     pub ambient_notes: Option<String>,
+    /// Attack/device/environment metadata.
+    #[serde(default)]
+    pub metadata: CollectionMetadata,
+    /// When this session was withdrawn, if it has been. `None` while the
+    /// session is live. A withdrawn session is excluded from export and
+    /// retention manifests but is not physically deleted until
+    /// [`crate::store::CollectionStore::delete_session`] is called.
+    #[serde(default)]
+    pub withdrawn_at_us: Option<u64>,
 }
 
 /// Configuration for a collection session.
@@ -80,6 +120,8 @@ impl CaptureSession {
             started_at_us: self.started_at_us,
             device: self.config.device.clone(),
             ambient_notes: None,
+            metadata: CollectionMetadata::default(),
+            withdrawn_at_us: None,
         }
     }
 
@@ -113,6 +155,7 @@ mod tests {
         let meta = session.meta();
         assert_eq!(meta.contributor_id, "bob");
         assert_eq!(meta.kind, SessionKind::Print);
+        assert!(meta.withdrawn_at_us.is_none());
     }
 
     #[test]

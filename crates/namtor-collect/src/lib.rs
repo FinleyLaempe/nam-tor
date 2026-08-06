@@ -11,11 +11,28 @@
 //!   wherever they suffice; most PAD signal survives the reduction.
 //! - Per-session identifiers, so withdrawal and deletion are possible.
 //! - Contributor-facing documentation explains exactly what is stored and why.
+//!
+//! Productization (Task 20):
+//! - Consent carries a `purpose_version` and a `RetentionPolicy` (default
+//!   `LocalOnly`).
+//! - The product path stores **only** derived differential statistics — no
+//!   raw face images. Raw capture is a separately authorised research path
+//!   ([`research::ResearchCapture`], gated by `NAMTOR_RESEARCH_CAPTURE=1`).
+//! - Sessions can be withdrawn (soft delete) or deleted (hard delete), and
+//!   exported as a [`manifest::CollectionManifest`]. A
+//!   [`manifest::RetentionManifest`] aggregates the whole store.
 
 pub mod consent;
+pub mod manifest;
+pub mod research;
 pub mod session;
 pub mod store;
 
-pub use consent::{ConsentRecord, ConsentState};
-pub use session::{CaptureSession, SessionConfig, SessionKind, SessionMeta};
-pub use store::{CollectionStore, StoreError};
+pub use consent::{ConsentRecord, ConsentState, RetentionPolicy};
+pub use manifest::{
+    permits_derived_export, permits_raw_export, CollectionManifest, RetentionManifest,
+    SessionManifest,
+};
+pub use research::{raw_pair_count, ResearchCapture, RESEARCH_ENV_VAR};
+pub use session::{CaptureSession, CollectionMetadata, SessionConfig, SessionKind, SessionMeta};
+pub use store::{CollectionStore, DiffStats, StoreError};
