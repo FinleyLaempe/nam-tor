@@ -11,10 +11,10 @@ namtor-capture = { path = "../namtor-capture" }
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = "0.8"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-toml = "0.8"
 
 [[bin]]
 name = "namtor-probe"

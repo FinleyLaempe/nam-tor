@@ -7,4 +7,5 @@
 
 pub mod describe;
 pub mod emit;
+pub mod flywheel;
 pub mod probe;
