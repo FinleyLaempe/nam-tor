@@ -166,4 +166,20 @@ mod tests {
         assert_eq!(serde_json::from_value::<Demo>(v1).unwrap(), m1);
         assert_eq!(serde_json::from_value::<Demo>(v2).unwrap(), m2);
     }
+
+    /// A header announcing exactly MAX_PAYLOAD bytes with no payload following
+    /// is a truncated stream, not an oversized payload. Proves the boundary
+    /// check is `<` not `<=`, so MAX_PAYLOAD itself is an accepted size and
+    /// only the missing body is reported.
+    #[test]
+    fn max_payload_boundary_not_oversized() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&MAX_PAYLOAD.to_be_bytes());
+        let mut cursor = std::io::Cursor::new(&buf);
+        let err = decode(&mut cursor).unwrap_err();
+        match err {
+            ProtoError::Truncated { announced, .. } => assert_eq!(announced, MAX_PAYLOAD),
+            other => panic!("expected Truncated at MAX_PAYLOAD, got {other:?}"),
+        }
+    }
 }

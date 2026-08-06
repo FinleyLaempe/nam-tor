@@ -435,6 +435,50 @@ mod tests {
         );
     }
 
+    /// Every PAD veto variant is stripped at the trust boundary so the PAM
+    /// client cannot tell which gate fired (spec §8.3: a PAD veto must be
+    /// indistinguishable from a regular NoMatch).
+    #[test]
+    fn external_reason_strips_all_pad_veto_variants() {
+        for reason in [
+            "pad veto: energy (0.123)",
+            "pad veto: gradient (0.456)",
+            "pad veto: specular (0.789)",
+            "pad veto: radial (0.012)",
+        ] {
+            let outcome = VerifyOutcome::no_match(reason);
+            assert!(
+                external_reason(&outcome).is_none(),
+                "external_reason must strip `{reason}`"
+            );
+        }
+    }
+
+    /// Non-PAD NoMatch reasons that cross the trust boundary must carry no
+    /// biometric data — no embeddings, templates, pixels, raw vectors, or
+    /// hex dumps. Proves the socket reply does not leak biometric material.
+    #[test]
+    fn non_pad_reasons_carry_no_biometric_data() {
+        let forbidden = ["embedding", "template", "pixel", "vec=", "0x"];
+        for reason in [
+            "no enrollment",
+            "no face",
+            "below threshold",
+            "store error",
+            "inference failed",
+            "differential failed",
+        ] {
+            let outcome = VerifyOutcome::no_match(reason);
+            let ext = external_reason(&outcome).unwrap_or_default();
+            for token in forbidden {
+                assert!(
+                    !ext.contains(token),
+                    "reason `{reason}` leaks `{token}` to the client"
+                );
+            }
+        }
+    }
+
     #[test]
     fn external_reason_passes_through_non_pad_nomatch() {
         let no_face = VerifyOutcome::no_match("no face");

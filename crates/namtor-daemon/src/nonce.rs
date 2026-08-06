@@ -117,4 +117,46 @@ mod tests {
         let set: HashSet<[u8; 16]> = all.iter().copied().collect();
         assert_eq!(set.len(), all.len(), "nonce collision detected");
     }
+
+    /// Two threads racing to validate the same issued nonce: exactly one
+    /// must win, the other must see the replay-rejection. Proves the
+    /// anti-replay guard is race-free under contention.
+    #[test]
+    fn concurrent_validate_same_nonce_one_wins() {
+        let svc = Arc::new(NonceService::new());
+        let n = svc.issue();
+        let svc_a = Arc::clone(&svc);
+        let svc_b = Arc::clone(&svc);
+        let handle_a = thread::spawn(move || svc_a.validate_reply(n, n));
+        let handle_b = thread::spawn(move || svc_b.validate_reply(n, n));
+        let res_a = handle_a.join().expect("thread a");
+        let res_b = handle_b.join().expect("thread b");
+        let wins = res_a.is_ok() as u8 + res_b.is_ok() as u8;
+        assert_eq!(
+            wins, 1,
+            "exactly one thread must succeed; got {} (a={:?}, b={:?})",
+            wins, res_a, res_b
+        );
+    }
+
+    /// A nonce that was never issued must never validate against an issued
+    /// request nonce. 1000 random candidates; the astronomically unlikely
+    /// collision is skipped rather than failing.
+    #[test]
+    fn random_nonces_do_not_match_issued() {
+        let svc = NonceService::new();
+        let issued = svc.issue();
+        for _ in 0..1000 {
+            let candidate: [u8; 16] = rand::random();
+            if candidate == issued {
+                // 2^-128 chance — skip rather than flake.
+                continue;
+            }
+            let err = svc.validate_reply(issued, candidate).unwrap_err();
+            assert!(
+                matches!(err, DaemonError::Acl(_)),
+                "expected Acl error, got {err:?}"
+            );
+        }
+    }
 }

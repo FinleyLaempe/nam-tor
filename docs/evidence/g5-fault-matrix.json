@@ -1,0 +1,86 @@
+[
+  {
+    "fault": "worker cannot open files (landlock)",
+    "injected": "fork+apply_landlock+File::create",
+    "expected": "EPERM",
+    "test": "landlock_denies_open",
+    "status": "existing"
+  },
+  {
+    "fault": "worker cannot open sockets (seccomp blocks network)",
+    "injected": "fork+apply_seccomp+socket()",
+    "expected": "SIGSYS / EPERM",
+    "test": "seccomp_denies_socket",
+    "status": "existing"
+  },
+  {
+    "fault": "PAM_RHOST set causes auth refusal (anti-remote)",
+    "injected": "AuthBody{rhost:Some(..)} over socket",
+    "expected": "Verdict::Refused",
+    "test": "rhost_set_returns_refused",
+    "status": "existing"
+  },
+  {
+    "fault": "unauthorised uid connection is closed (SO_PEERCRED gate)",
+    "injected": "socketpair with non-root/non-auth-gid peer creds",
+    "expected": "connection closed, no auth dispatch",
+    "test": "unauthorised_uid_connection_closed",
+    "status": "existing"
+  },
+  {
+    "fault": "replayed nonce is rejected (anti-replay)",
+    "injected": "validate_reply(n,n) twice",
+    "expected": "Err(Acl) on second call",
+    "test": "replayed_nonce_fails",
+    "status": "existing"
+  },
+  {
+    "fault": "no biometric data in logs at any level",
+    "injected": "full verify cycle with capture frames",
+    "expected": "no embedding/template/pixel/vec= tokens in log output",
+    "test": "e2e_no_biometric_data_in_logs",
+    "status": "existing"
+  },
+  {
+    "fault": "tampered model weights are rejected (sha256 mismatch)",
+    "injected": "model file with altered bytes",
+    "expected": "fetch / manifest validation error",
+    "test": "fetch_rejects_tampered_sha256",
+    "status": "existing"
+  },
+  {
+    "fault": "concurrent nonce validation is race-free (exactly one wins)",
+    "injected": "two threads call validate_reply(n,n) on the same issued nonce",
+    "expected": "exactly one Ok, one Err(Acl replay)",
+    "test": "concurrent_validate_same_nonce_one_wins",
+    "status": "pass"
+  },
+  {
+    "fault": "random nonce cannot validate against an issued nonce (no forgery)",
+    "injected": "1000x random [u8;16] candidates against an issued nonce",
+    "expected": "all fail validation (mismatch), modulo 2^-128 skip",
+    "test": "random_nonces_do_not_match_issued",
+    "status": "pass"
+  },
+  {
+    "fault": "spoofed non-root/non-auth-gid peer creds are rejected; root bypass is gid-independent",
+    "injected": "PeerCreds{uid:1000,gid:999} and PeerCreds{uid:0,gid:999} with auth_gid=1000",
+    "expected": "non-root rejected, root accepted",
+    "test": "authorise_rejects_spoofed_non_root_non_auth_group",
+    "status": "pass"
+  },
+  {
+    "fault": "PAD veto detail never crosses the trust boundary (all four gates stripped)",
+    "injected": "VerifyOutcome::no_match for energy/gradient/specular/radial pad veto reasons",
+    "expected": "external_reason returns None for every variant",
+    "test": "external_reason_strips_all_pad_veto_variants",
+    "status": "pass"
+  },
+  {
+    "fault": "MAX_PAYLOAD header with no body is truncated, not oversized (off-by-one boundary)",
+    "injected": "4-byte BE header = MAX_PAYLOAD, no payload bytes",
+    "expected": "ProtoError::Truncated, not Oversized",
+    "test": "max_payload_boundary_not_oversized",
+    "status": "pass"
+  }
+]

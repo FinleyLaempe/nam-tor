@@ -106,6 +106,29 @@ mod tests {
         assert!(!authorise(&creds, 1000));
     }
 
+    /// A non-root uid whose gid does not match the auth group is rejected,
+    /// while root passes regardless of gid. Proves the ACL cannot be spoofed
+    /// by a peer that sets its gid to a non-auth value, and that root is the
+    /// only gid-independent bypass.
+    #[test]
+    fn authorise_rejects_spoofed_non_root_non_auth_group() {
+        let spoofed = PeerCreds {
+            pid: 1,
+            uid: 1000,
+            gid: 999,
+        };
+        assert!(
+            !authorise(&spoofed, 1000),
+            "non-root with non-auth gid must be rejected"
+        );
+        let root = PeerCreds {
+            pid: 1,
+            uid: 0,
+            gid: 999,
+        };
+        assert!(authorise(&root, 1000), "root must pass regardless of gid");
+    }
+
     #[test]
     fn resolve_gid_from_temp_group_file() {
         let tmp = tempfile::NamedTempFile::new().expect("tmpfile");
