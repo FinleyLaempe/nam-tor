@@ -1464,6 +1464,7 @@ dependencies = [
  "namtor-uvc",
  "nix",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]

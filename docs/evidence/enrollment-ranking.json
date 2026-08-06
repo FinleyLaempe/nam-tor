@@ -1,0 +1,134 @@
+{
+  "task": "15",
+  "feature": "unlimited rolling enrollment with bounded reservoir and review-then-commit",
+  "max_reservoir": 100,
+  "select_n": 8,
+  "holdout_fraction_pct": 10,
+  "metrics": {
+    "EnrollmentQuality": {
+      "label": "Enrollment Quality",
+      "range": "0-100",
+      "sub_metrics": [
+        "detection_confidence",
+        "landmark_quality",
+        "blur_metric",
+        "pose_angle_deg",
+        "illumination"
+      ],
+      "is_far_frr": false
+    },
+    "MatchConfidence": {
+      "label": "Match Confidence",
+      "range": "0-100",
+      "sub_metrics": [
+        "mean_similarity",
+        "min_similarity"
+      ],
+      "is_far_frr": false
+    }
+  },
+  "review_decisions": [
+    "Merge",
+    "Replace",
+    "Cancel"
+  ],
+  "zeroize": {
+    "on_finish": true,
+    "on_cancel": true,
+    "on_drop": true,
+    "targets": [
+      "raw_frame",
+      "embedding"
+    ]
+  },
+  "tests": [
+    {
+      "name": "session_start_progress_finish_lifecycle",
+      "asserts": "start->progress->finish transitions through Created->Capturing->Finished; first template is anchor",
+      "status": "pass"
+    },
+    {
+      "name": "start_twice_rejected",
+      "asserts": "calling start() twice returns an error",
+      "status": "pass"
+    },
+    {
+      "name": "progress_before_start_rejected",
+      "asserts": "progress() before start() returns an error",
+      "status": "pass"
+    },
+    {
+      "name": "finish_before_start_rejected",
+      "asserts": "finish() before start() returns an error",
+      "status": "pass"
+    },
+    {
+      "name": "finish_with_too_few_candidates_cancels",
+      "asserts": "finish() with <3 candidates cancels the session and returns an error",
+      "status": "pass"
+    },
+    {
+      "name": "bounded_reservoir_stays_within_limit_with_25k_frames",
+      "asserts": "reservoir never exceeds max (100) across 25000 frames; exactly 100 admitted, replacements occur",
+      "status": "pass"
+    },
+    {
+      "name": "diverse_gallery_not_just_top_score",
+      "asserts": "diversity-aware selector includes >=3 orthogonal embedding directions, not just top-score collinear ones",
+      "status": "pass"
+    },
+    {
+      "name": "cancel_writes_nothing_to_store",
+      "asserts": "cancel via review_then_commit writes no sealed file and leaves store empty",
+      "status": "pass"
+    },
+    {
+      "name": "cancel_direct_writes_nothing",
+      "asserts": "cancel() directly writes no sealed file and clears the reservoir",
+      "status": "pass"
+    },
+    {
+      "name": "finish_stores_templates_only_no_raw_frames",
+      "asserts": "stored profile contains embedding vectors only; no raw frame bytes are persisted",
+      "status": "pass"
+    },
+    {
+      "name": "metrics_labelled_correctly_not_far_frr",
+      "asserts": "EnrollmentQuality and MatchConfidence labels do not contain FAR or FRR",
+      "status": "pass"
+    },
+    {
+      "name": "match_confidence_high_for_identical_gallery",
+      "asserts": "identical held-out and gallery embeddings produce mean_similarity=1.0 and score=100",
+      "status": "pass"
+    },
+    {
+      "name": "match_confidence_zero_for_orthogonal_gallery",
+      "asserts": "orthogonal held-out vs gallery produces mean_similarity=0 and score=0",
+      "status": "pass"
+    },
+    {
+      "name": "merge_appends_to_existing_gallery",
+      "asserts": "Merge decision appends new templates to existing gallery; first entry stays anchor",
+      "status": "pass"
+    },
+    {
+      "name": "replace_overwrites_existing_gallery",
+      "asserts": "Replace decision discards existing gallery and keeps only new templates",
+      "status": "pass"
+    },
+    {
+      "name": "reservoir_replaces_lowest_quality_when_full",
+      "asserts": "full reservoir evicts lowest-score entry on admission of higher-score candidate; rejects below-floor candidates",
+      "status": "pass"
+    },
+    {
+      "name": "drop_zeroizes_raw_frames",
+      "asserts": "cancel() clears the reservoir, triggering zeroize on raw frames",
+      "status": "pass"
+    }
+  ],
+  "test_count": 17,
+  "status": "pass",
+  "date": "2026-08-06"
+}

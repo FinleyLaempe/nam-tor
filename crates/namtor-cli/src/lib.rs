@@ -6,6 +6,7 @@
 //! arrive in later milestones.
 
 pub mod enroll;
+pub mod enroll_session;
 pub mod list;
 pub mod status;
 pub mod verify;
