@@ -24,6 +24,8 @@ pub mod gradient;
 pub mod radial;
 pub mod specular;
 
+pub mod calibration;
+
 pub use energy::differential_energy;
 pub use gradient::gradient_consistency;
 pub use radial::radial_falloff;
