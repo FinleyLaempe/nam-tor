@@ -10,6 +10,7 @@ pub mod acl;
 pub mod backoff;
 pub mod daemon;
 pub mod dispatch;
+pub mod fusion;
 pub mod licence;
 pub mod lifecycle;
 pub mod listener;
