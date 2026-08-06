@@ -1,0 +1,126 @@
+{
+  "task": "Task 18 — temporal decision policy",
+  "commit_subject": "feat(daemon): add temporal decision policy",
+  "module": "crates/namtor-daemon/src/policy.rs",
+  "spec_refs": ["§3.4 (5s hard deadline)", "§6.4 (PAD is a veto)", "§6.6 (per-user z-norm thresholds)"],
+  "constants": {
+    "HARD_DEADLINE_MS": 5000,
+    "MAX_PAIRS": 5
+  },
+  "operating_points": {
+    "Balanced": {
+      "high_confidence_threshold": 0.62,
+      "max_pairs": 3
+    },
+    "Strict": {
+      "high_confidence_threshold": 0.78,
+      "max_pairs": 5
+    }
+  },
+  "invariants": [
+    "PAD is a veto — any pad_vetoed pair forces NoMatch regardless of accumulated match evidence",
+    "Temporal coherence — alternating identities (match,no-match,match) never resolve to Match",
+    "Hard 5s deadline — caller signals via timeout(); classified Timeout unless PAD already vetoed",
+    "Privacy-safe trace — DecisionTrace carries only scalar scores + booleans; no embeddings/frames/pixels"
+  ],
+  "tests": [
+    {
+      "name": "high_confidence_first_pair_exits_immediately",
+      "given": "Balanced policy, first pair score 0.70 is_match=true pad_vetoed=false",
+      "when": "add_pair",
+      "then": "DecisionOutcome::Match, pairs_seen=1",
+      "result": "pass"
+    },
+    {
+      "name": "ambiguous_first_pair_continues_to_second",
+      "given": "Balanced policy, first pair score 0.50 (below 0.62 high-confidence bar) is_match=true",
+      "when": "add_pair",
+      "then": "DecisionOutcome::Continue",
+      "result": "pass"
+    },
+    {
+      "name": "consistent_matches_across_pair_cap_resolve_to_match",
+      "given": "Balanced policy (max_pairs=3), three low-margin matches (0.50, 0.48, 0.52)",
+      "when": "add_pair x3",
+      "then": "Continue, Continue, Match at pair cap",
+      "result": "pass"
+    },
+    {
+      "name": "alternating_identities_never_match",
+      "given": "Balanced policy, sequence match/no-match/match (0.50, 0.30, 0.55)",
+      "when": "add_pair x3",
+      "then": "Continue, Continue, NoMatch (temporal coherence enforced)",
+      "result": "pass"
+    },
+    {
+      "name": "pad_veto_always_produces_no_match",
+      "given": "Balanced policy, first pair score 0.80 is_match=true pad_vetoed=true",
+      "when": "add_pair",
+      "then": "DecisionOutcome::NoMatch (PAD veto overrides high-confidence match)",
+      "result": "pass"
+    },
+    {
+      "name": "pad_veto_mid_sequence_forces_no_match",
+      "given": "Strict policy, second pair pad_vetoed=true after first continuing match",
+      "when": "add_pair x2",
+      "then": "Continue, NoMatch",
+      "result": "pass"
+    },
+    {
+      "name": "hard_deadline_enforced_as_timeout",
+      "given": "Empty accumulator, caller signals deadline",
+      "when": "timeout()",
+      "then": "DecisionOutcome::Timeout",
+      "result": "pass"
+    },
+    {
+      "name": "timeout_after_pad_veto_still_no_match",
+      "given": "PAD already vetoed on first pair",
+      "when": "timeout()",
+      "then": "DecisionOutcome::NoMatch (veto is terminal)",
+      "result": "pass"
+    },
+    {
+      "name": "strict_and_balanced_thresholds_differ",
+      "given": "DecisionPolicy::balanced() vs DecisionPolicy::strict()",
+      "when": "compare high_confidence_threshold and max_pairs",
+      "then": "Strict threshold 0.78 > Balanced 0.62; Strict max_pairs=5 > Balanced 3; both deadlines 5s",
+      "result": "pass"
+    },
+    {
+      "name": "consistent_non_matches_resolve_to_no_match",
+      "given": "Balanced policy, three non-matches (0.20, 0.18, 0.22)",
+      "when": "add_pair x3",
+      "then": "Continue, Continue, NoMatch at pair cap",
+      "result": "pass"
+    },
+    {
+      "name": "strict_does_not_early_exit_below_its_threshold",
+      "given": "Strict policy (threshold 0.78), first pair score 0.70 (≥Balanced but <Strict)",
+      "when": "add_pair",
+      "then": "DecisionOutcome::Continue",
+      "result": "pass"
+    },
+    {
+      "name": "trace_is_privacy_safe",
+      "given": "Two pairs accumulated, trace produced",
+      "when": "serialise DecisionTrace to JSON",
+      "then": "No biometric field names (embedding/frame/pixel/template/vector/0x) appear; only scalar score + is_match + pad_vetoed per pair",
+      "result": "pass"
+    },
+    {
+      "name": "operating_point_serialises_roundtrip",
+      "given": "OperatingPoint::Balanced and OperatingPoint::Strict",
+      "when": "serde_json::to_string then from_str",
+      "then": "Round-trip preserves the variant",
+      "result": "pass"
+    }
+  ],
+  "verification": {
+    "cargo_test": "cargo test -p namtor-daemon -- --skip concurrent_connections_serialise --test-threads=1 → 94 passed, 0 failed, 1 ignored (13 in policy::)",
+    "cargo_clippy": "cargo clippy -p namtor-daemon -- -D warnings → clean",
+    "cargo_fmt": "cargo fmt -p namtor-daemon -- --check → clean",
+    "policy_module_loc": 237
+  },
+  "status": "implemented — accumulator is a pure state machine; not yet wired into verify.rs (caller integration is a follow-up, same pattern as backoff.rs task 10)"
+}
