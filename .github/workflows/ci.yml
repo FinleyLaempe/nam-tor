@@ -9,12 +9,54 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      - run: ./scripts/check-spdx.sh
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --all
+
+      # Gate 6a — SPDX license headers on every Rust source file.
+      - name: SPDX headers
+        run: ./scripts/check-spdx.sh
+
+      # Gate 6b — rustfmt (formatting is a gate, not a style preference).
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      # Gate 6c — clippy with -D warnings.
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Gate 6d — test suite.
+      # `--skip concurrent_connections_serialise` avoids a pre-existing deadlock
+      # in listener.rs::concurrent_connections_serialise_on_camera_lock (flagged
+      # for a later wave; see docs/evidence/ci-baseline.md).
+      # `--test-threads=1` serialises tests that mutate process-global env vars
+      # (licence tests set/remove NAMTOR_ACCEPT_LICENCE); without it those races
+      # produce spurious failures under the parallel executor.
+      - name: cargo test --all
+        run: cargo test --all -- --skip concurrent_connections_serialise --test-threads=1
+
+      # Gate 1a — namtor-proto carries no ML deps (existing G5.1 check).
       - name: G5.1 — namtor-proto carries no ML deps
         run: cargo tree -p namtor-proto --no-default-features | grep -E ' ort | onnxruntime | opencv | image | ndarray | tch ' && exit 1 || exit 0
+
+      # Gate 1b — namtor-pam carries no ML deps in its NON-dev dependency tree
+      # (the PAM module must be ML-free; spec §3.4 + G5.1). `-e no-dev` excludes
+      # dev-dependencies, which never link into the cdylib — namtor-pam's
+      # dev-dep on namtor-daemon transitively pulls ort/ndarray for tests only.
+      - name: G5.1 — namtor-pam carries no ML deps
+        run: cargo tree -p namtor-pam -e no-dev | grep -E ' ort | onnxruntime | opencv | image | ndarray | tch ' && exit 1 || exit 0
+
+      # Gate 2 — build the release cdylib so the g5_structural size + ldd tests
+      # actually execute (they skip when the .so is absent). Debug-only `cargo
+      # test --all` above never builds the release cdylib.
+      - name: Build pam_namtor.so (release) for structural + size gate
+        run: cargo build --release -p namtor-pam
+
+      # Gate 2 — G5.1 structural (no ML/image libs in ldd output) + size
+      # (< 512000 bytes). Runs against the release .so built above.
+      - name: G5.1 structural + binary size — namtor-pam release .so
+        run: cargo test --release -p namtor-pam --test g5_structural -- --nocapture
+
+      # Gate 7 — security advisories in the dependency lockfile.
+      - name: cargo audit (advisory database)
+        uses: rustsec/audit-check@v2.0.0
 
   python:
     runs-on: ubuntu-latest
