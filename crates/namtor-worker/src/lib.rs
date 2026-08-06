@@ -15,6 +15,7 @@
 //!
 //! [`namtor-daemon`]: https://github.com/finley/nam-tor
 
+pub mod dispatch;
 pub mod infer;
 #[cfg(feature = "onnx")]
 pub mod infer_onnx;
