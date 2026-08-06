@@ -36,6 +36,15 @@ onnx = ["dep:ort"]
 # Use the deterministic MockBackend instead of OnnxCpu. CI and the M3 e2e
 # harness enable this so tests run with no ONNX Runtime and no model weights.
 mock-infer = []
+# Optional OpenVINO CPU backend evaluator (Task 31). OFF by default. Enabling
+# this flag ONLY makes the `BackendKind::OpenVino` variant available for
+# ablation reporting — it does NOT wire a real OpenVINO backend into the auth
+# path, change the default backend, or relax the sandbox. Promotion is still
+# gated by `run_ablation` on predeclared accuracy + latency + sandbox parity.
+openvino = []
+# Optional R100 (RidgeRun / custom CPU EP) backend evaluator (Task 31). Same
+# semantics as `openvino`: variant-only, OFF by default, no default change.
+r100 = []
 
 [[bin]]
 name = "namtor-worker"
