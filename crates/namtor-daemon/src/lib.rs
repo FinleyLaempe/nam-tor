@@ -18,6 +18,7 @@ pub mod nonce;
 pub mod policy;
 pub mod supervisor;
 pub mod verify;
+pub mod znorm;
 
 use thiserror::Error;
 
