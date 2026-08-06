@@ -307,7 +307,9 @@ mod tests {
         let ub = far_upper_bound_95(100_000);
         assert!(ub > 1e-5, "upper bound {ub} must exceed 1e-5 at 100k");
         // 100k comparisons are enough to *run* G3 but not to claim FAR ≤ 1e-5.
-        assert!(100_000 < FAR_CLAIM_MIN_N);
+        const _: () = if 100_000 >= FAR_CLAIM_MIN_N {
+            panic!("FAR_CLAIM_MIN_N must exceed 100k")
+        };
     }
 
     #[test]

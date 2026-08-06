@@ -19,6 +19,7 @@ pub mod dispatch;
 pub mod infer;
 #[cfg(feature = "onnx")]
 pub mod infer_onnx;
+pub mod learned_pad;
 pub mod pipe;
 pub mod sandbox;
 
