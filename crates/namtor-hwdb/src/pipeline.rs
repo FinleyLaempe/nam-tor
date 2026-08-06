@@ -41,6 +41,56 @@ pub struct Classification {
     pub dev_nodes: Vec<V4l2Node>,
 }
 
+/// The IR, optional metadata, and optional RGB V4L2 nodes extracted from a
+/// [`Classification`]'s `dev_nodes` by interface-number pairing.
+///
+/// Node numbering is allocation-order dependent; pairing by USB interface
+/// number is the stable, deterministic correlation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodePairing {
+    pub ir: V4l2Node,
+    pub metadata: Option<V4l2Node>,
+    pub rgb: Option<V4l2Node>,
+}
+
+impl Classification {
+    /// Pairs the IR streaming node, its metadata node (if the classification
+    /// reports one), and the RGB streaming node (if classified) from
+    /// `dev_nodes` by interface number.
+    ///
+    /// Returns `None` when no non-metadata node on `ir_interface` is found —
+    /// the device was classified but the correlated `/dev/videoN` nodes do not
+    /// include the IR streaming interface (a torn topology).
+    pub fn pair(&self) -> Option<NodePairing> {
+        let ir = self
+            .dev_nodes
+            .iter()
+            .find(|n| n.interface == self.ir_interface && !n.is_metadata)?;
+
+        let metadata = if self.metadata_node {
+            self.dev_nodes
+                .iter()
+                .find(|n| n.interface == self.ir_interface && n.is_metadata)
+                .cloned()
+        } else {
+            None
+        };
+
+        let rgb = self.rgb_interface.and_then(|rgb_if| {
+            self.dev_nodes
+                .iter()
+                .find(|n| n.interface == rgb_if && !n.is_metadata)
+                .cloned()
+        });
+
+        Some(NodePairing {
+            ir: ir.clone(),
+            metadata,
+            rgb,
+        })
+    }
+}
+
 /// Classifies a device by reading its raw descriptors from sysfs and applying
 /// the quirks → format-GUID → heuristic pipeline.
 pub fn classify(usb: &UsbDevice, db: &QuirksDb) -> Result<Classification, HwdbError> {
@@ -258,5 +308,107 @@ mod tests {
 
         let err = classify_with_set(&set, &usb, &db).unwrap_err();
         assert!(matches!(err, HwdbError::NotFound(_)));
+    }
+
+    fn mk_node(dev: &str, iface: u8, is_meta: bool) -> V4l2Node {
+        V4l2Node {
+            dev_path: std::path::PathBuf::from(dev),
+            interface: iface,
+            is_metadata: is_meta,
+            name: format!("node {dev}"),
+        }
+    }
+
+    fn classification_with_nodes(
+        ir_iface: u8,
+        rgb_iface: Option<u8>,
+        metadata: bool,
+        nodes: Vec<V4l2Node>,
+    ) -> Classification {
+        Classification {
+            ir_interface: ir_iface,
+            ir_format_guid: "00000032-0002-0010-8000-00aa00389b71".into(),
+            rgb_interface: rgb_iface,
+            metadata_node: metadata,
+            source: ClassSource::Quirks,
+            xu_units: vec![],
+            dev_nodes: nodes,
+        }
+    }
+
+    #[test]
+    fn pair_extracts_ir_metadata_and_rgb_for_reference_topology() {
+        let nodes = vec![
+            mk_node("/dev/video0", 1, false),
+            mk_node("/dev/video1", 1, true),
+            mk_node("/dev/video2", 3, false),
+            mk_node("/dev/video3", 3, true),
+        ];
+        let c = classification_with_nodes(3, Some(1), true, nodes);
+
+        let p = c.pair().expect("IR node must be found");
+        assert_eq!(p.ir.dev_path, std::path::PathBuf::from("/dev/video2"));
+        assert_eq!(p.ir.interface, 3);
+        assert!(!p.ir.is_metadata);
+        assert_eq!(
+            p.metadata.as_ref().unwrap().dev_path,
+            std::path::PathBuf::from("/dev/video3")
+        );
+        assert!(p.metadata.as_ref().unwrap().is_metadata);
+        assert_eq!(
+            p.rgb.as_ref().unwrap().dev_path,
+            std::path::PathBuf::from("/dev/video0")
+        );
+        assert!(!p.rgb.as_ref().unwrap().is_metadata);
+    }
+
+    #[test]
+    fn pair_works_with_renumbered_nodes() {
+        let nodes = vec![
+            mk_node("/dev/video4", 3, false),
+            mk_node("/dev/video5", 3, true),
+            mk_node("/dev/video6", 1, false),
+            mk_node("/dev/video7", 1, true),
+        ];
+        let c = classification_with_nodes(3, Some(1), true, nodes);
+
+        let p = c.pair().expect("IR node found by interface, not by index");
+        assert_eq!(p.ir.dev_path, std::path::PathBuf::from("/dev/video4"));
+        assert_eq!(
+            p.metadata.as_ref().unwrap().dev_path,
+            std::path::PathBuf::from("/dev/video5")
+        );
+        assert_eq!(
+            p.rgb.as_ref().unwrap().dev_path,
+            std::path::PathBuf::from("/dev/video6")
+        );
+    }
+
+    #[test]
+    fn pair_returns_none_when_ir_interface_missing_from_nodes() {
+        let nodes = vec![mk_node("/dev/video0", 1, false)];
+        let c = classification_with_nodes(3, None, false, nodes);
+        assert!(c.pair().is_none());
+    }
+
+    #[test]
+    fn pair_omits_metadata_when_classification_says_none() {
+        let nodes = vec![mk_node("/dev/video2", 3, false)];
+        let c = classification_with_nodes(3, None, false, nodes);
+        let p = c.pair().unwrap();
+        assert!(p.metadata.is_none());
+        assert!(p.rgb.is_none());
+    }
+
+    #[test]
+    fn pair_omits_rgb_when_not_classified() {
+        let nodes = vec![
+            mk_node("/dev/video2", 3, false),
+            mk_node("/dev/video3", 3, true),
+        ];
+        let c = classification_with_nodes(3, None, true, nodes);
+        let p = c.pair().unwrap();
+        assert!(p.rgb.is_none());
+        assert!(p.metadata.is_some());
     }
 }

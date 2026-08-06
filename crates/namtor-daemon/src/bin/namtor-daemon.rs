@@ -82,7 +82,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let capture_factory = if std::env::var("NAMTOR_NO_CAMERA").is_ok() {
         None
     } else {
-        Some(live_capture::factory())
+        let configured = std::env::var("NAMTOR_CAMERA_DEV").ok();
+        Some(live_capture::factory_with_configured(configured))
     };
 
     let daemon = Daemon::new(

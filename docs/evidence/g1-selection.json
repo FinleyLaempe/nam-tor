@@ -1,0 +1,119 @@
+{
+  "gate": "G1",
+  "title": "Automatic camera topology selection",
+  "spec_ref": "§4.10.4 — deterministic multi-camera selection; quirks→GUID→heuristic classification",
+  "commit": "feat(daemon): auto-select camera topology",
+  "date": "2026-08-06",
+  "status": "pass",
+  "summary": "The daemon no longer hardcodes /dev/videoN paths or VID:PID constants. Camera topology is auto-detected at runtime via sysfs USB enumeration, format-GUID classification, and interface-number node pairing. The existing select_camera preference order (configured → enrolled → internal → first IR) is reused through an injectable CameraInventory seam.",
+  "production_code_changes": {
+    "crates/namtor-hwdb/src/pipeline.rs": "Added NodePairing struct and Classification::pair() method — deterministic IR/metadata/RGB node pairing by USB interface number",
+    "crates/namtor-camera/src/inventory.rs": "New module: CameraInventory trait, DiscoveredCamera, SysfsInventory (production), FakeInventory (test), select_camera_from_inventory() — the inventory seam",
+    "crates/namtor-camera/src/lib.rs": "Added pub mod inventory",
+    "crates/namtor-daemon/src/bin/namtor-daemon/live_capture.rs": "Removed hardcoded /dev/video2, /dev/video3, and 3277:0018 constant. Factory now enumerates via CameraInventory, selects via select_camera_from_inventory, and opens the selected device. EmitterGuard stores EmitterCfg for restore-on-drop instead of reloading quirks by hardcoded VID:PID.",
+    "crates/namtor-daemon/src/bin/namtor-daemon.rs": "Added NAMTOR_CAMERA_DEV env var for admin-configured device path override"
+  },
+  "hardcoded_paths_removed": [
+    "/dev/video2 (was in live_capture.rs line 10)",
+    "/dev/video3 (was in live_capture.rs line 11)",
+    "3277:0018 (was in live_capture.rs lines 70, 80)"
+  ],
+  "test_cases": [
+    {
+      "name": "zero_config_reference_sonix_is_selected",
+      "crate": "namtor-camera",
+      "module": "inventory::tests",
+      "description": "Reference Sonix 3277:0018 discovered with IR/metadata/RGB nodes, no configured/enrolled path set — selected via Internal preference",
+      "result": "pass"
+    },
+    {
+      "name": "fake_renumber_selects_by_interface_not_hardcoded_path",
+      "crate": "namtor-camera",
+      "module": "inventory::tests",
+      "description": "Same camera appears at /dev/video4 instead of /dev/video2 (boot renumbering) — selected correctly because pairing is by interface number, not node index",
+      "result": "pass"
+    },
+    {
+      "name": "multi_camera_picks_internal_without_config",
+      "crate": "namtor-camera",
+      "module": "inventory::tests",
+      "description": "Two IR cameras present (one internal, one external) — internal selected via Internal preference",
+      "result": "pass"
+    },
+    {
+      "name": "multi_camera_configured_overrides_internal",
+      "crate": "namtor-camera",
+      "module": "inventory::tests",
+      "description": "Admin-configured device path overrides internal preference",
+      "result": "pass"
+    },
+    {
+      "name": "multi_camera_enrolled_overrides_internal",
+      "crate": "namtor-camera",
+      "module": "inventory::tests",
+      "description": "Enrolled device path overrides internal preference when no configured path is set",
+      "result": "pass"
+    },
+    {
+      "name": "multi_camera_no_internal_picks_lowest_index",
+      "crate": "namtor-camera",
+      "module": "inventory::tests",
+      "description": "Two external IR cameras, no configured/enrolled — lowest /dev/videoN index selected for determinism",
+      "result": "pass"
+    },
+    {
+      "name": "missing_device_returns_none_actionably",
+      "crate": "namtor-camera",
+      "module": "inventory::tests",
+      "description": "Empty inventory (no IR camera) — select returns None, factory returns DaemonError::Capture (not a panic)",
+      "result": "pass"
+    },
+    {
+      "name": "pair_extracts_ir_metadata_and_rgb_for_reference_topology",
+      "crate": "namtor-hwdb",
+      "module": "pipeline::tests",
+      "description": "Classification with 4 nodes (IR stream, IR metadata, RGB stream, RGB metadata) — pair() returns correct IR, metadata, and RGB nodes",
+      "result": "pass"
+    },
+    {
+      "name": "pair_works_with_renumbered_nodes",
+      "crate": "namtor-hwdb",
+      "module": "pipeline::tests",
+      "description": "Same topology but nodes at /dev/video4-7 instead of /dev/video0-3 — pair() finds them by interface number",
+      "result": "pass"
+    },
+    {
+      "name": "pair_returns_none_when_ir_interface_missing_from_nodes",
+      "crate": "namtor-hwdb",
+      "module": "pipeline::tests",
+      "description": "Classification reports IR interface 3 but dev_nodes only has interface 1 — pair() returns None (torn topology)",
+      "result": "pass"
+    },
+    {
+      "name": "pair_omits_metadata_when_classification_says_none",
+      "crate": "namtor-hwdb",
+      "module": "pipeline::tests",
+      "description": "metadata_node=false in classification — pair() returns metadata=None even if a metadata-flagged node exists",
+      "result": "pass"
+    },
+    {
+      "name": "pair_omits_rgb_when_not_classified",
+      "crate": "namtor-hwdb",
+      "module": "pipeline::tests",
+      "description": "rgb_interface=None in classification — pair() returns rgb=None",
+      "result": "pass"
+    }
+  ],
+  "test_results": {
+    "namtor-hwdb": "27 passed, 0 failed, 0 ignored (5 new pair tests)",
+    "namtor-camera": "49 passed, 0 failed, 0 ignored (11 new inventory tests)",
+    "namtor-daemon": "64 passed, 0 failed, 1 ignored (HW-gated r4_int8_vs_fp32); 9 e2e passed, 0 failed",
+    "clippy": "cargo clippy --workspace --all-targets -- -D warnings: clean (one redundant-closure fix applied to live_capture.rs:24)",
+    "fmt": "cargo fmt --all -- --check: clean",
+    "test_command": "cargo test -p namtor-camera -p namtor-hwdb -p namtor-daemon -- --skip concurrent_connections_serialise --test-threads=1"
+  },
+  "grep_verification": {
+    "production_code_hardcoded_dev_video": "none found in live_capture.rs, namtor-daemon.rs, or inventory.rs production code",
+    "production_code_hardcoded_vid_pid": "no 3277:0018 constant in namtor-daemon/src/ or namtor-camera/src/inventory.rs"
+  }
+}
