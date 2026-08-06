@@ -692,7 +692,6 @@ fn bundle_readme() -> String {
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn scanner() -> PrivacyScanner {
@@ -834,7 +833,7 @@ mod tests {
     #[test]
     fn doctor_flags_missing_model_as_e004_error() {
         let tmp = TempDir::new().unwrap();
-        let mut cfg = full_ok_config(tmp.path());
+        let cfg = full_ok_config(tmp.path());
         fs::remove_file(cfg.models_dir.join("yunet_2023mar.onnx")).unwrap();
         let report = run_doctor(&cfg);
         assert!(report.model.is_error());

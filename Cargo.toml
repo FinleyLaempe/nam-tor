@@ -9,6 +9,7 @@ members = [
     "crates/namtor-eval",
     "crates/namtor-gnome",
     "crates/namtor-hwdb",
+    "crates/namtor-kde",
     "crates/namtor-pad",
     "crates/namtor-pam",
     "crates/namtor-probe",
