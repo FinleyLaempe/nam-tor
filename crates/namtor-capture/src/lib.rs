@@ -4,6 +4,7 @@
 //! Provides the [`CaptureSource`] trait implemented by every capture path,
 //! along with recording, replay, and synthetic session generation.
 
+pub mod depth;
 pub mod frame;
 pub mod recording;
 pub mod replay;
