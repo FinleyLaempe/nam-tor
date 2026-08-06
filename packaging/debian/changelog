@@ -1,0 +1,9 @@
+namtor (0.1.0-1) unstable; urgency=medium
+
+  * Initial Debian packaging.
+  * Daemon, worker, setuid spawn helper, CLI, PAM module, systemd units.
+  * Transactional PAM install/uninstall scripts under /usr/share/namtor.
+  * Models fetched at runtime per model-manifest.toml after licence
+    acceptance (NAMTOR_ACCEPT_LICENCE=1).
+
+ -- Nam-tor Project <namtor@example.invalid>  Thu, 06 Aug 2026 00:00:00 +0000

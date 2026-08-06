@@ -1,0 +1,30 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
+# namtor.prerm — Debian pre-removal hook (debhelper compat 13).
+#
+# Stops the daemon and removes the transactional PAM integration (restoring
+# the checksum-verified backup) before the binaries go away.
+
+set -e
+
+case "$1" in
+    remove)
+        if [ -x /usr/share/namtor/pam-uninstall.sh ]; then
+            /usr/share/namtor/pam-uninstall.sh --restore-backup || true
+        fi
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl --no-reload disable --now namtor-daemon.socket \
+                namtor-daemon.service 2>/dev/null || true
+        fi
+        ;;
+    deconfigure|upgrade|failed-upgrade)
+        ;;
+    *)
+        echo "namtor.prerm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

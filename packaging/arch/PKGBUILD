@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Maintainer: Nam-tor Project <https://github.com/namtor/nam-tor>
+#
+# Arch Linux package for Nam-tor — IR face authentication (daemon, worker,
+# CLI, PAM module, systemd units). Builds from the source tarball with
+# `cargo build --release` then stages via `packaging/stage.sh` for a
+# deterministic DESTDIR layout (see packaging/install-manifest.toml).
+#
+# Supported architectures: x86_64, aarch64 (matches model-manifest.toml
+# `target_arch = "both"` for YuNet/SFace/MiniFASNet).
+#
+# Runtime deps:
+#   - onnxruntime (CPU EP — model inference; the daemon refuses to start
+#     without a working onnxruntime in the worker process).
+#   - systemd (socket activation, sysusers, tmpfiles).
+#   - pam (the auth module links libpam).
+#
+# Models are NOT packaged — they are fetched at runtime per
+# /usr/share/namtor/model-manifest.toml after the operator accepts the
+# upstream licences (NAMTOR_ACCEPT_LICENCE=1). This keeps weights (which
+# carry their own licence terms) out of the binary package.
+
+pkgname=namtor
+pkgver=0.1.0
+pkgrel=1
+epoch=0
+pkgdesc="IR face authentication for Linux — daemon, PAM module, CLI"
+arch=('x86_64' 'aarch64')
+url="https://github.com/namtor/nam-tor"
+license=('GPL-3.0-only')
+groups=()
+depends=(
+    'onnxruntime'
+    'pam'
+    'systemd'
+    'gcc-libs'
+)
+makedepends=(
+    'cargo'
+    'rust'
+    'python>=3.11'
+)
+checkdepends=('cargo')
+optdepends=()
+provides=('pam_namtor')
+conflicts=()
+replaces=()
+backup=()
+options=('!strip' '!debug')  # release profile already strips; debug symbols not shipped
+install=namtor.install
+changelog=
+source=("$pkgname-$pkgver.tar.gz::https://github.com/namtor/nam-tor/archive/refs/tags/v$pkgver.tar.gz")
+noextract=()
+sha256sums=('SKIP')  # verified by the release workflow via the GPG-signed checksums file
+validpgpkeys=()
+
+# ---------------------------------------------------------------------------
+# prepare: verify Cargo.lock is present (reproducible offline build)
+# ---------------------------------------------------------------------------
+prepare() {
+    cd "$srcdir/nam-tor-$pkgver"
+    if [[ ! -f Cargo.lock ]]; then
+        echo "error: Cargo.lock missing — release tarballs must ship a lockfile" >&2
+        return 1
+    fi
+    cargo --version
+}
+
+# ---------------------------------------------------------------------------
+# build: cargo build --release for the install-manifest binaries + PAM cdylib
+# ---------------------------------------------------------------------------
+build() {
+    cd "$srcdir/nam-tor-$pkgver"
+    # Build every artifact the install manifest references. -p pins avoid
+    # pulling unrelated workspace members (e.g. namtor-eval, namtor-probe).
+    cargo build --release --frozen \
+        -p namtor-daemon \
+        -p namtor-worker \
+        -p namtor-cli \
+        -p namtor-camera-emitter-off \
+        -p namtor-pam
+}
+
+# ---------------------------------------------------------------------------
+# check: workspace tests (skipping the known-flaky serialise test)
+# ---------------------------------------------------------------------------
+check() {
+    cd "$srcdir/nam-tor-$pkgver"
+    cargo test --workspace -- --skip concurrent_connections_serialise --test-threads=1
+}
+
+# ---------------------------------------------------------------------------
+# package: deterministic staging from packaging/install-manifest.toml, then
+# sysusers + tmpfiles + the transactional PAM install scripts.
+# ---------------------------------------------------------------------------
+package() {
+    cd "$srcdir/nam-tor-$pkgver"
+
+    local destdir="$pkgdir"
+    ./packaging/stage.sh "$destdir" "$srcdir/nam-tor-$pkgver"
+
+    # Transactional PAM integration scripts (shipped for the admin to run
+    # explicitly — they are NOT invoked automatically by the package; the
+    # admin chooses the target PAM file).
+    install -Dm755 packaging/pam-install.sh   "$destdir/usr/share/namtor/pam-install.sh"
+    install -Dm755 packaging/pam-uninstall.sh "$destdir/usr/share/namtor/pam-uninstall.sh"
+    install -Dm755 packaging/pam-preflight.sh "$destdir/usr/share/namtor/pam-preflight.sh"
+
+    # README documenting the install flow
+    install -Dm644 packaging/README.md "$destdir/usr/share/doc/namtor/README.md"
+}

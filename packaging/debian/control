@@ -1,0 +1,38 @@
+SPDX-License-Identifier: GPL-3.0-only
+Source: namtor
+Section: admin
+Priority: optional
+Maintainer: Nam-tor Project <namtor@example.invalid>
+Build-Depends:
+    debhelper-compat (= 13),
+    cargo,
+    rustc,
+    python3 (>= 3.11),
+    dh-cargo,
+    libpam0g-dev,
+Standards-Version: 4.7.0
+Homepage: https://github.com/namtor/nam-tor
+Rules-Requires-Root: binary-targets
+Vcs-Git: https://github.com/namtor/nam-tor.git
+Vcs-Browser: https://github.com/namtor/nam-tor
+
+Package: namtor
+Architecture: amd64 arm64
+Depends:
+    ${misc:Depends},
+    ${shlibs:Depends},
+    onnxruntime,
+    libpam0g,
+    systemd,
+Multi-Arch: same
+Description: IR face authentication for Linux — daemon, PAM module, CLI
+ Nam-tor replaces Howdy, targeting Windows Hello parity on speed and
+ accuracy while fixing the architectural problems that produced Howdy's
+ authentication-bypass CVEs. Four processes across three trust levels:
+ daemon (namtor user), setuid worker-spawn, sandboxed inference worker
+ (nobody, seccomp+landlock), and a PAM module with no ML code that fails
+ closed on every path.
+ .
+ This package provides the daemon, worker, setuid spawn helper, CLI,
+ PAM module, systemd units, and transactional PAM install scripts.
+ Models are fetched at runtime after licence acceptance.

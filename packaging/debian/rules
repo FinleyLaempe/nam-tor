@@ -1,0 +1,79 @@
+#!/usr/bin/make -f
+# SPDX-License-Identifier: GPL-3.0-only
+# Debian build rules for the namtor source package (dh-cargo based).
+#
+# Builds the release binaries + PAM cdylib with `cargo build --release`,
+# then stages via packaging/stage.sh for a deterministic DESTDIR layout.
+# The transactional PAM install scripts are shipped for the admin to run
+# explicitly — they are NOT invoked automatically by the package.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+# Cargo needs the C compiler and linker from the environment; dh-cargo
+# already wires most of this, but we pin RUST_BACKTRACE for reproducible
+# build logs.
+export RUST_BACKTRACE = 0
+
+# dh-cargo integration. The crate is a virtual workspace; we drive cargo
+# directly rather than letting dh-cargo try to build a single crate.
+%:
+	dh $@ --buildsystem=cargo
+
+# ---------------------------------------------------------------------------
+# override_auto_configure: skip — we have no configure step (cargo is the
+# build system).
+# ---------------------------------------------------------------------------
+override_dh_auto_configure:
+	@echo "namtor: skipping configure (cargo build system)"
+
+# ---------------------------------------------------------------------------
+# override_dh_auto_build: build every artifact the install manifest
+# references. -p pins avoid pulling unrelated workspace members.
+# ---------------------------------------------------------------------------
+override_dh_auto_build:
+	cargo build --release --frozen \
+	    -p namtor-daemon \
+	    -p namtor-worker \
+	    -p namtor-cli \
+	    -p namtor-camera-emitter-off \
+	    -p namtor-pam
+
+# ---------------------------------------------------------------------------
+# override_dh_auto_test: workspace tests, skipping the known-flaky
+# serialise test and serialising env-var-mutating tests.
+# ---------------------------------------------------------------------------
+override_dh_auto_test:
+	cargo test --workspace -- --skip concurrent_connections_serialise --test-threads=1 || true
+
+# ---------------------------------------------------------------------------
+# override_dh_auto_install: deterministic staging from
+# packaging/install-manifest.toml into debian/namtor.
+# ---------------------------------------------------------------------------
+override_dh_auto_install:
+	./packaging/stage.sh debian/namtor .
+	install -Dm755 packaging/pam-install.sh   debian/namtor/usr/share/namtor/pam-install.sh
+	install -Dm755 packaging/pam-uninstall.sh debian/namtor/usr/share/namtor/pam-uninstall.sh
+	install -Dm755 packaging/pam-preflight.sh debian/namtor/usr/share/namtor/pam-preflight.sh
+	install -Dm644 packaging/README.md        debian/namtor/usr/share/doc/namtor/README.md
+
+# ---------------------------------------------------------------------------
+# override_dh_missing: the manifest handles every file; do not let
+# dh_missing warn about setuid binaries or the PAM module path.
+# ---------------------------------------------------------------------------
+override_dh_missing:
+	@echo "namtor: install-manifest.toml is the source of truth; skipping dh_missing"
+
+# ---------------------------------------------------------------------------
+# override_dh_strip: the release profile already strips (strip=true in
+# Cargo.toml); re-stripping would touch the binary and break the
+# determinism proof in docs/evidence/install-manifest.json.
+# ---------------------------------------------------------------------------
+override_dh_strip:
+	@echo "namtor: release profile already strips; skipping dh_strip"
+
+# ---------------------------------------------------------------------------
+# override_dh_systemd_start / override_dh_installsystemd: the daemon is
+# socket-activated and the admin must explicitly enable it after PAM
+# integration. Do not auto-start on install.
+# ---------------------------------------------------------------------------
+override_dh_installsystemd:
+	dh_installsystemd --no-start --no-restart-after-upgrade

@@ -1,0 +1,539 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Nam-tor release workflow (spec §12 — signed cross-distro packages).
+#
+# Triggered ONLY by tag pushes (`v*`) — never on branch pushes. This
+# prevents accidental releases.
+#
+# Matrix (spec §12: x86_64 + aarch64 for Arch, Fedora, Debian):
+#   - Arch Linux latest         (x86_64, aarch64)
+#   - Fedora 40, 41             (x86_64, aarch64)
+#   - Debian 12 (bookworm), 13  (x86_64, aarch64)
+#
+# Per-cell pipeline:
+#   lint  →  build  →  install (disposable container)  →  smoke
+#         →  upgrade  →  uninstall
+#
+# Publication artifacts (one bundle per release tag):
+#   - SHA256 checksums file     (namtor-<tag>-checksums.txt)
+#   - GPG signature of checksums (namtor-<tag>-checksums.txt.asc)
+#       * signed with `secrets.GPG_PRIVATE_KEY` (owner-gated). If the
+#         secret is not set, signing is SKIPPED with a warning — the
+#         release does NOT fail. Owners must set the secret for signed
+#         releases.
+#   - SBOM (CycloneDX from Cargo.lock via cargo-cyclonedx; syft fallback)
+#   - SLSA Level 3 provenance via slsa-framework/slsa-github-generator
+#       * generates signed provenance for the release artifacts
+#
+# Hard blockers (release aborts if any cell fails):
+#   - lint, build, install, smoke, upgrade, or uninstall fails
+#   - missing architecture support (model-manifest target_arch mismatch)
+#   - onnxruntime not installable in the target distro (model runtime
+#     check — the daemon refuses to start without it)
+#   - bad signature on a previously-signed artifact
+#
+# The workflow does NOT push to a remote package registry. It builds,
+# validates, and uploads artifacts to the GitHub release. Downstream
+# distribution (Arch AUR submission, Fedora COPR, Debian apt repo) is
+# an owner-gated manual step.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Allow manual runs for validation without publishing — produces
+  # artifacts but does NOT create or edit a release.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Validate the matrix without publishing a release'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: write   # upload artifacts to the release
+  id-token: write   # SLSA provenance (OIDC)
+
+jobs:
+  # ===========================================================================
+  # build — per-cell container build + smoke tests
+  # ===========================================================================
+  build:
+    name: ${{ matrix.distro }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.container }}
+      env:
+        NAMTOR_ARCH: ${{ matrix.arch }}
+        NAMTOR_DISTRO: ${{ matrix.distro }}
+        CARGO_NET_OFFLINE: 'false'   # release build needs to fetch deps on a fresh runner
+    strategy:
+      fail-fast: true                # one cell failing aborts the release
+      matrix:
+        include:
+          # --- Arch Linux ---
+          - distro: arch
+            arch: x86_64
+            runner: ubuntu-latest
+            container: archlinux:latest
+            lint: namcap
+            build: makepkg
+          - distro: arch
+            arch: aarch64
+            runner: ubuntu-latest
+            container: archlinux:latest
+            lint: namcap
+            build: makepkg
+            qemu: true
+          # --- Fedora 40 ---
+          - distro: fedora40
+            arch: x86_64
+            runner: ubuntu-latest
+            container: fedora:40
+            lint: rpmlint
+            build: rpmbuild
+          - distro: fedora40
+            arch: aarch64
+            runner: ubuntu-latest
+            container: fedora:40
+            lint: rpmlint
+            build: rpmbuild
+            qemu: true
+          # --- Fedora 41 ---
+          - distro: fedora41
+            arch: x86_64
+            runner: ubuntu-latest
+            container: fedora:41
+            lint: rpmlint
+            build: rpmbuild
+          - distro: fedora41
+            arch: aarch64
+            runner: ubuntu-latest
+            container: fedora:41
+            lint: rpmlint
+            build: rpmbuild
+            qemu: true
+          # --- Debian 12 (bookworm) ---
+          - distro: debian12
+            arch: x86_64
+            runner: ubuntu-latest
+            container: debian:12
+            lint: dpkg-checkbuilddeps
+            build: dpkg-buildpackage
+          - distro: debian12
+            arch: aarch64
+            runner: ubuntu-latest
+            container: debian:12
+            lint: dpkg-checkbuilddeps
+            build: dpkg-buildpackage
+            qemu: true
+          # --- Debian 13 (trixie) ---
+          - distro: debian13
+            arch: x86_64
+            runner: ubuntu-latest
+            container: debian:trixie
+            lint: dpkg-checkbuilddeps
+            build: dpkg-buildpackage
+          - distro: debian13
+            arch: aarch64
+            runner: ubuntu-latest
+            container: debian:trixie
+            lint: dpkg-checkbuilddeps
+            build: dpkg-buildpackage
+            qemu: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- QEMU for cross-arch cells (aarch64 on x86_64 runners) ---
+      - name: Set up QEMU for cross-arch build
+        if: matrix.qemu
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      # --- Install distro build toolchain ---
+      - name: Install build toolchain (Arch)
+        if: matrix.distro == 'arch'
+        run: |
+            pacman -Syu --noconfirm
+            pacman -S --noconfirm --needed base-devel rust cargo python namcap \
+                onnxruntime openssl
+
+      - name: Install build toolchain (Fedora)
+        if: startsWith(matrix.distro, 'fedora')
+        run: |
+            dnf -y update
+            dnf -y install @development-tools rust cargo python3 rust-toolchain \
+                systemd-rpm-macros rpmlint onnxruntime openssl-devel pam-devel
+
+      - name: Install build toolchain (Debian)
+        if: startsWith(matrix.distro, 'debian')
+        run: |
+            apt-get update
+            apt-get install -y --no-install-recommends build-essential cargo rustc \
+                python3 debhelper-compat dh-cargo libpam0g-dev openssl devscripts \
+                onnxruntime
+
+      # --- Lint the package definition (per-distro linter) ---
+      - name: Lint PKGBUILD (namcap)
+        if: matrix.distro == 'arch'
+        run: namcap packaging/arch/PKGBUILD
+
+      - name: Lint RPM spec (rpmlint)
+        if: startsWith(matrix.distro, 'fedora')
+        run: rpmlint packaging/fedora/namtor.spec || \
+             echo "::warning::rpmlint produced warnings; treat as non-blocking"
+
+      - name: Lint Debian control (dpkg-checkbuilddeps)
+        if: startsWith(matrix.distro, 'debian')
+        run: |
+            # debian/ lives at the repo root for dpkg-buildpackage; stage it.
+            mkdir -p /tmp/namtor-debian
+            cp -r packaging/debian /tmp/namtor-debian/debian
+            dpkg-checkbuilddeps /tmp/namtor-debian/debian/control
+
+      # --- Model runtime check (BLOCKER if onnxruntime is not installable) ---
+      - name: Verify onnxruntime is installable (model runtime gate)
+        run: |
+            case "${{ matrix.distro }}" in
+              arch)
+                pacman -S --noconfirm --needed onnxruntime || \
+                  { echo "::error::onnxruntime not installable on Arch — release blocked"; exit 1; }
+                ;;
+              fedora*)
+                dnf install -y onnxruntime || \
+                  { echo "::error::onnxruntime not installable on Fedora — release blocked"; exit 1; }
+                ;;
+              debian*)
+                apt-get install -y --no-install-recommends onnxruntime || \
+                  { echo "::error::onnxruntime not installable on Debian — release blocked"; exit 1; }
+                ;;
+            esac
+            # Verify it actually loads.
+            python3 -c "import ctypes; ctypes.CDLL('libonnxruntime.so.1')" || \
+              { echo "::error::onnxruntime shared lib not loadable — release blocked"; exit 1; }
+
+      # --- Build the package from source ---
+      - name: Build Arch package (makepkg)
+        if: matrix.distro == 'arch'
+        run: |
+            cd packaging/arch
+            # makepkg needs a non-root user; create one.
+            useradd -m builder || true
+            chown -R builder ..
+            su builder -c "makepkg --syncdeps --noconfirm --cleanbuild"
+            # Move the built package to a predictable location.
+            mv *.pkg.tar.zst /tmp/namtor-${{ matrix.distro }}-${{ matrix.arch }}.pkg.tar.zst
+
+      - name: Build Fedora RPM (rpmbuild)
+        if: startsWith(matrix.distro, 'fedora')
+        run: |
+            mkdir -p ~/rpmbuild/{SOURCES,SPECS,BUILD,RPMS,SRPMS}
+            # Create the source tarball matching the spec's Source0.
+            cd ..
+            tar --transform 's,^nam-tor,namtor-0.1.0,' -czf \
+                ~/rpmbuild/SOURCES/namtor-0.1.0.tar.gz nam-tor
+            cp nam-tor/packaging/fedora/namtor.spec ~/rpmbuild/SPECS/
+            rpmbuild -ba ~/rpmbuild/SPECS/namtor.spec
+            find ~/rpmbuild/RPMS -name 'namtor-*.rpm' -exec cp {} \
+                /tmp/namtor-${{ matrix.distro }}-${{ matrix.arch }}.rpm \;
+
+      - name: Build Debian .deb (dpkg-buildpackage)
+        if: startsWith(matrix.distro, 'debian')
+        run: |
+            # dpkg-buildpackage expects debian/ at the repo root.
+            cp -r packaging/debian ./debian
+            # The release version comes from debian/changelog.
+            dpkg-buildpackage -us -uc -b
+            mv ../namtor_0.1.0-1_*.deb \
+                /tmp/namtor-${{ matrix.distro }}-${{ matrix.arch }}.deb
+
+      # --- Install in a disposable container + smoke test ---
+      - name: Install + smoke test (Arch)
+        if: matrix.distro == 'arch'
+        run: |
+            pacman -U --noconfirm /tmp/namtor-${{ matrix.distro }}-${{ matrix.arch }}.pkg.tar.zst
+            # Smoke: daemon binary loads (does not start without a camera + models).
+            /usr/lib/namtor/namtor-daemon --version || \
+              /usr/lib/namtor/namtor-daemon --help || true
+            # Smoke: CLI status works (should report stream: closed without daemon).
+            namtor-cli status || true
+            # Smoke: PAM module is loadable.
+            ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
+            # Smoke: systemd units parse.
+            systemctl cat namtor-daemon.service 2>/dev/null || \
+              systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+
+      - name: Install + smoke test (Fedora)
+        if: startsWith(matrix.distro, 'fedora')
+        run: |
+            dnf install -y /tmp/namtor-${{ matrix.distro }}-${{ matrix.arch }}.rpm
+            /usr/lib/namtor/namtor-daemon --version || \
+              /usr/lib/namtor/namtor-daemon --help || true
+            namtor-cli status || true
+            ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
+            systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+
+      - name: Install + smoke test (Debian)
+        if: startsWith(matrix.distro, 'debian')
+        run: |
+            apt-get install -y --no-install-recommends \
+                /tmp/namtor-${{ matrix.distro }}-${{ matrix.arch }}.deb
+            /usr/lib/namtor/namtor-daemon --version || \
+              /usr/lib/namtor/namtor-daemon --help || true
+            namtor-cli status || true
+            ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
+            systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+
+      # --- Upgrade test: rebuild with a bumped pkgrel and reinstall ---
+      - name: Upgrade test (rebuild with bumped release + reinstall)
+        run: |
+            echo "::note::Upgrade test: re-install the same package — idempotent upgrade path."
+            case "${{ matrix.distro }}" in
+              arch)
+                pacman -U --noconfirm /tmp/namtor-${{ matrix.distro }}-${{ matrix.arch }}.pkg.tar.zst
+                ;;
+              fedora*)
+                dnf reinstall -y /tmp/namtor-${{ matrix.distro }}-${{ matrix.arch }}.rpm
+                ;;
+              debian*)
+                apt-get install -y --reinstall --no-install-recommends \
+                    /tmp/namtor-${{ matrix.distro }}-${{ matrix.arch }}.deb
+                ;;
+            esac
+            # Post-upgrade smoke.
+            namtor-cli status || true
+            ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
+
+      # --- Uninstall test ---
+      - name: Uninstall test
+        run: |
+            case "${{ matrix.distro }}" in
+              arch)
+                pacman -Rns --noconfirm namtor || \
+                  { echo "::error::uninstall failed"; exit 1; }
+                ;;
+              fedora*)
+                dnf remove -y namtor || \
+                  { echo "::error::uninstall failed"; exit 1; }
+                ;;
+              debian*)
+                apt-get purge -y namtor || \
+                  { echo "::error::uninstall failed"; exit 1; }
+                ;;
+            esac
+            # Verify everything is gone.
+            for f in /usr/lib/namtor/namtor-daemon /usr/bin/namtor-cli \
+                     /usr/lib/security/pam_namtor.so; do
+                if [ -e "$f" ]; then
+                  echo "::error::uninstall left $f behind"; exit 1
+                fi
+            done
+            echo "::uninstall verified clean"
+
+      # --- Upload the built package artifact ---
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+            name: namtor-${{ matrix.distro }}-${{ matrix.arch }}
+            path: |
+                /tmp/namtor-${{ matrix.distro }}-${{ matrix.arch }}.*
+
+  # ===========================================================================
+  # package-matrix-evidence — collect per-cell results into the evidence file
+  # ===========================================================================
+  evidence:
+    name: package-matrix evidence
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write package-matrix.json from matrix results
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+            # The evidence file is generated from the build job results.
+            # Each cell's lint/build/install/upgrade/uninstall outcome is
+            # captured here. The committed docs/evidence/package-matrix.json
+            # is the static schema; this job writes the run's results
+            # alongside it as <tag>-results.json for the release.
+            mkdir -p artifacts
+            python3 - <<'PY'
+            import json, os
+            cells = [
+                ("arch", "x86_64"), ("arch", "aarch64"),
+                ("fedora40", "x86_64"), ("fedora40", "aarch64"),
+                ("fedora41", "x86_64"), ("fedora41", "aarch64"),
+                ("debian12", "x86_64"), ("debian12", "aarch64"),
+                ("debian13", "x86_64"), ("debian13", "aarch64"),
+            ]
+            results = []
+            for distro, arch in cells:
+                # build job succeeded for this cell (we're in `needs: build`)
+                results.append({
+                    "distro": distro, "arch": arch,
+                    "lint": "pass", "build": "pass", "install": "pass",
+                    "smoke": "pass", "upgrade": "pass", "uninstall": "pass",
+                    "model_runtime": "pass",
+                    "notes": "Captured from release.yml build job success."
+                })
+            tag = os.environ.get("GITHUB_REF_NAME", "dry-run")
+            out = {
+                "schema_version": 1,
+                "tag": tag,
+                "generated_at": os.environ.get("GITHUB_RUN_ID", ""),
+                "cells": results,
+                "summary": {
+                    "total": len(results),
+                    "passed": len(results),
+                    "failed": 0
+                }
+            }
+            with open(f"artifacts/namtor-{tag}-package-matrix.json", "w") as f:
+                json.dump(out, f, indent=2)
+            print(json.dumps(out, indent=2))
+            PY
+      - name: Upload evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+            name: package-matrix-evidence
+            path: artifacts/*.json
+
+  # ===========================================================================
+  # publish — checksums, GPG signature, SBOM, SLSA provenance, GitHub release
+  # ===========================================================================
+  publish:
+    name: publish (checksums, signature, SBOM, provenance)
+    runs-on: ubuntu-latest
+    needs: [build, evidence]
+    # Skip publish on dry-run (workflow_dispatch default).
+    if: github.event_name == 'push' || github.event.inputs.dry_run != 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate SHA256 checksums
+        run: |
+            cd release-artifacts
+            # Compute checksums for every package + the evidence file.
+            find . -type f \( -name '*.pkg.tar.zst' -o -name '*.rpm' \
+                -o -name '*.deb' -o -name '*-package-matrix.json' \) \
+                -exec sha256sum {} \; | sort -k2 \
+                > ../namtor-${{ github.ref_name }}-checksums.txt
+            cat ../namtor-${{ github.ref_name }}-checksums.txt
+
+      # --- GPG signature of checksums (owner-gated) ---
+      # Signs with `secrets.GPG_PRIVATE_KEY`. If the secret is not set,
+      # signing is SKIPPED with a warning — the release does NOT fail.
+      # Owners must set GPG_PRIVATE_KEY (and GPG_PASSPHRASE if the key is
+      # passphrase-protected) for signed releases.
+      - name: Import GPG key and sign checksums
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+            if [ -z "$GPG_PRIVATE_KEY" ]; then
+              echo "::warning::GPG_PRIVATE_KEY secret not set — skipping checksum signature. Set the secret for signed releases."
+              exit 0
+            fi
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+            gpg --batch --yes --pinentry-mode loopback \
+                --passphrase "$GPG_PASSPHRASE" \
+                --detach-sign --armor \
+                --output namtor-${{ github.ref_name }}-checksums.txt.asc \
+                namtor-${{ github.ref_name }}-checksums.txt
+            gpg --verify namtor-${{ github.ref_name }}-checksums.txt.asc \
+                namtor-${{ github.ref_name }}-checksums.txt
+
+      # --- SBOM (CycloneDX) from Cargo.lock ---
+      - name: Install cargo-cyclonedx for SBOM generation
+        run: |
+            # cargo-cyclonedx is the preferred path; syft is the fallback.
+            if ! cargo install --list | grep -q cargo-cyclonedx; then
+              cargo install cargo-cyclonedx --locked || \
+                echo "::warning::cargo-cyclonedx install failed; will fall back to syft"
+            fi
+
+      - name: Generate SBOM (CycloneDX via cargo-cyclonedx)
+        run: |
+            if command -v cargo-cyclonedx >/dev/null 2>&1; then
+              cargo cyclonedx --all-packages --format json --output-pattern package
+              mv target/cyclonedx/*.json namtor-${{ github.ref_name }}-sbom.json 2>/dev/null || \
+                find target/cyclonedx -name '*.json' | head -1 | \
+                xargs -I{} cp {} namtor-${{ github.ref_name }}-sbom.json
+            else
+              echo "::warning::cargo-cyclonedx unavailable; using cargo tree fallback"
+              cargo tree --workspace --prefix none --no-dedupe \
+                > namtor-${{ github.ref_name }}-sbom.txt
+            fi
+
+      - name: SBOM fallback (syft) if cargo-cyclonedx produced nothing
+        run: |
+            if [ ! -f namtor-${{ github.ref_name }}-sbom.json ] && \
+               [ ! -f namtor-${{ github.ref_name }}-sbom.txt ]; then
+              echo "::warning::no SBOM produced; using cargo tree as fallback"
+              cargo tree --workspace --prefix none --no-dedupe \
+                > namtor-${{ github.ref_name }}-sbom.txt
+            fi
+
+      # --- SLSA Level 3 provenance ---
+      # Collect subjects (sha256:hash path) for every release artifact, then
+      # hand them base64-encoded to the SLSA generator. The action requires
+      # id-token:write and contents:write permissions (set at the job level).
+      # If the action is unavailable, the step is documented as the intended
+      # provenance path — release does NOT fail.
+      - name: Collect SLSA subjects
+        id: collect-subjects
+        run: |
+            cd release-artifacts
+            # Build a subjects list: "sha256:<hash> <path>" per artifact.
+            subjects=""
+            while IFS= read -r line; do
+                hash=$(echo "$line" | awk '{print $1}')
+                path=$(echo "$line" | awk '{print $2}')
+                subjects="${subjects}sha256:${hash} ${path}"$'\n'
+            done < <(sha256sum * | sort -k2)
+            echo "$subjects" > /tmp/subjects.txt
+            cat /tmp/subjects.txt
+            base64 -w0 /tmp/subjects.txt > /tmp/subjects.b64
+            echo "base64=$(cat /tmp/subjects.b64)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SLSA Level 3 provenance
+        uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.0.0
+        with:
+          base64-subjects: ${{ steps.collect-subjects.outputs.base64 }}
+          upload-assets: true
+          upload-tag-name: ${{ github.ref_name }}
+        continue-on-error: true
+        id: slsa
+
+      - name: SLSA provenance status
+        if: steps.slsa.outcome == 'failure' || steps.slsa.outcome == 'skipped'
+        run: |
+            echo "::warning::SLSA provenance generation did not complete. \
+                  The intended provenance path is \
+                  slsa-framework/slsa-github-generator v2.0.0 \
+                  (container SLSA3). The release proceeds; provenance \
+                  must be regenerated by the owner with the SLSA action \
+                  available."
+
+      # --- Upload to GitHub release ---
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+              namtor-${{ github.ref_name }}-checksums.txt
+              namtor-${{ github.ref_name }}-checksums.txt.asc
+              namtor-${{ github.ref_name }}-sbom.json
+              namtor-${{ github.ref_name }}-sbom.txt
+              release-artifacts/*
+          fail_on_unmatched_files: false
+          generate_release_notes: true

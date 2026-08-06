@@ -1,0 +1,56 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
+# namtor.postinst — Debian post-install hook (debhelper compat 13).
+#
+# Mirrors the manual install flow in packaging/README.md:
+#   - register sysusers + tmpfiles so the `namtor` user, `namtor-auth`
+#     group, and runtime dirs exist.
+#   - print setup instructions (the admin must still: add the display-
+#     manager user to namtor-auth, run the PAM install script, accept
+#     model licences, and enable the daemon).
+#
+# We do NOT touch /etc/pam.d here — the transactional pam-install.sh is
+# the only sanctioned path for that (spec §3.4, §8.3).
+
+set -e
+
+case "$1" in
+    configure)
+        if command -v systemd-sysusers >/dev/null 2>&1; then
+            systemd-sysusers /usr/lib/sysusers.d/namtor.conf || true
+        fi
+        if command -v systemd-tmpfiles >/dev/null 2>&1; then
+            systemd-tmpfiles --create /usr/lib/tmpfiles.d/namtor.conf || true
+        fi
+        cat <<'EOF'
+
+:: namtor installed. To complete setup:
+
+  1. Add the display-manager user to namtor-auth:
+       sudo gpasswd -a gdm namtor-auth
+
+  2. Accept the upstream model licences and fetch models:
+       NAMTOR_ACCEPT_LICENCE=1 namtor-cli models ensure
+
+  3. Install the PAM integration (transactional, reversible):
+       sudo /usr/share/namtor/pam-preflight.sh
+       sudo /usr/share/namtor/pam-install.sh
+
+  4. Enable and start the socket-activated daemon:
+       sudo systemctl enable --now namtor-daemon.socket
+
+See /usr/share/doc/namtor/README.md for the full flow.
+EOF
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "namtor.postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+# dh_installdeb will replace this with debhelper's generated content.
+#DEBHELPER#
+
+exit 0

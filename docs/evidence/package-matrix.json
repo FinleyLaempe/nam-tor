@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "task": "G3 — signed cross-distro packages (spec §12)",
+  "generated_at": "2026-08-06T00:00:00Z",
+  "generator": "packager (task 6)",
+  "status": "defined",
+  "status_note": "Package definitions, release workflow, and matrix schema are defined and committed. Per-cell lint/build/install/upgrade/uninstall results are produced at tag time by .github/workflows/release.yml; this file records the matrix definition and the gate semantics. A 'pass' status here means the cell is wired into the release pipeline, not that a release has run. Live run results are written alongside as <tag>-results.json by the release workflow's evidence job.",
+  "matrix": {
+    "distros": ["arch", "fedora40", "fedora41", "debian12", "debian13"],
+    "arches": ["x86_64", "aarch64"],
+    "cells_total": 10
+  },
+  "cells": [
+    {
+      "distro": "arch",
+      "arch": "x86_64",
+      "package_format": "pkg.tar.zst",
+      "definition": "packaging/arch/PKGBUILD",
+      "lint_tool": "namcap",
+      "build_tool": "makepkg",
+      "install_tool": "pacman -U",
+      "smoke_checks": [
+        "namtor-daemon --version (or --help)",
+        "namtor-cli status",
+        "ldd /usr/lib/security/pam_namtor.so (no 'not found')",
+        "systemd-analyze verify namtor-daemon.service"
+      ],
+      "upgrade": "pacman -U reinstall (idempotent upgrade path)",
+      "uninstall": "pacman -Rns --noconfirm namtor; verify no files left behind",
+      "model_runtime": "pacman -S onnxruntime + ctypes.CDLL('libonnxruntime.so.1')",
+      "model_runtime_blocks_publication": true,
+      "status": "defined"
+    },
+    {
+      "distro": "arch",
+      "arch": "aarch64",
+      "package_format": "pkg.tar.zst",
+      "definition": "packaging/arch/PKGBUILD",
+      "lint_tool": "namcap",
+      "build_tool": "makepkg (via QEMU on x86_64 runner)",
+      "install_tool": "pacman -U",
+      "smoke_checks": [
+        "namtor-daemon --version (or --help)",
+        "namtor-cli status",
+        "ldd /usr/lib/security/pam_namtor.so (no 'not found')",
+        "systemd-analyze verify namtor-daemon.service"
+      ],
+      "upgrade": "pacman -U reinstall (idempotent upgrade path)",
+      "uninstall": "pacman -Rns --noconfirm namtor; verify no files left behind",
+      "model_runtime": "pacman -S onnxruntime + ctypes.CDLL('libonnxruntime.so.1')",
+      "model_runtime_blocks_publication": true,
+      "status": "defined"
+    },
+    {
+      "distro": "fedora40",
+      "arch": "x86_64",
+      "package_format": "rpm",
+      "definition": "packaging/fedora/namtor.spec",
+      "lint_tool": "rpmlint (warnings non-blocking)",
+      "build_tool": "rpmbuild -ba",
+      "install_tool": "dnf install -y",
+      "smoke_checks": [
+        "namtor-daemon --version (or --help)",
+        "namtor-cli status",
+        "ldd /usr/lib/security/pam_namtor.so (no 'not found')",
+        "systemd-analyze verify namtor-daemon.service"
+      ],
+      "upgrade": "dnf reinstall -y",
+      "uninstall": "dnf remove -y namtor; verify no files left behind",
+      "model_runtime": "dnf install -y onnxruntime + ctypes.CDLL('libonnxruntime.so.1')",
+      "model_runtime_blocks_publication": true,
+      "status": "defined"
+    },
+    {
+      "distro": "fedora40",
+      "arch": "aarch64",
+      "package_format": "rpm",
+      "definition": "packaging/fedora/namtor.spec",
+      "lint_tool": "rpmlint (warnings non-blocking)",
+      "build_tool": "rpmbuild -ba (via QEMU on x86_64 runner)",
+      "install_tool": "dnf install -y",
+      "smoke_checks": [
+        "namtor-daemon --version (or --help)",
+        "namtor-cli status",
+        "ldd /usr/lib/security/pam_namtor.so (no 'not found')",
+        "systemd-analyze verify namtor-daemon.service"
+      ],
+      "upgrade": "dnf reinstall -y",
+      "uninstall": "dnf remove -y namtor; verify no files left behind",
+      "model_runtime": "dnf install -y onnxruntime + ctypes.CDLL('libonnxruntime.so.1')",
+      "model_runtime_blocks_publication": true,
+      "status": "defined"
+    },
+    {
+      "distro": "fedora41",
+      "arch": "x86_64",
+      "package_format": "rpm",
+      "definition": "packaging/fedora/namtor.spec",
+      "lint_tool": "rpmlint (warnings non-blocking)",
+      "build_tool": "rpmbuild -ba",
+      "install_tool": "dnf install -y",
+      "smoke_checks": [
+        "namtor-daemon --version (or --help)",
+        "namtor-cli status",
+        "ldd /usr/lib/security/pam_namtor.so (no 'not found')",
+        "systemd-analyze verify namtor-daemon.service"
+      ],
+      "upgrade": "dnf reinstall -y",
+      "uninstall": "dnf remove -y namtor; verify no files left behind",
+      "model_runtime": "dnf install -y onnxruntime + ctypes.CDLL('libonnxruntime.so.1')",
+      "model_runtime_blocks_publication": true,
+      "status": "defined"
+    },
+    {
+      "distro": "fedora41",
+      "arch": "aarch64",
+      "package_format": "rpm",
+      "definition": "packaging/fedora/namtor.spec",
+      "lint_tool": "rpmlint (warnings non-blocking)",
+      "build_tool": "rpmbuild -ba (via QEMU on x86_64 runner)",
+      "install_tool": "dnf install -y",
+      "smoke_checks": [
+        "namtor-daemon --version (or --help)",
+        "namtor-cli status",
+        "ldd /usr/lib/security/pam_namtor.so (no 'not found')",
+        "systemd-analyze verify namtor-daemon.service"
+      ],
+      "upgrade": "dnf reinstall -y",
+      "uninstall": "dnf remove -y namtor; verify no files left behind",
+      "model_runtime": "dnf install -y onnxruntime + ctypes.CDLL('libonnxruntime.so.1')",
+      "model_runtime_blocks_publication": true,
+      "status": "defined"
+    },
+    {
+      "distro": "debian12",
+      "arch": "x86_64",
+      "package_format": "deb",
+      "definition": "packaging/debian/control",
+      "lint_tool": "dpkg-checkbuilddeps",
+      "build_tool": "dpkg-buildpackage -us -uc -b",
+      "install_tool": "apt-get install -y",
+      "smoke_checks": [
+        "namtor-daemon --version (or --help)",
+        "namtor-cli status",
+        "ldd /usr/lib/security/pam_namtor.so (no 'not found')",
+        "systemd-analyze verify namtor-daemon.service"
+      ],
+      "upgrade": "apt-get install --reinstall",
+      "uninstall": "apt-get purge -y namtor; verify no files left behind",
+      "model_runtime": "apt-get install -y onnxruntime + ctypes.CDLL('libonnxruntime.so.1')",
+      "model_runtime_blocks_publication": true,
+      "status": "defined"
+    },
+    {
+      "distro": "debian12",
+      "arch": "aarch64",
+      "package_format": "deb",
+      "definition": "packaging/debian/control",
+      "lint_tool": "dpkg-checkbuilddeps",
+      "build_tool": "dpkg-buildpackage -us -uc -b (via QEMU on x86_64 runner)",
+      "install_tool": "apt-get install -y",
+      "smoke_checks": [
+        "namtor-daemon --version (or --help)",
+        "namtor-cli status",
+        "ldd /usr/lib/security/pam_namtor.so (no 'not found')",
+        "systemd-analyze verify namtor-daemon.service"
+      ],
+      "upgrade": "apt-get install --reinstall",
+      "uninstall": "apt-get purge -y namtor; verify no files left behind",
+      "model_runtime": "apt-get install -y onnxruntime + ctypes.CDLL('libonnxruntime.so.1')",
+      "model_runtime_blocks_publication": true,
+      "status": "defined"
+    },
+    {
+      "distro": "debian13",
+      "arch": "x86_64",
+      "package_format": "deb",
+      "definition": "packaging/debian/control",
+      "lint_tool": "dpkg-checkbuilddeps",
+      "build_tool": "dpkg-buildpackage -us -uc -b",
+      "install_tool": "apt-get install -y",
+      "smoke_checks": [
+        "namtor-daemon --version (or --help)",
+        "namtor-cli status",
+        "ldd /usr/lib/security/pam_namtor.so (no 'not found')",
+        "systemd-analyze verify namtor-daemon.service"
+      ],
+      "upgrade": "apt-get install --reinstall",
+      "uninstall": "apt-get purge -y namtor; verify no files left behind",
+      "model_runtime": "apt-get install -y onnxruntime + ctypes.CDLL('libonnxruntime.so.1')",
+      "model_runtime_blocks_publication": true,
+      "status": "defined"
+    },
+    {
+      "distro": "debian13",
+      "arch": "aarch64",
+      "package_format": "deb",
+      "definition": "packaging/debian/control",
+      "lint_tool": "dpkg-checkbuilddeps",
+      "build_tool": "dpkg-buildpackage -us -uc -b (via QEMU on x86_64 runner)",
+      "install_tool": "apt-get install -y",
+      "smoke_checks": [
+        "namtor-daemon --version (or --help)",
+        "namtor-cli status",
+        "ldd /usr/lib/security/pam_namtor.so (no 'not found')",
+        "systemd-analyze verify namtor-daemon.service"
+      ],
+      "upgrade": "apt-get install --reinstall",
+      "uninstall": "apt-get purge -y namtor; verify no files left behind",
+      "model_runtime": "apt-get install -y onnxruntime + ctypes.CDLL('libonnxruntime.so.1')",
+      "model_runtime_blocks_publication": true,
+      "status": "defined"
+    }
+  ],
+  "release_pipeline": {
+    "workflow": ".github/workflows/release.yml",
+    "trigger": "push tags 'v*' + workflow_dispatch (dry-run default)",
+    "permissions": {
+      "contents": "write",
+      "id-token": "write"
+    },
+    "publication_blockers": [
+      "lint failure in any cell",
+      "build failure in any cell",
+      "install failure in any cell",
+      "smoke failure in any cell",
+      "upgrade failure in any cell",
+      "uninstall failure in any cell (files left behind)",
+      "missing architecture support (model-manifest target_arch mismatch)",
+      "onnxruntime not installable in target distro (model runtime gate)",
+      "bad signature on a previously-signed artifact"
+    ],
+    "publication_artifacts": [
+      "namtor-<tag>-checksums.txt (SHA256 of every package + evidence file)",
+      "namtor-<tag>-checksums.txt.asc (GPG detached signature; skipped if GPG_PRIVATE_KEY secret unset — release does NOT fail)",
+      "namtor-<tag>-sbom.json (CycloneDX from cargo-cyclonedx) or namtor-<tag>-sbom.txt (cargo tree fallback)",
+      "SLSA Level 3 provenance via slsa-framework/slsa-github-generator v2.0.0 (continue-on-error: provenance is the intended path; release proceeds if the action is unavailable)"
+    ],
+    "owner_gated_inputs": [
+      "secrets.GPG_PRIVATE_KEY — GPG private key for checksum signing (unset → signing skipped with warning)",
+      "secrets.GPG_PASSPHRASE — passphrase for the GPG key (unset → key assumed unprotected)",
+      "tag push — only a `v*` tag triggers publication; branch pushes never release"
+    ]
+  },
+  "build_contract": {
+    "source": "release tarball (git tag) — NOT pre-built binaries",
+    "build_command": "cargo build --release --frozen -p namtor-daemon -p namtor-worker -p namtor-cli -p namtor-camera-emitter-off -p namtor-pam",
+    "staging": "packaging/stage.sh reads packaging/install-manifest.toml and produces a deterministic DESTDIR tree",
+    "models": "NOT packaged — fetched at runtime per /usr/share/namtor/model-manifest.toml after licence acceptance (NAMTOR_ACCEPT_LICENCE=1)",
+    "pam_install": "Transactional scripts (pam-install.sh / pam-uninstall.sh / pam-preflight.sh) shipped under /usr/share/namtor; admin runs explicitly — NEVER invoked automatically by the package"
+  },
+  "summary": {
+    "total": 10,
+    "defined": 10,
+    "passing": 0,
+    "failing": 0,
+    "note": "All 10 cells are wired into the release pipeline. Live pass/fail counts are populated by the release workflow's evidence job at tag time and written as <tag>-results.json alongside this file."
+  }
+}

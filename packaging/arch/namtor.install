@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# namtor.install — pacman pre/post install hooks for the namtor package.
+#
+# Mirrors the manual install flow in packaging/README.md:
+#   - post_install / post_upgrade: register sysusers + tmpfiles so the
+#     `namtor` user, `namtor-auth` group, and runtime dirs exist.
+#   - The admin must still: (a) add the display-manager user to
+#     namtor-auth, (b) run /usr/share/namtor/pam-install.sh against the
+#     target PAM file, (c) accept model licences + start the daemon.
+#
+# We do NOT touch /etc/pam.d here — the transactional pam-install.sh is
+# the only sanctioned path for that (spec §3.4, §8.3).
+
+post_install() {
+    echo ":: namtor: registering system user + runtime dirs"
+    if command -v systemd-sysusers >/dev/null 2>&1; then
+        systemd-sysusers /usr/lib/sysusers.d/namtor.conf || true
+    fi
+    if command -v systemd-tmpfiles >/dev/null 2>&1; then
+        systemd-tmpfiles --create /usr/lib/tmpfiles.d/namtor.conf || true
+    fi
+    cat <<'EOF'
+
+:: namtor installed. To complete setup:
+
+  1. Add the display-manager user to namtor-auth:
+       sudo gpasswd -a gdm namtor-auth
+
+  2. Accept the upstream model licences and fetch models:
+       NAMTOR_ACCEPT_LICENCE=1 namtor-cli models ensure
+
+  3. Install the PAM integration (transactional, reversible):
+       sudo /usr/share/namtor/pam-preflight.sh
+       sudo /usr/share/namtor/pam-install.sh
+
+  4. Enable and start the socket-activated daemon:
+       sudo systemctl enable --now namtor-daemon.socket
+
+See /usr/share/doc/namtor/README.md for the full flow.
+EOF
+}
+
+post_upgrade() {
+    post_install
+}
+
+pre_remove() {
+    echo ":: namtor: removing PAM integration (if installed)"
+    if [[ -x /usr/share/namtor/pam-uninstall.sh ]]; then
+        /usr/share/namtor/pam-uninstall.sh --restore-backup || true
+    fi
+    echo ":: namtor: stopping daemon"
+    systemctl --no-reload disable --now namtor-daemon.socket namtor-daemon.service 2>/dev/null || true
+}
+
+post_remove() {
+    echo ":: namtor: cleaning runtime dirs"
+    if command -v systemd-tmpfiles >/dev/null 2>&1; then
+        systemd-tmpfiles --remove /usr/lib/tmpfiles.d/namtor.conf || true
+    fi
+    echo ":: namtor: /var/lib/namtor (templates, models) left in place — remove manually if desired"
+}

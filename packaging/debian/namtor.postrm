@@ -1,0 +1,31 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
+# namtor.postrm — Debian post-removal hook (debhelper compat 13).
+#
+# Cleans runtime dirs after package removal. The model store under
+# /var/lib/namtor (templates + fetched models) is left in place for
+# manual removal — a purge option is provided for it.
+
+set -e
+
+case "$1" in
+    remove)
+        if command -v systemd-tmpfiles >/dev/null 2>&1; then
+            systemd-tmpfiles --remove /usr/lib/tmpfiles.d/namtor.conf 2>/dev/null || true
+        fi
+        ;;
+    purge)
+        # On purge, remove the model store too.
+        rm -rf /var/lib/namtor || true
+        ;;
+    upgrade|failed-upgrade|abort-install|disappear)
+        ;;
+    *)
+        echo "namtor.postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
