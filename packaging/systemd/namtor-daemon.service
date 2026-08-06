@@ -11,7 +11,10 @@ Group=namtor
 SupplementaryGroups=video tss
 Environment=NAMTOR_WORKER_BIN=/usr/lib/namtor/namtor-worker
 ExecStart=/usr/lib/namtor/namtor-daemon
+# SIGKILL backstop: after TimeoutStopSec, systemd sends SIGKILL; ExecStopPost
+# runs even then to force the emitter off (spec §4.10.2 G1.4).
 ExecStopPost=/usr/lib/namtor/namtor-camera-emitter-off /dev/video2
+TimeoutStopSec=2
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

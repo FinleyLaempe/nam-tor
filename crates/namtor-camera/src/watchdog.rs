@@ -120,6 +120,24 @@ pub fn force_off_on_device(device: &Path, cfg: &EmitterCfg) -> Result<(), String
     force_off_lib(&mut xu, cfg)
 }
 
+/// Checks the watchdog and, if expired, forces the emitter off and disarms.
+/// Returns `true` when a force-off was performed, `false` otherwise. Used by
+/// the daemon's per-frame loop to enforce `max_on_ms` without a separate
+/// timer thread.
+pub fn enforce_off_if_expired<C: Clock, T: XuTransport>(
+    wd: &mut Watchdog<'_, C>,
+    xu: &mut SafeXu<T>,
+    cfg: &EmitterCfg,
+) -> Result<bool, String> {
+    if wd.check_expired() {
+        force_off_lib(xu, cfg)?;
+        wd.disarm();
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +278,41 @@ mod tests {
         assert!(
             force_off_lib(&mut xu, &cfg).is_ok(),
             "absent control must not error"
+        );
+    }
+
+    #[test]
+    fn enforce_off_if_expired_forces_off_and_disarms() {
+        let dev = FakeDevice::new();
+        dev.add(4, 6, 0b11, vec![0x01, 0x03, 0x02, 0, 0, 0, 0, 0, 0]);
+        let mut xu = SafeXu::new(dev);
+        let clock = MockClock::new(Instant::now());
+        let mut wd = Watchdog::new(2000, &clock);
+        wd.arm();
+        clock.advance(Duration::from_millis(2001));
+        assert!(wd.is_armed());
+        let cfg = EmitterCfg {
+            method: namtor_hwdb::quirks::EmitterMethod::MsxuMode,
+            guid: None,
+            vc_interface: None,
+            unit: Some(4),
+            selector: Some(6),
+            length: None,
+            payload_on: vec![0x01, 0x03, 0x02, 0, 0, 0, 0, 0, 0],
+            payload_off: vec![0x01, 0x03, 0x01, 0, 0, 0, 0, 0, 0],
+            mode: None,
+            strobe: None,
+            idle: None,
+            lifecycle: None,
+        };
+        let forced = enforce_off_if_expired(&mut wd, &mut xu, &cfg).unwrap();
+        assert!(forced, "expired watchdog must force off");
+        assert!(!wd.is_armed(), "force-off must disarm the watchdog");
+        let profile = xu.probe_control(4, 6).unwrap();
+        assert_eq!(
+            profile.current,
+            vec![0x01, 0x03, 0x01, 0, 0, 0, 0, 0, 0],
+            "payload_off must be written"
         );
     }
 }

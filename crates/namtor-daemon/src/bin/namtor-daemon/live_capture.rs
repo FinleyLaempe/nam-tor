@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
+use namtor_camera::always_on::ProtectionLevel;
+use namtor_camera::emitter_ctrl::{ApplyOutcome, EmitterController, EnvConsent};
 use namtor_camera::inventory::{
     select_camera_from_inventory, CameraInventory, DiscoveredCamera, SysfsInventory,
 };
+use namtor_camera::watchdog::force_off_lib;
 use namtor_capture::source::CaptureSource;
 use namtor_daemon::daemon::CaptureFactory;
 use namtor_hwdb::quirks::EmitterCfg;
@@ -42,11 +46,12 @@ fn open_selected_camera(
     let emitter_cfg = cam.quirks_entry.as_ref().map(|e| &e.emitter);
     let emitter = activate_emitter(dev, emitter_cfg).unwrap_or_else(|e| {
         eprintln!("namtor-daemon: warning — emitter activation failed: {e}");
-        EmitterGuard {
-            xu: None,
-            cfg: emitter_cfg.cloned(),
-        }
+        EmitterGuard::failed(emitter_cfg.cloned())
     });
+    eprintln!(
+        "namtor-daemon: emitter protection level: {}",
+        emitter.protection_level()
+    );
 
     let streamer = namtor_capture::ir_uvc::V4l2IrStream::open(
         dev,
@@ -77,14 +82,55 @@ fn open_selected_camera(
 struct EmitterGuard {
     xu: Option<Box<namtor_uvc::probe::SafeXu<namtor_uvc::device::V4l2Device>>>,
     cfg: Option<EmitterCfg>,
+    outcome: ApplyOutcome,
+    armed: bool,
+    armed_at: Option<Instant>,
+    max_on_ms: u32,
+}
+
+impl EmitterGuard {
+    fn failed(cfg: Option<EmitterCfg>) -> Self {
+        Self {
+            xu: None,
+            cfg,
+            outcome: ApplyOutcome::SkippedAlwaysOn,
+            armed: false,
+            armed_at: None,
+            max_on_ms: 2000,
+        }
+    }
+
+    fn protection_level(&self) -> ProtectionLevel {
+        match self.outcome {
+            ApplyOutcome::Activated => ProtectionLevel::Full,
+            ApplyOutcome::SkippedVendorXuNoConsent | ApplyOutcome::SkippedAlwaysOn => {
+                ProtectionLevel::Reduced
+            }
+        }
+    }
+
+    /// Per-frame watchdog enforcement (spec §4.10.2). If the emitter has been
+    /// on longer than `max_on_ms`, force it off and disarm. Called before
+    /// each frame pull so a stuck capture loop cannot leave the emitter on.
+    fn check_watchdog_and_force_off(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Some(t0) = self.armed_at else { return };
+        if t0.elapsed() > Duration::from_millis(self.max_on_ms as u64) {
+            if let (Some(xu), Some(cfg)) = (self.xu.as_mut(), self.cfg.as_ref()) {
+                let _ = force_off_lib(xu.as_mut(), cfg);
+            }
+            self.armed = false;
+            self.armed_at = None;
+        }
+    }
 }
 
 impl Drop for EmitterGuard {
     fn drop(&mut self) {
         if let (Some(mut xu), Some(cfg)) = (self.xu.take(), self.cfg.as_ref()) {
-            let unit = cfg.unit.unwrap_or(0);
-            let selector = cfg.selector.unwrap_or(0);
-            let _ = xu.try_write(unit, selector, &cfg.payload_off);
+            let _ = force_off_lib(xu.as_mut(), cfg);
         }
     }
 }
@@ -96,17 +142,31 @@ fn activate_emitter(dev: &Path, emitter_cfg: Option<&EmitterCfg>) -> Result<Emit
     let cfg = emitter_cfg.ok_or_else(|| "no emitter config for selected device".to_string())?;
     let v4l2_dev = V4l2Device::open(dev).map_err(|e| format!("open {}: {e}", dev.display()))?;
     let mut xu = Box::new(SafeXu::new(v4l2_dev));
-    let unit = cfg.unit.ok_or("emitter cfg missing unit")?;
-    let selector = cfg.selector.ok_or("emitter cfg missing selector")?;
-    xu.probe_control(unit, selector)
-        .map_err(|e| format!("emitter probe failed: {e}"))?;
-    let restorer = xu
-        .try_write(unit, selector, &cfg.payload_on)
-        .map_err(|e| format!("emitter write failed: {e}"))?;
-    restorer.keep();
+    let max_on_ms = cfg.lifecycle.as_ref().map(|l| l.max_on_ms).unwrap_or(2000);
+
+    let outcome = {
+        let mut ctrl = EmitterController::new(&mut xu, cfg);
+        let r = ctrl.apply_on_gated(&EnvConsent);
+        match r {
+            Ok(o) => {
+                if o == ApplyOutcome::Activated {
+                    ctrl.release_to_guard();
+                }
+                o
+            }
+            Err(e) => return Err(format!("emitter gated apply failed: {e}")),
+        }
+    };
+
+    let armed = outcome == ApplyOutcome::Activated;
+    let armed_at = if armed { Some(Instant::now()) } else { None };
     Ok(EmitterGuard {
         xu: Some(xu),
         cfg: emitter_cfg.cloned(),
+        outcome,
+        armed,
+        armed_at,
+        max_on_ms,
     })
 }
 
@@ -130,6 +190,7 @@ impl<S: namtor_capture::ir_uvc::Streamer, P: namtor_capture::ir_uvc::EmitterPoli
     fn next_frame(
         &mut self,
     ) -> Result<Option<namtor_capture::frame::Frame>, namtor_capture::source::CaptureError> {
+        self._emitter.check_watchdog_and_force_off();
         self.source.next_frame()
     }
 
