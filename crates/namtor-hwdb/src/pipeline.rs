@@ -30,11 +30,24 @@ pub enum ClassSource {
 }
 
 /// The result of classifying a USB device.
+///
+/// Interface numbers come in two namespaces that must not be mixed:
+/// - **VideoStreaming (VS)** interfaces (`ir_interface`, `rgb_interface`)
+///   are descriptor-level: they carry format/frame descriptors and the L8
+///   format GUID. XU enumeration and format-GUID reporting use these.
+/// - **VideoControl (VC)** interfaces (`ir_vc_interface`, `rgb_vc_interface`)
+///   are where uvcvideo attaches `/dev/videoN` in sysfs. `correlate_nodes`
+///   reports the VC interface as `V4l2Node::interface`, so `pair()` matches
+///   against the VC fields. `None` when the classifier has no VC mapping
+///   (FormatGuid/Heuristic paths); `pair()` then falls back to the VS
+///   interface.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Classification {
     pub ir_interface: u8,
+    pub ir_vc_interface: Option<u8>,
     pub ir_format_guid: String,
     pub rgb_interface: Option<u8>,
+    pub rgb_vc_interface: Option<u8>,
     pub metadata_node: bool,
     pub source: ClassSource,
     pub xu_units: Vec<ExtensionUnit>,
@@ -58,25 +71,34 @@ impl Classification {
     /// reports one), and the RGB streaming node (if classified) from
     /// `dev_nodes` by interface number.
     ///
-    /// Returns `None` when no non-metadata node on `ir_interface` is found —
+    /// `V4l2Node::interface` is the **VideoControl** interface uvcvideo
+    /// attaches the node under in sysfs. When `ir_vc_interface`/`rgb_vc_interface`
+    /// are known (Quirks path), nodes are matched against them; otherwise the
+    /// call falls back to the VideoStreaming interfaces (`ir_interface`/
+    /// `rgb_interface`), which is correct only when VC and VS numbers coincide.
+    ///
+    /// Returns `None` when no non-metadata node on the IR interface is found —
     /// the device was classified but the correlated `/dev/videoN` nodes do not
-    /// include the IR streaming interface (a torn topology).
+    /// include the IR interface (a torn topology).
     pub fn pair(&self) -> Option<NodePairing> {
+        let ir_iface = self.ir_vc_interface.unwrap_or(self.ir_interface);
+        let rgb_iface = self.rgb_vc_interface.or(self.rgb_interface);
+
         let ir = self
             .dev_nodes
             .iter()
-            .find(|n| n.interface == self.ir_interface && !n.is_metadata)?;
+            .find(|n| n.interface == ir_iface && !n.is_metadata)?;
 
         let metadata = if self.metadata_node {
             self.dev_nodes
                 .iter()
-                .find(|n| n.interface == self.ir_interface && n.is_metadata)
+                .find(|n| n.interface == ir_iface && n.is_metadata)
                 .cloned()
         } else {
             None
         };
 
-        let rgb = self.rgb_interface.and_then(|rgb_if| {
+        let rgb = rgb_iface.and_then(|rgb_if| {
             self.dev_nodes
                 .iter()
                 .find(|n| n.interface == rgb_if && !n.is_metadata)
@@ -125,8 +147,10 @@ pub fn classify_with_set(
         let xu_units = enumerate_xus(set, ir.interface);
         return Ok(Classification {
             ir_interface: ir.interface,
+            ir_vc_interface: None,
             ir_format_guid: ir.guid_str.clone(),
             rgb_interface: None,
+            rgb_vc_interface: None,
             metadata_node: false,
             source: ClassSource::FormatGuid,
             xu_units,
@@ -139,8 +163,10 @@ pub fn classify_with_set(
         let xu_units = enumerate_xus(set, ir.interface);
         return Ok(Classification {
             ir_interface: ir.interface,
+            ir_vc_interface: None,
             ir_format_guid: ir.guid_str.clone(),
             rgb_interface: None,
+            rgb_vc_interface: None,
             metadata_node: false,
             source: ClassSource::Heuristic,
             xu_units,
@@ -157,6 +183,8 @@ pub fn classify_with_set(
 /// Builds a Classification from a matched quirks entry. XUs are enumerated on
 /// the VideoControl interface (`ir_vc_interface`), where extension units live;
 /// `ir_interface` reports the VideoStreaming interface (`ir_streaming`).
+/// `ir_vc_interface`/`rgb_vc_interface` carry the VC interfaces uvcvideo
+/// attaches `/dev/videoN` under, so `pair()` matches sysfs nodes correctly.
 fn classification_from_quirks(
     entry: &QuirksEntry,
     set: &DescriptorSet,
@@ -165,8 +193,10 @@ fn classification_from_quirks(
     let xu_units = enumerate_xus(set, entry.nodes.ir_vc_interface);
     Classification {
         ir_interface: entry.nodes.ir_streaming,
+        ir_vc_interface: Some(entry.nodes.ir_vc_interface),
         ir_format_guid: entry.nodes.ir_format_guid.clone(),
         rgb_interface: entry.nodes.rgb_streaming,
+        rgb_vc_interface: entry.nodes.rgb_vc_interface,
         metadata_node: entry.nodes.metadata_node,
         source: ClassSource::Quirks,
         xu_units,
@@ -232,8 +262,14 @@ mod tests {
         let c = classify(&usb_at(tmp.path(), descriptors), &db).unwrap();
         assert_eq!(c.source, ClassSource::Quirks);
         assert_eq!(c.ir_interface, 3, "ir_interface from nodes.ir_streaming");
+        assert_eq!(
+            c.ir_vc_interface,
+            Some(2),
+            "ir_vc_interface from nodes.ir_vc_interface"
+        );
         assert!(c.ir_format_guid.starts_with("00000032-"));
         assert_eq!(c.rgb_interface, Some(1));
+        assert_eq!(c.rgb_vc_interface, Some(0), "rgb_vc_interface from quirk");
         assert!(c.metadata_node);
         assert!(!c.xu_units.is_empty(), "XUs enumerated on ir_vc_interface");
         assert!(crate::xu_index::is_msxu(&c.xu_units[0].guid), "MSXU first");
@@ -327,8 +363,10 @@ mod tests {
     ) -> Classification {
         Classification {
             ir_interface: ir_iface,
+            ir_vc_interface: None,
             ir_format_guid: "00000032-0002-0010-8000-00aa00389b71".into(),
             rgb_interface: rgb_iface,
+            rgb_vc_interface: None,
             metadata_node: metadata,
             source: ClassSource::Quirks,
             xu_units: vec![],
@@ -410,5 +448,83 @@ mod tests {
         let p = c.pair().unwrap();
         assert!(p.rgb.is_none());
         assert!(p.metadata.is_some());
+    }
+
+    /// Regression: real uvcvideo attaches `/dev/videoN` nodes under the
+    /// **VideoControl** interface dir in sysfs, not the VideoStreaming
+    /// interface. The reference camera exposes IR nodes (video2, video3)
+    /// under `3-8:1.2` (VC iface 2) and RGB nodes (video0, video1) under
+    /// `3-8:1.0` (VC iface 0). The quirk records UVC descriptor semantics:
+    /// `ir_vc_interface=2`, `ir_streaming=3`, `rgb_vc_interface=0`,
+    /// `rgb_streaming=1`. Pairing must translate between the two and select
+    /// `/dev/video2` (IR), `/dev/video3` (IR metadata), `/dev/video0` (RGB).
+    #[test]
+    fn pair_picks_nodes_by_vc_interface_real_uvcvideo_topology() {
+        let tmp = tempfile::tempdir().unwrap();
+        let devs = tmp.path().join("bus/usb/devices");
+        std::fs::create_dir_all(&devs).unwrap();
+        let usb_dir = devs.join("3-8");
+        std::fs::create_dir_all(&usb_dir).unwrap();
+        std::fs::write(usb_dir.join("descriptors"), fixture_blob()).unwrap();
+
+        fn mk_node(devs: &std::path::Path, iface_dir: &str, video: &str, name: &str) {
+            let d = devs.join(iface_dir).join("video4linux").join(video);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("name"), name).unwrap();
+        }
+        // RGB streaming + metadata under VC interface 0.
+        mk_node(&devs, "3-8:1.0", "video0", "Sonix USB2.0 FHD UVC WebCam");
+        mk_node(
+            &devs,
+            "3-8:1.0",
+            "video1",
+            "Sonix USB2.0 FHD UVC WebCam Metadata",
+        );
+        // IR streaming + metadata under VC interface 2.
+        mk_node(&devs, "3-8:1.2", "video2", "Sonix USB2.0 FHD UVC IR Camera");
+        mk_node(
+            &devs,
+            "3-8:1.2",
+            "video3",
+            "Sonix USB2.0 FHD UVC IR Metadata",
+        );
+
+        write_quirks(tmp.path());
+        let db = load_quirks_dir(&tmp.path().join("quirks")).unwrap();
+        let usb = UsbDevice {
+            sysfs_path: usb_dir,
+            vid: 0x3277,
+            pid: 0x0018,
+            bcd_device: 0x0001,
+            descriptors_path: devs.join("3-8/descriptors"),
+        };
+
+        let c = classify(&usb, &db).expect("classify failed");
+        assert_eq!(c.source, ClassSource::Quirks);
+        // Descriptor-level streaming interfaces, unchanged.
+        assert_eq!(c.ir_interface, 3, "ir_interface is the VS streaming iface");
+        assert_eq!(c.rgb_interface, Some(1), "rgb_interface is the VS iface");
+
+        let p = c
+            .pair()
+            .expect("pair must succeed for real uvcvideo topology");
+        assert_eq!(p.ir.dev_path, std::path::PathBuf::from("/dev/video2"));
+        assert_eq!(p.ir.interface, 2, "IR node sits under VC iface 2");
+        assert!(!p.ir.is_metadata);
+        assert_eq!(
+            p.metadata.as_ref().unwrap().dev_path,
+            std::path::PathBuf::from("/dev/video3")
+        );
+        assert!(p.metadata.as_ref().unwrap().is_metadata);
+        assert_eq!(
+            p.rgb.as_ref().unwrap().dev_path,
+            std::path::PathBuf::from("/dev/video0")
+        );
+        assert_eq!(
+            p.rgb.as_ref().unwrap().interface,
+            0,
+            "RGB node under VC iface 0"
+        );
+        assert!(!p.rgb.as_ref().unwrap().is_metadata);
     }
 }

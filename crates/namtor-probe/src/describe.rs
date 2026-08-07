@@ -109,23 +109,32 @@ mod tests {
     }
 
     fn fake_3277(tmp: &std::path::Path) -> (UsbDevice, PathBuf) {
-        let usb_dir = tmp.join("3-8");
+        // Real sysfs: the USB device dir and its interface dirs are siblings
+        // under `.../bus/usb/devices/`.
+        let devs = tmp.join("bus/usb/devices");
+        fs::create_dir_all(&devs).unwrap();
+        let usb_dir = devs.join("3-8");
         fs::create_dir_all(&usb_dir).unwrap();
         // Four V4L2 nodes across three interfaces, matching the reference camera.
-        fn mk(root: &std::path::Path, iface: &str, video: &str, name: &str) {
-            let d = root.join("3-8").join(iface).join("video4linux").join(video);
+        fn mk(devs: &std::path::Path, iface: &str, video: &str, name: &str) {
+            let d = devs.join(iface).join("video4linux").join(video);
             fs::create_dir_all(&d).unwrap();
             fs::write(d.join("name"), name).unwrap();
         }
-        mk(tmp, "3-8:1.0", "video0", "Sonix USB2.0 FHD UVC WebCam");
+        mk(&devs, "3-8:1.0", "video0", "Sonix USB2.0 FHD UVC WebCam");
         mk(
-            tmp,
+            &devs,
             "3-8:1.1",
             "video1",
             "Sonix USB2.0 FHD UVC WebCam Metadata",
         );
-        mk(tmp, "3-8:1.3", "video2", "Sonix USB2.0 FHD UVC IR Camera");
-        mk(tmp, "3-8:1.3", "video3", "Sonix USB2.0 FHD UVC IR Metadata");
+        mk(&devs, "3-8:1.3", "video2", "Sonix USB2.0 FHD UVC IR Camera");
+        mk(
+            &devs,
+            "3-8:1.3",
+            "video3",
+            "Sonix USB2.0 FHD UVC IR Metadata",
+        );
 
         let descriptors = usb_dir.join("descriptors");
         fs::write(&descriptors, fixture_blob()).unwrap();
