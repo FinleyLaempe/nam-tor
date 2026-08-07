@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "g1_1_clean_enrollment": { "status": "WITHHELD", "reason": "requires reference camera HIL" },
+  "g1_2_compatibility_80pct": { "status": "WITHHELD", "reason": "one device known, cannot satisfy broad claim" },
+  "g1_3_msxu_zero_prompt": { "status": "WITHHELD", "reason": "requires MSXU camera HIL", "r3_pass": true },
+  "g1_4_failure_messages": { "status": "implemented", "evidence": "docs/evidence/diagnostics.md" },
+  "g1_5_emitter_teardown_200ms": { "status": "WITHHELD", "reason": "requires HIL measurement" },
+  "g1_6_s3_20x_first_auth": { "status": "WITHHELD", "reason": "requires real S3 cycles", "simulated_pass": true },
+  "contributor_denominator": { "known_devices": 1, "required_for_claim": ">=80%", "status": "WITHHELD" }
+}
