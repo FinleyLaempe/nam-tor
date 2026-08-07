@@ -159,8 +159,15 @@ fn run_auth(pamh: *mut ffi::PamHandle) -> c_int {
 /// only uid, service, result, reason code, latency, operating point. We log
 /// the reason code only.
 fn log_fail(reason: &str, _journal_code: c_int, pam_code: c_int) -> c_int {
-    eprintln!("pam_namtor: {reason} → {}", ffi::pam_code_name(pam_code));
+    eprintln!("{}", log_line(reason, pam_code));
     pam_code
+}
+
+/// Build the single journald line for a failure. Pure (no I/O) so tests can
+/// assert the PAM module never surfaces the daemon's `AuthReply.reason` —
+/// only the hardcoded reason codes from `run_auth` cross into the journal.
+fn log_line(reason: &str, pam_code: c_int) -> String {
+    format!("pam_namtor: {reason} → {}", ffi::pam_code_name(pam_code))
 }
 
 #[cfg(test)]
@@ -174,6 +181,66 @@ mod tests {
             ffi::PAM_AUTHINFO_UNAVAIL
         );
         assert_eq!(log_fail("test", 0, ffi::PAM_SUCCESS), ffi::PAM_SUCCESS);
+    }
+
+    /// Spec §8.6: the PAM journal line carries only a hardcoded reason code,
+    /// never the daemon's `AuthReply.reason`. The reason codes used in
+    /// `run_auth` are fixed literals ("no_match", "unavailable", …), so no
+    /// biometric or PAD detail can reach the journal via this path.
+    #[test]
+    fn log_line_carries_only_hardcoded_reason_codes() {
+        let forbidden = [
+            "pad veto",
+            "energy",
+            "gradient",
+            "specular",
+            "radial",
+            "threshold",
+            "embedding",
+            "vec=",
+            "0x",
+            "no capture source",
+            "store error",
+            "inference failed",
+            "below threshold",
+        ];
+        let codes = [
+            ("no_match", ffi::PAM_AUTH_ERR),
+            ("unavailable", ffi::PAM_AUTHINFO_UNAVAIL),
+            ("rate_limited", ffi::PAM_MAXTRIES),
+            ("refused", ffi::PAM_AUTHINFO_UNAVAIL),
+            ("daemon_unreachable", ffi::PAM_AUTHINFO_UNAVAIL),
+            ("daemon_error", ffi::PAM_AUTHINFO_UNAVAIL),
+            ("keypress_fallback", ffi::PAM_AUTHINFO_UNAVAIL),
+        ];
+        for (reason, code) in codes {
+            let line = log_line(reason, code);
+            for token in forbidden {
+                assert!(
+                    !line.to_lowercase().contains(token),
+                    "journal line for `{reason}` leaks `{token}`: `{line}`"
+                );
+            }
+            assert!(
+                line.contains(reason),
+                "journal line must name the hardcoded reason code"
+            );
+            assert!(
+                line.contains(ffi::pam_code_name(code)),
+                "journal line must name the PAM code"
+            );
+        }
+    }
+
+    /// Fail-closed invariant (spec §8.2): only `Verdict::Match` maps to
+    /// `PAM_SUCCESS`. Every other verdict maps to an error code.
+    #[test]
+    fn only_match_maps_to_pam_success() {
+        assert_eq!(map_verdict(Verdict::Match), ffi::PAM_SUCCESS);
+        assert_ne!(map_verdict(Verdict::NoMatch), ffi::PAM_SUCCESS);
+        assert_ne!(map_verdict(Verdict::Unavailable), ffi::PAM_SUCCESS);
+        assert_ne!(map_verdict(Verdict::RateLimited), ffi::PAM_SUCCESS);
+        assert_ne!(map_verdict(Verdict::Refused), ffi::PAM_SUCCESS);
     }
 
     #[test]

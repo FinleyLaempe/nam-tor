@@ -57,14 +57,19 @@ pub struct VerifyOutcome {
 /// never the socket reply. The internal `VerifyOutcome.reason` keeps the
 /// detail; this function strips it at the trust boundary.
 ///
-/// Non-PAD `NoMatch` reasons (e.g. "no face", "below threshold") and all
+/// Non-PAD `NoMatch` reasons (e.g. "no face", "score too low") and all
 /// `Unavailable`/`Refused`/`RateLimited` reasons are passed through, since
-/// they do not reveal PAD internals.
+/// they do not reveal PAD internals. "below threshold" is normalised to
+/// "score too low" so the operating-point concept and value never cross the
+/// boundary; an empty NoMatch reason is collapsed to `None` so a PAD veto
+/// (also `None`) stays indistinguishable from a reason-less NoMatch.
 pub fn external_reason(outcome: &VerifyOutcome) -> Option<String> {
     match outcome.verdict {
         Verdict::Match => None,
         Verdict::NoMatch => match outcome.reason.as_deref() {
             Some(r) if r.starts_with("pad veto") => None,
+            Some("") => None,
+            Some("below threshold") => Some("score too low".into()),
             other => other.map(|s| s.to_string()),
         },
         Verdict::Refused | Verdict::RateLimited | Verdict::Unavailable => outcome.reason.clone(),
@@ -483,8 +488,13 @@ mod tests {
     fn external_reason_passes_through_non_pad_nomatch() {
         let no_face = VerifyOutcome::no_match("no face");
         assert_eq!(external_reason(&no_face).as_deref(), Some("no face"));
+        // "below threshold" is normalised so the operating-point word/value
+        // never reaches the client; the actionable signal is preserved.
         let below = VerifyOutcome::no_match("below threshold");
-        assert_eq!(external_reason(&below).as_deref(), Some("below threshold"));
+        assert_eq!(external_reason(&below).as_deref(), Some("score too low"));
+        // An empty NoMatch reason collapses to None, matching a PAD veto.
+        let empty = VerifyOutcome::no_match("");
+        assert!(external_reason(&empty).is_none());
     }
 
     #[test]
@@ -499,6 +509,109 @@ mod tests {
     fn external_reason_is_none_for_match() {
         let m = VerifyOutcome::match_(0.9);
         assert!(external_reason(&m).is_none());
+    }
+
+    /// Privacy gate (spec §8.3): the external reason that crosses the trust
+    /// boundary into `AuthReply.reason` — and thus the PAM module and any CLI
+    /// that surfaces it — must never carry PAD gate names, the match threshold,
+    /// embeddings, raw vectors, or hex dumps. This is the comprehensive scan
+    /// across every outcome variant, not just the PAD-veto strip.
+    #[test]
+    fn external_reason_rejects_gate_names_embeddings_and_thresholds() {
+        let forbidden = [
+            "energy",
+            "gradient",
+            "specular",
+            "radial",
+            "pad veto",
+            "threshold",
+            "embedding",
+            "vec=",
+            "0x",
+            "template",
+        ];
+        let outcomes: &[VerifyOutcome] = &[
+            VerifyOutcome::match_(0.91),
+            VerifyOutcome::no_match("pad veto: energy (0.123)"),
+            VerifyOutcome::no_match("pad veto: gradient (0.456)"),
+            VerifyOutcome::no_match("pad veto: specular (0.789)"),
+            VerifyOutcome::no_match("pad veto: radial (0.012)"),
+            VerifyOutcome::no_match("no enrollment"),
+            VerifyOutcome::no_match("empty enrollment"),
+            VerifyOutcome::no_match("no face"),
+            VerifyOutcome::no_match("below threshold"),
+            VerifyOutcome::no_match("timeout"),
+            VerifyOutcome::unavailable("no capture source"),
+            VerifyOutcome::unavailable("store error"),
+            VerifyOutcome::unavailable("inference failed"),
+            VerifyOutcome::unavailable("differential failed"),
+            VerifyOutcome::unavailable("pad failed"),
+            VerifyOutcome::refused("rhost set"),
+            VerifyOutcome {
+                verdict: Verdict::RateLimited,
+                score: 0.0,
+                reason: Some("backoff active".into()),
+            },
+        ];
+        for outcome in outcomes {
+            let ext = external_reason(outcome).unwrap_or_default();
+            for token in forbidden {
+                assert!(
+                    !ext.to_lowercase().contains(token),
+                    "external_reason for {:?} leaks `{token}`: `{ext}`",
+                    outcome.verdict
+                );
+            }
+        }
+    }
+
+    /// Failure-contract table (spec §8.3 / §3.4): every infrastructure failure
+    /// and the PAD veto must map to the intended `Verdict`, and the PAD veto
+    /// must be indistinguishable from a regular NoMatch at the trust boundary
+    /// (same verdict, same absent external reason).
+    #[test]
+    fn failure_modes_map_to_intended_verdicts() {
+        // Missing camera → Unavailable.
+        let no_camera = VerifyOutcome::unavailable("no capture source");
+        assert_eq!(no_camera.verdict, Verdict::Unavailable);
+        assert_eq!(
+            external_reason(&no_camera).as_deref(),
+            Some("no capture source")
+        );
+
+        // Missing store → Unavailable.
+        let store_err = VerifyOutcome::unavailable("store error");
+        assert_eq!(store_err.verdict, Verdict::Unavailable);
+
+        // Missing/broken worker → Unavailable.
+        let worker_err = VerifyOutcome::unavailable("inference failed");
+        assert_eq!(worker_err.verdict, Verdict::Unavailable);
+
+        // Timeout → NoMatch (the loop exhausted attempts before a Match).
+        let timeout = VerifyOutcome::no_match("timeout");
+        assert_eq!(timeout.verdict, Verdict::NoMatch);
+        assert_eq!(external_reason(&timeout).as_deref(), Some("timeout"));
+
+        // Rate limit → RateLimited, reason passed through (no PAD detail).
+        let rate = VerifyOutcome {
+            verdict: Verdict::RateLimited,
+            score: 0.0,
+            reason: Some("backoff active".into()),
+        };
+        assert_eq!(rate.verdict, Verdict::RateLimited);
+        assert_eq!(external_reason(&rate).as_deref(), Some("backoff active"));
+
+        // PAD veto → NoMatch with NO external reason (indistinguishable from a
+        // regular NoMatch that also carries no reason).
+        let pad_veto = VerifyOutcome::no_match("pad veto: energy (0.123)");
+        assert_eq!(pad_veto.verdict, Verdict::NoMatch);
+        assert!(external_reason(&pad_veto).is_none());
+
+        // A regular NoMatch with no reason is the canonical indistinguishable
+        // case; the PAD veto must match it exactly at the boundary.
+        let plain_no_match = VerifyOutcome::no_match("");
+        assert_eq!(pad_veto.verdict, plain_no_match.verdict);
+        assert_eq!(external_reason(&pad_veto), external_reason(&plain_no_match));
     }
 
     #[test]
