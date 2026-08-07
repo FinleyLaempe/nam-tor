@@ -18,24 +18,44 @@ use namtor_daemon::acl::resolve_namtor_auth_gid;
 use namtor_daemon::daemon::Daemon;
 use namtor_daemon::dispatch::DaemonDispatcher;
 use namtor_daemon::lifecycle::SystemClock;
-use namtor_daemon::listener::Listener;
+use namtor_daemon::startup;
 use namtor_daemon::supervisor::ChildSupervisor;
 use namtor_daemon::verify::VerifyEngine;
+use tracing_subscriber::EnvFilter;
 
 #[path = "namtor-daemon/live_capture.rs"]
 mod live_capture;
 
 fn main() -> ExitCode {
+    init_tracing();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("namtor-daemon: {e}");
+            tracing::error!(error = %e, "daemon startup failed");
             ExitCode::FAILURE
         }
     }
 }
 
+/// Initialise the global tracing subscriber exactly once. Uses
+/// `RUST_LOG` / `EnvFilter` directives; defaults to `info` for the daemon
+/// crate and `warn` for dependencies.
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,namtor_daemon=info,namtor_pam=warn"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .compact()
+        .init();
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "namtor-daemon starting"
+    );
+
     let socket_path = PathBuf::from(
         std::env::var("NAMTOR_SOCKET").unwrap_or_else(|_| "/run/namtor/auth.sock".into()),
     );
@@ -75,14 +95,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         },
     ];
     let mock_infer = std::env::var("NAMTOR_MOCK_INFER").is_ok();
+    tracing::info!(worker = %worker_bin.display(), mock_infer, "spawning worker");
     let supervisor = ChildSupervisor::spawn(&worker_bin, &model_specs, mock_infer, &models_dir)?;
 
+    tracing::info!(store = %store_dir.display(), "opening template store");
     let verify = VerifyEngine::new(&yunet_path, &sface_path, &store_dir, &key_path)?;
 
     let capture_factory = if std::env::var("NAMTOR_NO_CAMERA").is_ok() {
+        tracing::info!("camera disabled (NAMTOR_NO_CAMERA)");
         None
     } else {
         let configured = std::env::var("NAMTOR_CAMERA_DEV").ok();
+        tracing::info!(
+            camera = configured.as_deref().unwrap_or("auto"),
+            "camera enabled"
+        );
         Some(live_capture::factory_with_configured(configured))
     };
 
@@ -97,21 +124,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let dispatcher = Arc::new(DaemonDispatcher::new(daemon, verify));
 
     let auth_gid = resolve_namtor_auth_gid().unwrap_or_else(|_| {
-        eprintln!("namtor-daemon: warning — namtor-auth group not found, allowing all");
+        tracing::warn!("namtor-auth group not found — allowing all connections");
         0
     });
 
-    eprintln!("namtor-daemon: listening on {}", socket_path.display());
-
-    let listener = if std::env::var("LISTEN_FDS").is_ok() {
-        Listener::from_fd(3, socket_path, auth_gid, dispatcher)?
+    let started = if std::env::var("LISTEN_FDS").is_ok() {
+        tracing::info!(fd = 3, "adopting socket-activation listener");
+        startup::from_fd(3, socket_path, auth_gid, dispatcher)?
     } else {
-        Listener::bind(&socket_path, auth_gid, dispatcher)?
+        startup::bind(&socket_path, auth_gid, dispatcher)?
     };
+
+    let listener = started.listener;
 
     loop {
         if let Err(e) = listener.accept_one() {
-            eprintln!("namtor-daemon: accept error: {e}");
+            tracing::warn!(error = %e, "accept error");
         }
     }
 }

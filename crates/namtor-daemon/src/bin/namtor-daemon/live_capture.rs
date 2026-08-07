@@ -48,13 +48,10 @@ fn open_selected_camera(
 
     let emitter_cfg = cam.quirks_entry.as_ref().map(|e| &e.emitter);
     let emitter = activate_emitter(dev, emitter_cfg).unwrap_or_else(|e| {
-        eprintln!("namtor-daemon: warning — emitter activation failed: {e}");
+        tracing::warn!(error = %e, dev = %dev.display(), "emitter activation failed");
         EmitterGuard::failed(emitter_cfg.cloned())
     });
-    eprintln!(
-        "namtor-daemon: emitter protection level: {}",
-        emitter.protection_level()
-    );
+    tracing::info!(protection = ?emitter.protection_level(), "emitter ready");
 
     let streamer = namtor_capture::ir_uvc::V4l2IrStream::open(
         dev,
@@ -329,7 +326,7 @@ impl ReconcileGuard {
                         self.capture = Some(src);
                     }
                     Err(e) => {
-                        eprintln!("namtor-daemon: post-resume re-open failed: {e}");
+                        tracing::warn!(error = %e, "post-resume re-open failed");
                         self.reconciler
                             .record_rediscovery(ReconcileOutcome::MissingCamera);
                     }

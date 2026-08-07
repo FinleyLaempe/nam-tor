@@ -26,11 +26,11 @@ nix = { version = "0.29", features = ["fs", "process", "socket", "user"] }
 rand = "0.8"
 sha2 = "0.10"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 namtor-eval = { path = "../namtor-eval" }
 namtor-worker = { path = "../namtor-worker", features = ["onnx"] }
 namtor-capture = { path = "../namtor-capture" }
