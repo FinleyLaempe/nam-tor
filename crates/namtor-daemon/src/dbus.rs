@@ -28,6 +28,7 @@ use crate::acl::PeerCreds;
 use crate::manager::contract;
 use crate::DaemonError;
 use serde::{Deserialize, Serialize};
+use zbus::zvariant::Type;
 
 /// API version of the `org.namtor.Manager` surface. Re-exported from the
 /// frozen contract so there is a single source of truth.
@@ -42,7 +43,7 @@ pub mod action {
 }
 
 /// Coarse quality bucket derived from a scalar coverage/quality metric.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum QualityLabel {
     Low,
@@ -63,20 +64,20 @@ impl QualityLabel {
 }
 
 /// Public, biometric-free profile descriptor returned by `ListProfiles`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct ProfileInfo {
     pub id: String,
     pub name: String,
     pub enabled: bool,
     pub created: u64,
-    pub last_used: Option<u64>,
+    pub last_used: u64,
 }
 
 /// Live enrollment progress emitted as the `EnrollmentProgress` signal. Wire
 /// signature `(susu)` (session_id, frames_captured, quality_label,
 /// coverage_percent). `coverage_percent` is an integer 0-100; the UI must not
 /// receive a fractional value it could mistake for a threshold.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct EnrollmentProgress {
     pub session_id: String,
     pub frames_captured: u32,
@@ -87,11 +88,11 @@ pub struct EnrollmentProgress {
 /// Coarse outcome of `ReviewProfile` (wire `(sbs)`): the reviewed profile id,
 /// a quality label, and whether re-enrollment is recommended. No score, no
 /// threshold, no embedding.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct ReviewOutcome {
     pub profile_id: String,
-    pub quality: QualityLabel,
     pub needs_reenroll: bool,
+    pub quality: QualityLabel,
 }
 
 /// Identity of a D-Bus peer, resolved from `SO_PEERCRED` + `/proc/<pid>/cmdline`.
@@ -188,6 +189,40 @@ impl From<ApiError> for DaemonError {
     }
 }
 
+/// D-Bus wire error. Variants map 1:1 to frozen `org.namtor.Error.*` names
+/// (see [`contract::error`]).
+#[derive(Debug, zbus::DBusError)]
+#[zbus(prefix = "org.namtor.Error")]
+pub enum ManagerDBusError {
+    #[zbus(error)]
+    ZBus(zbus::Error),
+    Denied(String),
+    Challenge(String),
+    NotFound(String),
+    Exists(String),
+    SessionNotFound(String),
+    SessionBusy(String),
+    State(String),
+    IncompatibleVersion(String),
+}
+
+impl From<ApiError> for ManagerDBusError {
+    fn from(e: ApiError) -> Self {
+        match e {
+            ApiError::Denied { action } => Self::Denied(action),
+            ApiError::Challenge(a) => Self::Challenge(a),
+            ApiError::NotFound(s) => Self::NotFound(s),
+            ApiError::Exists(s) => Self::Exists(s),
+            ApiError::SessionNotFound(s) => Self::SessionNotFound(s),
+            ApiError::SessionBusy(uid) => {
+                Self::SessionBusy(format!("uid {uid} has active session"))
+            }
+            ApiError::State(s) => Self::State(s),
+            ApiError::Io(e) => Self::State(e.to_string()),
+        }
+    }
+}
+
 /// Signals emitted by the Manager interface. Mirrors the frozen signal set in
 /// [`crate::manager::contract::signal`].
 #[derive(Debug, Clone, PartialEq)]
@@ -208,7 +243,7 @@ pub enum ManagerSignal {
 }
 
 /// Snapshot returned by `Status`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Type)]
 pub struct StatusReport {
     pub api_version: u32,
     pub profiles: Vec<ProfileInfo>,
@@ -313,7 +348,7 @@ impl<P: PolkitAuthority> ManagerService<P> {
                 name: p.name.clone(),
                 enabled: p.enabled,
                 created: p.created,
-                last_used: None,
+                last_used: 0,
             })
             .collect();
         StatusReport {
@@ -399,7 +434,7 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
                 name: p.name.clone(),
                 enabled: p.enabled,
                 created: p.created,
-                last_used: None,
+                last_used: 0,
             })
             .collect())
     }
@@ -507,8 +542,8 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         };
         let outcome = ReviewOutcome {
             profile_id: id.to_string(),
-            quality,
             needs_reenroll: !p.enabled,
+            quality,
         };
         drop(profiles);
         lock(&self.signals).push(ManagerSignal::ProfileChanged {
@@ -722,7 +757,7 @@ mod tests {
             name: "n".into(),
             enabled: true,
             created: 0,
-            last_used: None,
+            last_used: 0,
         };
         let ep = EnrollmentProgress {
             session_id: "s".into(),
@@ -732,8 +767,8 @@ mod tests {
         };
         let ro = ReviewOutcome {
             profile_id: "p".into(),
-            quality: QualityLabel::High,
             needs_reenroll: false,
+            quality: QualityLabel::High,
         };
         let sr = StatusReport {
             api_version: 1,

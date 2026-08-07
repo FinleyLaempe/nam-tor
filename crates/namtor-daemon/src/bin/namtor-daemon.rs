@@ -8,16 +8,24 @@
 //! Supports systemd socket activation: if `LISTEN_FDS=1` is set, adopts the
 //! pre-bound listener fd from systemd (`namtor-daemon.socket`). Otherwise
 //! binds `/run/namtor/auth.sock` directly (dev/test path).
+//!
+//! D-Bus manager service (`org.namtor.Manager` on the system bus) is started
+//! in parallel with the PAM listener. If the bus is unavailable or the name
+//! is already taken, the daemon logs a warning and continues serving PAM —
+//! PAM is the critical path, D-Bus is management convenience.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use namtor_daemon::acl::resolve_namtor_auth_gid;
 use namtor_daemon::daemon::Daemon;
+use namtor_daemon::dbus::{ManagerService, SystemPolkit};
 use namtor_daemon::dispatch::DaemonDispatcher;
 use namtor_daemon::lifecycle::SystemClock;
+use namtor_daemon::manager::bus::ManagerBusService;
 use namtor_daemon::startup;
 use namtor_daemon::supervisor::ChildSupervisor;
 use namtor_daemon::verify::VerifyEngine;
@@ -25,6 +33,8 @@ use tracing_subscriber::EnvFilter;
 
 #[path = "namtor-daemon/live_capture.rs"]
 mod live_capture;
+
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 fn main() -> ExitCode {
     init_tracing();
@@ -37,9 +47,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// Initialise the global tracing subscriber exactly once. Uses
-/// `RUST_LOG` / `EnvFilter` directives; defaults to `info` for the daemon
-/// crate and `warn` for dependencies.
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,namtor_daemon=info,namtor_pam=warn"));
@@ -48,6 +55,26 @@ fn init_tracing() {
         .with_target(false)
         .compact()
         .init();
+}
+
+/// Install SIGTERM/SIGINT handlers that set [`SHUTDOWN`]. The blocking
+/// `accept()` in the listener returns `EINTR` when a signal arrives, so
+/// the accept loop wakes and checks the flag.
+fn install_signal_handlers() {
+    use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+
+    let action = SigAction::new(
+        SigHandler::Handler(handle_signal),
+        SaFlags::empty(),
+        SigSet::empty(),
+    );
+    for sig in [Signal::SIGTERM, Signal::SIGINT] {
+        let _ = unsafe { sigaction(sig, &action) };
+    }
+}
+
+extern "C" fn handle_signal(_sig: nix::libc::c_int) {
+    SHUTDOWN.store(true, Ordering::Relaxed);
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -128,6 +155,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         0
     });
 
+    let bus_service = start_manager_bus();
+
     let started = if std::env::var("LISTEN_FDS").is_ok() {
         tracing::info!(fd = 3, "adopting socket-activation listener");
         startup::from_fd(3, socket_path, auth_gid, dispatcher)?
@@ -137,9 +166,38 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = started.listener;
 
+    install_signal_handlers();
+
     loop {
+        if SHUTDOWN.load(Ordering::Relaxed) {
+            tracing::info!("shutdown signal received, stopping");
+            break;
+        }
         if let Err(e) = listener.accept_one() {
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                tracing::info!("shutdown signal received during accept, stopping");
+                break;
+            }
             tracing::warn!(error = %e, "accept error");
+        }
+    }
+
+    if let Some(bus) = bus_service {
+        bus.shutdown();
+    }
+
+    Ok(())
+}
+
+/// Start the `org.namtor.Manager` service on the system bus. Returns `None`
+/// and logs a warning if the bus is unavailable or the name is already taken.
+fn start_manager_bus() -> Option<ManagerBusService> {
+    let svc = Arc::new(ManagerService::new(SystemPolkit));
+    match ManagerBusService::start_system(svc) {
+        Ok(bus) => Some(bus),
+        Err(e) => {
+            tracing::warn!(error = %e, "manager d-bus service not started (pam path continues)");
+            None
         }
     }
 }

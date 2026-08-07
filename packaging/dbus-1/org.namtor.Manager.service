@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# D-Bus system-bus service activation for org.namtor.Manager.
+#
+# When a D-Bus client calls a method on org.namtor.Manager and no process
+# currently owns the name, dbus-daemon starts namtor-daemon via this unit.
+# Under normal operation systemd has already started the daemon via
+# namtor-daemon.service, so this file is a fallback for direct bus
+# activation (e.g. debugging without systemd).
+#
+# Installed to /usr/share/dbus-1/system-services/org.namtor.Manager.service.
+
+[D-BUS Service]
+Name=org.namtor.Manager
+Exec=/usr/lib/namtor/namtor-daemon
+User=namtor

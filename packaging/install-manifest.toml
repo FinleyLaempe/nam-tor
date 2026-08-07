@@ -159,6 +159,23 @@ group = "root"
 symlink = false
 
 # ---------------------------------------------------------------------------
+# D-Bus system-bus service activation
+# ---------------------------------------------------------------------------
+[[dirs]]
+path = "/usr/share/dbus-1/system-services"
+mode = "0755"
+owner = "root"
+group = "root"
+
+[[files]]
+dest = "/usr/share/dbus-1/system-services/org.namtor.Manager.service"
+src = "packaging/dbus-1/org.namtor.Manager.service"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+# ---------------------------------------------------------------------------
 # Manifests themselves (installed for the daemon to consult at startup)
 # ---------------------------------------------------------------------------
 [[files]]

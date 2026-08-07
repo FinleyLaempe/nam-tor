@@ -22,12 +22,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = "0.8"
-nix = { version = "0.29", features = ["fs", "process", "socket", "user"] }
+nix = { version = "0.29", features = ["fs", "process", "signal", "socket", "user"] }
 rand = "0.8"
 sha2 = "0.10"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false, optional = true }
+zbus = { version = "5.18", features = ["p2p"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
