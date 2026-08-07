@@ -1463,7 +1463,9 @@ dependencies = [
  "namtor-store",
  "namtor-uvc",
  "nix",
+ "serde",
  "tempfile",
+ "toml 0.8.23",
  "zeroize",
 ]
 

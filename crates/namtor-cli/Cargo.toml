@@ -15,6 +15,8 @@ namtor-uvc = { path = "../namtor-uvc" }
 namtor-pam = { path = "../namtor-pam" }
 clap = { version = "4", features = ["derive"] }
 nix = { version = "0.29", features = ["fs", "user"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 zeroize = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

@@ -16,6 +16,9 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use crate::install_layout::{InstallRoot, LayoutPaths};
+use namtor_camera::inventory::CameraInventory;
+
 /// Operator-coded diagnostic check result. Codes are stable operator
 /// identifiers (`E001`, `W001`, ...) that support tooling, not free text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,8 +178,9 @@ impl std::fmt::Display for DiagnosticReport {
     }
 }
 
-/// Paths and identifiers the doctor probes. Defaults point at the
-/// production install locations; tests override them with tempdirs.
+/// Paths and identifiers the doctor probes. Defaults are derived from the
+/// install-layout contract ([`LayoutPaths`]) and the camera inventory; tests
+/// override them with tempdirs.
 #[derive(Debug, Clone)]
 pub struct DiagnosticConfig {
     pub device_path: PathBuf,
@@ -192,23 +196,57 @@ pub struct DiagnosticConfig {
 }
 
 impl DiagnosticConfig {
-    /// Production install defaults.
+    /// Production defaults for an installed system: paths come from the
+    /// install manifest at `/usr/share/namtor/install-manifest.toml`, and
+    /// the device/vid:pid come from the sysfs camera inventory. No
+    /// reference-hardware constant is hard-coded here.
     pub fn production() -> Self {
+        let layout = LayoutPaths::resolve(
+            Path::new("/"),
+            Path::new("/usr/share/namtor/install-manifest.toml"),
+            InstallRoot::Installed,
+        );
+        let (device_path, vid_pid) = discover_device(&layout.quirks_dirs);
+        Self::from_layout(&layout, device_path, vid_pid)
+    }
+
+    /// Build a config from a resolved layout plus an explicit device.
+    pub fn from_layout(layout: &LayoutPaths, device_path: PathBuf, vid_pid: String) -> Self {
         Self {
-            device_path: PathBuf::from("/dev/video2"),
-            vid_pid: "3277:0018".into(),
-            templates_dir: PathBuf::from("/var/lib/namtor/templates"),
-            key_path: PathBuf::from("/var/lib/namtor/templates.key"),
-            models_dir: PathBuf::from("/var/lib/namtor/models"),
-            daemon_socket: PathBuf::from("/run/namtor/auth.sock"),
-            daemon_bin: PathBuf::from("/usr/libexec/namtor-daemon"),
-            cli_bin: PathBuf::from("/usr/bin/namtor-cli"),
-            quirks_dirs: vec![
-                PathBuf::from("/usr/share/namtor/quirks/devices"),
-                PathBuf::from("quirks/devices"),
-            ],
+            device_path,
+            vid_pid,
+            templates_dir: layout.templates_dir.clone(),
+            key_path: layout.key_path.clone(),
+            models_dir: layout.models_dir.clone(),
+            daemon_socket: layout.daemon_socket.clone(),
+            daemon_bin: layout.daemon_bin.clone(),
+            cli_bin: layout.cli_bin.clone(),
+            quirks_dirs: layout.quirks_dirs.clone(),
             auth_outcome: AuthOutcome::Unavailable,
         }
+    }
+}
+
+/// Discover the selected IR camera's device path and `vid:pid` from the
+/// sysfs inventory, using the same quirks directories the doctor probes.
+/// Returns `("/dev/video0", "0000:0000")`-style fallbacks when no IR camera
+/// is found so the doctor reports an actionable E001 rather than panicking.
+fn discover_device(quirks_dirs: &[PathBuf]) -> (PathBuf, String) {
+    let inventory =
+        namtor_camera::inventory::SysfsInventory::new(PathBuf::from("/sys"), quirks_dirs.to_vec());
+    match inventory.enumerate() {
+        Ok(cameras) if !cameras.is_empty() => {
+            if let Some(sel) =
+                namtor_camera::inventory::select_camera_from_inventory(&cameras, None, None)
+            {
+                let dev = sel.camera.ir_node.dev_path;
+                let vid_pid = format!("{:04x}:{:04x}", sel.camera.usb.vid, sel.camera.usb.pid);
+                (dev, vid_pid)
+            } else {
+                (PathBuf::from("/dev/video0"), String::from("0000:0000"))
+            }
+        }
+        _ => (PathBuf::from("/dev/video0"), String::from("0000:0000")),
     }
 }
 
@@ -979,5 +1017,178 @@ mod tests {
             err,
             BundleError::Privacy(PrivacyError::ForbiddenTerm { .. })
         ));
+    }
+
+    // -----------------------------------------------------------------
+    // Portability: derived defaults must not embed reference constants.
+    // -----------------------------------------------------------------
+
+    fn repo_manifest_path() -> PathBuf {
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/install-manifest.toml"
+        ))
+    }
+
+    #[test]
+    fn static_guard_rejects_reference_constants_in_defaults() {
+        // The guard checks the compile-time fallback defaults embedded in
+        // the layout + device discovery, not the runtime sysfs result (which
+        // legitimately finds the reference camera on this dev machine).
+        // An unreadable manifest forces LayoutPaths onto its fallback dests;
+        // an empty sysfs root forces discover_device onto its fallback path.
+        let layout = LayoutPaths::resolve(
+            Path::new("/nonexistent-root"),
+            Path::new("/nonexistent-manifest.toml"),
+            InstallRoot::Installed,
+        );
+        let layout_text = format!(
+            "{} {} {} {} {} {} {:?}",
+            layout.daemon_bin.display(),
+            layout.cli_bin.display(),
+            layout.models_dir.display(),
+            layout.templates_dir.display(),
+            layout.key_path.display(),
+            layout.daemon_socket.display(),
+            layout.quirks_dirs
+        );
+        for c in crate::install_layout::REFERENCE_CONSTANTS {
+            assert!(
+                !layout_text.contains(c),
+                "reference constant {c:?} leaked into layout fallback defaults: {layout_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn layout_source_root_uses_target_release_binaries() {
+        let layout = LayoutPaths::resolve(
+            std::env::current_dir().unwrap().as_path(),
+            &repo_manifest_path(),
+            InstallRoot::Source,
+        );
+        assert!(
+            layout.daemon_bin.ends_with("target/release/namtor-daemon"),
+            "source daemon_bin = {}",
+            layout.daemon_bin.display()
+        );
+        assert!(
+            layout.cli_bin.ends_with("target/release/namtor-cli"),
+            "source cli_bin = {}",
+            layout.cli_bin.display()
+        );
+    }
+
+    #[test]
+    fn layout_staged_root_rebases_paths_under_destdir() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = repo_manifest_path();
+        let staged_manifest = tmp.path().join("usr/share/namtor/install-manifest.toml");
+        fs::create_dir_all(staged_manifest.parent().unwrap()).unwrap();
+        fs::copy(&manifest, &staged_manifest).unwrap();
+
+        let layout = LayoutPaths::resolve(tmp.path(), &staged_manifest, InstallRoot::Staged);
+        assert_eq!(
+            layout.daemon_bin,
+            tmp.path().join("usr/lib/namtor/namtor-daemon"),
+            "staged daemon_bin rebased under DESTDIR"
+        );
+        assert_eq!(
+            layout.cli_bin,
+            tmp.path().join("usr/bin/namtor-cli"),
+            "staged cli_bin rebased under DESTDIR"
+        );
+        assert_eq!(layout.models_dir, tmp.path().join("var/lib/namtor/models"));
+        assert_eq!(
+            layout.daemon_socket,
+            tmp.path().join("run/namtor/auth.sock")
+        );
+        assert_eq!(
+            layout.templates_dir,
+            tmp.path().join("var/lib/namtor/templates")
+        );
+    }
+
+    #[test]
+    fn layout_alternate_libexec_follows_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let alt_manifest = tmp.path().join("install-manifest.toml");
+        fs::write(
+            &alt_manifest,
+            "[[files]]\ndest = \"/usr/libexec/namtor-daemon\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n\n\
+             [[files]]\ndest = \"/usr/bin/namtor-cli\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n",
+        )
+        .unwrap();
+
+        let layout = LayoutPaths::resolve(tmp.path(), &alt_manifest, InstallRoot::Installed);
+        assert_eq!(
+            layout.daemon_bin,
+            PathBuf::from("/usr/libexec/namtor-daemon"),
+            "alternate libexec dest followed from manifest"
+        );
+    }
+
+    #[test]
+    fn doctor_reports_absent_daemon_in_destdir_fixture() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = repo_manifest_path();
+        let staged_manifest = tmp.path().join("usr/share/namtor/install-manifest.toml");
+        fs::create_dir_all(staged_manifest.parent().unwrap()).unwrap();
+        fs::copy(&manifest, &staged_manifest).unwrap();
+
+        let layout = LayoutPaths::resolve(tmp.path(), &staged_manifest, InstallRoot::Staged);
+        let cfg = DiagnosticConfig::from_layout(
+            &layout,
+            tmp.path().join("dev/video2"),
+            "3277:0018".into(),
+        );
+        let report = run_doctor(&cfg);
+        assert!(
+            report.package.is_warning(),
+            "absent daemon in DESTDIR must be W004, got {:?}",
+            report.package
+        );
+        assert_eq!(report.package.code(), Some("W004"));
+    }
+
+    #[test]
+    fn doctor_renumbered_device_reports_correct_path() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = full_ok_config(tmp.path());
+        let renumbered = tmp.path().join("video7");
+        fs::write(&renumbered, b"x").unwrap();
+        cfg.device_path = renumbered.clone();
+        let report = run_doctor(&cfg);
+        assert!(report.device.is_ok());
+        assert!(
+            format!("{}", report.device).contains("video7"),
+            "renumbered device path reported"
+        );
+    }
+
+    #[test]
+    fn from_layout_carries_all_layout_paths() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = tmp.path().join("m.toml");
+        fs::write(
+            &manifest,
+            "[[files]]\ndest = \"/usr/lib/namtor/namtor-daemon\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n\n\
+             [[files]]\ndest = \"/usr/bin/namtor-cli\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n",
+        )
+        .unwrap();
+        let layout = LayoutPaths::resolve(tmp.path(), &manifest, InstallRoot::Staged);
+        let cfg = DiagnosticConfig::from_layout(
+            &layout,
+            PathBuf::from("/dev/video4"),
+            "1111:2222".into(),
+        );
+        assert_eq!(cfg.device_path, PathBuf::from("/dev/video4"));
+        assert_eq!(cfg.vid_pid, "1111:2222");
+        assert_eq!(
+            cfg.daemon_bin,
+            tmp.path().join("usr/lib/namtor/namtor-daemon")
+        );
+        assert_eq!(cfg.cli_bin, tmp.path().join("usr/bin/namtor-cli"));
+        assert_eq!(cfg.models_dir, tmp.path().join("var/lib/namtor/models"));
     }
 }
