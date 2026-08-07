@@ -154,12 +154,10 @@ fn full_pam_lifecycle_match() {
     let reply = namtor_pam::client::authenticate(&cfg).expect("auth should succeed");
     assert_eq!(reply.verdict, Verdict::Match);
     assert!((reply.score - 0.92).abs() < 0.01);
-    // PAM client sends Release as best-effort (no reply wait), so the
-    // dispatcher may have been called 2 or 3 times depending on timing.
     let count = dispatcher.phase_sequence.load(Ordering::SeqCst);
-    assert!(
-        count == 2 || count == 3,
-        "expected 2 or 3 dispatches, got {count}"
+    assert_eq!(
+        count, 3,
+        "expected 3 dispatches (Prepare+Verify+Release), got {count}"
     );
 }
 

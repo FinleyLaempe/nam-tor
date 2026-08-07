@@ -139,7 +139,10 @@ pub fn authenticate(cfg: &AuthConfig) -> Result<AuthReply, ClientError> {
         serde_json::from_value(ver_val).map_err(|_| ClientError::BadHello)?;
     let verdict = classify(&verify_reply, &nonce);
 
-    // 4. Release phase (best-effort; ignore errors here).
+    // 4. Release phase — symmetric bounded acknowledgment. We send Release
+    // and read the daemon's ack, bounded by the socket timeout. The verdict
+    // is already in hand, so any failure here is swallowed quietly: the
+    // daemon's connection-end cleanup guarantees capture/emitter release.
     let release = AuthRequest::Auth(AuthBody {
         nonce,
         target_uid: cfg.target_uid,
@@ -147,9 +150,10 @@ pub fn authenticate(cfg: &AuthConfig) -> Result<AuthReply, ClientError> {
         rhost: cfg.rhost.clone(),
         deadline_us,
     });
-    let _ = encode(&release, &mut stream);
-    let _ = stream.flush();
-    // Don't wait for the release reply — the verdict is already in hand.
+    if encode(&release, &mut stream).is_ok() {
+        let _ = stream.flush();
+        let _ = decode(&mut stream);
+    }
 
     verdict?;
     Ok(verify_reply)
@@ -390,5 +394,72 @@ mod tests {
         };
         let err = classify(&reply, &[0xaa; 16]).unwrap_err();
         assert!(matches!(err, ClientError::NonceMismatch));
+    }
+
+    /// The client must read the Release ack (symmetric bounded Release).
+    /// A daemon that closes the socket immediately after the Verify reply
+    /// (no Release ack) must not cause the client to fail — the verdict is
+    /// already in hand and errors are swallowed quietly.
+    #[test]
+    fn release_ack_failure_is_swallowed_quietly() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("auth.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let h = std::thread::spawn(move || -> std::io::Result<()> {
+            let (mut conn, _) = listener.accept()?;
+            let hello = HelloMsg {
+                server_version: 1,
+                nonce: [0xaa; 16],
+            };
+            encode(&hello, &mut conn).map_err(|e| std::io::Error::other(e.to_string()))?;
+            for _ in 0..2 {
+                let val = decode(&mut conn).map_err(|e| std::io::Error::other(e.to_string()))?;
+                let req: AuthRequest = serde_json::from_value(val)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                let AuthRequest::Auth(body) = req else {
+                    continue;
+                };
+                let reply = AuthReply {
+                    nonce: body.nonce,
+                    verdict: if body.phase == AuthPhase::Verify {
+                        Verdict::Match
+                    } else {
+                        Verdict::Unavailable
+                    },
+                    score: 0.0,
+                    reason: None,
+                };
+                encode(&reply, &mut conn).map_err(|e| std::io::Error::other(e.to_string()))?;
+                if body.phase == AuthPhase::Verify {
+                    break;
+                }
+            }
+            Ok(())
+        });
+
+        let cfg = make_cfg(&sock);
+        let reply = authenticate(&cfg).expect("Match verdict must be returned");
+        assert_eq!(reply.verdict, Verdict::Match);
+        drop(dir);
+        let _ = h.join();
+    }
+
+    /// The client must send Release even when the Verify verdict is an error
+    /// variant (Unavailable/Refused/RateLimited). The full lifecycle must
+    /// complete on every path.
+    #[test]
+    fn release_sent_after_unavailable_verdict() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("auth.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let (phase_tx, phase_rx) = mpsc::channel();
+        let h = mock_daemon_recording(listener, Verdict::Unavailable, phase_tx);
+        let cfg = make_cfg(&sock);
+        let _ = authenticate(&cfg);
+        assert_eq!(phase_rx.recv().unwrap(), AuthPhase::Prepare);
+        assert_eq!(phase_rx.recv().unwrap(), AuthPhase::Verify);
+        assert_eq!(phase_rx.recv().unwrap(), AuthPhase::Release);
+        drop(dir);
+        let _ = h.join();
     }
 }

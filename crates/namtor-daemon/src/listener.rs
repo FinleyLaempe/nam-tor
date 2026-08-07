@@ -15,7 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use namtor_proto::framing::{decode, encode};
-use namtor_proto::pam::{AuthBody, AuthReply, AuthRequest, HelloMsg, StatusReply, Verdict};
+use namtor_proto::pam::{
+    AuthBody, AuthPhase, AuthReply, AuthRequest, HelloMsg, StatusReply, Verdict,
+};
 
 use crate::acl::{authorise, get_peer_creds};
 use crate::nonce::NonceService;
@@ -133,6 +135,8 @@ impl Listener {
         let mut reader = std::io::BufReader::new(reader);
 
         let mut nonce_validated = false;
+        let mut last_auth_body: Option<AuthBody> = None;
+        let mut released = false;
 
         loop {
             let value = match decode(&mut reader) {
@@ -142,16 +146,31 @@ impl Listener {
                 {
                     break;
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    self.ensure_release(&last_auth_body, &mut released);
+                    return Err(e.into());
+                }
             };
-            let req: AuthRequest = serde_json::from_value(value)?;
+            let req: AuthRequest = match serde_json::from_value(value) {
+                Ok(r) => r,
+                Err(e) => {
+                    self.ensure_release(&last_auth_body, &mut released);
+                    return Err(e.into());
+                }
+            };
 
             match req {
                 AuthRequest::Status => {
                     tracing::debug!(peer_uid = creds.uid, "status request");
                     let status = self.dispatcher.snapshot();
-                    encode(&status, &mut writer)?;
-                    writer.flush()?;
+                    if let Err(e) = encode(&status, &mut writer) {
+                        self.ensure_release(&last_auth_body, &mut released);
+                        return Err(e.into());
+                    }
+                    if let Err(e) = writer.flush() {
+                        self.ensure_release(&last_auth_body, &mut released);
+                        return Err(e.into());
+                    }
                 }
                 AuthRequest::Auth(body) => {
                     if body.rhost.is_some() {
@@ -162,8 +181,8 @@ impl Listener {
                             score: 0.0,
                             reason: Some("remote authentication refused".into()),
                         };
-                        encode(&reply, &mut writer)?;
-                        writer.flush()?;
+                        let _ = encode(&reply, &mut writer);
+                        let _ = writer.flush();
                         return Ok(());
                     }
 
@@ -184,17 +203,27 @@ impl Listener {
                     );
                     let _lock = self.camera_lock.lock().expect("camera_lock poisoned");
 
+                    if body.phase == AuthPhase::Release {
+                        released = true;
+                    }
+                    last_auth_body = Some(body.clone());
+
                     match self.dispatcher.dispatch(&body) {
                         Ok(reply) => {
                             tracing::info!(
                                 peer_uid = creds.uid,
                                 target_uid = body.target_uid,
                                 verdict = ?reply.verdict,
-                                score = reply.score,
                                 "auth phase complete"
                             );
-                            encode(&reply, &mut writer)?;
-                            writer.flush()?;
+                            if let Err(e) = encode(&reply, &mut writer) {
+                                self.ensure_release(&last_auth_body, &mut released);
+                                return Err(e.into());
+                            }
+                            if let Err(e) = writer.flush() {
+                                self.ensure_release(&last_auth_body, &mut released);
+                                return Err(e.into());
+                            }
                         }
                         Err(e) => {
                             let reply = AuthReply {
@@ -203,15 +232,39 @@ impl Listener {
                                 score: 0.0,
                                 reason: Some(e.to_string()),
                             };
-                            encode(&reply, &mut writer)?;
-                            writer.flush()?;
+                            let _ = encode(&reply, &mut writer);
+                            let _ = writer.flush();
                         }
                     }
                 }
             }
         }
 
+        self.ensure_release(&last_auth_body, &mut released);
         Ok(())
+    }
+
+    /// Guarantee capture/emitter release if the client disconnects after
+    /// Prepare/Verify without sending Release. Idempotent: safe to call
+    /// after a real Release (released=true) or when no auth started.
+    fn ensure_release(&self, last: &Option<AuthBody>, released: &mut bool) {
+        if *released {
+            return;
+        }
+        let Some(body) = last else {
+            return;
+        };
+        let cleanup = AuthBody {
+            nonce: body.nonce,
+            target_uid: body.target_uid,
+            phase: AuthPhase::Release,
+            rhost: None,
+            deadline_us: body.deadline_us,
+        };
+        let _lock = self.camera_lock.lock().expect("camera_lock poisoned");
+        let _ = self.dispatcher.dispatch(&cleanup);
+        *released = true;
+        tracing::debug!(peer_uid = body.target_uid, "cleanup release dispatched");
     }
 
     /// Path the listener is bound to.
@@ -523,5 +576,135 @@ mod tests {
         let _status: StatusReply = serde_json::from_value(recv_msg(&s)).expect("status");
         drop(s);
         t.join().expect("join");
+    }
+
+    /// Dispatcher that records the sequence of phases it received.
+    struct ReleaseTrackingDispatcher {
+        phases: Arc<Mutex<Vec<AuthPhase>>>,
+    }
+
+    impl ReleaseTrackingDispatcher {
+        fn new() -> (Self, Arc<Mutex<Vec<AuthPhase>>>) {
+            let phases = Arc::new(Mutex::new(Vec::new()));
+            let d = Self {
+                phases: phases.clone(),
+            };
+            (d, phases)
+        }
+    }
+
+    impl LifecycleDispatch for ReleaseTrackingDispatcher {
+        fn dispatch(&self, body: &AuthBody) -> Result<AuthReply, DaemonError> {
+            self.phases.lock().expect("phases").push(body.phase);
+            Ok(AuthReply {
+                nonce: body.nonce,
+                verdict: match body.phase {
+                    AuthPhase::Verify => Verdict::Match,
+                    _ => Verdict::Unavailable,
+                },
+                score: 0.0,
+                reason: None,
+            })
+        }
+        fn snapshot(&self) -> StatusReply {
+            StatusReply {
+                stream: namtor_proto::pam::StreamState::Closed,
+                requester: None,
+                warm_remaining_ms: None,
+            }
+        }
+    }
+
+    /// If the client disconnects after Verify without sending Release, the
+    /// listener must dispatch a synthetic Release to guarantee capture/emitter
+    /// cleanup.
+    #[test]
+    fn cleanup_release_on_disconnect_after_verify() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let sock = tmp.path().join("auth.sock");
+        let (dispatcher, phases) = ReleaseTrackingDispatcher::new();
+        let our_gid = nix::unistd::getgid().as_raw() as u32;
+        let listener = Listener::bind(&sock, our_gid, Arc::new(dispatcher)).expect("bind");
+
+        let h = serve(listener);
+
+        let s = connect_and_hello(&sock);
+        let hello: HelloMsg = serde_json::from_value(recv_msg(&s)).expect("hello");
+        let body = AuthBody {
+            nonce: hello.nonce,
+            target_uid: 1000,
+            phase: AuthPhase::Verify,
+            rhost: None,
+            deadline_us: 5_000_000,
+        };
+        send_msg(&s, &AuthRequest::Auth(body));
+        let _reply: AuthReply = serde_json::from_value(recv_msg(&s)).expect("reply");
+        drop(s);
+        h.join().expect("join");
+
+        let recorded = phases.lock().expect("phases").clone();
+        assert_eq!(
+            recorded,
+            vec![AuthPhase::Verify, AuthPhase::Release],
+            "listener must dispatch cleanup Release after disconnect"
+        );
+    }
+
+    /// If the client sends Release explicitly, the listener must NOT dispatch
+    /// a second cleanup Release.
+    #[test]
+    fn explicit_release_prevents_cleanup_release() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let sock = tmp.path().join("auth.sock");
+        let (dispatcher, phases) = ReleaseTrackingDispatcher::new();
+        let our_gid = nix::unistd::getgid().as_raw() as u32;
+        let listener = Listener::bind(&sock, our_gid, Arc::new(dispatcher)).expect("bind");
+
+        let h = serve(listener);
+
+        let s = connect_and_hello(&sock);
+        let hello: HelloMsg = serde_json::from_value(recv_msg(&s)).expect("hello");
+        for phase in [AuthPhase::Verify, AuthPhase::Release] {
+            let body = AuthBody {
+                nonce: hello.nonce,
+                target_uid: 1000,
+                phase,
+                rhost: None,
+                deadline_us: 5_000_000,
+            };
+            send_msg(&s, &AuthRequest::Auth(body));
+            let _reply: AuthReply = serde_json::from_value(recv_msg(&s)).expect("reply");
+        }
+        drop(s);
+        h.join().expect("join");
+
+        let recorded = phases.lock().expect("phases").clone();
+        assert_eq!(
+            recorded,
+            vec![AuthPhase::Verify, AuthPhase::Release],
+            "explicit Release must suppress cleanup Release"
+        );
+    }
+
+    /// If no auth was started (only Status), no cleanup Release is dispatched.
+    #[test]
+    fn no_cleanup_release_without_auth() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let sock = tmp.path().join("auth.sock");
+        let (dispatcher, phases) = ReleaseTrackingDispatcher::new();
+        let our_gid = nix::unistd::getgid().as_raw() as u32;
+        let listener = Listener::bind(&sock, our_gid, Arc::new(dispatcher)).expect("bind");
+
+        let h = serve(listener);
+
+        let s = connect_and_hello(&sock);
+        let _hello: HelloMsg = serde_json::from_value(recv_msg(&s)).expect("hello");
+        send_msg(&s, &AuthRequest::Status);
+        let _status: StatusReply = serde_json::from_value(recv_msg(&s)).expect("status");
+        drop(s);
+        h.join().expect("join");
+
+        let recorded = phases.lock().expect("phases").clone();
+        assert!(recorded.is_empty(), "no auth → no cleanup Release");
     }
 }
