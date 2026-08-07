@@ -1,0 +1,108 @@
+{
+  "report": "rc-g2-g5",
+  "date": "2026-08-07",
+  "task": 34,
+  "commit_message": "test(release): certify production gates",
+  "spec_ref": "docs/superpowers/specs/2026-08-04-nam-tor-design.md §12",
+  "protocol_ref": "ml/reports/production-eval.md",
+  "gates": [
+    {
+      "gate": "G2",
+      "name": "latency",
+      "target": "median ≤ 500 ms, p95 ≤ 1000 ms",
+      "status": "WITHHELD",
+      "evidence": "crates/namtor-eval/src/protocol.rs (G2Report, LatencyBand); crates/namtor-eval/src/score.rs (LatencyBreakdown)",
+      "reason": "Harness ready. Requires RC packages on reference hardware for measurement."
+    },
+    {
+      "gate": "G3",
+      "name": "biometric_accuracy",
+      "target": "FAR ≤ 1e-5 at FRR ≤ 3%",
+      "status": "WITHHELD",
+      "evidence": "crates/namtor-eval/src/protocol.rs (validate_protocol, validate_g3_report, far_claim_eligible)",
+      "reason": "Subject-disjoint protocol validated. FAR ≤ 1e-5 requires ≥ 100k impostor comparisons AND zero false accepts AND 95% upper bound ≤ 1e-5 (rule of three, n ≥ 300k). No lawful cohort dataset available."
+    },
+    {
+      "gate": "G4",
+      "name": "presentation_attack_detection",
+      "target": "APCER ≤ 5% per attack type, BPCER ≤ 5%",
+      "status": "WITHHELD",
+      "evidence": "ml/reports/analytic-pad-calibration.md (synthetic), ml/reports/learned-pad.md (synthetic)",
+      "reason": "Analytic gates calibrated on synthetic data only. Learned PAD synthetic-only. 3D masks explicitly NOT evaluated."
+    },
+    {
+      "gate": "G5.1",
+      "name": "pam_no_ml_structural",
+      "target": "pam_namtor.so < 500 KB, no ML deps",
+      "status": "PASSED",
+      "evidence": "CI gate; namtor-pam 457 KB, no ML code",
+      "reason": "Structural test passes on master."
+    },
+    {
+      "gate": "G5.2",
+      "name": "sandbox_escape_blocked",
+      "target": "worker cannot open files/network/unauthorised syscalls",
+      "status": "PASSED",
+      "evidence": "CI gate; docs/evidence/g5-fault-matrix.json (landlock_denies_open, seccomp_denies_socket)",
+      "reason": "seccomp + landlock tests pass on master."
+    },
+    {
+      "gate": "G5.3",
+      "name": "fail_closed",
+      "target": "all error paths return PAM_AUTHINFO_UNAVAIL",
+      "status": "PASSED",
+      "evidence": "CI gate; namtor-pam error path tests",
+      "reason": "Fail-closed contract asserted by tests on master."
+    },
+    {
+      "gate": "G5.4",
+      "name": "no_biometric_logs",
+      "target": "no biometric data in logs at any level",
+      "status": "PASSED",
+      "evidence": "CI gate; e2e_no_biometric_data_in_logs (docs/evidence/g5-fault-matrix.json)",
+      "reason": "E2E log scan passes on master."
+    },
+    {
+      "gate": "G5.5",
+      "name": "tpm_templates_unreadable_off_device",
+      "target": "sealed key blob fails to unseal on a different TPM",
+      "status": "PARTIAL",
+      "evidence": "docs/evidence/g5-tpm.md (MockTpm contract tests pass; real_tpm_seal_unseal_round_trip #[ignore])",
+      "reason": "MockTpm contract + same-device real-TPM pass. Cross-hardware WITHHELD (one TPM machine)."
+    }
+  ],
+  "desktop_acceptance": {
+    "gnome": {
+      "status": "implemented",
+      "evidence": "docs/evidence/gnome-qa/report.md",
+      "hil_verified": false
+    },
+    "kde": {
+      "status": "implemented",
+      "evidence": "docs/evidence/kde-qa/report.md",
+      "hil_verified": false
+    },
+    "dbus_api": {
+      "status": "implemented",
+      "evidence": "docs/evidence/dbus-contract.xml"
+    },
+    "e2e_profile_lifecycle": {
+      "status": "implemented",
+      "operations": ["create", "review", "merge", "delete"],
+      "direct_store_access": false,
+      "hil_verified": false,
+      "reason": "S3 20x HIL WITHHELD per docs/evidence/status-audit.md R10."
+    }
+  },
+  "model_and_package_hashes": {
+    "status": "pending_tag",
+    "reason": "Bound to RC results at tag time. Recorded at run time in EvalConfig.model_hashes."
+  },
+  "summary": {
+    "passed": ["G5.1", "G5.2", "G5.3", "G5.4"],
+    "partial": ["G5.5"],
+    "withheld": ["G2", "G3", "G4"],
+    "failed": [],
+    "principle": "No claim published without evidence."
+  }
+}
