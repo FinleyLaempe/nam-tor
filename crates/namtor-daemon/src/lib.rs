@@ -9,6 +9,7 @@
 pub mod acl;
 pub mod backoff;
 pub mod daemon;
+pub mod dbus;
 pub mod dispatch;
 pub mod fusion;
 pub mod licence;
