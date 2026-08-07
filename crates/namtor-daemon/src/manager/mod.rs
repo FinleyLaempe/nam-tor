@@ -3,3 +3,4 @@
 
 pub mod bus;
 pub mod contract;
+pub mod store;

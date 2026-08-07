@@ -102,6 +102,12 @@ pub struct ProfileRecord {
     pub model_id: String,
     pub created_at_us: u64,
     pub schema_version: u16,
+    /// Wall-clock microseconds of the last successful authentication using
+    /// this profile. Zero means "never used" (enrolled but not yet matched
+    /// against). Updated by the daemon's verify path; surfaced to the UI as
+    /// `ProfileInfo.last_used` (seconds).
+    #[serde(default)]
+    pub last_used_us: u64,
 }
 
 /// A profile plus the templates enrolled under it.

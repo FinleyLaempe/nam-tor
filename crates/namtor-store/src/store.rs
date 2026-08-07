@@ -459,6 +459,61 @@ impl TemplateStore {
         self.write_container(&path, uid, &container)
     }
 
+    /// Fold `src_id` into `dst_id`: append src's templates to dst's, then
+    /// remove src. Atomic at the container level (single [`write_container`])
+    /// — a missing dst leaves src intact (no partial mutation).
+    pub fn combine_profiles(
+        &self,
+        uid: u32,
+        src_id: &ProfileId,
+        dst_id: &ProfileId,
+    ) -> Result<(), StoreError> {
+        let path = self.record_path(uid);
+        let mut container = self.require_container(&path, uid)?;
+        let src_idx = container
+            .profiles
+            .iter()
+            .position(|p| p.profile.profile_id == *src_id)
+            .ok_or_else(|| StoreError::ProfileNotFound(src_id.0.clone()))?;
+        let dst_idx = container
+            .profiles
+            .iter()
+            .position(|p| p.profile.profile_id == *dst_id)
+            .ok_or_else(|| StoreError::ProfileNotFound(dst_id.0.clone()))?;
+        if src_idx == dst_idx {
+            return Err(StoreError::ProfileExists(src_id.0.clone()));
+        }
+        let src_entry = container.profiles.remove(src_idx);
+        let dst_idx = if src_idx < dst_idx {
+            dst_idx - 1
+        } else {
+            dst_idx
+        };
+        container.profiles[dst_idx]
+            .templates
+            .extend(src_entry.templates);
+        self.write_container(&path, uid, &container)
+    }
+
+    /// Update `last_used_us` on a profile. Called by the verify path after a
+    /// successful match; zero leaves it unchanged from enrollment.
+    pub fn touch_last_used(
+        &self,
+        uid: u32,
+        profile_id: &ProfileId,
+        last_used_us: u64,
+    ) -> Result<(), StoreError> {
+        let path = self.record_path(uid);
+        let mut container = self.require_container(&path, uid)?;
+        let entry = container
+            .profiles
+            .iter_mut()
+            .find(|p| p.profile.profile_id == *profile_id)
+            .ok_or_else(|| StoreError::ProfileNotFound(profile_id.0.clone()))?;
+        entry.profile.last_used_us = last_used_us;
+        self.write_container(&path, uid, &container)
+    }
+
     fn require_container(&self, path: &Path, uid: u32) -> Result<UserContainer, StoreError> {
         if !path.exists() {
             return Err(StoreError::NotFound(uid));
@@ -533,6 +588,7 @@ fn legacy_to_container(record: TemplateRecord) -> UserContainer {
                 model_id: record.meta.model_id.clone(),
                 created_at_us: record.meta.created_at_us,
                 schema_version: 1,
+                last_used_us: 0,
             },
             templates: record.templates,
         }],
@@ -573,6 +629,7 @@ mod tests {
             model_id: "sface".into(),
             created_at_us: 1,
             schema_version: 1,
+            last_used_us: 0,
         }
     }
 
@@ -886,5 +943,155 @@ mod tests {
             parsed.profiles[1].profile.profile_id,
             ProfileId("home".into())
         );
+    }
+
+    #[test]
+    fn combine_folds_src_into_dst() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "work", true),
+                vec![test_template(0.1), test_template(0.2)],
+            )
+            .unwrap();
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "home", true),
+                vec![test_template(0.3)],
+            )
+            .unwrap();
+        store
+            .combine_profiles(1000, &ProfileId("work".into()), &ProfileId("home".into()))
+            .unwrap();
+
+        let profiles = store.list_profiles(1000).unwrap();
+        assert_eq!(profiles.len(), 1, "src removed, dst remains");
+        assert_eq!(profiles[0].profile.profile_id, ProfileId("home".into()));
+        assert_eq!(
+            profiles[0].templates.len(),
+            3,
+            "dst has src + dst templates"
+        );
+        assert_eq!(profiles[0].templates[0].vector, vec![0.3; 128]);
+        assert_eq!(profiles[0].templates[1].vector, vec![0.1; 128]);
+        assert_eq!(profiles[0].templates[2].vector, vec![0.2; 128]);
+    }
+
+    #[test]
+    fn combine_missing_dst_preserves_src() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "work", true),
+                vec![test_template(0.1)],
+            )
+            .unwrap();
+        let err = store
+            .combine_profiles(
+                1000,
+                &ProfileId("work".into()),
+                &ProfileId("nonexistent".into()),
+            )
+            .unwrap_err();
+        assert!(matches!(err, StoreError::ProfileNotFound(_)));
+
+        let profiles = store.list_profiles(1000).unwrap();
+        assert_eq!(profiles.len(), 1, "src preserved on missing dst");
+        assert_eq!(profiles[0].profile.profile_id, ProfileId("work".into()));
+        assert_eq!(profiles[0].templates.len(), 1);
+    }
+
+    #[test]
+    fn combine_missing_src_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "home", true),
+                vec![test_template(0.3)],
+            )
+            .unwrap();
+        let err = store
+            .combine_profiles(
+                1000,
+                &ProfileId("nonexistent".into()),
+                &ProfileId("home".into()),
+            )
+            .unwrap_err();
+        assert!(matches!(err, StoreError::ProfileNotFound(_)));
+        assert_eq!(store.list_profiles(1000).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn combine_same_id_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "work", true),
+                vec![test_template(0.1)],
+            )
+            .unwrap();
+        let err = store
+            .combine_profiles(1000, &ProfileId("work".into()), &ProfileId("work".into()))
+            .unwrap_err();
+        assert!(matches!(err, StoreError::ProfileExists(_)));
+        assert_eq!(store.list_profiles(1000).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn touch_last_used_updates_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "work", true),
+                vec![test_template(0.1)],
+            )
+            .unwrap();
+        store
+            .touch_last_used(1000, &ProfileId("work".into()), 9_000_000_000)
+            .unwrap();
+
+        let profiles = store.list_profiles(1000).unwrap();
+        assert_eq!(profiles[0].profile.last_used_us, 9_000_000_000);
+    }
+
+    #[test]
+    fn touch_last_used_missing_profile_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path());
+
+        store
+            .create_profile(
+                1000,
+                test_profile(1000, "work", true),
+                vec![test_template(0.1)],
+            )
+            .unwrap();
+        let err = store
+            .touch_last_used(1000, &ProfileId("nope".into()), 1)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::ProfileNotFound(_)));
+    }
+
+    #[test]
+    fn last_used_defaults_to_zero_on_deserialize() {
+        let json = r#"{"profile_id":"x","display_name":"x","enabled":true,"uid":1,"model_id":"m","created_at_us":0,"schema_version":1}"#;
+        let rec: ProfileRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(rec.last_used_us, 0);
     }
 }

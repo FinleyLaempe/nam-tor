@@ -26,9 +26,11 @@ use namtor_daemon::dbus::{ManagerService, SystemPolkit};
 use namtor_daemon::dispatch::DaemonDispatcher;
 use namtor_daemon::lifecycle::SystemClock;
 use namtor_daemon::manager::bus::ManagerBusService;
+use namtor_daemon::manager::store::{ProfileStore, TemplateProfileStore};
 use namtor_daemon::startup;
 use namtor_daemon::supervisor::ChildSupervisor;
 use namtor_daemon::verify::VerifyEngine;
+use namtor_store::TemplateStore;
 use tracing_subscriber::EnvFilter;
 
 #[path = "namtor-daemon/live_capture.rs"]
@@ -155,7 +157,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         0
     });
 
-    let bus_service = start_manager_bus();
+    let bus_service = start_manager_bus(&store_dir, &key_path);
 
     let started = if std::env::var("LISTEN_FDS").is_ok() {
         tracing::info!(fd = 3, "adopting socket-activation listener");
@@ -191,8 +193,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Start the `org.namtor.Manager` service on the system bus. Returns `None`
 /// and logs a warning if the bus is unavailable or the name is already taken.
-fn start_manager_bus() -> Option<ManagerBusService> {
-    let svc = Arc::new(ManagerService::new(SystemPolkit));
+fn start_manager_bus(
+    store_dir: &std::path::Path,
+    key_path: &std::path::Path,
+) -> Option<ManagerBusService> {
+    let store = match TemplateStore::open(store_dir, key_path) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            tracing::warn!(error = %e, "template store open failed (manager bus not started)");
+            return None;
+        }
+    };
+    let profile_store: Arc<dyn ProfileStore> = Arc::new(TemplateProfileStore::new(store));
+    let svc = Arc::new(ManagerService::new_with_store(SystemPolkit, profile_store));
     match ManagerBusService::start_system(svc) {
         Ok(bus) => Some(bus),
         Err(e) => {

@@ -19,14 +19,16 @@
 // reference impl). The frozen contract itself lives in `manager::contract`.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 use crate::acl::PeerCreds;
 use crate::manager::contract;
+use crate::manager::store::{map_store_error, NullProfileStore, ProfileStore};
 use crate::DaemonError;
+use namtor_store::template::{ProfileEntry, ProfileId, ProfileRecord};
 use serde::{Deserialize, Serialize};
 use zbus::zvariant::Type;
 
@@ -41,6 +43,11 @@ pub mod action {
     pub const DELETE: &str = "org.namtor.delete";
     pub const CONFIGURE: &str = "org.namtor.configure";
 }
+
+/// Model identifier stamped into every profile record at commit. The daemon
+/// serves embeddings from this model; the store AAD binds uid + model_id so
+/// a template enrolled under one model cannot be matched under another.
+const PROFILE_MODEL_ID: &str = "sface_2021dec";
 
 /// Coarse quality bucket derived from a scalar coverage/quality metric.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -250,14 +257,6 @@ pub struct StatusReport {
     pub emitter_armed: bool,
 }
 
-// In-memory profile entry for the reference impl.
-#[derive(Debug, Clone)]
-struct InMemoryProfile {
-    name: String,
-    enabled: bool,
-    created: u64,
-}
-
 // Live enrollment session.
 #[derive(Debug)]
 struct Session {
@@ -266,24 +265,41 @@ struct Session {
     name: String,
 }
 
-/// Reference in-memory `org.namtor.Manager` service.
+/// Reference `org.namtor.Manager` service backed by a durable [`ProfileStore`].
+///
+/// Profile data is persisted through the encrypted template store — there is
+/// no in-memory profile map. A [`Mutex<()>`] serializes all store access so
+/// concurrent D-Bus calls cannot interleave a read-mutate-write cycle on the
+/// same uid's container. The UI has no direct store handle; every mutation
+/// goes through the [`ProfileApi`] trait.
 pub struct ManagerService<P: PolkitAuthority> {
     polkit: P,
+    store: Arc<dyn ProfileStore>,
+    store_lock: Mutex<()>,
     sessions: Mutex<HashMap<String, Session>>,
     active_per_uid: Mutex<HashMap<u32, String>>,
-    profiles: Mutex<HashMap<(u32, String), InMemoryProfile>>,
     emitter_armed: Mutex<bool>,
     signals: Mutex<Vec<ManagerSignal>>,
     store_gen: Mutex<u64>,
 }
 
 impl<P: PolkitAuthority> ManagerService<P> {
+    /// Construct with a null store. Used by bus-service tests that exercise
+    /// D-Bus mechanics, not profile persistence. Production code must use
+    /// [`Self::new_with_store`].
     pub fn new(polkit: P) -> Self {
+        Self::new_with_store(polkit, Arc::new(NullProfileStore))
+    }
+
+    /// Construct with a durable profile store. The daemon passes a
+    /// [`TemplateProfileStore`] wrapping the real [`namtor_store::TemplateStore`].
+    pub fn new_with_store(polkit: P, store: Arc<dyn ProfileStore>) -> Self {
         Self {
             polkit,
+            store,
+            store_lock: Mutex::new(()),
             sessions: Mutex::new(HashMap::new()),
             active_per_uid: Mutex::new(HashMap::new()),
-            profiles: Mutex::new(HashMap::new()),
             emitter_armed: Mutex::new(false),
             signals: Mutex::new(Vec::new()),
             store_gen: Mutex::new(0),
@@ -340,16 +356,17 @@ impl<P: PolkitAuthority> ManagerService<P> {
     }
 
     fn snapshot_status(&self) -> StatusReport {
-        let profiles = lock(&self.profiles);
-        let list: Vec<ProfileInfo> = profiles
+        self.snapshot_status_for(0)
+    }
+
+    fn snapshot_status_for(&self, uid: u32) -> StatusReport {
+        let _guard = lock(&self.store_lock);
+        let list = self
+            .store
+            .list_profiles(uid)
+            .unwrap_or_default()
             .iter()
-            .map(|((_, id), p)| ProfileInfo {
-                id: id.clone(),
-                name: p.name.clone(),
-                enabled: p.enabled,
-                created: p.created,
-                last_used: 0,
-            })
+            .map(profile_entry_to_info)
             .collect();
         StatusReport {
             api_version: API_VERSION,
@@ -357,6 +374,25 @@ impl<P: PolkitAuthority> ManagerService<P> {
             emitter_armed: *lock(&self.emitter_armed),
         }
     }
+}
+
+/// Map a stored [`ProfileEntry`] to the biometric-free [`ProfileInfo`] that
+/// crosses the D-Bus surface. Microsecond timestamps are truncated to seconds.
+fn profile_entry_to_info(entry: &ProfileEntry) -> ProfileInfo {
+    ProfileInfo {
+        id: entry.profile.profile_id.0.clone(),
+        name: entry.profile.display_name.clone(),
+        enabled: entry.profile.enabled,
+        created: entry.profile.created_at_us / 1_000_000,
+        last_used: entry.profile.last_used_us / 1_000_000,
+    }
+}
+
+fn now_us() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0)
 }
 
 /// Public D-Bus-exposed profile API. Method names mirror the frozen contract
@@ -425,18 +461,12 @@ pub trait ProfileApi {
 
 impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
     fn list_profiles(&self, peer: &PeerIdentity) -> Result<Vec<ProfileInfo>, ApiError> {
-        let profiles = lock(&self.profiles);
-        Ok(profiles
-            .iter()
-            .filter(|((uid, _), _)| *uid == peer.uid)
-            .map(|((_, id), p)| ProfileInfo {
-                id: id.clone(),
-                name: p.name.clone(),
-                enabled: p.enabled,
-                created: p.created,
-                last_used: 0,
-            })
-            .collect())
+        let _guard = lock(&self.store_lock);
+        let entries = self
+            .store
+            .list_profiles(peer.uid)
+            .map_err(map_store_error)?;
+        Ok(entries.iter().map(profile_entry_to_info).collect())
     }
 
     fn start_enrollment(
@@ -494,19 +524,25 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         let was_armed = *lock(&self.emitter_armed);
         *lock(&self.emitter_armed) = false;
         lock(&self.active_per_uid).remove(&s.target_uid);
+        drop(sessions);
+
         let profile_id = format!("profile-{}", session_id);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        lock(&self.profiles).insert(
-            (s.target_uid, profile_id.clone()),
-            InMemoryProfile {
-                name: s.name,
-                enabled: true,
-                created: now,
-            },
-        );
+        let record = ProfileRecord {
+            profile_id: ProfileId(profile_id.clone()),
+            display_name: s.name,
+            enabled: true,
+            uid: s.target_uid,
+            model_id: PROFILE_MODEL_ID.into(),
+            created_at_us: now_us(),
+            schema_version: 1,
+            last_used_us: 0,
+        };
+        {
+            let _guard = lock(&self.store_lock);
+            self.store
+                .create_profile(s.target_uid, record, Vec::new())
+                .map_err(map_store_error)?;
+        }
         *lock(&self.store_gen) += 1;
         let mut sigs = lock(&self.signals);
         sigs.push(ManagerSignal::EnrollmentCompleted {
@@ -531,21 +567,20 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         id: &str,
     ) -> Result<ReviewOutcome, ApiError> {
         self.authz(action::CONFIGURE, peer, uid)?;
-        let profiles = lock(&self.profiles);
-        let p = profiles
-            .get(&(uid, id.to_string()))
-            .ok_or_else(|| ApiError::NotFound(id.into()))?;
-        let quality = if p.enabled {
+        let pid = ProfileId(id.into());
+        let _guard = lock(&self.store_lock);
+        let entry = self.store.get_profile(uid, &pid).map_err(map_store_error)?;
+        let quality = if entry.profile.enabled {
             QualityLabel::High
         } else {
             QualityLabel::Low
         };
         let outcome = ReviewOutcome {
             profile_id: id.to_string(),
-            needs_reenroll: !p.enabled,
+            needs_reenroll: !entry.profile.enabled,
             quality,
         };
-        drop(profiles);
+        drop(_guard);
         lock(&self.signals).push(ManagerSignal::ProfileChanged {
             uid,
             id: id.to_string(),
@@ -562,13 +597,13 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         new_name: &str,
     ) -> Result<(), ApiError> {
         self.authz(action::CONFIGURE, peer, uid)?;
-        let mut profiles = lock(&self.profiles);
-        let p = profiles
-            .get_mut(&(uid, id.to_string()))
-            .ok_or_else(|| ApiError::NotFound(id.into()))?;
-        p.name = new_name.to_string();
+        let pid = ProfileId(id.into());
+        let _guard = lock(&self.store_lock);
+        self.store
+            .rename_profile(uid, &pid, new_name.to_string())
+            .map_err(map_store_error)?;
         *lock(&self.store_gen) += 1;
-        drop(profiles);
+        drop(_guard);
         lock(&self.signals).push(ManagerSignal::ProfileChanged {
             uid,
             id: id.to_string(),
@@ -584,13 +619,13 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         enabled: bool,
     ) -> Result<(), ApiError> {
         self.authz(action::CONFIGURE, peer, uid)?;
-        let mut profiles = lock(&self.profiles);
-        let p = profiles
-            .get_mut(&(uid, id.to_string()))
-            .ok_or_else(|| ApiError::NotFound(id.into()))?;
-        p.enabled = enabled;
+        let pid = ProfileId(id.into());
+        let _guard = lock(&self.store_lock);
+        self.store
+            .enable_profile(uid, &pid, enabled)
+            .map_err(map_store_error)?;
         *lock(&self.store_gen) += 1;
-        drop(profiles);
+        drop(_guard);
         lock(&self.signals).push(ManagerSignal::ProfileChanged {
             uid,
             id: id.to_string(),
@@ -600,12 +635,13 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
 
     fn delete_profile(&self, peer: &PeerIdentity, uid: u32, id: &str) -> Result<(), ApiError> {
         self.authz(action::DELETE, peer, uid)?;
-        let mut profiles = lock(&self.profiles);
-        if profiles.remove(&(uid, id.to_string())).is_none() {
-            return Err(ApiError::NotFound(id.into()));
-        }
+        let pid = ProfileId(id.into());
+        let _guard = lock(&self.store_lock);
+        self.store
+            .delete_profile(uid, &pid)
+            .map_err(map_store_error)?;
         *lock(&self.store_gen) += 1;
-        drop(profiles);
+        drop(_guard);
         lock(&self.signals).push(ManagerSignal::ProfileChanged {
             uid,
             id: id.to_string(),
@@ -621,18 +657,14 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         dst_id: &str,
     ) -> Result<(), ApiError> {
         self.authz(action::CONFIGURE, peer, uid)?;
-        let mut profiles = lock(&self.profiles);
-        let src_p = profiles
-            .remove(&(uid, src_id.to_string()))
-            .ok_or_else(|| ApiError::NotFound(src_id.into()))?;
-        let dst_p = profiles
-            .get_mut(&(uid, dst_id.to_string()))
-            .ok_or_else(|| ApiError::NotFound(dst_id.into()))?;
-        dst_p.name = src_p.name;
-        dst_p.enabled = src_p.enabled;
-        dst_p.created = src_p.created;
+        let src = ProfileId(src_id.into());
+        let dst = ProfileId(dst_id.into());
+        let _guard = lock(&self.store_lock);
+        self.store
+            .combine_profiles(uid, &src, &dst)
+            .map_err(map_store_error)?;
         *lock(&self.store_gen) += 1;
-        drop(profiles);
+        drop(_guard);
         lock(&self.signals).push(ManagerSignal::ProfileChanged {
             uid,
             id: dst_id.to_string(),
@@ -648,13 +680,16 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         new_name: &str,
     ) -> Result<(), ApiError> {
         self.authz(action::CONFIGURE, peer, uid)?;
-        let mut profiles = lock(&self.profiles);
-        let p = profiles
-            .get_mut(&(uid, id.to_string()))
-            .ok_or_else(|| ApiError::NotFound(id.into()))?;
-        p.name = new_name.to_string();
+        let pid = ProfileId(id.into());
+        let _guard = lock(&self.store_lock);
+        let entry = self.store.get_profile(uid, &pid).map_err(map_store_error)?;
+        let mut updated = entry.profile;
+        updated.display_name = new_name.to_string();
+        self.store
+            .merge_profile(uid, updated, entry.templates)
+            .map_err(map_store_error)?;
         *lock(&self.store_gen) += 1;
-        drop(profiles);
+        drop(_guard);
         lock(&self.signals).push(ManagerSignal::ProfileChanged {
             uid,
             id: id.to_string(),
@@ -662,8 +697,8 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         Ok(())
     }
 
-    fn get_status(&self, _peer: &PeerIdentity) -> Result<StatusReport, ApiError> {
-        Ok(self.snapshot_status())
+    fn get_status(&self, peer: &PeerIdentity) -> Result<StatusReport, ApiError> {
+        Ok(self.snapshot_status_for(peer.uid))
     }
 }
 
@@ -676,6 +711,8 @@ pub fn introspect_xml() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manager::store::TemplateProfileStore;
+    use namtor_store::TemplateStore;
 
     fn peer(uid: u32) -> PeerIdentity {
         PeerIdentity {
@@ -685,16 +722,28 @@ mod tests {
         }
     }
 
+    fn test_store() -> (tempfile::TempDir, Arc<dyn ProfileStore>) {
+        let dir = tempfile::tempdir().unwrap();
+        let ts = TemplateStore::open(dir.path(), &dir.path().join("key")).unwrap();
+        (dir, Arc::new(TemplateProfileStore::new(Arc::new(ts))))
+    }
+
+    fn svc() -> (tempfile::TempDir, ManagerService<SystemPolkit>) {
+        let (dir, store) = test_store();
+        let svc = ManagerService::new_with_store(SystemPolkit, store);
+        (dir, svc)
+    }
+
     #[test]
     fn self_enroll_allowed_for_own_uid() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         assert!(sid.starts_with("sess-"));
     }
 
     #[test]
     fn enroll_other_requires_admin() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         assert!(matches!(
             svc.start_enrollment(&peer(1000), 1001, "bob"),
             Err(ApiError::Denied { .. })
@@ -703,7 +752,7 @@ mod tests {
 
     #[test]
     fn delete_requires_admin() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         assert!(matches!(
             svc.delete_profile(&peer(1000), 1000, "x"),
             Err(ApiError::Denied { .. })
@@ -715,7 +764,7 @@ mod tests {
 
     #[test]
     fn configure_requires_admin() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         assert!(matches!(
             svc.rename_profile(&peer(1000), 1000, "x", "y"),
             Err(ApiError::Denied { .. })
@@ -732,7 +781,7 @@ mod tests {
 
     #[test]
     fn disconnect_mid_enrollment_cleans_up_emitter() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         let _sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         assert!(*svc.emitter_armed.lock().unwrap());
         svc.handle_disconnect(&peer(1000));
@@ -741,13 +790,13 @@ mod tests {
 
     #[test]
     fn disconnect_mid_enrollment_leaves_store_unchanged() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         let gen_before = *svc.store_gen.lock().unwrap();
         let _sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         svc.handle_disconnect(&peer(1000));
         let gen_after = *svc.store_gen.lock().unwrap();
         assert_eq!(gen_before, gen_after, "store generation unchanged");
-        assert!(svc.profiles.lock().unwrap().is_empty());
+        assert!(svc.list_profiles(&peer(1000)).unwrap().is_empty());
     }
 
     #[test]
@@ -803,7 +852,7 @@ mod tests {
 
     #[test]
     fn status_returns_profile_list_without_biometrics() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         svc.commit_profile(&peer(1000), &sid).unwrap();
         let st = svc.get_status(&peer(1000)).unwrap();
@@ -816,7 +865,7 @@ mod tests {
 
     #[test]
     fn commit_emits_completed_and_profile_changed_signals() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         svc.commit_profile(&peer(1000), &sid).unwrap();
         let sigs = svc.drain_signals();
@@ -834,7 +883,7 @@ mod tests {
 
     #[test]
     fn mutations_emit_profile_changed() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         let sid = svc.start_enrollment(&peer(0), 0, "root").unwrap();
         let pid = svc.commit_profile(&peer(0), &sid).unwrap();
         svc.drain_signals();
@@ -861,7 +910,7 @@ mod tests {
 
     #[test]
     fn merge_folds_src_into_dst_and_emits_profile_changed() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         let sid_a = svc.start_enrollment(&peer(0), 0, "a").unwrap();
         let pid_a = svc.commit_profile(&peer(0), &sid_a).unwrap();
         let sid_b = svc.start_enrollment(&peer(0), 0, "b").unwrap();
@@ -880,7 +929,7 @@ mod tests {
 
     #[test]
     fn cancel_disarms_without_writing_or_emitting_completed() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         assert!(*svc.emitter_armed.lock().unwrap());
         let gen_before = *svc.store_gen.lock().unwrap();
@@ -898,7 +947,7 @@ mod tests {
 
     #[test]
     fn review_returns_coarse_label_and_reenroll_flag() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         let sid = svc.start_enrollment(&peer(0), 0, "root").unwrap();
         let pid = svc.commit_profile(&peer(0), &sid).unwrap();
         svc.drain_signals();
@@ -918,7 +967,7 @@ mod tests {
 
     #[test]
     fn start_and_cancel_round_trip_via_trait() {
-        let svc = ManagerService::new(SystemPolkit);
+        let (_dir, svc) = svc();
         let api: &dyn ProfileApi = &svc;
         let sid = api.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         api.cancel_enrollment(&peer(1000), &sid).unwrap();
@@ -960,5 +1009,262 @@ mod tests {
         assert_eq!(QualityLabel::from_scalar(0.1), QualityLabel::Low);
         assert_eq!(QualityLabel::from_scalar(0.5), QualityLabel::Medium);
         assert_eq!(QualityLabel::from_scalar(0.9), QualityLabel::High);
+    }
+
+    // ---- Durable store integration tests (task 10) ----
+
+    #[test]
+    fn restart_persistence_across_manager_instances() {
+        let (dir, store) = test_store();
+
+        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let sid = svc1.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let pid = svc1.commit_profile(&peer(1000), &sid).unwrap();
+
+        drop(svc1);
+
+        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let list = svc2.list_profiles(&peer(1000)).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, pid);
+        assert_eq!(list[0].name, "alice");
+        assert!(list[0].enabled);
+
+        let _ = dir;
+    }
+
+    #[test]
+    fn duplicate_profile_id_rejected() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let pid = svc.commit_profile(&peer(1000), &sid).unwrap();
+        assert!(svc.list_profiles(&peer(1000)).unwrap().len() == 1);
+
+        // Manually insert a duplicate via the store to verify Exists error
+        let record = ProfileRecord {
+            profile_id: ProfileId(pid.clone()),
+            display_name: "dup".into(),
+            enabled: true,
+            uid: 1000,
+            model_id: PROFILE_MODEL_ID.into(),
+            created_at_us: now_us(),
+            schema_version: 1,
+            last_used_us: 0,
+        };
+        let err = svc
+            .store
+            .create_profile(1000, record, Vec::new())
+            .unwrap_err();
+        assert!(matches!(
+            namtor_store::store::StoreError::from(err),
+            namtor_store::store::StoreError::ProfileExists(_)
+        ));
+    }
+
+    #[test]
+    fn wrong_uid_isolated() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.commit_profile(&peer(1000), &sid).unwrap();
+
+        let other = svc.list_profiles(&peer(2000)).unwrap();
+        assert!(other.is_empty(), "uid 2000 sees no profiles from uid 1000");
+    }
+
+    #[test]
+    fn corrupt_store_errors_gracefully() {
+        let (dir, store) = test_store();
+
+        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let sid = svc1.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc1.commit_profile(&peer(1000), &sid).unwrap();
+        drop(svc1);
+
+        // Corrupt the sealed container file
+        let path = dir.path().join("1000.sealed");
+        let mut data = std::fs::read(&path).unwrap();
+        if data.len() > 20 {
+            let last = data.len() - 1;
+            data[last] ^= 0xff;
+        }
+        std::fs::write(&path, &data).unwrap();
+
+        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let err = svc2.list_profiles(&peer(1000)).unwrap_err();
+        assert!(
+            matches!(err, ApiError::State(_) | ApiError::Io(_)),
+            "corruption maps to State/Io, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn concurrent_mutation_serialized() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(0), 0, "root").unwrap();
+        let pid = svc.commit_profile(&peer(0), &sid).unwrap();
+
+        let svc = Arc::new(svc);
+        let pid_a = pid.clone();
+        let svc_a = svc.clone();
+        let t1 = std::thread::spawn(move || {
+            for i in 0..10 {
+                svc_a
+                    .rename_profile(&peer(0), 0, &pid_a, &format!("name-{i}"))
+                    .unwrap();
+            }
+        });
+        let pid_b = pid.clone();
+        let svc_b = svc.clone();
+        let t2 = std::thread::spawn(move || {
+            for i in 0..10 {
+                svc_b
+                    .enable_profile(&peer(0), 0, &pid_b, i % 2 == 0)
+                    .unwrap();
+            }
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let list = svc.list_profiles(&peer(0)).unwrap();
+        assert_eq!(
+            list.len(),
+            1,
+            "no duplicate profiles after concurrent writes"
+        );
+        assert!(list[0].name.starts_with("name-"));
+    }
+
+    #[test]
+    fn merge_rollback_on_missing_dst() {
+        let (_dir, svc) = svc();
+        let sid_a = svc.start_enrollment(&peer(0), 0, "a").unwrap();
+        let pid_a = svc.commit_profile(&peer(0), &sid_a).unwrap();
+        svc.drain_signals();
+
+        let err = svc
+            .merge_profiles(&peer(0), 0, &pid_a, "nonexistent-dst")
+            .unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)));
+
+        let list = svc.list_profiles(&peer(0)).unwrap();
+        assert_eq!(list.len(), 1, "src preserved on missing dst");
+        assert_eq!(list[0].id, pid_a);
+    }
+
+    #[test]
+    fn merge_missing_src_errors() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(0), 0, "dst").unwrap();
+        let pid = svc.commit_profile(&peer(0), &sid).unwrap();
+
+        let err = svc
+            .merge_profiles(&peer(0), 0, "nonexistent-src", &pid)
+            .unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)));
+        assert_eq!(svc.list_profiles(&peer(0)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rename_persists_across_restart() {
+        let (dir, store) = test_store();
+
+        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let sid = svc1.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let pid = svc1.commit_profile(&peer(1000), &sid).unwrap();
+        svc1.rename_profile(&peer(0), 1000, &pid, "Alice").unwrap();
+        drop(svc1);
+
+        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let list = svc2.list_profiles(&peer(1000)).unwrap();
+        assert_eq!(list[0].name, "Alice");
+
+        let _ = dir;
+    }
+
+    #[test]
+    fn enable_disable_persists_across_restart() {
+        let (dir, store) = test_store();
+
+        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let sid = svc1.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let pid = svc1.commit_profile(&peer(1000), &sid).unwrap();
+        svc1.enable_profile(&peer(0), 1000, &pid, false).unwrap();
+        drop(svc1);
+
+        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let list = svc2.list_profiles(&peer(1000)).unwrap();
+        assert!(!list[0].enabled, "disabled state persists");
+
+        let _ = dir;
+    }
+
+    #[test]
+    fn delete_persists_across_restart() {
+        let (dir, store) = test_store();
+
+        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let sid = svc1.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let pid = svc1.commit_profile(&peer(1000), &sid).unwrap();
+        svc1.delete_profile(&peer(0), 1000, &pid).unwrap();
+        drop(svc1);
+
+        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        assert!(svc2.list_profiles(&peer(1000)).unwrap().is_empty());
+
+        let _ = dir;
+    }
+
+    #[test]
+    fn merge_persists_across_restart() {
+        let (dir, store) = test_store();
+
+        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let sid_a = svc1.start_enrollment(&peer(0), 0, "a").unwrap();
+        let pid_a = svc1.commit_profile(&peer(0), &sid_a).unwrap();
+        let sid_b = svc1.start_enrollment(&peer(0), 0, "b").unwrap();
+        let pid_b = svc1.commit_profile(&peer(0), &sid_b).unwrap();
+        svc1.merge_profiles(&peer(0), 0, &pid_a, &pid_b).unwrap();
+        drop(svc1);
+
+        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let list = svc2.list_profiles(&peer(0)).unwrap();
+        assert_eq!(list.len(), 1, "merge persisted: src removed, dst remains");
+        assert_eq!(list[0].id, pid_b);
+
+        let _ = dir;
+    }
+
+    #[test]
+    fn replace_persists_across_restart() {
+        let (dir, store) = test_store();
+
+        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let sid = svc1.start_enrollment(&peer(1000), 1000, "old").unwrap();
+        let pid = svc1.commit_profile(&peer(1000), &sid).unwrap();
+        svc1.replace_profile(&peer(0), 1000, &pid, "new").unwrap();
+        drop(svc1);
+
+        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let list = svc2.list_profiles(&peer(1000)).unwrap();
+        assert_eq!(list[0].name, "new");
+
+        let _ = dir;
+    }
+
+    #[test]
+    fn null_store_list_returns_empty() {
+        let svc = ManagerService::new(SystemPolkit);
+        assert!(svc.list_profiles(&peer(1000)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn null_store_commit_errors() {
+        let svc = ManagerService::new(SystemPolkit);
+        let sid = svc.start_enrollment(&peer(0), 0, "root").unwrap();
+        let err = svc.commit_profile(&peer(0), &sid).unwrap_err();
+        assert!(
+            matches!(err, ApiError::State(_)),
+            "null store commit should error, got {err:?}"
+        );
     }
 }
