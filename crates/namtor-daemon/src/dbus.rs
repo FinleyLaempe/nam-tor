@@ -12,12 +12,14 @@
 // in-memory storage with calls to namtor-store; splitting now would be premature.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
-use serde::{Deserialize, Serialize};
-
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
 use crate::acl::PeerCreds;
 use crate::DaemonError;
+use serde::{Deserialize, Serialize};
 
 /// API version of the `org.namtor.Manager` surface.
 pub const API_VERSION: u32 = 1;
@@ -275,12 +277,25 @@ pub trait ProfileApi {
     fn status(&self, peer: &PeerIdentity) -> Result<StatusReport, ApiError>;
     fn drain_signals(&self) -> Vec<ManagerSignal>;
     fn handle_disconnect(&self, peer: &PeerIdentity);
+    fn merge(
+        &self,
+        peer: &PeerIdentity,
+        uid: u32,
+        src_id: &str,
+        dst_id: &str,
+    ) -> Result<(), ApiError>;
+    fn replace(
+        &self,
+        peer: &PeerIdentity,
+        uid: u32,
+        id: &str,
+        new_name: &str,
+    ) -> Result<(), ApiError>;
 }
 
-#[allow(clippy::unwrap_used)]
 impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
     fn list(&self, peer: &PeerIdentity) -> Result<Vec<ProfileInfo>, ApiError> {
-        let profiles = self.profiles.lock().unwrap();
+        let profiles = lock(&self.profiles);
         Ok(profiles
             .iter()
             .filter(|((uid, _), _)| *uid == peer.uid)
@@ -301,13 +316,13 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
             action::ENROLL_OTHER
         };
         self.authz(action, peer, target_uid)?;
-        let mut active = self.active_per_uid.lock().unwrap();
+        let mut active = lock(&self.active_per_uid);
         if active.contains_key(&target_uid) {
             return Err(ApiError::SessionBusy(target_uid));
         }
         let sid = Self::gen_session_id();
         active.insert(target_uid, sid.clone());
-        self.sessions.lock().unwrap().insert(
+        lock(&self.sessions).insert(
             sid.clone(),
             Session {
                 target_uid,
@@ -321,12 +336,12 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
     }
 
     fn start(&self, _peer: &PeerIdentity, session_id: &str) -> Result<(), ApiError> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = lock(&self.sessions);
         let s = sessions
             .get_mut(session_id)
             .ok_or_else(|| ApiError::SessionNotFound(session_id.into()))?;
         s.armed = true;
-        *self.emitter_armed.lock().unwrap() = true;
+        *lock(&self.emitter_armed) = true;
         Ok(())
     }
 
@@ -335,7 +350,7 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         _peer: &PeerIdentity,
         session_id: &str,
     ) -> Result<EnrollmentProgress, ApiError> {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = lock(&self.sessions);
         let s = sessions
             .get(session_id)
             .ok_or_else(|| ApiError::SessionNotFound(session_id.into()))?;
@@ -348,18 +363,18 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
     }
 
     fn finish(&self, _peer: &PeerIdentity, session_id: &str) -> Result<String, ApiError> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = lock(&self.sessions);
         let s = sessions
             .remove(session_id)
             .ok_or_else(|| ApiError::SessionNotFound(session_id.into()))?;
-        *self.emitter_armed.lock().unwrap() = false;
-        self.active_per_uid.lock().unwrap().remove(&s.target_uid);
+        *lock(&self.emitter_armed) = false;
+        lock(&self.active_per_uid).remove(&s.target_uid);
         let profile_id = format!("profile-{}", session_id);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        self.profiles.lock().unwrap().insert(
+        lock(&self.profiles).insert(
             (s.target_uid, profile_id.clone()),
             InMemoryProfile {
                 name: s.name,
@@ -367,8 +382,8 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
                 created: now,
             },
         );
-        *self.store_gen.lock().unwrap() += 1;
-        self.signals.lock().unwrap().push(ManagerSignal::Enrolled {
+        *lock(&self.store_gen) += 1;
+        lock(&self.signals).push(ManagerSignal::Enrolled {
             session_id: session_id.to_string(),
             profile_id: profile_id.clone(),
         });
@@ -376,11 +391,11 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
     }
 
     fn cancel(&self, _peer: &PeerIdentity, session_id: &str) -> Result<(), ApiError> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = lock(&self.sessions);
         if let Some(s) = sessions.remove(session_id) {
-            *self.emitter_armed.lock().unwrap() = false;
-            self.active_per_uid.lock().unwrap().remove(&s.target_uid);
-            self.signals.lock().unwrap().push(ManagerSignal::Cancelled {
+            *lock(&self.emitter_armed) = false;
+            lock(&self.active_per_uid).remove(&s.target_uid);
+            lock(&self.signals).push(ManagerSignal::Cancelled {
                 session_id: session_id.to_string(),
             });
         }
@@ -389,11 +404,11 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
 
     fn delete(&self, peer: &PeerIdentity, uid: u32, id: &str) -> Result<(), ApiError> {
         self.authz(action::DELETE, peer, uid)?;
-        let mut profiles = self.profiles.lock().unwrap();
+        let mut profiles = lock(&self.profiles);
         if profiles.remove(&(uid, id.to_string())).is_none() {
             return Err(ApiError::NotFound(id.into()));
         }
-        *self.store_gen.lock().unwrap() += 1;
+        *lock(&self.store_gen) += 1;
         Ok(())
     }
 
@@ -405,12 +420,12 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         new_name: &str,
     ) -> Result<(), ApiError> {
         self.authz(action::CONFIGURE, peer, uid)?;
-        let mut profiles = self.profiles.lock().unwrap();
+        let mut profiles = lock(&self.profiles);
         let p = profiles
             .get_mut(&(uid, id.to_string()))
             .ok_or_else(|| ApiError::NotFound(id.into()))?;
         p.name = new_name.to_string();
-        *self.store_gen.lock().unwrap() += 1;
+        *lock(&self.store_gen) += 1;
         Ok(())
     }
 
@@ -422,17 +437,17 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         enabled: bool,
     ) -> Result<(), ApiError> {
         self.authz(action::CONFIGURE, peer, uid)?;
-        let mut profiles = self.profiles.lock().unwrap();
+        let mut profiles = lock(&self.profiles);
         let p = profiles
             .get_mut(&(uid, id.to_string()))
             .ok_or_else(|| ApiError::NotFound(id.into()))?;
         p.enabled = enabled;
-        *self.store_gen.lock().unwrap() += 1;
+        *lock(&self.store_gen) += 1;
         Ok(())
     }
 
     fn status(&self, _peer: &PeerIdentity) -> Result<StatusReport, ApiError> {
-        let profiles = self.profiles.lock().unwrap();
+        let profiles = lock(&self.profiles);
         let list: Vec<ProfileInfo> = profiles
             .iter()
             .map(|((_, id), p)| ProfileInfo {
@@ -446,16 +461,16 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         Ok(StatusReport {
             api_version: API_VERSION,
             profiles: list,
-            emitter_armed: *self.emitter_armed.lock().unwrap(),
+            emitter_armed: *lock(&self.emitter_armed),
         })
     }
 
     fn drain_signals(&self) -> Vec<ManagerSignal> {
-        std::mem::take(&mut *self.signals.lock().unwrap())
+        std::mem::take(&mut *lock(&self.signals))
     }
 
     fn handle_disconnect(&self, peer: &PeerIdentity) {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = lock(&self.sessions);
         let sids: Vec<String> = sessions
             .iter()
             .filter(|(_, s)| s.peer_uid == peer.uid)
@@ -463,10 +478,51 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
             .collect();
         for sid in sids {
             if let Some(s) = sessions.remove(&sid) {
-                self.active_per_uid.lock().unwrap().remove(&s.target_uid);
+                lock(&self.active_per_uid).remove(&s.target_uid);
             }
         }
-        *self.emitter_armed.lock().unwrap() = false;
+        *lock(&self.emitter_armed) = false;
+    }
+
+    fn merge(
+        &self,
+        peer: &PeerIdentity,
+        uid: u32,
+        src_id: &str,
+        dst_id: &str,
+    ) -> Result<(), ApiError> {
+        self.authz(action::CONFIGURE, peer, uid)?;
+        let mut profiles = lock(&self.profiles);
+        let src_p = profiles
+            .remove(&(uid, src_id.to_string()))
+            .ok_or_else(|| ApiError::NotFound(src_id.into()))?;
+        let dst_p = profiles
+            .get_mut(&(uid, dst_id.to_string()))
+            .ok_or_else(|| ApiError::NotFound(dst_id.into()))?;
+
+        dst_p.name = src_p.name;
+        dst_p.enabled = src_p.enabled;
+        dst_p.created = src_p.created;
+
+        *lock(&self.store_gen) += 1;
+        Ok(())
+    }
+
+    fn replace(
+        &self,
+        peer: &PeerIdentity,
+        uid: u32,
+        id: &str,
+        new_name: &str,
+    ) -> Result<(), ApiError> {
+        self.authz(action::CONFIGURE, peer, uid)?;
+        let mut profiles = lock(&self.profiles);
+        let p = profiles
+            .get_mut(&(uid, id.to_string()))
+            .ok_or_else(|| ApiError::NotFound(id.into()))?;
+        p.name = new_name.to_string();
+        *lock(&self.store_gen) += 1;
+        Ok(())
     }
 }
 
@@ -482,8 +538,8 @@ pub fn introspect_xml() -> &'static str {
 <method name="CancelEnrollment"><arg name="session" type="s" direction="in"/></method>
 <method name="DeleteProfile"><arg name="uid" type="u" direction="in"/><arg name="id" type="s" direction="in"/></method>
 <method name="RenameProfile"><arg name="uid" type="u" direction="in"/><arg name="id" type="s" direction="in"/><arg name="name" type="s" direction="in"/></method>
-<method name="EnableProfile"><arg name="uid" type="u" direction="in"/><arg name="id" type="s" direction="in"/><arg name="enabled" type="b" direction="in"/></method>
-<method name="Status"><arg name="status" type="(ua(ssbtt)b)" direction="out"/></method>
+<method name="MergeProfiles"><arg name="uid" type="u" direction="in"/><arg name="src" type="s" direction="in"/><arg name="dst" type="s" direction="in"/></method>
+<method name="ReplaceProfile"><arg name="uid" type="u" direction="in"/><arg name="id" type="s" direction="in"/><arg name="name" type="s" direction="in"/></method>
 <signal name="Progress"><arg name="progress" type="(suss)"/></signal>
 <signal name="Enrolled"><arg name="profile" type="s"/></signal>
 <signal name="Cancelled"><arg name="session" type="s"/></signal>

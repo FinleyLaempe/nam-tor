@@ -6,7 +6,7 @@ __pycache__/
 /ml/**/data/
 /ml/**/weights/
 /fixtures/large/
-
+ 
 # opencode internal
 /.omo/
 # python build artifacts
@@ -14,3 +14,5 @@ ml/eval/namtor_eval.egg-info/
 ml/.venv/
 var/
 ml/eval/build/
+ml/models/
+
