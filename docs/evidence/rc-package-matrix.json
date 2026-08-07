@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "task": "G3.3 — RC package lifecycle certification (spec §12, §8.3)",
+  "generated_at": "2026-08-07T00:00:00Z",
+  "generator": "release (task 32)",
+  "status": "defined",
+  "status_note": "RC package lifecycle not yet executed. Matrix defined; live results produced at tag time by release workflow.",
+  "matrix": {
+    "distros": ["arch", "fedora40", "fedora41", "debian12", "debian13"],
+    "arches": ["x86_64", "aarch64"],
+    "cells_total": 10
+  },
+  "cells": [
+    {
+      "distro": "arch",
+      "arch": "x86_64",
+      "install": "pending",
+      "model_provision": "pending",
+      "daemon_socket": "pending",
+      "pam_enable": "pending",
+      "password_fallback": "pending",
+      "upgrade_migration": "pending",
+      "failure_rollback": "pending",
+      "uninstall_reinstall": "pending",
+      "result": "pending"
+    },
+    {
+      "distro": "arch",
+      "arch": "aarch64",
+      "install": "pending",
+      "model_provision": "pending",
+      "daemon_socket": "pending",
+      "pam_enable": "pending",
+      "password_fallback": "pending",
+      "upgrade_migration": "pending",
+      "failure_rollback": "pending",
+      "uninstall_reinstall": "pending",
+      "result": "pending"
+    },
+    {
+      "distro": "fedora40",
+      "arch": "x86_64",
+      "install": "pending",
+      "model_provision": "pending",
+      "daemon_socket": "pending",
+      "pam_enable": "pending",
+      "password_fallback": "pending",
+      "upgrade_migration": "pending",
+      "failure_rollback": "pending",
+      "uninstall_reinstall": "pending",
+      "result": "pending"
+    },
+    {
+      "distro": "fedora40",
+      "arch": "aarch64",
+      "install": "pending",
+      "model_provision": "pending",
+      "daemon_socket": "pending",
+      "pam_enable": "pending",
+      "password_fallback": "pending",
+      "upgrade_migration": "pending",
+      "failure_rollback": "pending",
+      "uninstall_reinstall": "pending",
+      "result": "pending"
+    },
+    {
+      "distro": "fedora41",
+      "arch": "x86_64",
+      "install": "pending",
+      "model_provision": "pending",
+      "daemon_socket": "pending",
+      "pam_enable": "pending",
+      "password_fallback": "pending",
+      "upgrade_migration": "pending",
+      "failure_rollback": "pending",
+      "uninstall_reinstall": "pending",
+      "result": "pending"
+    },
+    {
+      "distro": "fedora41",
+      "arch": "aarch64",
+      "install": "pending",
+      "model_provision": "pending",
+      "daemon_socket": "pending",
+      "pam_enable": "pending",
+      "password_fallback": "pending",
+      "upgrade_migration": "pending",
+      "failure_rollback": "pending",
+      "uninstall_reinstall": "pending",
+      "result": "pending"
+    },
+    {
+      "distro": "debian12",
+      "arch": "x86_64",
+      "install": "pending",
+      "model_provision": "pending",
+      "daemon_socket": "pending",
+      "pam_enable": "pending",
+      "password_fallback": "pending",
+      "upgrade_migration": "pending",
+      "failure_rollback": "pending",
+      "uninstall_reinstall": "pending",
+      "result": "pending"
+    },
+    {
+      "distro": "debian12",
+      "arch": "aarch64",
+      "install": "pending",
+      "model_provision": "pending",
+      "daemon_socket": "pending",
+      "pam_enable": "pending",
+      "password_fallback": "pending",
+      "upgrade_migration": "pending",
+      "failure_rollback": "pending",
+      "uninstall_reinstall": "pending",
+      "result": "pending"
+    },
+    {
+      "distro": "debian13",
+      "arch": "x86_64",
+      "install": "pending",
+      "model_provision": "pending",
+      "daemon_socket": "pending",
+      "pam_enable": "pending",
+      "password_fallback": "pending",
+      "upgrade_migration": "pending",
+      "failure_rollback": "pending",
+      "uninstall_reinstall": "pending",
+      "result": "pending"
+    },
+    {
+      "distro": "debian13",
+      "arch": "aarch64",
+      "install": "pending",
+      "model_provision": "pending",
+      "daemon_socket": "pending",
+      "pam_enable": "pending",
+      "password_fallback": "pending",
+      "upgrade_migration": "pending",
+      "failure_rollback": "pending",
+      "uninstall_reinstall": "pending",
+      "result": "pending"
+    }
+  ],
+  "recovery_console": {
+    "tested": false,
+    "result": "pending"
+  },
+  "release_pipeline": {
+    "workflow": ".github/workflows/release.yml",
+    "trigger": "push tags 'v*' + workflow_dispatch",
+    "evidence_output": "rc-package-matrix-<tag>-results.json written by release evidence job"
+  },
+  "summary": {
+    "total": 10,
+    "defined": 10,
+    "passing": 0,
+    "failing": 0,
+    "note": "All 10 cells defined; live lifecycle results populated at tag time by the release workflow."
+  }
+}
