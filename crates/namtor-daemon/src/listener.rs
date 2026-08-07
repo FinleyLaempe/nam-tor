@@ -519,7 +519,9 @@ mod tests {
         let _r2: AuthReply = serde_json::from_value(recv_msg(&s2)).expect("reply2");
         let elapsed = start.elapsed();
 
-        // Two 100ms dispatches serialised → ~200ms. If parallel, ~100ms.
+        drop(s1);
+        drop(s2);
+
         assert!(
             elapsed >= Duration::from_millis(180),
             "expected serialised dispatch (~200ms), got {elapsed:?}"
