@@ -13,6 +13,9 @@ use rand::RngCore;
 
 use crate::store::StoreError;
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 /// Refuse if `path` is a symlink. A missing path is fine (caller will create).
 pub(crate) fn reject_symlink(path: &Path) -> Result<(), StoreError> {
     match std::fs::symlink_metadata(path) {
@@ -74,6 +77,7 @@ pub(crate) fn atomic_write(
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
+            .mode(0o600)
             .open(&tmp_path)?;
         file.write_all(data)?;
         file.sync_all()?;
@@ -102,7 +106,10 @@ fn hex_short(b: &[u8]) -> String {
 /// `chown` `path` to `expected_owner` (and that user's primary gid) only when
 /// running as root. As a non-root process we cannot chown and the file is
 /// already owned by the current user, so this is a no-op.
-fn chown_if_root(path: &Path, expected_owner: u32) -> Result<(), StoreError> {
+///
+/// Hard-fails on `chown` error rather than silently leaving a root-owned
+/// artefact the daemon (running as the `namtor` system user) could not read.
+pub(crate) fn chown_if_root(path: &Path, expected_owner: u32) -> Result<(), StoreError> {
     #[cfg(unix)]
     {
         let euid = unsafe { libc::geteuid() };
@@ -126,6 +133,35 @@ fn chown_if_root(path: &Path, expected_owner: u32) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Ensure `dir` (and the directory file descriptor itself) is owned by
+/// `expected_owner` when running as root. No-op for non-root. Used at store
+/// open time so the templates directory — which the daemon must read/write —
+/// is handed to the `namtor` system user, not left root-owned by an
+/// enrollment run that created it.
+pub(crate) fn ensure_dir_owner(dir: &Path, expected_owner: u32) -> Result<(), StoreError> {
+    #[cfg(unix)]
+    {
+        let euid = unsafe { libc::geteuid() };
+        if euid != 0 {
+            return Ok(());
+        }
+        let gid = gid_for_uid(expected_owner).unwrap_or(expected_owner);
+        let c_path = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes())
+            .map_err(|e| StoreError::Crypto(format!("path nul: {e}")))?;
+        // SAFETY: `c_path` is a valid NUL-terminated C string; `chown` does
+        // not retain the pointer.
+        let rc = unsafe { libc::chown(c_path.as_ptr(), expected_owner, gid) };
+        if rc != 0 {
+            return Err(StoreError::Io(std::io::Error::last_os_error()));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (dir, expected_owner);
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn gid_for_uid(uid: u32) -> Option<u32> {
     // SAFETY: `getpwuid` returns a pointer into static/thread-local storage
@@ -145,7 +181,11 @@ pub(crate) struct FileLock {
 }
 
 impl FileLock {
-    pub(crate) fn acquire(path: &Path) -> Result<Self, StoreError> {
+    /// Acquire the lock and, when running as root, chown the lock file to
+    /// `expected_owner` so the daemon (running as `namtor`) can truncate and
+    /// lock it on a later write. Non-root callers pass their own euid, which
+    /// `chown_if_root` turns into a no-op.
+    pub(crate) fn acquire_with_owner(path: &Path, expected_owner: u32) -> Result<Self, StoreError> {
         #[cfg(unix)]
         {
             use std::os::unix::io::AsRawFd;
@@ -166,11 +206,12 @@ impl FileLock {
                     std::io::Error::last_os_error()
                 )));
             }
+            chown_if_root(path, expected_owner)?;
             Ok(Self { _file: file })
         }
         #[cfg(not(unix))]
         {
-            let _ = path;
+            let _ = (path, expected_owner);
             Ok(Self {
                 _file: std::fs::File::create("/dev/null")?,
             })

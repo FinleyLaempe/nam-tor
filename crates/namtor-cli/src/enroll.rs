@@ -13,7 +13,130 @@ use std::process::ExitCode;
 
 use namtor_recog::pipeline::RecognitionPipeline;
 use namtor_store::template::{EnrollmentMeta, Template, TemplateRecord};
-use namtor_store::TemplateStore;
+use namtor_store::{StoreError, TemplateStore};
+
+/// The system user that owns the template store in production. The
+/// sysusers.d entry (`packaging/sysusers.d/namtor.conf`) installs it; the
+/// daemon runs as this user and expects every store artefact — key file,
+/// templates directory, per-uid lock files, sealed records — to be owned by
+/// it. Enrollment run as root chowns every artefact to this user so the
+/// daemon can read what enrollment wrote.
+const STORE_OWNER: &str = "namtor";
+
+/// Resolved enrollment identity: who is being enrolled and which uid the
+/// store should treat as the file owner.
+#[derive(Debug, Clone)]
+pub struct EnrollmentIdentity {
+    pub uid: u32,
+    pub username: String,
+    pub store_owner_uid: u32,
+}
+
+/// Identity-resolution failures. Each variant maps to a distinct user-facing
+/// error so the operator can tell a missing install from a missing user.
+#[derive(Debug)]
+pub enum IdentityError {
+    /// `--user` named a user that does not exist on this system.
+    UnknownUser(String),
+    /// Running as root but the `namtor` system user is not installed
+    /// (sysusers.d not applied). Enrollment cannot produce daemon-readable
+    /// artefacts without it.
+    MissingStoreOwner,
+    /// `--user` targets another account but the process is not root; only
+    /// root may enroll another user.
+    NotRootForOtherUser,
+}
+
+impl std::fmt::Display for IdentityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IdentityError::UnknownUser(n) => {
+                write!(f, "user '{n}' not found")
+            }
+            IdentityError::MissingStoreOwner => {
+                write!(
+                    f,
+                    "system user '{STORE_OWNER}' not found; install the namtor package (sysusers.d) before enrolling"
+                )
+            }
+            IdentityError::NotRootForOtherUser => {
+                write!(f, "enrolling another user requires root")
+            }
+        }
+    }
+}
+
+/// Resolve the enrollment identity for `user` (None = self).
+///
+/// - Self-enrollment (no `--user`): the enrolled uid is the current euid and
+///   the store owner is the current euid. Works unprivileged.
+/// - Enrolling another user (`--user NAME`): requires root. The enrolled uid
+///   is NAME's uid; the store owner is the `namtor` system user, which must
+///   exist (the daemon reads the artefacts as `namtor`).
+pub fn resolve_identity(user: Option<&str>) -> Result<EnrollmentIdentity, IdentityError> {
+    let euid = nix::unistd::getuid().as_raw();
+    let is_root = euid == 0;
+
+    match user {
+        Some(name) => {
+            let target = nix::unistd::User::from_name(name)
+                .map_err(|_| IdentityError::UnknownUser(name.to_string()))?
+                .ok_or_else(|| IdentityError::UnknownUser(name.to_string()))?;
+            if !is_root {
+                return Err(IdentityError::NotRootForOtherUser);
+            }
+            let owner = nix::unistd::User::from_name(STORE_OWNER)
+                .map_err(|_| IdentityError::MissingStoreOwner)?
+                .ok_or(IdentityError::MissingStoreOwner)?;
+            Ok(EnrollmentIdentity {
+                uid: target.uid.as_raw(),
+                username: target.name,
+                store_owner_uid: owner.uid.as_raw(),
+            })
+        }
+        None => {
+            let username = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(euid))
+                .ok()
+                .flatten()
+                .map(|u| u.name)
+                .unwrap_or_else(|| format!("uid-{euid}"));
+            let store_owner_uid = if is_root {
+                nix::unistd::User::from_name(STORE_OWNER)
+                    .map_err(|_| IdentityError::MissingStoreOwner)?
+                    .ok_or(IdentityError::MissingStoreOwner)?
+                    .uid
+                    .as_raw()
+            } else {
+                euid
+            };
+            Ok(EnrollmentIdentity {
+                uid: euid,
+                username,
+                store_owner_uid,
+            })
+        }
+    }
+}
+
+/// Commit an enrollment record to the store with the correct owner.
+///
+/// Opens the store expecting `identity.store_owner_uid` as the file owner,
+/// then `update`s the record atomically. The store chowns the key file,
+/// templates directory, per-uid lock file, and sealed record to the owner
+/// when running as root, so the daemon (running as `namtor`) can immediately
+/// read what a root-initiated enrollment wrote. On any write failure the
+/// store's atomic-write discipline leaves the previous record byte-identical
+/// and removes the temp file.
+pub fn commit_enrollment(
+    templates_dir: &Path,
+    key_path: &Path,
+    identity: &EnrollmentIdentity,
+    record: &TemplateRecord,
+) -> Result<(), StoreError> {
+    let store =
+        TemplateStore::open_with_owner(templates_dir, key_path, Some(identity.store_owner_uid))?;
+    store.update(record)
+}
 
 pub fn run_enroll(
     models_dir: &Path,
@@ -36,27 +159,15 @@ pub fn run_enroll(
         return ExitCode::FAILURE;
     }
 
-    let (uid, username) = match &user {
-        Some(name) => {
-            let u = nix::unistd::User::from_name(name)
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| {
-                    eprintln!("error: user '{name}' not found");
-                    std::process::exit(1);
-                });
-            (u.uid.as_raw(), u.name)
-        }
-        None => {
-            let uid = nix::unistd::getuid().as_raw();
-            let username = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
-                .ok()
-                .flatten()
-                .map(|u| u.name)
-                .unwrap_or_else(|| format!("uid-{uid}"));
-            (uid, username)
+    let identity = match resolve_identity(user.as_deref()) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
         }
     };
+    let uid = identity.uid;
+    let username = identity.username.clone();
 
     eprintln!("enrolling uid={uid} ({username})...");
     eprintln!("opening IR camera /dev/video2...");
@@ -157,7 +268,11 @@ pub fn run_enroll(
         templates,
     };
 
-    let store = match TemplateStore::open(templates_dir, key_path) {
+    let store = match TemplateStore::open_with_owner(
+        templates_dir,
+        key_path,
+        Some(identity.store_owner_uid),
+    ) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("store open failed: {e}");
@@ -169,23 +284,6 @@ pub fn run_enroll(
 
     match store.update(&record) {
         Ok(()) => {
-            if nix::unistd::geteuid().is_root() {
-                let uid = nix::unistd::User::from_name("namtor")
-                    .ok()
-                    .flatten()
-                    .map(|user| user.uid);
-                let gid = nix::unistd::Group::from_name("namtor")
-                    .ok()
-                    .flatten()
-                    .map(|group| group.gid);
-                if let (Some(owner), Some(group)) = (uid, gid) {
-                    let path = templates_dir.join(format!("{}.sealed", record.meta.uid));
-                    if let Err(e) = nix::unistd::chown(&path, Some(owner), Some(group)) {
-                        eprintln!("store ownership failed: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                }
-            }
             eprintln!("enrolled {username} (uid={uid}): {num_templates} templates stored");
             ExitCode::SUCCESS
         }

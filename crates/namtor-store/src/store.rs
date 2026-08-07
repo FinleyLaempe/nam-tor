@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::crypto::SealedKey;
 use crate::format::{aad_v2, decode, encode_v2, Decoded};
-use crate::fs_util::{atomic_write, check_owner, reject_symlink, FileLock};
+use crate::fs_util::{atomic_write, check_owner, ensure_dir_owner, reject_symlink, FileLock};
 use crate::template::{
     ProfileEntry, ProfileId, ProfileRecord, Template, TemplateRecord, UserContainer,
 };
@@ -129,7 +129,19 @@ impl TemplateStore {
         selector: &mut crate::crypto::BackendSelector,
     ) -> Result<Self, StoreError> {
         std::fs::create_dir_all(dir)?;
+        let owner = expected_owner.unwrap_or_else(|| {
+            #[cfg(unix)]
+            {
+                unsafe { libc::geteuid() }
+            }
+            #[cfg(not(unix))]
+            {
+                0
+            }
+        });
+        ensure_dir_owner(dir, owner)?;
         let key = SealedKey::load_or_create_with(key_path, selector)?;
+        crate::fs_util::chown_if_root(key_path, owner)?;
         Ok(Self {
             dir: dir.to_path_buf(),
             key,
@@ -216,7 +228,7 @@ impl TemplateStore {
             return Err(StoreError::NotFound(uid));
         }
         reject_symlink(&path)?;
-        let _guard = FileLock::acquire(&self.lock_path(uid))?;
+        let _guard = FileLock::acquire_with_owner(&self.lock_path(uid), self.expected_owner_uid())?;
         std::fs::remove_file(&path)?;
         Ok(())
     }
@@ -245,7 +257,10 @@ impl TemplateStore {
         profile_id: &str,
     ) -> Result<(), StoreError> {
         reject_symlink(path)?;
-        let _guard = FileLock::acquire(&self.lock_path(record.meta.uid))?;
+        let _guard = FileLock::acquire_with_owner(
+            &self.lock_path(record.meta.uid),
+            self.expected_owner_uid(),
+        )?;
 
         let json = serde_json::to_vec(record)?;
         let cipher = Aes256Gcm::new_from_slice(self.key.key())
@@ -484,7 +499,7 @@ impl TemplateStore {
         container: &UserContainer,
     ) -> Result<(), StoreError> {
         reject_symlink(path)?;
-        let _guard = FileLock::acquire(&self.lock_path(uid))?;
+        let _guard = FileLock::acquire_with_owner(&self.lock_path(uid), self.expected_owner_uid())?;
         let envelope = ContainerEnvelope::Profiles(container.clone());
         let json = serde_json::to_vec(&envelope)?;
         let cipher = Aes256Gcm::new_from_slice(self.key.key())
