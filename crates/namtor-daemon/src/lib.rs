@@ -15,6 +15,7 @@ pub mod fusion;
 pub mod licence;
 pub mod lifecycle;
 pub mod listener;
+pub mod manager;
 pub mod models;
 pub mod nonce;
 pub mod policy;

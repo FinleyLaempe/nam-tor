@@ -1,17 +1,68 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
-<node><interface name="org.namtor.Manager">
-<method name="ListProfiles"><arg name="profiles" type="a(ssbtt)" direction="out"/></method>
-<method name="CreateProfile"><arg name="uid" type="u" direction="in"/><arg name="name" type="s" direction="in"/><arg name="session" type="s" direction="out"/></method>
-<method name="StartEnrollment"><arg name="session" type="s" direction="in"/></method>
-<method name="GetProgress"><arg name="session" type="s" direction="in"/><arg name="progress" type="(suss)" direction="out"/></method>
-<method name="FinishEnrollment"><arg name="session" type="s" direction="in"/><arg name="profile" type="s" direction="out"/></method>
-<method name="CancelEnrollment"><arg name="session" type="s" direction="in"/></method>
-<method name="DeleteProfile"><arg name="uid" type="u" direction="in"/><arg name="id" type="s" direction="in"/></method>
-<method name="RenameProfile"><arg name="uid" type="u" direction="in"/><arg name="id" type="s" direction="in"/><arg name="name" type="s" direction="in"/></method>
-<method name="EnableProfile"><arg name="uid" type="u" direction="in"/><arg name="id" type="s" direction="in"/><arg name="enabled" type="b" direction="in"/></method>
-<method name="Status"><arg name="status" type="(ua(ssbtt)b)" direction="out"/></method>
-<signal name="Progress"><arg name="progress" type="(suss)"/></signal>
-<signal name="Enrolled"><arg name="profile" type="s"/></signal>
-<signal name="Cancelled"><arg name="session" type="s"/></signal>
-<property name="ApiVersion" type="u" access="read"/>
-</interface></node>
+<node>
+  <interface name="org.namtor.Manager">
+    <method name="ListProfiles">
+      <arg name="profiles" type="a(ssbtt)" direction="out"/>
+    </method>
+    <method name="StartEnrollment">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="name" type="s" direction="in"/>
+      <arg name="session" type="s" direction="out"/>
+    </method>
+    <method name="CancelEnrollment">
+      <arg name="session" type="s" direction="in"/>
+    </method>
+    <method name="CommitProfile">
+      <arg name="session" type="s" direction="in"/>
+      <arg name="profile" type="s" direction="out"/>
+    </method>
+    <method name="ReviewProfile">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="id" type="s" direction="in"/>
+      <arg name="review" type="(sbs)" direction="out"/>
+    </method>
+    <method name="RenameProfile">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="id" type="s" direction="in"/>
+      <arg name="name" type="s" direction="in"/>
+    </method>
+    <method name="EnableProfile">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="id" type="s" direction="in"/>
+      <arg name="enabled" type="b" direction="in"/>
+    </method>
+    <method name="DeleteProfile">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="id" type="s" direction="in"/>
+    </method>
+    <method name="MergeProfiles">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="src" type="s" direction="in"/>
+      <arg name="dst" type="s" direction="in"/>
+    </method>
+    <method name="ReplaceProfile">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="id" type="s" direction="in"/>
+      <arg name="name" type="s" direction="in"/>
+    </method>
+    <method name="GetStatus">
+      <arg name="status" type="(ua(ssbtt)b)" direction="out"/>
+    </method>
+    <signal name="EnrollmentProgress">
+      <arg name="session" type="s"/>
+      <arg name="progress" type="(susu)"/>
+    </signal>
+    <signal name="EnrollmentCompleted">
+      <arg name="session" type="s"/>
+      <arg name="profile" type="s"/>
+    </signal>
+    <signal name="ProfileChanged">
+      <arg name="uid" type="u"/>
+      <arg name="id" type="s"/>
+    </signal>
+    <signal name="StatusChanged">
+      <arg name="status" type="(ua(ssbtt)b)"/>
+    </signal>
+    <property name="ApiVersion" type="u" access="read"/>
+  </interface>
+</node>

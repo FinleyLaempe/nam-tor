@@ -2,14 +2,21 @@
 //! D-Bus profile API: `org.namtor.Manager` surface (spec §9.1).
 //!
 //! Reference in-memory implementation of the profile management API exposed
-//! over D-Bus. Polkit-backed authorisation gates every mutating operation;
-//! enrollment sessions track emitter arming so a mid-enrollment disconnect
-//! disarms the emitter without touching the template store. No biometric
-//! payload (embedding, frame, template, score) ever crosses this surface.
+//! over D-Bus. The frozen wire contract — method/signal/property names and
+//! argument signatures — lives in [`crate::manager::contract`] and is kept
+//! byte-identical to `docs/evidence/dbus-contract.xml`. This module owns the
+//! runtime types and an in-memory reference service; the bus service itself
+//! (zbus wiring) is task 9.
+//!
+//! Polkit-backed authorisation gates every mutating operation; enrollment
+//! sessions track emitter arming so a mid-enrollment disconnect disarms the
+//! emitter without touching the template store. No biometric payload
+//! (embedding, frame, template, score) ever crosses this surface — asserted
+//! by the privacy scan in [`crate::manager::contract`] and the
+//! `no_biometrics_in_api_structs` test here.
 //
 // allow: SIZE_OK — single cohesive D-Bus API surface (types + trait + in-memory
-// reference impl + introspection XML). The real zbus binding will replace the
-// in-memory storage with calls to namtor-store; splitting now would be premature.
+// reference impl). The frozen contract itself lives in `manager::contract`.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
@@ -18,11 +25,13 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 use crate::acl::PeerCreds;
+use crate::manager::contract;
 use crate::DaemonError;
 use serde::{Deserialize, Serialize};
 
-/// API version of the `org.namtor.Manager` surface.
-pub const API_VERSION: u32 = 1;
+/// API version of the `org.namtor.Manager` surface. Re-exported from the
+/// frozen contract so there is a single source of truth.
+pub use crate::manager::contract::API_VERSION;
 
 /// Polkit action identifiers (spec §9.1).
 pub mod action {
@@ -63,13 +72,26 @@ pub struct ProfileInfo {
     pub last_used: Option<u64>,
 }
 
-/// Live enrollment progress emitted as the `Progress` signal.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Live enrollment progress emitted as the `EnrollmentProgress` signal. Wire
+/// signature `(susu)` (session_id, frames_captured, quality_label,
+/// coverage_percent). `coverage_percent` is an integer 0-100; the UI must not
+/// receive a fractional value it could mistake for a threshold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnrollmentProgress {
     pub session_id: String,
     pub frames_captured: u32,
     pub quality: QualityLabel,
-    pub coverage_percent: f32,
+    pub coverage_percent: u32,
+}
+
+/// Coarse outcome of `ReviewProfile` (wire `(sbs)`): the reviewed profile id,
+/// a quality label, and whether re-enrollment is recommended. No score, no
+/// threshold, no embedding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewOutcome {
+    pub profile_id: String,
+    pub quality: QualityLabel,
+    pub needs_reenroll: bool,
 }
 
 /// Identity of a D-Bus peer, resolved from `SO_PEERCRED` + `/proc/<pid>/cmdline`.
@@ -166,17 +188,23 @@ impl From<ApiError> for DaemonError {
     }
 }
 
-/// Signals emitted by the Manager interface.
+/// Signals emitted by the Manager interface. Mirrors the frozen signal set in
+/// [`crate::manager::contract::signal`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum ManagerSignal {
-    Progress(EnrollmentProgress),
-    Enrolled {
+    /// `EnrollmentProgress(session, progress)` — live enrollment update.
+    EnrollmentProgress(EnrollmentProgress),
+    /// `EnrollmentCompleted(session, profile)` — `CommitProfile` succeeded.
+    EnrollmentCompleted {
         session_id: String,
         profile_id: String,
     },
-    Cancelled {
-        session_id: String,
-    },
+    /// `ProfileChanged(uid, id)` — a profile was created/renamed/enabled/
+    /// deleted/merged/replaced/reviewed.
+    ProfileChanged { uid: u32, id: String },
+    /// `StatusChanged(status)` — daemon status (emitter arming, profile list)
+    /// changed.
+    StatusChanged(StatusReport),
 }
 
 /// Snapshot returned by `Status`.
@@ -201,8 +229,6 @@ struct Session {
     target_uid: u32,
     peer_uid: u32,
     name: String,
-    frames: u32,
-    armed: bool,
 }
 
 /// Reference in-memory `org.namtor.Manager` service.
@@ -244,57 +270,126 @@ impl<P: PolkitAuthority> ManagerService<P> {
         static C: AtomicU64 = AtomicU64::new(1);
         format!("sess-{}", C.fetch_add(1, Ordering::Relaxed))
     }
+
+    /// Drain queued signals for the transport layer to emit on the bus. Not a
+    /// wire method — internal plumbing for the reference impl.
+    pub fn drain_signals(&self) -> Vec<ManagerSignal> {
+        std::mem::take(&mut *lock(&self.signals))
+    }
+
+    /// Disarm any enrollment session owned by the disconnected peer and lower
+    /// the emitter. Not a wire method — internal plumbing invoked by the
+    /// transport layer on peer disconnect.
+    pub fn handle_disconnect(&self, peer: &PeerIdentity) {
+        let mut sessions = lock(&self.sessions);
+        let sids: Vec<String> = sessions
+            .iter()
+            .filter(|(_, s)| s.peer_uid == peer.uid)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for sid in sids {
+            if let Some(s) = sessions.remove(&sid) {
+                lock(&self.active_per_uid).remove(&s.target_uid);
+            }
+        }
+        let was_armed = *lock(&self.emitter_armed);
+        *lock(&self.emitter_armed) = false;
+        if was_armed {
+            self.push_status_changed();
+        }
+    }
+
+    fn push_status_changed(&self) {
+        let st = self.snapshot_status();
+        lock(&self.signals).push(ManagerSignal::StatusChanged(st));
+    }
+
+    fn snapshot_status(&self) -> StatusReport {
+        let profiles = lock(&self.profiles);
+        let list: Vec<ProfileInfo> = profiles
+            .iter()
+            .map(|((_, id), p)| ProfileInfo {
+                id: id.clone(),
+                name: p.name.clone(),
+                enabled: p.enabled,
+                created: p.created,
+                last_used: None,
+            })
+            .collect();
+        StatusReport {
+            api_version: API_VERSION,
+            profiles: list,
+            emitter_armed: *lock(&self.emitter_armed),
+        }
+    }
 }
 
-/// Public D-Bus-exposed profile API. Methods take a `PeerIdentity` so the
-/// transport layer (zbus) can resolve the caller once and pass it in.
+/// Public D-Bus-exposed profile API. Method names mirror the frozen contract
+/// in [`crate::manager::contract::method`] 1:1. Methods take a `PeerIdentity`
+/// so the transport layer (zbus) can resolve the caller once and pass it in.
 pub trait ProfileApi {
-    fn list(&self, peer: &PeerIdentity) -> Result<Vec<ProfileInfo>, ApiError>;
-    fn create(&self, peer: &PeerIdentity, target_uid: u32, name: &str) -> Result<String, ApiError>;
-    fn start(&self, peer: &PeerIdentity, session_id: &str) -> Result<(), ApiError>;
-    fn progress(
+    /// `ListProfiles` → `a(ssbtt)`. Returns only profiles owned by the caller.
+    fn list_profiles(&self, peer: &PeerIdentity) -> Result<Vec<ProfileInfo>, ApiError>;
+    /// `StartEnrollment(uid, name) → session`. Creates and arms a session.
+    fn start_enrollment(
         &self,
         peer: &PeerIdentity,
-        session_id: &str,
-    ) -> Result<EnrollmentProgress, ApiError>;
-    fn finish(&self, peer: &PeerIdentity, session_id: &str) -> Result<String, ApiError>;
-    fn cancel(&self, peer: &PeerIdentity, session_id: &str) -> Result<(), ApiError>;
-    fn delete(&self, peer: &PeerIdentity, uid: u32, id: &str) -> Result<(), ApiError>;
-    fn rename(
+        target_uid: u32,
+        name: &str,
+    ) -> Result<String, ApiError>;
+    /// `CancelEnrollment(session)`. Disarms; no profile is written.
+    fn cancel_enrollment(&self, peer: &PeerIdentity, session_id: &str) -> Result<(), ApiError>;
+    /// `CommitProfile(session) → profile`. Finalises a session into a profile.
+    fn commit_profile(&self, peer: &PeerIdentity, session_id: &str) -> Result<String, ApiError>;
+    /// `ReviewProfile(uid, id) → (sbs)`. Coarse re-review of an existing
+    /// profile; never returns a score or threshold.
+    fn review_profile(
+        &self,
+        peer: &PeerIdentity,
+        uid: u32,
+        id: &str,
+    ) -> Result<ReviewOutcome, ApiError>;
+    /// `RenameProfile(uid, id, name)`. Relabel a profile.
+    fn rename_profile(
         &self,
         peer: &PeerIdentity,
         uid: u32,
         id: &str,
         new_name: &str,
     ) -> Result<(), ApiError>;
-    fn enable(
+    /// `EnableProfile(uid, id, enabled)`. Toggle a profile.
+    fn enable_profile(
         &self,
         peer: &PeerIdentity,
         uid: u32,
         id: &str,
         enabled: bool,
     ) -> Result<(), ApiError>;
-    fn status(&self, peer: &PeerIdentity) -> Result<StatusReport, ApiError>;
-    fn drain_signals(&self) -> Vec<ManagerSignal>;
-    fn handle_disconnect(&self, peer: &PeerIdentity);
-    fn merge(
+    /// `DeleteProfile(uid, id)`. Remove a profile.
+    fn delete_profile(&self, peer: &PeerIdentity, uid: u32, id: &str) -> Result<(), ApiError>;
+    /// `MergeProfiles(uid, src, dst)`. Fold `src` into `dst`, remove `src`.
+    fn merge_profiles(
         &self,
         peer: &PeerIdentity,
         uid: u32,
         src_id: &str,
         dst_id: &str,
     ) -> Result<(), ApiError>;
-    fn replace(
+    /// `ReplaceProfile(uid, id, name)`. Re-name an existing profile in place,
+    /// re-running the store write path (distinct from a pure relabel).
+    fn replace_profile(
         &self,
         peer: &PeerIdentity,
         uid: u32,
         id: &str,
         new_name: &str,
     ) -> Result<(), ApiError>;
+    /// `GetStatus → (ua(ssbtt)b)`. Daemon status snapshot.
+    fn get_status(&self, peer: &PeerIdentity) -> Result<StatusReport, ApiError>;
 }
 
 impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
-    fn list(&self, peer: &PeerIdentity) -> Result<Vec<ProfileInfo>, ApiError> {
+    fn list_profiles(&self, peer: &PeerIdentity) -> Result<Vec<ProfileInfo>, ApiError> {
         let profiles = lock(&self.profiles);
         Ok(profiles
             .iter()
@@ -309,7 +404,12 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
             .collect())
     }
 
-    fn create(&self, peer: &PeerIdentity, target_uid: u32, name: &str) -> Result<String, ApiError> {
+    fn start_enrollment(
+        &self,
+        peer: &PeerIdentity,
+        target_uid: u32,
+        name: &str,
+    ) -> Result<String, ApiError> {
         let action = if peer.uid == target_uid {
             action::ENROLL_SELF
         } else {
@@ -328,45 +428,35 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
                 target_uid,
                 peer_uid: peer.uid,
                 name: name.to_string(),
-                frames: 0,
-                armed: false,
             },
         );
+        let was_armed = *lock(&self.emitter_armed);
+        *lock(&self.emitter_armed) = true;
+        if !was_armed {
+            self.push_status_changed();
+        }
         Ok(sid)
     }
 
-    fn start(&self, _peer: &PeerIdentity, session_id: &str) -> Result<(), ApiError> {
+    fn cancel_enrollment(&self, _peer: &PeerIdentity, session_id: &str) -> Result<(), ApiError> {
         let mut sessions = lock(&self.sessions);
-        let s = sessions
-            .get_mut(session_id)
-            .ok_or_else(|| ApiError::SessionNotFound(session_id.into()))?;
-        s.armed = true;
-        *lock(&self.emitter_armed) = true;
+        if let Some(s) = sessions.remove(session_id) {
+            lock(&self.active_per_uid).remove(&s.target_uid);
+            let was_armed = *lock(&self.emitter_armed);
+            *lock(&self.emitter_armed) = false;
+            if was_armed {
+                self.push_status_changed();
+            }
+        }
         Ok(())
     }
 
-    fn progress(
-        &self,
-        _peer: &PeerIdentity,
-        session_id: &str,
-    ) -> Result<EnrollmentProgress, ApiError> {
-        let sessions = lock(&self.sessions);
-        let s = sessions
-            .get(session_id)
-            .ok_or_else(|| ApiError::SessionNotFound(session_id.into()))?;
-        Ok(EnrollmentProgress {
-            session_id: session_id.to_string(),
-            frames_captured: s.frames,
-            quality: QualityLabel::High,
-            coverage_percent: 100.0,
-        })
-    }
-
-    fn finish(&self, _peer: &PeerIdentity, session_id: &str) -> Result<String, ApiError> {
+    fn commit_profile(&self, _peer: &PeerIdentity, session_id: &str) -> Result<String, ApiError> {
         let mut sessions = lock(&self.sessions);
         let s = sessions
             .remove(session_id)
             .ok_or_else(|| ApiError::SessionNotFound(session_id.into()))?;
+        let was_armed = *lock(&self.emitter_armed);
         *lock(&self.emitter_armed) = false;
         lock(&self.active_per_uid).remove(&s.target_uid);
         let profile_id = format!("profile-{}", session_id);
@@ -383,36 +473,53 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
             },
         );
         *lock(&self.store_gen) += 1;
-        lock(&self.signals).push(ManagerSignal::Enrolled {
+        let mut sigs = lock(&self.signals);
+        sigs.push(ManagerSignal::EnrollmentCompleted {
             session_id: session_id.to_string(),
             profile_id: profile_id.clone(),
         });
+        sigs.push(ManagerSignal::ProfileChanged {
+            uid: s.target_uid,
+            id: profile_id.clone(),
+        });
+        if was_armed {
+            drop(sigs);
+            self.push_status_changed();
+        }
         Ok(profile_id)
     }
 
-    fn cancel(&self, _peer: &PeerIdentity, session_id: &str) -> Result<(), ApiError> {
-        let mut sessions = lock(&self.sessions);
-        if let Some(s) = sessions.remove(session_id) {
-            *lock(&self.emitter_armed) = false;
-            lock(&self.active_per_uid).remove(&s.target_uid);
-            lock(&self.signals).push(ManagerSignal::Cancelled {
-                session_id: session_id.to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    fn delete(&self, peer: &PeerIdentity, uid: u32, id: &str) -> Result<(), ApiError> {
-        self.authz(action::DELETE, peer, uid)?;
-        let mut profiles = lock(&self.profiles);
-        if profiles.remove(&(uid, id.to_string())).is_none() {
-            return Err(ApiError::NotFound(id.into()));
-        }
+    fn review_profile(
+        &self,
+        peer: &PeerIdentity,
+        uid: u32,
+        id: &str,
+    ) -> Result<ReviewOutcome, ApiError> {
+        self.authz(action::CONFIGURE, peer, uid)?;
+        let profiles = lock(&self.profiles);
+        let p = profiles
+            .get(&(uid, id.to_string()))
+            .ok_or_else(|| ApiError::NotFound(id.into()))?;
+        let quality = if p.enabled {
+            QualityLabel::High
+        } else {
+            QualityLabel::Low
+        };
+        let outcome = ReviewOutcome {
+            profile_id: id.to_string(),
+            quality,
+            needs_reenroll: !p.enabled,
+        };
+        drop(profiles);
+        lock(&self.signals).push(ManagerSignal::ProfileChanged {
+            uid,
+            id: id.to_string(),
+        });
         *lock(&self.store_gen) += 1;
-        Ok(())
+        Ok(outcome)
     }
 
-    fn rename(
+    fn rename_profile(
         &self,
         peer: &PeerIdentity,
         uid: u32,
@@ -426,10 +533,15 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
             .ok_or_else(|| ApiError::NotFound(id.into()))?;
         p.name = new_name.to_string();
         *lock(&self.store_gen) += 1;
+        drop(profiles);
+        lock(&self.signals).push(ManagerSignal::ProfileChanged {
+            uid,
+            id: id.to_string(),
+        });
         Ok(())
     }
 
-    fn enable(
+    fn enable_profile(
         &self,
         peer: &PeerIdentity,
         uid: u32,
@@ -443,48 +555,30 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
             .ok_or_else(|| ApiError::NotFound(id.into()))?;
         p.enabled = enabled;
         *lock(&self.store_gen) += 1;
+        drop(profiles);
+        lock(&self.signals).push(ManagerSignal::ProfileChanged {
+            uid,
+            id: id.to_string(),
+        });
         Ok(())
     }
 
-    fn status(&self, _peer: &PeerIdentity) -> Result<StatusReport, ApiError> {
-        let profiles = lock(&self.profiles);
-        let list: Vec<ProfileInfo> = profiles
-            .iter()
-            .map(|((_, id), p)| ProfileInfo {
-                id: id.clone(),
-                name: p.name.clone(),
-                enabled: p.enabled,
-                created: p.created,
-                last_used: None,
-            })
-            .collect();
-        Ok(StatusReport {
-            api_version: API_VERSION,
-            profiles: list,
-            emitter_armed: *lock(&self.emitter_armed),
-        })
-    }
-
-    fn drain_signals(&self) -> Vec<ManagerSignal> {
-        std::mem::take(&mut *lock(&self.signals))
-    }
-
-    fn handle_disconnect(&self, peer: &PeerIdentity) {
-        let mut sessions = lock(&self.sessions);
-        let sids: Vec<String> = sessions
-            .iter()
-            .filter(|(_, s)| s.peer_uid == peer.uid)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for sid in sids {
-            if let Some(s) = sessions.remove(&sid) {
-                lock(&self.active_per_uid).remove(&s.target_uid);
-            }
+    fn delete_profile(&self, peer: &PeerIdentity, uid: u32, id: &str) -> Result<(), ApiError> {
+        self.authz(action::DELETE, peer, uid)?;
+        let mut profiles = lock(&self.profiles);
+        if profiles.remove(&(uid, id.to_string())).is_none() {
+            return Err(ApiError::NotFound(id.into()));
         }
-        *lock(&self.emitter_armed) = false;
+        *lock(&self.store_gen) += 1;
+        drop(profiles);
+        lock(&self.signals).push(ManagerSignal::ProfileChanged {
+            uid,
+            id: id.to_string(),
+        });
+        Ok(())
     }
 
-    fn merge(
+    fn merge_profiles(
         &self,
         peer: &PeerIdentity,
         uid: u32,
@@ -499,16 +593,19 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         let dst_p = profiles
             .get_mut(&(uid, dst_id.to_string()))
             .ok_or_else(|| ApiError::NotFound(dst_id.into()))?;
-
         dst_p.name = src_p.name;
         dst_p.enabled = src_p.enabled;
         dst_p.created = src_p.created;
-
         *lock(&self.store_gen) += 1;
+        drop(profiles);
+        lock(&self.signals).push(ManagerSignal::ProfileChanged {
+            uid,
+            id: dst_id.to_string(),
+        });
         Ok(())
     }
 
-    fn replace(
+    fn replace_profile(
         &self,
         peer: &PeerIdentity,
         uid: u32,
@@ -522,29 +619,23 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
             .ok_or_else(|| ApiError::NotFound(id.into()))?;
         p.name = new_name.to_string();
         *lock(&self.store_gen) += 1;
+        drop(profiles);
+        lock(&self.signals).push(ManagerSignal::ProfileChanged {
+            uid,
+            id: id.to_string(),
+        });
         Ok(())
+    }
+
+    fn get_status(&self, _peer: &PeerIdentity) -> Result<StatusReport, ApiError> {
+        Ok(self.snapshot_status())
     }
 }
 
 /// Static D-Bus introspection XML for the `org.namtor.Manager` interface.
+/// Delegates to the frozen contract so there is a single source of truth.
 pub fn introspect_xml() -> &'static str {
-    r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
-<node><interface name="org.namtor.Manager">
-<method name="ListProfiles"><arg name="profiles" type="a(ssbtt)" direction="out"/></method>
-<method name="CreateProfile"><arg name="uid" type="u" direction="in"/><arg name="name" type="s" direction="in"/><arg name="session" type="s" direction="out"/></method>
-<method name="StartEnrollment"><arg name="session" type="s" direction="in"/></method>
-<method name="GetProgress"><arg name="session" type="s" direction="in"/><arg name="progress" type="(suss)" direction="out"/></method>
-<method name="FinishEnrollment"><arg name="session" type="s" direction="in"/><arg name="profile" type="s" direction="out"/></method>
-<method name="CancelEnrollment"><arg name="session" type="s" direction="in"/></method>
-<method name="DeleteProfile"><arg name="uid" type="u" direction="in"/><arg name="id" type="s" direction="in"/></method>
-<method name="RenameProfile"><arg name="uid" type="u" direction="in"/><arg name="id" type="s" direction="in"/><arg name="name" type="s" direction="in"/></method>
-<method name="MergeProfiles"><arg name="uid" type="u" direction="in"/><arg name="src" type="s" direction="in"/><arg name="dst" type="s" direction="in"/></method>
-<method name="ReplaceProfile"><arg name="uid" type="u" direction="in"/><arg name="id" type="s" direction="in"/><arg name="name" type="s" direction="in"/></method>
-<signal name="Progress"><arg name="progress" type="(suss)"/></signal>
-<signal name="Enrolled"><arg name="profile" type="s"/></signal>
-<signal name="Cancelled"><arg name="session" type="s"/></signal>
-<property name="ApiVersion" type="u" access="read"/>
-</interface></node>"#
+    contract::INTROSPECTION_XML
 }
 
 #[cfg(test)]
@@ -562,7 +653,7 @@ mod tests {
     #[test]
     fn self_enroll_allowed_for_own_uid() {
         let svc = ManagerService::new(SystemPolkit);
-        let sid = svc.create(&peer(1000), 1000, "alice").unwrap();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         assert!(sid.starts_with("sess-"));
     }
 
@@ -570,7 +661,7 @@ mod tests {
     fn enroll_other_requires_admin() {
         let svc = ManagerService::new(SystemPolkit);
         assert!(matches!(
-            svc.create(&peer(1000), 1001, "bob"),
+            svc.start_enrollment(&peer(1000), 1001, "bob"),
             Err(ApiError::Denied { .. })
         ));
     }
@@ -578,27 +669,28 @@ mod tests {
     #[test]
     fn delete_requires_admin() {
         let svc = ManagerService::new(SystemPolkit);
-        // non-admin
         assert!(matches!(
-            svc.delete(&peer(1000), 1000, "x"),
+            svc.delete_profile(&peer(1000), 1000, "x"),
             Err(ApiError::Denied { .. })
         ));
-        // admin - first create a profile via enrollment
-        let sid = svc.create(&peer(0), 0, "root").unwrap();
-        svc.start(&peer(0), &sid).unwrap();
-        let pid = svc.finish(&peer(0), &sid).unwrap();
-        svc.delete(&peer(0), 0, &pid).unwrap();
+        let sid = svc.start_enrollment(&peer(0), 0, "root").unwrap();
+        let pid = svc.commit_profile(&peer(0), &sid).unwrap();
+        svc.delete_profile(&peer(0), 0, &pid).unwrap();
     }
 
     #[test]
     fn configure_requires_admin() {
         let svc = ManagerService::new(SystemPolkit);
         assert!(matches!(
-            svc.rename(&peer(1000), 1000, "x", "y"),
+            svc.rename_profile(&peer(1000), 1000, "x", "y"),
             Err(ApiError::Denied { .. })
         ));
         assert!(matches!(
-            svc.enable(&peer(1000), 1000, "x", false),
+            svc.enable_profile(&peer(1000), 1000, "x", false),
+            Err(ApiError::Denied { .. })
+        ));
+        assert!(matches!(
+            svc.review_profile(&peer(1000), 1000, "x"),
             Err(ApiError::Denied { .. })
         ));
     }
@@ -606,8 +698,7 @@ mod tests {
     #[test]
     fn disconnect_mid_enrollment_cleans_up_emitter() {
         let svc = ManagerService::new(SystemPolkit);
-        let sid = svc.create(&peer(1000), 1000, "alice").unwrap();
-        svc.start(&peer(1000), &sid).unwrap();
+        let _sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         assert!(*svc.emitter_armed.lock().unwrap());
         svc.handle_disconnect(&peer(1000));
         assert!(!*svc.emitter_armed.lock().unwrap());
@@ -617,8 +708,7 @@ mod tests {
     fn disconnect_mid_enrollment_leaves_store_unchanged() {
         let svc = ManagerService::new(SystemPolkit);
         let gen_before = *svc.store_gen.lock().unwrap();
-        let sid = svc.create(&peer(1000), 1000, "alice").unwrap();
-        svc.start(&peer(1000), &sid).unwrap();
+        let _sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         svc.handle_disconnect(&peer(1000));
         let gen_after = *svc.store_gen.lock().unwrap();
         assert_eq!(gen_before, gen_after, "store generation unchanged");
@@ -638,48 +728,50 @@ mod tests {
             session_id: "s".into(),
             frames_captured: 0,
             quality: QualityLabel::High,
-            coverage_percent: 100.0,
+            coverage_percent: 100,
+        };
+        let ro = ReviewOutcome {
+            profile_id: "p".into(),
+            quality: QualityLabel::High,
+            needs_reenroll: false,
         };
         let sr = StatusReport {
             api_version: 1,
             profiles: vec![pi],
             emitter_armed: false,
         };
-        let json = serde_json::to_string(&ep).unwrap();
-        // `frames_captured` is a counter, not a raw frame payload; the guard
-        // checks for biometric-bearing tokens only.
-        for token in [
-            "embedding",
-            "template",
-            "pixel",
-            "score=",
-            "0x",
-            "nonce",
-            "key",
+        for (name, json) in [
+            ("ep", serde_json::to_string(&ep).unwrap()),
+            ("sr", serde_json::to_string(&sr).unwrap()),
+            ("ro", serde_json::to_string(&ro).unwrap()),
         ] {
-            assert!(!json.to_lowercase().contains(token), "ep has {token}");
+            for token in [
+                "embedding",
+                "template",
+                "pixel",
+                "score",
+                "0x",
+                "nonce",
+                "key",
+                "threshold",
+            ] {
+                assert!(
+                    !json.to_lowercase().contains(token),
+                    "{name} leaked `{token}`: {json}"
+                );
+            }
         }
-        let sr_json = serde_json::to_string(&sr).unwrap();
-        for token in [
-            "embedding",
-            "template",
-            "pixel",
-            "score=",
-            "0x",
-            "nonce",
-            "key",
-        ] {
-            assert!(!sr_json.to_lowercase().contains(token), "sr has {token}");
-        }
+        assert!(serde_json::to_string(&ep)
+            .unwrap()
+            .contains("frames_captured"));
     }
 
     #[test]
     fn status_returns_profile_list_without_biometrics() {
         let svc = ManagerService::new(SystemPolkit);
-        let sid = svc.create(&peer(1000), 1000, "alice").unwrap();
-        svc.start(&peer(1000), &sid).unwrap();
-        svc.finish(&peer(1000), &sid).unwrap();
-        let st = svc.status(&peer(1000)).unwrap();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.commit_profile(&peer(1000), &sid).unwrap();
+        let st = svc.get_status(&peer(1000)).unwrap();
         assert_eq!(st.profiles.len(), 1);
         assert_eq!(st.profiles[0].name, "alice");
         let json = serde_json::to_string(&st).unwrap();
@@ -688,14 +780,128 @@ mod tests {
     }
 
     #[test]
-    fn stable_introspection() {
-        let a = introspect_xml();
-        let b = introspect_xml();
-        assert_eq!(a, b);
-        assert!(a.contains("org.namtor.Manager"));
-        assert!(a.contains("ListProfiles"));
-        assert!(a.contains("FinishEnrollment"));
-        assert!(a.contains("DeleteProfile"));
+    fn commit_emits_completed_and_profile_changed_signals() {
+        let svc = ManagerService::new(SystemPolkit);
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.commit_profile(&peer(1000), &sid).unwrap();
+        let sigs = svc.drain_signals();
+        assert!(
+            sigs.iter()
+                .any(|s| matches!(s, ManagerSignal::EnrollmentCompleted { .. })),
+            "EnrollmentCompleted emitted on commit"
+        );
+        assert!(
+            sigs.iter()
+                .any(|s| matches!(s, ManagerSignal::ProfileChanged { uid: 1000, .. })),
+            "ProfileChanged emitted on commit"
+        );
+    }
+
+    #[test]
+    fn mutations_emit_profile_changed() {
+        let svc = ManagerService::new(SystemPolkit);
+        let sid = svc.start_enrollment(&peer(0), 0, "root").unwrap();
+        let pid = svc.commit_profile(&peer(0), &sid).unwrap();
+        svc.drain_signals();
+
+        svc.rename_profile(&peer(0), 0, &pid, "root2").unwrap();
+        svc.enable_profile(&peer(0), 0, &pid, false).unwrap();
+        svc.replace_profile(&peer(0), 0, &pid, "root3").unwrap();
+        svc.review_profile(&peer(0), 0, &pid).unwrap();
+        let sigs = svc.drain_signals();
+        let changed = sigs
+            .iter()
+            .filter(|s| matches!(s, ManagerSignal::ProfileChanged { .. }))
+            .count();
+        assert_eq!(
+            changed, 4,
+            "rename/enable/replace/review each emit ProfileChanged"
+        );
+        svc.delete_profile(&peer(0), 0, &pid).unwrap();
+        assert!(svc
+            .drain_signals()
+            .iter()
+            .any(|s| matches!(s, ManagerSignal::ProfileChanged { .. })));
+    }
+
+    #[test]
+    fn merge_folds_src_into_dst_and_emits_profile_changed() {
+        let svc = ManagerService::new(SystemPolkit);
+        let sid_a = svc.start_enrollment(&peer(0), 0, "a").unwrap();
+        let pid_a = svc.commit_profile(&peer(0), &sid_a).unwrap();
+        let sid_b = svc.start_enrollment(&peer(0), 0, "b").unwrap();
+        let pid_b = svc.commit_profile(&peer(0), &sid_b).unwrap();
+        svc.drain_signals();
+
+        svc.merge_profiles(&peer(0), 0, &pid_a, &pid_b).unwrap();
+        let list = svc.list_profiles(&peer(0)).unwrap();
+        assert_eq!(list.len(), 1, "src removed, dst remains");
+        assert_eq!(list[0].id, pid_b);
+        assert!(svc
+            .drain_signals()
+            .iter()
+            .any(|s| matches!(s, ManagerSignal::ProfileChanged { id, .. } if id == &pid_b)));
+    }
+
+    #[test]
+    fn cancel_disarms_without_writing_or_emitting_completed() {
+        let svc = ManagerService::new(SystemPolkit);
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        assert!(*svc.emitter_armed.lock().unwrap());
+        let gen_before = *svc.store_gen.lock().unwrap();
+        svc.cancel_enrollment(&peer(1000), &sid).unwrap();
+        assert!(!*svc.emitter_armed.lock().unwrap());
+        assert_eq!(*svc.store_gen.lock().unwrap(), gen_before);
+        let sigs = svc.drain_signals();
+        assert!(
+            !sigs
+                .iter()
+                .any(|s| matches!(s, ManagerSignal::EnrollmentCompleted { .. })),
+            "cancel must not emit EnrollmentCompleted"
+        );
+    }
+
+    #[test]
+    fn review_returns_coarse_label_and_reenroll_flag() {
+        let svc = ManagerService::new(SystemPolkit);
+        let sid = svc.start_enrollment(&peer(0), 0, "root").unwrap();
+        let pid = svc.commit_profile(&peer(0), &sid).unwrap();
+        svc.drain_signals();
+
+        let out = svc.review_profile(&peer(0), 0, &pid).unwrap();
+        assert_eq!(out.profile_id, pid);
+        assert!(
+            !out.needs_reenroll,
+            "enabled profile does not need reenroll"
+        );
+        assert_eq!(out.quality, QualityLabel::High);
+
+        svc.enable_profile(&peer(0), 0, &pid, false).unwrap();
+        let out = svc.review_profile(&peer(0), 0, &pid).unwrap();
+        assert!(out.needs_reenroll, "disabled profile needs reenroll");
+    }
+
+    #[test]
+    fn start_and_cancel_round_trip_via_trait() {
+        let svc = ManagerService::new(SystemPolkit);
+        let api: &dyn ProfileApi = &svc;
+        let sid = api.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        api.cancel_enrollment(&peer(1000), &sid).unwrap();
+        assert!(!*svc.emitter_armed.lock().unwrap());
+    }
+
+    #[test]
+    fn introspection_delegates_to_frozen_contract() {
+        let xml = introspect_xml();
+        assert_eq!(xml, contract::INTROSPECTION_XML);
+        assert!(xml.contains("org.namtor.Manager"));
+        assert!(xml.contains("ListProfiles"));
+        assert!(xml.contains("CommitProfile"));
+        assert!(xml.contains("ReviewProfile"));
+        assert!(xml.contains("GetStatus"));
+        assert!(xml.contains("EnrollmentCompleted"));
+        assert!(xml.contains("ProfileChanged"));
+        assert!(xml.contains("StatusChanged"));
     }
 
     #[test]
