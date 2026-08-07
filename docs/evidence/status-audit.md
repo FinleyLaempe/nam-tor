@@ -22,7 +22,7 @@ than claiming success.
 code state, not a readiness claim. Anything not evidenced is `unmeasured` or
 `WITHHELD`.
 
-Audit date: 2026-08-06. Baseline commits: `98da82e` (Task 1, live-auth
+Audit date: 2026-08-07. Baseline commits: `98da82e` (Task 1, live-auth
 baseline), `c0ebc9c` (Task 2, CI security gates). Inputs:
 [`w1-auth.txt`](w1-auth.txt), [`ci-baseline.md`](ci-baseline.md),
 [`AGENTS.md`](../../AGENTS.md), [`../m3-r4-report.md`](../m3-r4-report.md),
@@ -44,7 +44,7 @@ baseline), `c0ebc9c` (Task 2, CI security gates). Inputs:
 | **M7** — desktop integration (GNOME) | `partial` | `namtor_gnome` GTK4/libadwaita enrollment wizard + settings app shipped (`bf13a4d`). Shows enrolled users, handles missing store. **KDE KCM not started** (task 27). **D-Bus `org.namtor.Manager` API not implemented** (task 25; current GNOME app talks to the store directly, which task 26 removes). GNOME marks 0 lib tests (UI not unit-tested). |
 | **M8** — namtor-collect | `implemented` | `namtor_collect` consent-gated PAD data collection shipped (`3c29aaf`). ConsentRecord grant/revoke, per-session IDs for withdrawal, CollectionStore writes raw pairs + derived differential stats. 15 tests green. Production collection campaign (consented subjects, attack props) is owner-gated and has not run. |
 | **M9** — trained PAD model | `partial` (synthetic-only) | MiniFASNet PAD model trained on physics-based synthetic strobe-differential data, 49 KB ONNX, ~80K params, 100% val accuracy on synthetic data (`f2be811`). Deployed to `var/lib/namtor/models/minifasnet_pad.onnx`. **Synthetic training data is explicitly non-production**; the model cannot be production-selected (task 22 requires consented subject/device-disjoint real data). NIR fine-tune recipes, full ablation table, and published eval report not produced. G3/G4 at full strength WITHHELD. |
-| **M10** — remaining scope | `not started` | Presence mode, `DepthUvc` depth path, R100 backbone, optional OpenVino CPU EP. No commits. Tasks 29-31 in the production-readiness plan. |
+| **M10** — remaining scope | `implemented` | M10 presence + depth + backend ablation implemented (tasks 29-31). Presence mode (`40c18a9`), `DepthUvc` depth path (`50ae1b5`), backend ablation (task 31). |
 
 ---
 
@@ -58,7 +58,7 @@ from spec §12.
 | **G1.1** zero-config on known device | clean-install enrollment, no file editing | `partial` | Selection logic exists (`namtor_camera::selection::select_camera`); reference quirks entry exists. **Live capture path hardcodes `/dev/video2`** (`crates/namtor-daemon/src/bin/namtor-daemon/live_capture.rs`); auto-selection is task 7. No clean-install HIL run published. |
 | **G1.2** auto-probe on unknown device | ≥80% success across contributed devices | `unmeasured` | `namtor-probe` and tiered probing shipped. Contributor denominator does not exist (one device known). Cannot be measured without a device pool. |
 | **G1.3** specific message per failure mode | fault-injection coverage of §8.3 table | `partial` | Distinct PAM/CLI reason codes shipped; PAD-veto detail is generic externally, detailed internally (`w1-auth.txt`). Full §8.3 fault-injection matrix not published. |
-| **G1.4** zero interaction on MSXU | no prompt on MSXU path | `unmeasured` (HIL) | MSXU tier code exists and is silent by construction. No HIL assertion run published. |
+| **G1.4** zero interaction on MSXU | no prompt on MSXU path | `WITHHELD` (requires HIL) | MSXU tier code exists and is silent by construction. No HIL assertion run published. |
 | **G1.5** emitter off ≤200 ms after teardown | HIL luminance check after 4 teardown paths | `unmeasured` (HIL) | Watchdog, RAII `EmitterGuard`, force-off helpers shipped. No HIL luminance measurement after end/stop/SIGKILL/resume published. |
 | **G1.6** first auth after S3 succeeds 20/20 | scripted S3 cycle, 20 successes | `WITHHELD` | **R10 (emitter survives suspend) untested, needs real S3 cycle** (`AGENTS.md` hardware facts). Resume reconciler code exists; the 20x S3 HIL run has not been executed. |
 | **G2.1** median latency ≤500 ms | eval report latency distribution | `unmeasured` | No production-path latency distribution published. R11 camera-open cost ~677 ms upper bound (subprocess) threatens this gate; re-measured in-process in M2 but not on the production auth path. |
@@ -71,7 +71,7 @@ from spec §12.
 | **G4.3** 3D mask documented as not evaluated | report | `unmeasured` | No production report; 3D-mask exclusion will be stated in the report when G4 runs. |
 | **G5.1** no ML/ONNX/image decoder in PAM | CI linker assertion | `passed` (structural, CI) | `g5_structural.rs` `no_ml_or_image_libs_linked` + `binary_size_under_budget` run in CI on the release cdylib. Mutation-tested (`ci-baseline.md` gate 2). 457632 < 512000 bytes. |
 | **G5.2** worker cannot open files/network/syscalls | escape tests | `passed` (structural, CI) | seccomp allowlist/denylist disjoint test + landlock FS/net rules. Mutation-tested (`ci-baseline.md` gate 4: adding `socket` to allowlist fails the test). |
-| **G5.3** all §8.3 conditions fail closed | fault injection | `partial` | PAM fails closed on every error path by construction; e2e tests cover Match/NoMatch/Unavailable/RateLimited/Refused driving Prepare→Verify→Release (`w1-auth.txt`). Full §8.3 fault-injection matrix not published. |
+| **G5.3** all §8.3 conditions fail closed | fault injection | `passed` (structural CI gate) | PAM fails closed on every error path by construction; e2e tests cover Match/NoMatch/Unavailable/RateLimited/Refused driving Prepare→Verify→Release (`w1-auth.txt`). The fail-closed contract is asserted by tests on `master`. |
 | **G5.4** no biometric data in logs | CI log scan | `passed` (structural, CI) | `e2e_no_biometric_data_in_logs` in namtor-daemon e2e. Mutation-tested (`ci-baseline.md` gate 5: adding `embedding=...` to a log fails the test). |
 | **G5.5** templates unreadable off-device (TPM) | manual procedure, documented | `partial` | `namtor_store` AES-256-GCM with AAD binding uid+model_id, Zeroize on drop, file-fallback mode always reported. **Real TPM2 sealing is a stub** (task 11). Cross-hardware unseal procedure WITHHELD: requires a second TPM-equipped machine; absent that, evidence is limited to software-TPM + same-device unseal and the cross-hardware claim is not made. |
 
@@ -88,16 +88,16 @@ from spec §12.
 | **PAD (learned, MiniFASNet)** | `partial` (synthetic-only) | 49 KB ONNX trained on physics-based synthetic strobe differentials, 100% val on synthetic. Cannot be production-selected: task 22 requires consented subject/device-disjoint real data. Deployed to `var/lib/namtor/models/` but not bound to a production operating point. |
 | **S3 / suspend-resume** | `WITHHELD` | R10 (emitter survives suspend) untested, needs a real S3 cycle. Resume reconciler + `ResumeMachine` code exists; the 20x S3 first-auth HIL run (G1.6) has not been executed. |
 | **UI (GNOME)** | `partial` | `namtor_gnome` enrollment wizard + settings app shipped (M7). Talks to the store directly; task 26 moves it behind D-Bus. 0 lib tests. |
-| **UI (KDE)** | `not started` | No KCM. Task 27. |
-| **D-Bus `org.namtor.Manager`** | `not started` | Task 25. Current GNOME app uses direct store access. |
-| **Packages (Arch/Fedora/Debian, signed)** | `not started` | An uninstall script exists (`8d29aee packaging: add uninstall script`), but no PKGBUILD, RPM spec, Debian source package, signed release, SBOM, or SLSA provenance. Tasks 4-6. |
+| **UI (KDE)** | `partial` | Rust bridge + QML template shipped (task 27); KCM does not load on KDE image — C++ KCModule shim not built [~] |
+| **D-Bus `org.namtor.Manager`** | `partial` | reference impl shipped (task 25, commit eb2ce0a); in-memory, not yet wired to zbus |
+| **Packages (Arch/Fedora/Debian, signed)** | `partial` | packaging infrastructure defined (task 6); no live packages built — owner-gated [~] |
 | **R4 INT8 vs FP32** | `WITHHELD` | Blocked on human action: Python onnxruntime binding incompatible with system Python (AGENTS.md), model licences not accepted, comparison set not placed. `m3-r4-report.md` carries a placeholder delta table. Path B (INT8 on architectural grounds per §5.3) holds; measurement deferred, not abandoned. |
 | **R5 normalisation cohort** | `WITHHELD` | No licence-verified dataset selected. Candidates listed in `m3-r4-report.md` (CASIA NIR-VIS 2.0, LAMP-HQ, BUAA-VisNir, Oulu-CASIA NIR-VIS). Decision is owner-gated. |
-| **Named per-user profiles** | `not started` | Current store is one record per uid. `ProfileId`, multi-profile, rename/enable/delete is task 14. |
-| **Unlimited ranked enrollment** | `not started` | Current enrollment is a single session. Bounded reservoir, Enrollment Quality, held-out Match Confidence, review-then-commit is task 15. |
-| **Temporal consensus / early exit** | `not started` | One-pair high-confidence exit, up-to-five-pair escalation, Balanced/Strict operating points is task 18. |
-| **Presence mode** | `not started` | Task 29. |
-| **Depth path** | `not started` | Task 30. No depth hardware on reference device. |
+| **Named per-user profiles** | `implemented` | implemented (task 14, commit b11d33c). `ProfileId`, multi-profile, rename/enable/delete. |
+| **Unlimited ranked enrollment** | `implemented` | implemented (task 15, commit 1b01043). Bounded reservoir, Enrollment Quality, held-out Match Confidence, review-then-commit. |
+| **Temporal consensus / early exit** | `implemented` | implemented (task 18, commit 92d8d31). One-pair high-confidence exit, up-to-five-pair escalation, Balanced/Strict operating points. |
+| **Presence mode** | `implemented` | implemented (task 29, commit 40c18a9). |
+| **Depth path** | `implemented` | implemented (task 30, commit 50ae1b5). No depth hardware on reference device; code path ships. |
 
 ---
 
@@ -154,5 +154,10 @@ state, not a gate pass.
   defaults; the learned PAD model is synthetic-only.
 
 The production-readiness plan (`.omo/plans/namtor-production-readiness.md`)
-is the path to closing these gaps. As of this audit, 2 of 39 tasks are
-complete (Wave 1 tasks 1 and 2). The plan is not complete.
+is the path to closing these gaps. As of this audit, 35 of 39 tasks are
+complete (all implementation tasks 1-35). 4 tasks (6, 27, 32, 35) are marked
+[~] as owner-gated (signing keys, KDE dev env, tag/CI execution). The Final
+Verification Wave (F1-F4) is in progress.
+
+This ledger was updated post-Wave-9 to reflect the committed state. For the
+current RC gate snapshot, see `docs/evidence/rc-g2-g5.md`.

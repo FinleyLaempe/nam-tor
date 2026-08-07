@@ -151,11 +151,17 @@ wizard and settings app show enrolled users and handle the missing-store
 case.
 
 KDE profile management is implemented
-(`docs/evidence/kde-qa/report.md`). The KCM is wired to the same backend.
+(`docs/evidence/kde-qa/report.md`) (Rust bridge + QML template; KCM does not
+load on KDE image — C++ KCModule shim not built, owner-gated [~]). The KCM is
+wired to the same backend.
 
-Both UIs talk to the daemon through the D-Bus API
-(`docs/evidence/dbus-contract.xml`). No UI opens the template store
-directly.
+Desktop profile management is implemented through the D-Bus API contract
+(task 25, `docs/evidence/dbus-contract.xml`). The D-Bus service is currently
+an in-memory reference implementation (`crates/namtor-daemon/src/dbus.rs`);
+real zbus wiring into the daemon binary is a follow-up. GNOME and KDE tests
+drive a fake service that implements the same `ProfileApi` trait. No UI opens
+the template store directly — all operations go through the D-Bus contract
+surface.
 
 End-to-end profile create, review, merge, and delete without direct store
 access is implemented but not HIL-verified. The S3 20x HIL gate is WITHHELD
