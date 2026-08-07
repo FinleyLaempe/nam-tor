@@ -644,7 +644,7 @@ mod tests {
 
     #[test]
     fn api_error_maps_to_daemon_error() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        let io_err = std::io::Error::other("boom");
         let api: ApiError = io_err.into();
         let daemon: DaemonError = api.into();
         assert!(matches!(daemon, DaemonError::Io(_)));

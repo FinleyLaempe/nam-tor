@@ -18,6 +18,7 @@ pub mod listener;
 pub mod models;
 pub mod nonce;
 pub mod policy;
+pub mod presence;
 pub mod supervisor;
 pub mod verify;
 pub mod znorm;
