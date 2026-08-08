@@ -159,6 +159,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let bus_service = start_manager_bus(&store_dir, &key_path);
 
+    let _disconnect_monitor =
+        bus_service
+            .as_ref()
+            .and_then(|(bus, svc)| match bus.monitor_disconnects(svc.clone()) {
+                Ok(handle) => Some(handle),
+                Err(e) => {
+                    tracing::warn!(error = %e, "disconnect monitor not started");
+                    None
+                }
+            });
+
     let started = if std::env::var("LISTEN_FDS").is_ok() {
         tracing::info!(fd = 3, "adopting socket-activation listener");
         startup::from_fd(3, socket_path, auth_gid, dispatcher)?
@@ -184,7 +195,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if let Some(bus) = bus_service {
+    if let Some((bus, _svc)) = bus_service {
         bus.shutdown();
     }
 
@@ -196,7 +207,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 fn start_manager_bus(
     store_dir: &std::path::Path,
     key_path: &std::path::Path,
-) -> Option<ManagerBusService> {
+) -> Option<(ManagerBusService, Arc<ManagerService<SystemPolkit>>)> {
     let store = match TemplateStore::open(store_dir, key_path) {
         Ok(s) => Arc::new(s),
         Err(e) => {
@@ -209,8 +220,8 @@ fn start_manager_bus(
         SystemPolkit::default(),
         profile_store,
     ));
-    match ManagerBusService::start_system(svc) {
-        Ok(bus) => Some(bus),
+    match ManagerBusService::start_system(svc.clone()) {
+        Ok(bus) => Some((bus, svc)),
         Err(e) => {
             tracing::warn!(error = %e, "manager d-bus service not started (pam path continues)");
             None

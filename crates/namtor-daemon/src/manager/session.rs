@@ -135,6 +135,7 @@ impl EmbedSource for MockEmbedSource {
 pub struct EnrollmentCapture {
     target_uid: u32,
     peer_uid: u32,
+    peer_bus_name: String,
     name: String,
     capture: Option<Box<dyn CaptureSource>>,
     embed: Option<Box<dyn EmbedSource>>,
@@ -148,9 +149,13 @@ impl EnrollmentCapture {
     /// Build a new capturing session. `capture`/`embed` are `None` when the
     /// manager has no capture factory configured (the session can still be
     /// created for authorization/bus tests but produces no templates).
+    /// `peer_bus_name` is the D-Bus unique connection name (empty for the PAM
+    /// socket path) used by [`ManagerService::handle_disconnect_by_bus_name`]
+    /// to cancel sessions when the caller vanishes from the bus.
     pub fn new(
         target_uid: u32,
         peer_uid: u32,
+        peer_bus_name: String,
         name: String,
         capture: Option<Box<dyn CaptureSource>>,
         embed: Option<Box<dyn EmbedSource>>,
@@ -160,6 +165,7 @@ impl EnrollmentCapture {
         Self {
             target_uid,
             peer_uid,
+            peer_bus_name,
             name,
             capture,
             embed,
@@ -176,6 +182,10 @@ impl EnrollmentCapture {
 
     pub fn peer_uid(&self) -> u32 {
         self.peer_uid
+    }
+
+    pub fn peer_bus_name(&self) -> &str {
+        &self.peer_bus_name
     }
 
     pub fn name(&self) -> &str {
@@ -486,8 +496,15 @@ mod tests {
         let frames: Vec<Frame> = (0..5).map(|i| grey_frame(100 + i, 8, 8)).collect();
         let capture = Box::new(ReplaySource::new(frames));
         let embed = Box::new(MockEmbedSource::new(8));
-        let mut s =
-            EnrollmentCapture::new(1000, 1000, "alice".into(), Some(capture), Some(embed), 100);
+        let mut s = EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.42".into(),
+            "alice".into(),
+            Some(capture),
+            Some(embed),
+            100,
+        );
         for _ in 0..5 {
             assert!(s.pump().unwrap().is_some());
         }
@@ -502,8 +519,15 @@ mod tests {
         let frames: Vec<Frame> = (0..10).map(|i| grey_frame(110 + i, 8, 8)).collect();
         let capture = Box::new(ReplaySource::new(frames));
         let embed = Box::new(MockEmbedSource::new(8));
-        let mut s =
-            EnrollmentCapture::new(1000, 1000, "alice".into(), Some(capture), Some(embed), 100);
+        let mut s = EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.42".into(),
+            "alice".into(),
+            Some(capture),
+            Some(embed),
+            100,
+        );
         s.pump_until_exhausted().unwrap();
         let finished = s.finish().unwrap();
         assert!(finished.templates.len() <= 8);
@@ -518,8 +542,15 @@ mod tests {
         let frames = vec![grey_frame(100, 8, 8)];
         let capture = Box::new(ReplaySource::new(frames));
         let embed = Box::new(MockEmbedSource::new(8));
-        let mut s =
-            EnrollmentCapture::new(1000, 1000, "alice".into(), Some(capture), Some(embed), 100);
+        let mut s = EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.42".into(),
+            "alice".into(),
+            Some(capture),
+            Some(embed),
+            100,
+        );
         s.pump().unwrap();
         let finished = s.finish().unwrap();
         assert!(finished.templates.is_empty());
@@ -530,8 +561,15 @@ mod tests {
         let frames: Vec<Frame> = (0..5).map(|i| grey_frame(100 + i, 8, 8)).collect();
         let capture = Box::new(ReplaySource::new(frames));
         let embed = Box::new(MockEmbedSource::new(8));
-        let mut s =
-            EnrollmentCapture::new(1000, 1000, "alice".into(), Some(capture), Some(embed), 100);
+        let mut s = EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.42".into(),
+            "alice".into(),
+            Some(capture),
+            Some(embed),
+            100,
+        );
         for _ in 0..3 {
             s.pump().unwrap();
         }
@@ -541,19 +579,57 @@ mod tests {
     }
 
     #[test]
+    fn cancel_is_idempotent() {
+        let frames: Vec<Frame> = (0..3).map(|i| grey_frame(100 + i, 8, 8)).collect();
+        let capture = Box::new(ReplaySource::new(frames));
+        let embed = Box::new(MockEmbedSource::new(8));
+        let mut s = EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.42".into(),
+            "alice".into(),
+            Some(capture),
+            Some(embed),
+            100,
+        );
+        for _ in 0..2 {
+            s.pump().unwrap();
+        }
+        s.cancel();
+        assert_eq!(s.phase(), CapturePhase::Cancelled);
+        assert_eq!(s.reservoir_len(), 0);
+        s.cancel();
+        assert_eq!(s.phase(), CapturePhase::Cancelled);
+        assert_eq!(s.reservoir_len(), 0, "second cancel is a no-op");
+    }
+
+    #[test]
+    fn peer_bus_name_stored_and_accessible() {
+        let s = EnrollmentCapture::new(1000, 1000, ":1.99".into(), "alice".into(), None, None, 10);
+        assert_eq!(s.peer_bus_name(), ":1.99");
+    }
+
+    #[test]
     fn pump_after_cancel_errors() {
         let frames = vec![grey_frame(100, 8, 8)];
         let capture = Box::new(ReplaySource::new(frames));
         let embed = Box::new(MockEmbedSource::new(8));
-        let mut s =
-            EnrollmentCapture::new(1000, 1000, "alice".into(), Some(capture), Some(embed), 100);
+        let mut s = EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.42".into(),
+            "alice".into(),
+            Some(capture),
+            Some(embed),
+            100,
+        );
         s.cancel();
         assert!(s.pump().is_err());
     }
 
     #[test]
     fn reservoir_evicts_lowest_quality_when_full() {
-        let mut s = EnrollmentCapture::new(1000, 1000, "a".into(), None, None, 3);
+        let mut s = EnrollmentCapture::new(1000, 1000, ":1.42".into(), "a".into(), None, None, 3);
         // Manually offer candidates via the internal path through pump would
         // need a capture source; instead exercise offer through a tiny source.
         let frames = vec![
@@ -577,8 +653,15 @@ mod tests {
         let frames: Vec<Frame> = (0..10).map(|_| grey_frame(130, 8, 8)).collect();
         let capture = Box::new(ReplaySource::new(frames));
         let embed = Box::new(MockEmbedSource::new(8));
-        let mut s =
-            EnrollmentCapture::new(1000, 1000, "alice".into(), Some(capture), Some(embed), 10);
+        let mut s = EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.42".into(),
+            "alice".into(),
+            Some(capture),
+            Some(embed),
+            10,
+        );
         for _ in 0..5 {
             s.pump().unwrap();
         }
@@ -594,7 +677,7 @@ mod tests {
 
     #[test]
     fn pump_without_capture_errors() {
-        let mut s = EnrollmentCapture::new(1000, 1000, "a".into(), None, None, 10);
+        let mut s = EnrollmentCapture::new(1000, 1000, ":1.42".into(), "a".into(), None, None, 10);
         assert!(matches!(s.pump(), Err(ApiError::State(_))));
     }
 }

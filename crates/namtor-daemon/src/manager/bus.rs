@@ -139,6 +139,7 @@ impl ManagerIface {
         &self,
         #[zbus(connection)] conn: &Connection,
         #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
         uid: u32,
         name: &str,
     ) -> Result<String, ManagerDBusError> {
@@ -147,6 +148,7 @@ impl ManagerIface {
             .svc
             .start_enrollment(&peer, uid, name)
             .map_err(ManagerDBusError::from)?;
+        Self::emit_drained(&emitter, &self.svc).await?;
         Ok(session)
     }
 
@@ -155,12 +157,14 @@ impl ManagerIface {
         &self,
         #[zbus(connection)] conn: &Connection,
         #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
         session: &str,
     ) -> Result<(), ManagerDBusError> {
         let peer = Self::peer_identity(conn, &header).await?;
         self.svc
             .cancel_enrollment(&peer, session)
             .map_err(ManagerDBusError::from)?;
+        Self::emit_drained(&emitter, &self.svc).await?;
         Ok(())
     }
 
@@ -326,6 +330,47 @@ impl ManagerIface {
         -> zbus::Result<()>;
 }
 
+fn emit_drained_blocking(conn: &zbus::blocking::Connection, svc: &Svc) {
+    for sig in svc.drain_signals() {
+        let res = match sig {
+            crate::dbus::ManagerSignal::EnrollmentProgress(p) => conn.emit_signal(
+                None::<&str>,
+                contract::OBJECT_PATH,
+                contract::INTERFACE,
+                contract::signal::ENROLLMENT_PROGRESS,
+                &(p.session_id.as_str(), &p),
+            ),
+            crate::dbus::ManagerSignal::EnrollmentCompleted {
+                session_id,
+                profile_id,
+            } => conn.emit_signal(
+                None::<&str>,
+                contract::OBJECT_PATH,
+                contract::INTERFACE,
+                contract::signal::ENROLLMENT_COMPLETED,
+                &(session_id.as_str(), profile_id.as_str()),
+            ),
+            crate::dbus::ManagerSignal::ProfileChanged { uid, id } => conn.emit_signal(
+                None::<&str>,
+                contract::OBJECT_PATH,
+                contract::INTERFACE,
+                contract::signal::PROFILE_CHANGED,
+                &(uid, id.as_str()),
+            ),
+            crate::dbus::ManagerSignal::StatusChanged(status) => conn.emit_signal(
+                None::<&str>,
+                contract::OBJECT_PATH,
+                contract::INTERFACE,
+                contract::signal::STATUS_CHANGED,
+                &status,
+            ),
+        };
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "disconnect monitor: failed to emit signal");
+        }
+    }
+}
+
 /// Error from starting or running the bus service.
 #[derive(Debug, thiserror::Error)]
 pub enum BusServiceError {
@@ -413,6 +458,37 @@ impl ManagerBusService {
     #[allow(dead_code)]
     fn connection(&self) -> &zbus::blocking::Connection {
         &self.conn
+    }
+
+    /// Spawn a background thread that watches `org.freedesktop.DBus.NameOwnerChanged`
+    /// and cancels enrollment sessions when a peer's unique connection name
+    /// vanishes from the bus. Returns a `JoinHandle` so the caller can join on
+    /// shutdown; the thread exits when the connection is dropped.
+    pub fn monitor_disconnects(
+        &self,
+        svc: Arc<Svc>,
+    ) -> Result<std::thread::JoinHandle<()>, BusServiceError> {
+        let conn = self.conn.clone();
+        let dbus = zbus::blocking::fdo::DBusProxy::new(&conn).map_err(BusServiceError::ZBus)?;
+        let iter = dbus
+            .receive_name_owner_changed()
+            .map_err(BusServiceError::ZBus)?;
+        let emit_conn = conn.clone();
+        Ok(std::thread::spawn(move || {
+            for msg in iter {
+                let Ok(args) = msg.args() else {
+                    continue;
+                };
+                let Some(old) = args.old_owner().as_ref().map(|o| o.as_str().to_string()) else {
+                    continue;
+                };
+                if args.new_owner().is_some() {
+                    continue;
+                }
+                svc.handle_disconnect_by_bus_name(&old);
+                emit_drained_blocking(&emit_conn, &svc);
+            }
+        }))
     }
 }
 

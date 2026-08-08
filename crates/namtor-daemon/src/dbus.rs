@@ -394,13 +394,34 @@ impl<P: PolkitAuthority> ManagerService<P> {
     }
 
     /// Disarm any enrollment session owned by the disconnected peer and lower
-    /// the emitter. Not a wire method — internal plumbing invoked by the
-    /// transport layer on peer disconnect.
+    /// the emitter. Drops any signals queued before the disconnect (late
+    /// `EnrollmentProgress` for the vanished peer) so they do not accumulate
+    /// forever, then pushes a `StatusChanged` if the emitter transitioned.
+    /// Not a wire method — internal plumbing invoked by the transport layer
+    /// on peer disconnect.
     pub fn handle_disconnect(&self, peer: &PeerIdentity) {
+        let uid = peer.uid;
+        self.disconnect_sessions(|s| s.peer_uid() == uid);
+    }
+
+    /// Disarm any enrollment session owned by the peer with the given D-Bus
+    /// unique connection name. Used by the bus service's `NameOwnerChanged`
+    /// monitor to cancel sessions when the caller vanishes from the bus.
+    /// No-op when `bus_name` is empty (PAM socket path has no bus name).
+    pub fn handle_disconnect_by_bus_name(&self, bus_name: &str) {
+        if bus_name.is_empty() {
+            return;
+        }
+        let name = bus_name.to_string();
+        self.disconnect_sessions(|s| s.peer_bus_name() == name);
+    }
+
+    fn disconnect_sessions(&self, matching: impl Fn(&EnrollmentCapture) -> bool) {
+        let _dropped = std::mem::take(&mut *lock(&self.signals));
         let mut sessions = lock(&self.sessions);
         let sids: Vec<String> = sessions
             .iter()
-            .filter(|(_, s)| s.peer_uid() == peer.uid)
+            .filter(|(_, s)| matching(s))
             .map(|(k, _)| k.clone())
             .collect();
         for sid in sids {
@@ -569,6 +590,7 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         let session = EnrollmentCapture::new(
             target_uid,
             peer.uid,
+            peer.bus_name.clone(),
             name.to_string(),
             capture,
             embed,
@@ -1735,5 +1757,265 @@ mod tests {
         );
 
         let _ = dir;
+    }
+
+    // ---- Task 13: disconnect cleanup, cancel idempotency, late signals ----
+
+    #[test]
+    fn cancel_enrollment_twice_is_idempotent() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.cancel_enrollment(&peer(1000), &sid).unwrap();
+        assert!(!*svc.emitter_armed.lock().unwrap());
+        svc.cancel_enrollment(&peer(1000), &sid).unwrap();
+        assert!(!*svc.emitter_armed.lock().unwrap());
+        let sigs = svc.drain_signals();
+        assert!(
+            !sigs
+                .iter()
+                .any(|s| matches!(s, ManagerSignal::EnrollmentCompleted { .. })),
+            "idempotent cancel must not emit EnrollmentCompleted"
+        );
+    }
+
+    #[test]
+    fn commit_after_cancel_returns_session_not_found() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.cancel_enrollment(&peer(1000), &sid).unwrap();
+        let err = svc.commit_profile(&peer(1000), &sid).unwrap_err();
+        assert!(
+            matches!(err, ApiError::SessionNotFound(_)),
+            "commit after cancel must return SessionNotFound, got {err:?}"
+        );
+        assert!(
+            svc.list_profiles(&peer(1000)).unwrap().is_empty(),
+            "no profile written after cancelled commit"
+        );
+    }
+
+    #[test]
+    fn kill_client_during_enrollment_bounded_teardown() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        for _ in 0..5 {
+            svc.pump_enrollment(&sid).unwrap();
+        }
+        assert!(*svc.emitter_armed.lock().unwrap());
+
+        svc.handle_disconnect(&peer(1000));
+
+        assert!(!*svc.emitter_armed.lock().unwrap(), "emitter disarmed");
+        assert!(
+            svc.list_profiles(&peer(1000)).unwrap().is_empty(),
+            "no profile written on kill-client"
+        );
+        assert!(
+            svc.sessions.lock().unwrap().is_empty(),
+            "session map empty after disconnect"
+        );
+        assert!(
+            svc.active_per_uid.lock().unwrap().is_empty(),
+            "active_per_uid cleared"
+        );
+        let err = svc.pump_enrollment(&sid).unwrap_err();
+        assert!(
+            matches!(err, ApiError::SessionNotFound(_)),
+            "session gone after disconnect"
+        );
+    }
+
+    #[test]
+    fn disconnect_drops_late_progress_signals() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        for _ in 0..3 {
+            svc.pump_enrollment(&sid).unwrap();
+        }
+        let queued = svc.signals.lock().unwrap().len();
+        assert!(
+            queued > 0,
+            "progress + status signals queued during capture"
+        );
+        let has_progress_before = svc
+            .signals
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| matches!(s, ManagerSignal::EnrollmentProgress(_)));
+        assert!(has_progress_before, "EnrollmentProgress in queue");
+
+        svc.handle_disconnect(&peer(1000));
+
+        let after = svc.drain_signals();
+        let has_progress = after
+            .iter()
+            .any(|s| matches!(s, ManagerSignal::EnrollmentProgress(_)));
+        assert!(
+            !has_progress,
+            "late EnrollmentProgress signals dropped on disconnect, got {after:?}"
+        );
+        assert!(
+            after
+                .iter()
+                .any(|s| matches!(s, ManagerSignal::StatusChanged(_))),
+            "StatusChanged emitted for emitter transition"
+        );
+    }
+
+    #[test]
+    fn handle_disconnect_by_bus_name_cancels_session() {
+        let (_dir, svc) = svc();
+        let peer = PeerIdentity {
+            uid: 1000,
+            pid: 1,
+            cmdline: "test".into(),
+            bus_name: ":1.42".into(),
+        };
+        let sid = svc.start_enrollment(&peer, 1000, "alice").unwrap();
+        for _ in 0..3 {
+            svc.pump_enrollment(&sid).unwrap();
+        }
+        assert!(*svc.emitter_armed.lock().unwrap());
+
+        svc.handle_disconnect_by_bus_name(":1.42");
+
+        assert!(!*svc.emitter_armed.lock().unwrap());
+        assert!(svc.sessions.lock().unwrap().is_empty());
+        assert!(svc.pump_enrollment(&sid).is_err(), "session cancelled");
+    }
+
+    #[test]
+    fn handle_disconnect_by_bus_name_noop_for_empty() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.handle_disconnect_by_bus_name("");
+        assert!(
+            *svc.emitter_armed.lock().unwrap(),
+            "empty bus_name does not disconnect"
+        );
+        assert!(
+            svc.sessions.lock().unwrap().contains_key(&sid),
+            "session preserved on empty bus_name"
+        );
+    }
+
+    #[test]
+    fn handle_disconnect_by_bus_name_noop_for_unknown() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.handle_disconnect_by_bus_name(":1.999");
+        assert!(
+            svc.sessions.lock().unwrap().contains_key(&sid),
+            "unknown bus_name does not cancel unrelated session"
+        );
+    }
+
+    #[test]
+    fn all_signal_types_carry_no_biometrics() {
+        let progress = EnrollmentProgress {
+            session_id: "s".into(),
+            frames_captured: 5,
+            quality: QualityLabel::High,
+            coverage_percent: 80,
+        };
+        let status = StatusReport {
+            api_version: 1,
+            profiles: vec![ProfileInfo {
+                id: "p".into(),
+                name: "n".into(),
+                enabled: true,
+                created: 0,
+                last_used: 0,
+            }],
+            emitter_armed: true,
+        };
+        let signals = vec![
+            ManagerSignal::EnrollmentProgress(progress.clone()),
+            ManagerSignal::EnrollmentCompleted {
+                session_id: "s".into(),
+                profile_id: "p".into(),
+            },
+            ManagerSignal::ProfileChanged {
+                uid: 1000,
+                id: "p".into(),
+            },
+            ManagerSignal::StatusChanged(status),
+        ];
+        for sig in &signals {
+            let json = match sig {
+                ManagerSignal::EnrollmentProgress(p) => serde_json::to_string(p).unwrap(),
+                ManagerSignal::EnrollmentCompleted {
+                    session_id,
+                    profile_id,
+                } => serde_json::to_string(&(session_id, profile_id)).unwrap(),
+                ManagerSignal::ProfileChanged { uid, id } => {
+                    serde_json::to_string(&(uid, id)).unwrap()
+                }
+                ManagerSignal::StatusChanged(s) => serde_json::to_string(s).unwrap(),
+            };
+            for token in [
+                "embedding",
+                "template",
+                "pixel",
+                "score",
+                "0x",
+                "nonce",
+                "key",
+                "threshold",
+                "vec",
+            ] {
+                assert!(
+                    !json.to_lowercase().contains(token),
+                    "signal {sig:?} leaked `{token}`: {json}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sequenced_signals_on_full_enrollment_lifecycle() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let start_sigs = svc.drain_signals();
+        assert!(
+            start_sigs
+                .iter()
+                .any(|s| matches!(s, ManagerSignal::StatusChanged(_))),
+            "StatusChanged emitted on start (emitter armed)"
+        );
+
+        for _ in 0..3 {
+            svc.pump_enrollment(&sid).unwrap();
+        }
+        let progress_sigs = svc.drain_signals();
+        assert!(
+            progress_sigs
+                .iter()
+                .any(|s| matches!(s, ManagerSignal::EnrollmentProgress(_))),
+            "EnrollmentProgress emitted during capture"
+        );
+
+        let _pid = svc.commit_profile(&peer(1000), &sid).unwrap();
+        let commit_sigs = svc.drain_signals();
+        let order: Vec<&str> = commit_sigs
+            .iter()
+            .map(|s| match s {
+                ManagerSignal::EnrollmentCompleted { .. } => "completed",
+                ManagerSignal::ProfileChanged { .. } => "changed",
+                ManagerSignal::StatusChanged(_) => "status",
+                ManagerSignal::EnrollmentProgress(_) => "progress",
+            })
+            .collect();
+        let completed_pos = order.iter().position(|&t| t == "completed");
+        let changed_pos = order.iter().position(|&t| t == "changed");
+        assert!(
+            completed_pos.is_some() && changed_pos.is_some(),
+            "both EnrollmentCompleted and ProfileChanged emitted on commit"
+        );
+        assert!(
+            completed_pos < changed_pos,
+            "EnrollmentCompleted before ProfileChanged in commit sequence: {order:?}"
+        );
     }
 }
