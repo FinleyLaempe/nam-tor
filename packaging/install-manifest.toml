@@ -63,7 +63,7 @@ group = "namtor"
 
 [[dirs]]
 path = "/var/lib/namtor/templates"
-mode = "0750"
+mode = "0700"
 owner = "namtor"
 group = "namtor"
 

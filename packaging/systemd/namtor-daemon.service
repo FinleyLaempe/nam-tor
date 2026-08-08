@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 [Unit]
 Description=Nam-tor face authentication daemon
 Documentation=man:namtor-daemon(8)
@@ -15,16 +16,82 @@ ExecStart=/usr/lib/namtor/namtor-daemon
 # runs even then to force the emitter off (spec §4.10.2 G1.4).
 ExecStopPost=/usr/lib/namtor/namtor-camera-emitter-off /dev/video2
 TimeoutStopSec=2
+
+# --- Privilege reduction ---------------------------------------------------
+# The daemon is not root. It has no capabilities (bounding set empty, no
+# ambient capabilities). NoNewPrivileges prevents any child from gaining
+# privileges via setuid binaries — note this means namtor-worker-spawn
+# (setuid root) cannot be execed from within this unit; the worker is
+# spawned directly and self-applies seccomp + landlock (see evidence doc).
 NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+# --- Filesystem isolation --------------------------------------------------
+# ProtectSystem=strict makes the entire filesystem read-only except
+# ReadWritePaths. The daemon may only write to its state directory.
+# ProtectHome makes /home, /root, /run/user inaccessible.
+# PrivateTmp gives the daemon a private /tmp.
+# PrivateMounts gives the daemon a private mount namespace.
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+PrivateMounts=true
 ReadWritePaths=/var/lib/namtor
-CapabilityBoundingSet=
-RestrictAddressFamilies=AF_UNIX
-SystemCallFilter=@system-service
+
+# --- Kernel hardening ------------------------------------------------------
+# ProtectClock: blocks /dev/rtc, hwclock, system clock changes.
+# ProtectKernelTunables: makes /proc/sys and /sys read-only.
+# ProtectKernelModules: blocks init_module/fini_module syscalls.
+# ProtectKernelLogs: restricts kernel log access (dmesg).
+# ProtectControlGroups: makes /sys/fs/cgroup read-only.
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+
+# --- Namespace restrictions ------------------------------------------------
 RestrictNamespaces=true
+
+# --- Process and IPC isolation ---------------------------------------------
+# RemoveIPC: destroys SysV IPC objects owned by the service user on stop.
+# ProtectProc=invisible: hides processes owned by other users in /proc.
+# ProcSubset=pid: restricts /proc to PID-related entries only.
+# ProtectHostname: prevents changing the system hostname/domainname.
+RemoveIPC=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectHostname=true
+
+# --- Real-time and SUID/SGID restrictions ----------------------------------
+# RestrictRealtime: blocks real-time scheduling (RLIMIT_RTPRIO = 0).
+# RestrictSUIDSGID: blocks creation of setuid/setgid files.
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+# --- Personality and architecture locking ----------------------------------
 LockPersonality=true
+SystemCallArchitectures=native
+
+# --- Syscall filter --------------------------------------------------------
+# @system-service is the systemd-recommended baseline for system services.
+# It allows process management, file I/O, socket operations, and standard
+# libc calls, while blocking module loading, kernel keyring, and other
+# privileged syscall groups.
+# NOTE: the worker child inherits these restrictions. ONNX Runtime CPU EP
+# does not require W+X memory, so MemoryDenyWriteExecute is safe to add
+# in the future once verified against the full model set.
+SystemCallFilter=@system-service
+
+# --- Network restrictions --------------------------------------------------
+# The daemon only speaks AF_UNIX (PAM socket + worker socketpair).
+# No networking whatsoever. IPAddressDeny=any is defense-in-depth on top
+# of RestrictAddressFamilies — even if a future change widens the address
+# family set, all IP traffic remains blocked.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
 
 [Install]
 WantedBy=multi-user.target
