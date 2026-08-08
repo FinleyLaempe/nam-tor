@@ -12,7 +12,7 @@ use crate::client::{
 
 /// Coarse quality bucket the user sees, plus a guidance flag the view renders
 /// as an accessibility-friendly alert when diversity is low.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct QualityView {
     pub label: String,
     pub show_guidance: bool,
@@ -39,7 +39,7 @@ impl QualityView {
 
 /// One row in the profile list. The view renders name, enabled toggle, and a
 /// localized "last used" line. No biometric data, ever.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ProfileRowView {
     pub id: String,
     pub name: String,
@@ -63,7 +63,7 @@ impl ProfileRowView {
 
 /// Recovery guidance shown when the daemon is unreachable. The text is
 /// deliberately actionable, not a raw error dump.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RecoveryHint {
     pub title: String,
     pub steps: Vec<String>,
@@ -105,7 +105,7 @@ impl RecoveryHint {
 
 /// View model rendered by the GTK window. Every field is plain data the view
 /// can serialize into Atk roles and gettext strings.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
 pub struct ReviewView {
     pub profile_id: String,
     pub needs_reenroll: bool,
@@ -114,12 +114,14 @@ pub struct ReviewView {
     pub frames_captured: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
 pub struct PresenterModel {
     pub profiles: Vec<ProfileRowView>,
     pub status: Option<StatusReport>,
-    /// v2: template storage protection status.
-    pub protection: Option<ProtectionStatus>,
+    /// v2: template storage protection status (coarse, privacy-safe view).
+    pub protection: Option<ProtectionView>,
+    /// v2: system readiness indicators (daemon, model, camera).
+    pub readiness: Option<ReadinessView>,
     /// v2: detected PAM auth services.
     pub pam_services: Vec<PamServiceRowView>,
     pub enrollment: Option<EnrollmentView>,
@@ -135,7 +137,7 @@ pub struct PresenterModel {
     pub emitter_armed_warning: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct EnrollmentView {
     pub session_id: String,
     pub frames_captured: u32,
@@ -155,7 +157,7 @@ impl EnrollmentView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PendingMerge {
     pub src_id: String,
     pub src_name: String,
@@ -163,7 +165,7 @@ pub struct PendingMerge {
     pub dst_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PendingReplace {
     pub id: String,
     pub old_name: String,
@@ -174,7 +176,7 @@ pub struct PendingReplace {
 /// shows the experimental-risk warning dialog and only calls
 /// [`crate::presenter::ProfilePresenter::confirm_pam_toggle`] if the user
 /// acknowledges.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PendingPamToggle {
     pub id: String,
     pub display_name: String,
@@ -182,14 +184,14 @@ pub struct PendingPamToggle {
     pub high_impact: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ErrorView {
     pub title: String,
     pub detail: String,
     pub recovery: Option<RecoveryHint>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PamServiceRowView {
     pub id: String,
     pub display_name: String,
@@ -211,7 +213,7 @@ impl PamServiceRowView {
 }
 
 /// v2: human-readable protection status for the settings panel.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ProtectionStatusView {
     pub sealing: String,
     pub has_tpm: bool,
@@ -233,6 +235,68 @@ pub fn sealing_label(kind: ProtectionKeyKind) -> &'static str {
     match kind {
         ProtectionKeyKind::Tpm2 => "TPM2 (hardware-bound)",
         ProtectionKeyKind::Software => "Software AES-256-GCM (file fallback)",
+    }
+}
+
+/// Coarse readiness level for a single subsystem. The UI renders this as a
+/// labelled status row. No internal state (paths, model ids, thresholds) is
+/// exposed — only the three-bucket level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReadinessLevel {
+    /// Subsystem is operational.
+    Ready,
+    /// Subsystem is not available.
+    NotReady,
+    /// Could not determine (daemon unreachable, query failed).
+    #[default]
+    Unknown,
+}
+
+/// v2: system readiness indicators surfaced to the user. Each field is a
+/// coarse level — no paths, no model ids, no thresholds, no scores.
+///
+/// - `daemon`: whether the namtor daemon is reachable on the system bus.
+/// - `model`: whether the inference model is loaded (inferred from daemon
+///   reachability — the daemon loads models at startup).
+/// - `camera`: whether a supported IR camera was detected (inferred from
+///   daemon reachability — the daemon requires a camera to function).
+/// - `has_enrolled_profiles`: whether the user has at least one profile.
+/// - `enabled_pam_count`: coarse count of PAM services with namtor enabled.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub struct ReadinessView {
+    pub daemon: ReadinessLevel,
+    pub model: ReadinessLevel,
+    pub camera: ReadinessLevel,
+    pub has_enrolled_profiles: bool,
+    pub enabled_pam_count: u32,
+}
+
+/// v2: privacy-safe template protection status. Surfaces a coarse label, a
+/// warning string, and a boolean for software fallback. Does NOT expose the
+/// raw sealing kind, key material, or internal paths.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub struct ProtectionView {
+    /// Human-readable sealing label (e.g. "TPM2 (hardware-bound)").
+    pub label: String,
+    /// Warning text shown to the user (empty when hardware-bound).
+    pub warning: String,
+    /// True when the software AES-256-GCM file fallback is in use.
+    pub is_software_fallback: bool,
+    /// True when the IR emitter protection is reduced (always-on watchdog).
+    pub emitter_reduced: bool,
+}
+
+impl ProtectionView {
+    /// Build a `ProtectionView` from the raw `ProtectionStatus` and the
+    /// emitter-armed flag from the status report.
+    pub fn from_status(status: &ProtectionStatus, emitter_armed: bool) -> Self {
+        Self {
+            label: sealing_label(status.sealing).into(),
+            warning: status.warning.clone(),
+            is_software_fallback: status.sealing == ProtectionKeyKind::Software,
+            emitter_reduced: emitter_armed,
+        }
     }
 }
 

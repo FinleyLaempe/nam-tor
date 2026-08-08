@@ -136,7 +136,14 @@ fn create_pam_service_row<C: crate::client::ManagerClient + 'static>(
         let service_id = service.id.clone();
         let service_name = service.display_name.clone();
         toggle.connect_state_set(move |switch, new_state| {
-            handle_toggle::<C>(&rc, &container_clone, &service_id, &service_name, switch, new_state)
+            handle_toggle::<C>(
+                &rc,
+                &container_clone,
+                &service_id,
+                &service_name,
+                switch,
+                new_state,
+            )
         });
     }
 

@@ -1,0 +1,84 @@
+{
+  "task": "17-protection-ui",
+  "description": "Surface readiness and protection without biometric internals",
+  "date": "2026-08-09",
+  "tests": {
+    "presenter_flow": {
+      "total": 29,
+      "passed": 29,
+      "failed": 0,
+      "new_tests": [
+        "software_fallback_protection_surfaced",
+        "readiness_view_populated_when_daemon_running",
+        "readiness_view_when_daemon_down",
+        "readiness_view_counts_profiles_and_pam"
+      ]
+    },
+    "privacy_scan": {
+      "total": 12,
+      "passed": 12,
+      "failed": 0,
+      "new_tests": [
+        "mutation_test_forbidden_fields_in_protection_view",
+        "mutation_test_forbidden_fields_in_readiness_view",
+        "populated_presenter_model_carries_no_biometrics"
+      ]
+    },
+    "namtor_kde": {
+      "total": 21,
+      "passed": 21,
+      "failed": 0
+    }
+  },
+  "clippy": "clean (namtor-gnome + namtor-kde, no warnings)",
+  "fmt": "clean (namtor-gnome)",
+  "gnome_changes": {
+    "view_model": "Added ReadinessLevel enum (Ready/NotReady/Unknown), ReadinessView struct (daemon, model, camera, has_enrolled_profiles, enabled_pam_count), ProtectionView struct (label, warning, is_software_fallback, emitter_reduced). Changed PresenterModel.protection from Option<ProtectionStatus> to Option<ProtectionView>. Added readiness: Option<ReadinessView> field. Added serde::Serialize to all nested view types (QualityView, RecoveryHint, ReviewView, EnrollmentView, PendingMerge, PendingReplace, PendingPamToggle, ErrorView, ProtectionStatusView).",
+    "presenter": "refresh() now builds ProtectionView from raw ProtectionStatus + emitter_armed flag via ProtectionView::from_status(). Builds ReadinessView from daemon reachability (get_status Ok = Ready), profile count, and enabled PAM service count. Single get_status() call reused for status, emitter_armed, and readiness (was previously called twice).",
+    "wizard": "Added 'System Readiness' section rendering daemon/model/camera levels, enrolled profiles, and PAM service count. Updated 'Template Protection' section to use ProtectionView fields (label, is_software_fallback, emitter_reduced, warning) instead of raw ProtectionStatus.",
+    "privacy": "Exposed scan_value() as public function so mutation tests can inject forbidden field names into JSON and verify detection."
+  },
+  "kde_changes": {
+    "main_qml": "Added 'System Readiness' section: daemon ready/not running, model loaded/unknown, camera detected/not detected, enrolled profiles yes/none, PAM services enabled count (computed from pamServices model). Added emitter-reduced warning label to Template Protection section. Fixed broken Kirigami.Heading for Enrolled Profiles section (was missing body and closing brace)."
+  },
+  "what_is_shown": {
+    "daemon_readiness": "coarse level: ready / not running / unknown",
+    "model_readiness": "coarse level: ready / unknown (inferred from daemon reachability)",
+    "camera_readiness": "coarse level: ready / unknown (inferred from daemon reachability)",
+    "tpm_fallback_warning": "is_software_fallback boolean + warning text (persistent when software fallback)",
+    "reduced_emitter_protection": "emitter_reduced boolean (from emitter_armed_warning)",
+    "enrollment_presence": "has_enrolled_profiles boolean",
+    "enabled_pam_count": "coarse integer count"
+  },
+  "what_is_not_shown": [
+    "thresholds",
+    "scores",
+    "embeddings",
+    "gate names",
+    "paths",
+    "raw logs",
+    "sealing key material",
+    "model ids"
+  ],
+  "privacy_mutation_test": {
+    "description": "For each forbidden substring in FORBIDDEN_SUBSTRINGS, inject it as a field name into a JSON object shaped like ProtectionView and ReadinessView, then assert the scan flags it.",
+    "forbidden_substrings_tested": [
+      "vector",
+      "embedding",
+      "template",
+      "landmark",
+      "descriptor",
+      "raw_frame",
+      "frame_data",
+      "frame_buf",
+      "frame_pixel",
+      "frame_raw",
+      "score",
+      "threshold",
+      "biometric"
+    ],
+    "all_caught": true
+  },
+  "no_biometric_data_exposed": true,
+  "compilation_fixed": true
+}

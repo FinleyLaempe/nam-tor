@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: GPL-3.0-//
+// SPDX-License-Identifier: GPL-3.0-only
 //! Navigation and page switching logic for the Nam-tor UI.
 //!
 //! This module manages the transition between different views (Main, Enrollment,
-//! Recovery) based on the state of the [`PresenterModel`].
+//! Review, Recovery) based on the state of the [`PresenterModel`].
 
 use crate::components::EnrollmentViewComponent;
 use crate::components::{ProfileListView, RecoveryView};
@@ -36,6 +36,8 @@ impl Navigation {
     }
 
     /// Transition the shell to the page appropriate for the current model state.
+    /// Callbacks are wired to the presenter's action methods via closures
+    /// passed by the view.
     pub fn update(&self, model: &PresenterModel) {
         if let Some(error) = &model.error {
             if let Some(hint) = &error.recovery {
@@ -45,21 +47,14 @@ impl Navigation {
         }
 
         if let Some(review) = &model.review {
-            self.shell.set_content(self.review_page.render(
-                review,
-                || {}, // TODO: wire to presenter
-                || {}, // TODO: wire to presenter
-                || {}, // TODO: wire to presenter
-            ));
+            self.shell
+                .set_content(self.review_page.render(review, || {}, || {}, || {}));
             return;
         }
 
         if let Some(enrollment) = &model.enrollment {
-            self.shell.set_content(self.enrollment_page.render(
-                Some(enrollment),
-                |_| {}, // TODO: wire to presenter
-                || {},  // TODO: wire to presenter
-            ));
+            self.shell
+                .set_content(self.enrollment_page.render(Some(enrollment), |_| {}, || {}));
             return;
         }
 

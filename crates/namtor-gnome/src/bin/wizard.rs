@@ -276,24 +276,99 @@ fn render(
     while let Some(child) = protection_box.first_child() {
         protection_box.remove(&child);
     }
+
+    if let Some(readiness) = &model.readiness {
+        let readiness_title = Label::builder()
+            .label("System Readiness")
+            .halign(Align::Start)
+            .css_classes(["heading"])
+            .accessible_role(AccessibleRole::Heading)
+            .build();
+        protection_box.append(&readiness_title);
+
+        let level_str = |lvl: &namtor_gnome::ReadinessLevel| match lvl {
+            namtor_gnome::ReadinessLevel::Ready => "ready",
+            namtor_gnome::ReadinessLevel::NotReady => "not running",
+            namtor_gnome::ReadinessLevel::Unknown => "unknown",
+        };
+        let daemon_row = Label::builder()
+            .label(format!("Daemon: {}", level_str(&readiness.daemon)))
+            .halign(Align::Start)
+            .css_classes(["body"])
+            .build();
+        protection_box.append(&daemon_row);
+
+        let model_row = Label::builder()
+            .label(format!("Model: {}", level_str(&readiness.model)))
+            .halign(Align::Start)
+            .css_classes(["body"])
+            .build();
+        protection_box.append(&model_row);
+
+        let camera_row = Label::builder()
+            .label(format!("Camera: {}", level_str(&readiness.camera)))
+            .halign(Align::Start)
+            .css_classes(["body"])
+            .build();
+        protection_box.append(&camera_row);
+
+        let profiles_row = Label::builder()
+            .label(format!(
+                "Enrolled profiles: {}",
+                if readiness.has_enrolled_profiles {
+                    "yes"
+                } else {
+                    "none"
+                }
+            ))
+            .halign(Align::Start)
+            .css_classes(["body"])
+            .build();
+        protection_box.append(&profiles_row);
+
+        let pam_row = Label::builder()
+            .label(format!(
+                "PAM services enabled: {}",
+                readiness.enabled_pam_count
+            ))
+            .halign(Align::Start)
+            .css_classes(["body"])
+            .build();
+        protection_box.append(&pam_row);
+    }
+
     if let Some(protection) = &model.protection {
         let prot_title = Label::builder()
             .label("Template Protection")
             .halign(Align::Start)
             .css_classes(["heading"])
+            .accessible_role(AccessibleRole::Heading)
             .build();
         protection_box.append(&prot_title);
-        let sealing = format!(
-            "Sealing: {} (TPM: {})",
-            protection.sealing.as_str(),
-            if protection.has_tpm { "yes" } else { "no" }
-        );
         let row = Label::builder()
-            .label(&sealing)
+            .label(&protection.label)
             .halign(Align::Start)
             .css_classes(["body"])
             .build();
         protection_box.append(&row);
+        if protection.is_software_fallback {
+            let fb = Label::builder()
+                .label("Software fallback in use — templates are not hardware-bound.")
+                .halign(Align::Start)
+                .css_classes(["warning"])
+                .wrap(true)
+                .build();
+            protection_box.append(&fb);
+        }
+        if protection.emitter_reduced {
+            let em = Label::builder()
+                .label("Emitter protection reduced (always-on watchdog active).")
+                .halign(Align::Start)
+                .css_classes(["warning"])
+                .wrap(true)
+                .build();
+            protection_box.append(&em);
+        }
         if !protection.warning.is_empty() {
             let warn = Label::builder()
                 .label(&protection.warning)

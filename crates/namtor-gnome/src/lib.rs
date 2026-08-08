@@ -2,11 +2,12 @@
 //! GNOME management UI for Nam-tor — D-Bus client (spec §9.1, §9.2).
 //!
 //! GTK4 + libadwaita application. The UI talks to the daemon exclusively
-//! over the session D-Bus `org.namtor.Manager` interface (task 25). There is
-//! no direct template-store access from the GNOME process: every operation
-//! — list, create, enroll, rename, enable, delete, merge, replace — goes
-//! through the bus. This keeps biometric data inside the privileged daemon
-//! and lets polkit gate every mutation.
+//! over the **system** D-Bus `org.namtor.Manager` (v1) and `org.namtor.Manager2`
+//! (v2) interfaces (task 14). There is no direct template-store access from
+//! the GNOME process: every operation — list, enroll, commit, rename,
+//! enable, delete, merge, replace, PAM toggle — goes through the bus. This
+//! keeps biometric data inside the privileged daemon and lets polkit gate
+//! every mutation.
 //!
 //! Architecture:
 //! - [`client`] — the `ManagerClient` trait + UI-facing data types.
@@ -41,12 +42,14 @@ pub mod dbus_client;
 pub use dbus_client::DbusManagerClient;
 
 pub use client::{
-    EnrollmentProgress, FinishResult, ManagerClient, ManagerError, ManagerResult, ProfileId,
-    ProfileInfo, QualityLabel, SessionId, StatusInfo,
+    EnrollmentProgress, ManagerClient, ManagerError, ManagerResult, PamServiceCompatibility,
+    PamServiceInfo, ProfileId, ProfileInfo, ProtectionKeyKind, ProtectionStatus, QualityLabel,
+    ReviewOutcome, SessionId, StatusReport,
 };
 pub use fake::{FakeManagerClient, Mode as FakeMode};
 pub use presenter::ProfilePresenter;
 pub use view_model::{
-    ErrorView, PendingMerge, PendingReplace, PresenterModel, ProfileRowView, QualityView,
-    RecoveryHint,
+    compatibility_label, sealing_label, EnrollmentView, ErrorView, PamServiceRowView, PendingMerge,
+    PendingReplace, PresenterModel, ProfileRowView, ProtectionStatusView, ProtectionView,
+    QualityView, ReadinessLevel, ReadinessView, RecoveryHint, ReviewView,
 };

@@ -23,7 +23,7 @@ impl ProfileListView {
             self.container.remove(&child);
         }
 
-        if model.reduced_protection_warning {
+        if model.emitter_armed_warning {
             let warn = Label::builder()
                 .label("Reduced protection: Always-on emitter detected")
                 .css_classes(["warning-banner"])
@@ -67,9 +67,11 @@ impl ProfileListView {
                 let last = Label::builder()
                     .label(format!(
                         "last used: {}",
-                        row.last_used
-                            .map(|t| format!("epoch {t}"))
-                            .unwrap_or_else(|| "never".into())
+                        if row.last_used == 0 {
+                            "never".to_string()
+                        } else {
+                            format!("epoch {}", row.last_used)
+                        }
                     ))
                     .css_classes(["dim-label", "caption"])
                     .build();

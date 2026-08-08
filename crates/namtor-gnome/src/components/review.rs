@@ -64,7 +64,7 @@ impl ReviewViewComponent {
         summary_box.append(&quality_label);
 
         let template_label = Label::builder()
-            .label(format!("Templates: {} captures", view.template_count))
+            .label(format!("Frames: {} captures", view.frames_captured))
             .halign(gtk4::Align::Start)
             .build();
         summary_box.append(&template_label);

@@ -41,6 +41,13 @@ pub fn forbidden_fields<T: Serialize>(value: &T) -> Vec<String> {
     hits
 }
 
+/// Walk a serialized JSON value and collect every key (recursively) that
+/// contains a forbidden substring. Exposed so mutation tests can inject
+/// forbidden field names into JSON objects and verify they are caught.
+pub fn scan_value(value: &serde_json::Value, hits: &mut Vec<String>) {
+    walk(value, hits);
+}
+
 fn walk(value: &serde_json::Value, hits: &mut Vec<String>) {
     match value {
         serde_json::Value::Object(map) => {

@@ -129,16 +129,17 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             Err(err) => self.set_error(&err),
         }
 
-        match self.client.get_status() {
+        // GetStatus determines daemon readiness. We call it once and reuse
+        // the result for status, readiness, and emitter-armed.
+        let status_result = self.client.get_status();
+        match &status_result {
             Ok(StatusReport { emitter_armed, .. }) => {
-                self.model.emitter_armed_warning = emitter_armed;
+                self.model.emitter_armed_warning = *emitter_armed;
             }
-            Err(err) if self.model.error.is_none() => self.set_error(&err),
+            Err(err) if self.model.error.is_none() => self.set_error(err),
             Err(_) => {}
         }
-        if let Ok(status) = self.client.get_status() {
-            self.model.status = Some(status);
-        }
+        self.model.status = status_result.ok();
 
         // v2: refresh PAM services and protection status.
         match self.client.list_pam_services() {
@@ -151,11 +152,44 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             Err(err) if self.model.error.is_none() => self.set_error(&err),
             Err(_) => {}
         }
+
+        // v2: build the privacy-safe ProtectionView from the raw
+        // ProtectionStatus and the emitter-armed flag.
+        let emitter_armed = self.model.emitter_armed_warning;
         match self.client.get_protection_status() {
-            Ok(protection) => self.model.protection = Some(protection),
+            Ok(protection) => {
+                self.model.protection =
+                    Some(ProtectionView::from_status(&protection, emitter_armed));
+            }
             Err(err) if self.model.error.is_none() => self.set_error(&err),
             Err(_) => {}
         }
+
+        // v2: build readiness from daemon reachability and profile/PAM state.
+        let daemon_reachable = self.model.status.is_some();
+        let daemon_level = if daemon_reachable {
+            ReadinessLevel::Ready
+        } else {
+            ReadinessLevel::NotReady
+        };
+        let model_level = if daemon_reachable {
+            ReadinessLevel::Ready
+        } else {
+            ReadinessLevel::Unknown
+        };
+        let camera_level = if daemon_reachable {
+            ReadinessLevel::Ready
+        } else {
+            ReadinessLevel::Unknown
+        };
+        let enabled_pam_count = self.model.pam_services.iter().filter(|s| s.enabled).count() as u32;
+        self.model.readiness = Some(ReadinessView {
+            daemon: daemon_level,
+            model: model_level,
+            camera: camera_level,
+            has_enrolled_profiles: !self.model.profiles.is_empty(),
+            enabled_pam_count,
+        });
 
         self.model.is_loading = false;
         &self.model

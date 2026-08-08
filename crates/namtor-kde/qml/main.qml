@@ -88,6 +88,63 @@ KCM.SimpleKCM {
 
         Kirigami.Heading {
             Kirigami.FormData.isSection: true
+            text: i18n("System Readiness")
+            level: 2
+            Accessible.role: Accessible.Header
+            Accessible.name: text
+        }
+
+        QQC2.Label {
+            text: Namtor.NamtorKcm.daemonReachable
+                  ? i18n("Daemon: ready")
+                  : i18n("Daemon: not running")
+            color: Namtor.NamtorKcm.daemonReachable
+                   ? Kirigami.Theme.positiveTextColor
+                   : Kirigami.Theme.negativeTextColor
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+        QQC2.Label {
+            text: Namtor.NamtorKcm.daemonReachable
+                  ? i18n("Model: loaded")
+                  : i18n("Model: unknown")
+            color: Namtor.NamtorKcm.daemonReachable
+                   ? Kirigami.Theme.positiveTextColor
+                   : Kirigami.Theme.disabledTextColor
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+        QQC2.Label {
+            text: Namtor.NamtorKcm.cameraPresent
+                  ? i18n("Camera: detected")
+                  : i18n("Camera: not detected")
+            color: Namtor.NamtorKcm.cameraPresent
+                   ? Kirigami.Theme.positiveTextColor
+                   : Kirigami.Theme.negativeTextColor
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+        QQC2.Label {
+            text: Namtor.NamtorKcm.profileList.count > 0
+                  ? i18n("Enrolled profiles: yes")
+                  : i18n("Enrolled profiles: none")
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+        QQC2.Label {
+            text: {
+                var n = 0
+                for (var i = 0; i < Namtor.NamtorKcm.pamServices.length; i++) {
+                    if (Namtor.NamtorKcm.pamServices[i].enabled) n++
+                }
+                return i18n("PAM services enabled: %1").arg(n)
+            }
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+
+        Kirigami.Heading {
+            Kirigami.FormData.isSection: true
             text: i18n("Template Protection")
             level: 2
             Accessible.role: Accessible.Header
@@ -108,6 +165,17 @@ KCM.SimpleKCM {
                    ? Kirigami.Theme.positiveTextColor
                    : Kirigami.Theme.negativeTextColor
             visible: Namtor.NamtorKcm.protectionSealing.length > 0
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+        QQC2.Label {
+            text: Namtor.NamtorKcm.emitterArmed
+                  ? i18n("Emitter protection reduced (always-on watchdog active).")
+                  : ""
+            color: Kirigami.Theme.negativeTextColor
+            visible: Namtor.NamtorKcm.emitterArmed
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
             Accessible.role: Accessible.StaticText
             Accessible.name: text
         }
@@ -228,6 +296,12 @@ KCM.SimpleKCM {
         }
 
         Kirigami.Heading {
+            Kirigami.FormData.isSection: true
+            text: i18n("Enrolled Profiles")
+            level: 2
+            Accessible.role: Accessible.Header
+            Accessible.name: text
+        }
 
         Repeater {
             id: profileRepeater

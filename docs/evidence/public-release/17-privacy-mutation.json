@@ -1,0 +1,46 @@
+{
+  "task": "17-privacy-mutation",
+  "description": "Privacy scan mutation test: adding any forbidden field to view model types MUST fail the scan",
+  "date": "2026-08-09",
+  "tests": {
+    "mutation_test_forbidden_fields_in_protection_view": {
+      "status": "pass",
+      "method": "For each forbidden substring, construct a JSON object with ProtectionView fields plus an injected field named after the forbidden substring. Run scan_value and assert the forbidden field is flagged.",
+      "forbidden_substrings_verified": 13,
+      "all_caught": true
+    },
+    "mutation_test_forbidden_fields_in_readiness_view": {
+      "status": "pass",
+      "method": "Same as above, using a JSON object shaped like ReadinessView.",
+      "forbidden_substrings_verified": 13,
+      "all_caught": true
+    },
+    "populated_presenter_model_carries_no_biometrics": {
+      "status": "pass",
+      "method": "Construct a fully populated PresenterModel (all nested views set) and assert forbidden_fields returns empty.",
+      "fields_checked_recursively": "all nested view types including ReadinessView, ProtectionView, EnrollmentView, ReviewView, PendingMerge, PendingReplace, PendingPamToggle, ErrorView, ProfileRowView, PamServiceRowView, QualityView"
+    },
+    "presenter_model_carries_no_biometrics": {
+      "status": "pass",
+      "method": "Default PresenterModel (all fields None/empty) must pass scan."
+    }
+  },
+  "forbidden_substrings": [
+    "vector",
+    "embedding",
+    "template",
+    "landmark",
+    "descriptor",
+    "raw_frame",
+    "frame_data",
+    "frame_buf",
+    "frame_pixel",
+    "frame_raw",
+    "score",
+    "threshold",
+    "biometric"
+  ],
+  "scan_mechanism": "Serialize struct to serde_json::Value, recursively walk all object keys, flag any key whose lowercase form contains a forbidden substring.",
+  "scan_value_exposed": "privacy::scan_value() made public so mutation tests can inject forbidden field names directly into JSON without defining new Serialize structs.",
+  "all_tests_pass": true
+}

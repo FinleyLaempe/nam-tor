@@ -373,8 +373,8 @@ fn reconnect_restores_state() {
     assert!(!model.pam_services.is_empty(), "PAM services restored");
     assert!(model.protection.is_some(), "protection status restored");
     let prot = model.protection.as_ref().expect("protection");
-    assert_eq!(prot.sealing, ProtectionKeyKind::Tpm2);
-    assert!(prot.has_tpm);
+    assert!(prot.label.contains("TPM2"), "TPM2 sealing restored");
+    assert!(!prot.is_software_fallback);
 }
 
 /// v2: PAM service toggle works through the presenter.
@@ -408,7 +408,7 @@ fn pam_service_toggle_works() {
     assert!(gdm.enabled, "gdm-password now enabled");
 }
 
-/// v2: Protection status is surfaced in the model.
+/// v2: Protection status is surfaced in the model as a privacy-safe view.
 #[test]
 fn protection_status_surfaced() {
     let fake = FakeManagerClient::new();
@@ -422,9 +422,80 @@ fn protection_status_surfaced() {
         p.refresh();
     });
     let prot = model.protection.as_ref().expect("protection status");
-    assert_eq!(prot.sealing, ProtectionKeyKind::Tpm2);
-    assert!(prot.has_tpm);
-    assert!(prot.warning.is_empty());
+    assert!(prot.label.contains("TPM2"), "label reflects TPM2 sealing");
+    assert!(!prot.is_software_fallback, "not a software fallback");
+    assert!(prot.warning.is_empty(), "no warning when hardware-bound");
+}
+
+/// v2: Software fallback protection surfaces a warning and the fallback flag.
+#[test]
+fn software_fallback_protection_surfaced() {
+    let fake = FakeManagerClient::new();
+    fake.set_protection_status(ProtectionStatus {
+        sealing: ProtectionKeyKind::Software,
+        has_tpm: false,
+        warning: "TPM2 not available; using software fallback".into(),
+    });
+    let mut presenter = namtor_gnome::ProfilePresenter::new(fake, TEST_UID);
+    let model = after(&mut presenter, |p| {
+        p.refresh();
+    });
+    let prot = model.protection.as_ref().expect("protection status");
+    assert!(prot.is_software_fallback, "software fallback flagged");
+    assert!(!prot.warning.is_empty(), "warning shown for fallback");
+    assert!(
+        prot.label.contains("Software"),
+        "label reflects software sealing"
+    );
+}
+
+/// v2: Readiness view is populated after refresh with daemon running.
+#[test]
+fn readiness_view_populated_when_daemon_running() {
+    let mut presenter = new_presenter();
+    let model = after(&mut presenter, |p| {
+        p.refresh();
+    });
+    let readiness = model.readiness.as_ref().expect("readiness view");
+    assert_eq!(readiness.daemon, namtor_gnome::ReadinessLevel::Ready);
+    assert_eq!(readiness.model, namtor_gnome::ReadinessLevel::Ready);
+    assert_eq!(readiness.camera, namtor_gnome::ReadinessLevel::Ready);
+    assert!(!readiness.has_enrolled_profiles, "no profiles at start");
+    assert_eq!(readiness.enabled_pam_count, 0, "no PAM services enabled");
+}
+
+/// v2: Readiness view shows NotReady when daemon is down.
+#[test]
+fn readiness_view_when_daemon_down() {
+    let fake = FakeManagerClient::new();
+    fake.set_mode(Mode::DaemonDown("daemon stopped".into()));
+    let mut presenter = namtor_gnome::ProfilePresenter::new(fake, TEST_UID);
+    let model = after(&mut presenter, |p| {
+        p.refresh();
+    });
+    let readiness = model.readiness.as_ref().expect("readiness view");
+    assert_eq!(readiness.daemon, namtor_gnome::ReadinessLevel::NotReady);
+    assert_eq!(readiness.model, namtor_gnome::ReadinessLevel::Unknown);
+    assert_eq!(readiness.camera, namtor_gnome::ReadinessLevel::Unknown);
+}
+
+/// v2: Readiness view reflects enrolled profiles and enabled PAM count.
+#[test]
+fn readiness_view_counts_profiles_and_pam() {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment("Alice");
+    });
+    after(&mut presenter, |p| {
+        p.commit_profile();
+    });
+    after(&mut presenter, |p| {
+        p.set_pam_service_enabled("gdm-password", true);
+    });
+    let model = presenter.model().clone();
+    let readiness = model.readiness.as_ref().expect("readiness view");
+    assert!(readiness.has_enrolled_profiles, "profile enrolled");
+    assert_eq!(readiness.enabled_pam_count, 1, "one PAM service enabled");
 }
 
 /// Review flow: request_review → review staged → commit → profile persisted.
@@ -475,7 +546,10 @@ fn pam_service_row_view_has_no_biometrics() {
     };
     let view = PamServiceRowView::from_info(info);
     assert_eq!(view.id, "gdm-password");
-    assert_eq!(view.compatibility, namtor_gnome::PamServiceCompatibility::Safe);
+    assert_eq!(
+        view.compatibility,
+        namtor_gnome::PamServiceCompatibility::Safe
+    );
 }
 
 /// dbus_client uses the system bus, not the session bus.
@@ -521,7 +595,10 @@ fn unsupported_pam_service_cannot_be_toggled() {
     let model = after(&mut presenter, |p| {
         p.request_pam_toggle(&unsupported_id, true);
     });
-    assert!(model.error.is_some(), "error surfaced for unsupported toggle");
+    assert!(
+        model.error.is_some(),
+        "error surfaced for unsupported toggle"
+    );
     let err = model.error.as_ref().expect("error");
     assert!(
         err.detail.to_lowercase().contains("incompatible"),
@@ -556,7 +633,9 @@ fn failed_pam_toggle_reverts_to_previous_state() {
         .expect("gdm-password present");
     assert!(!gdm.enabled, "starts disabled");
 
-    presenter.client().set_mode(Mode::PolkitDenied("denied".into()));
+    presenter
+        .client()
+        .set_mode(Mode::PolkitDenied("denied".into()));
     let model = after(&mut presenter, |p| {
         p.request_pam_toggle("gdm-password", true);
     });
@@ -660,10 +739,7 @@ fn high_impact_pam_service_requires_confirmation() {
 #[test]
 fn high_impact_warning_contains_required_phrases() {
     let warning = namtor_gnome::components::pam_services::HIGH_IMPACT_WARNING;
-    assert!(
-        warning.contains("FAR/FRR"),
-        "warning names FAR/FRR"
-    );
+    assert!(warning.contains("FAR/FRR"), "warning names FAR/FRR");
     assert!(
         warning.contains("real-attack PAD"),
         "warning names real-attack PAD"
