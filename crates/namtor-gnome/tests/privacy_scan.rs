@@ -57,6 +57,7 @@ fn status_info_carries_no_biometrics() {
         camera_present: true,
         active_profile: Some("Alice".into()),
         version: Some("0.1.0".into()),
+        always_on_emitter: false,
     };
     let hits = forbidden_fields(&sample);
     assert!(hits.is_empty(), "StatusInfo leaked fields: {hits:?}");

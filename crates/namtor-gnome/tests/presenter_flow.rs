@@ -266,7 +266,7 @@ fn service_not_registered_has_recovery_hint() {
     let hint = RecoveryHint::for_error(&ManagerError::ServiceNotRegistered);
     assert!(hint.is_some(), "service-not-registered yields recovery");
     let hint = hint.expect("hint");
-    assert!(hint.title.to_lowercase().contains("bus"));
+    assert!(hint.title.to_lowercase().contains("service"));
 }
 
 /// `create_profile` with a duplicate name surfaces a conflict error, not a
