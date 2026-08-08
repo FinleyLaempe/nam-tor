@@ -198,12 +198,14 @@ make_backup
 
 # --- rollback trap: if the script exits non-zero after make_backup, restore --
 
+NAMTOR_TMP=""
 rollback_if_needed() {
     local rc=$?
     if [[ $rc -ne 0 ]]; then
         echo "pam-install: failed (exit $rc) — rolling back" >&2
         restore_backup || true
     fi
+    [[ -n "$NAMTOR_TMP" && -f "$NAMTOR_TMP" ]] && rm -f "$NAMTOR_TMP" 2>/dev/null || true
     exit $rc
 }
 trap rollback_if_needed EXIT
@@ -260,14 +262,21 @@ if head -n "$((FIRST_AUTH_LN - 1))" "$TARGET" 2>/dev/null | grep -qE '^[[:space:
     die "pam_deny.so appears before the namtor block insertion point — the block would be unreachable. Refusing unsafe ordering."
 fi
 
-# Insert the block before the first auth line using a temp file + sed.
-TMP="$(mktemp)"
+# Insert the block before the first auth line using a same-directory temp
+# file + atomic rename. The temp file MUST be in the same directory as the
+# target so `mv` is a same-filesystem rename(2) — truly atomic. A cross-
+# filesystem mv (e.g. mktemp in /tmp, target in /etc) falls back to copy+
+# unlink, which is NOT atomic and can leave the PAM file half-written if
+# interrupted.
+TMP="$(mktemp "${TARGET_DIR}/.namtor.pam.XXXXXX")"
+NAMTOR_TMP="$TMP"
 {
     head -n "$((FIRST_AUTH_LN - 1))" "$TARGET"
     printf '%s\n' "$BLOCK"
     tail -n +"$FIRST_AUTH_LN" "$TARGET"
 } > "$TMP"
-mv "$TMP" "$TARGET"
+mv -f "$TMP" "$TARGET"
+NAMTOR_TMP=""
 
 echo "pam-install: inserted namtor block before first auth line (line $FIRST_AUTH_LN)"
 
