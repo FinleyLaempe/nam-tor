@@ -1539,6 +1539,7 @@ dependencies = [
  "namtor-uvc",
  "nix",
  "serde",
+ "sha2",
  "tempfile",
  "toml 0.8.23",
  "zeroize",
