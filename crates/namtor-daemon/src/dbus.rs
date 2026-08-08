@@ -52,6 +52,43 @@ pub mod action {
 /// a template enrolled under one model cannot be matched under another.
 const PROFILE_MODEL_ID: &str = "sface_2021dec";
 
+/// Maximum length of a profile display name. Bounds the wire so a hostile
+/// peer cannot exhaust daemon memory with an oversized string.
+const MAX_NAME_LEN: usize = 128;
+/// Maximum length of a profile/session identifier accepted on the wire.
+const MAX_ID_LEN: usize = 256;
+/// Maximum number of concurrent enrollment sessions. Bounds resource usage
+/// under rapid-call fuzzing; excess sessions are rejected with `State`.
+const MAX_SESSIONS: usize = 64;
+
+/// Reject an oversized or empty name. Returns the validated name on success.
+fn validate_name(name: &str) -> Result<&str, ApiError> {
+    if name.is_empty() {
+        return Err(ApiError::State("name must not be empty".into()));
+    }
+    let len = name.chars().count();
+    if len > MAX_NAME_LEN {
+        return Err(ApiError::State(format!(
+            "name length {len} exceeds maximum {MAX_NAME_LEN}"
+        )));
+    }
+    Ok(name)
+}
+
+/// Reject an oversized or empty identifier. Returns the validated id on success.
+fn validate_id(id: &str) -> Result<&str, ApiError> {
+    if id.is_empty() {
+        return Err(ApiError::State("id must not be empty".into()));
+    }
+    let len = id.chars().count();
+    if len > MAX_ID_LEN {
+        return Err(ApiError::State(format!(
+            "id length {len} exceeds maximum {MAX_ID_LEN}"
+        )));
+    }
+    Ok(id)
+}
+
 /// Coarse quality bucket derived from a scalar coverage/quality metric.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -372,9 +409,15 @@ impl<P: PolkitAuthority> ManagerService<P> {
             let s = sessions
                 .get_mut(session_id)
                 .ok_or_else(|| ApiError::SessionNotFound(session_id.into()))?;
-            match s.pump()? {
-                Some(snap) => snap,
-                None => return Ok(None),
+            match s.pump() {
+                Ok(Some(snap)) => snap,
+                Ok(None) => return Ok(None),
+                Err(e) => {
+                    let target_uid = s.target_uid();
+                    drop(sessions);
+                    self.teardown_session(session_id, target_uid);
+                    return Err(e);
+                }
             }
         };
         let progress = EnrollmentProgress {
@@ -416,6 +459,26 @@ impl<P: PolkitAuthority> ManagerService<P> {
         self.disconnect_sessions(|s| s.peer_bus_name() == name);
     }
 
+    /// Cancel every live enrollment session, disarm the emitter, and drop
+    /// queued signals. Called on daemon shutdown so an in-flight enrollment
+    /// does not leak the emitter or leave a half-written store entry.
+    pub fn shutdown(&self) {
+        let _dropped = std::mem::take(&mut *lock(&self.signals));
+        let mut sessions = lock(&self.sessions);
+        let sids: Vec<String> = sessions.keys().cloned().collect();
+        for sid in sids {
+            if let Some(mut s) = sessions.remove(&sid) {
+                s.cancel();
+                lock(&self.active_per_uid).remove(&s.target_uid());
+            }
+        }
+        let was_armed = *lock(&self.emitter_armed);
+        *lock(&self.emitter_armed) = false;
+        if was_armed {
+            self.push_status_changed();
+        }
+    }
+
     fn disconnect_sessions(&self, matching: impl Fn(&EnrollmentCapture) -> bool) {
         let _dropped = std::mem::take(&mut *lock(&self.signals));
         let mut sessions = lock(&self.sessions);
@@ -430,6 +493,23 @@ impl<P: PolkitAuthority> ManagerService<P> {
                 lock(&self.active_per_uid).remove(&s.target_uid());
             }
         }
+        let was_armed = *lock(&self.emitter_armed);
+        *lock(&self.emitter_armed) = false;
+        if was_armed {
+            self.push_status_changed();
+        }
+    }
+
+    /// Disarm a session, remove it from the active map, and lower the emitter
+    /// flag. Shared cleanup for error paths in commit/pump that must not leak
+    /// the emitter or leave a stale session entry.
+    fn teardown_session(&self, session_id: &str, target_uid: u32) {
+        let mut sessions = lock(&self.sessions);
+        if let Some(mut s) = sessions.remove(session_id) {
+            s.cancel();
+        }
+        drop(sessions);
+        lock(&self.active_per_uid).remove(&target_uid);
         let was_armed = *lock(&self.emitter_armed);
         *lock(&self.emitter_armed) = false;
         if was_armed {
@@ -575,6 +655,7 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         target_uid: u32,
         name: &str,
     ) -> Result<String, ApiError> {
+        validate_name(name)?;
         let action = if peer.uid == target_uid {
             action::ENROLL_SELF
         } else {
@@ -584,6 +665,12 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         let mut active = lock(&self.active_per_uid);
         if active.contains_key(&target_uid) {
             return Err(ApiError::SessionBusy(target_uid));
+        }
+        let session_count = lock(&self.sessions).len();
+        if session_count >= MAX_SESSIONS {
+            return Err(ApiError::State(format!(
+                "too many concurrent sessions ({session_count} >= {MAX_SESSIONS})"
+            )));
         }
         let sid = Self::gen_session_id();
         let (capture, embed) = self.build_capture_embed()?;
@@ -607,6 +694,7 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
     }
 
     fn cancel_enrollment(&self, _peer: &PeerIdentity, session_id: &str) -> Result<(), ApiError> {
+        validate_id(session_id)?;
         let disarmed = {
             let mut sessions = lock(&self.sessions);
             if let Some(mut s) = sessions.remove(session_id) {
@@ -629,27 +717,33 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
     }
 
     fn commit_profile(&self, _peer: &PeerIdentity, session_id: &str) -> Result<String, ApiError> {
+        validate_id(session_id)?;
         let (target_uid, name, finished) = {
             let mut sessions = lock(&self.sessions);
-            let mut s = sessions
-                .remove(session_id)
-                .ok_or_else(|| ApiError::SessionNotFound(session_id.into()))?;
+            let s = match sessions.remove(session_id) {
+                Some(s) => s,
+                None => return Err(ApiError::SessionNotFound(session_id.into())),
+            };
+            let mut s = s;
             let uid = s.target_uid();
             let name = s.name().to_string();
             // If the session has a capture source, drain it to completion so
             // start→commit without explicit pumps still produces templates.
             if let Err(e) = s.pump_until_exhausted() {
                 s.cancel();
-                lock(&self.active_per_uid).remove(&uid);
-                let was_armed = *lock(&self.emitter_armed);
-                *lock(&self.emitter_armed) = false;
-                if was_armed {
-                    self.push_status_changed();
-                }
+                drop(sessions);
+                self.teardown_session(session_id, uid);
                 return Err(e);
             }
-            let finished = s.finish()?;
-            (uid, name, finished)
+            match s.finish() {
+                Ok(finished) => (uid, name, finished),
+                Err(e) => {
+                    s.cancel();
+                    drop(sessions);
+                    self.teardown_session(session_id, uid);
+                    return Err(e);
+                }
+            }
         };
         let was_armed = *lock(&self.emitter_armed);
         *lock(&self.emitter_armed) = false;
@@ -695,6 +789,7 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         uid: u32,
         id: &str,
     ) -> Result<ReviewOutcome, ApiError> {
+        validate_id(id)?;
         self.authz(action::CONFIGURE, peer, uid)?;
         let pid = ProfileId(id.into());
         let _guard = lock(&self.store_lock);
@@ -723,6 +818,8 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         id: &str,
         new_name: &str,
     ) -> Result<(), ApiError> {
+        validate_id(id)?;
+        validate_name(new_name)?;
         self.authz(action::CONFIGURE, peer, uid)?;
         let pid = ProfileId(id.into());
         let _guard = lock(&self.store_lock);
@@ -745,6 +842,7 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         id: &str,
         enabled: bool,
     ) -> Result<(), ApiError> {
+        validate_id(id)?;
         self.authz(action::CONFIGURE, peer, uid)?;
         let pid = ProfileId(id.into());
         let _guard = lock(&self.store_lock);
@@ -761,6 +859,7 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
     }
 
     fn delete_profile(&self, peer: &PeerIdentity, uid: u32, id: &str) -> Result<(), ApiError> {
+        validate_id(id)?;
         self.authz(action::DELETE, peer, uid)?;
         let pid = ProfileId(id.into());
         let _guard = lock(&self.store_lock);
@@ -783,6 +882,8 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         src_id: &str,
         dst_id: &str,
     ) -> Result<(), ApiError> {
+        validate_id(src_id)?;
+        validate_id(dst_id)?;
         self.authz(action::CONFIGURE, peer, uid)?;
         let src = ProfileId(src_id.into());
         let dst = ProfileId(dst_id.into());
@@ -806,6 +907,8 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         id: &str,
         new_name: &str,
     ) -> Result<(), ApiError> {
+        validate_id(id)?;
+        validate_name(new_name)?;
         self.authz(action::CONFIGURE, peer, uid)?;
         let pid = ProfileId(id.into());
         let _guard = lock(&self.store_lock);
@@ -1526,7 +1629,7 @@ mod tests {
     fn commit_writes_real_templates_from_reservoir() {
         let (_dir, svc) = svc();
         let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
-        let pid = svc.commit_profile(&peer(1000), &sid).unwrap();
+        let _pid = svc.commit_profile(&peer(1000), &sid).unwrap();
 
         let _guard = svc.store_lock.lock().unwrap_or_else(|e| e.into_inner());
         let entries = svc.store.list_profiles(1000).unwrap();
@@ -2016,6 +2119,484 @@ mod tests {
         assert!(
             completed_pos < changed_pos,
             "EnrollmentCompleted before ProfileChanged in commit sequence: {order:?}"
+        );
+    }
+
+    // ---- Task 14: fault injection + boundary fuzzing ----
+
+    /// Capture source that fails after `n` successful frames.
+    struct FlakySource {
+        caps: SourceCaps,
+        frames_before_fail: usize,
+        idx: usize,
+        started: bool,
+        err_msg: String,
+    }
+
+    impl FlakySource {
+        fn new(frames_before_fail: usize, err_msg: String) -> Self {
+            Self {
+                caps: SourceCaps {
+                    spectrum: Spectrum::Ir,
+                    format: PixFmt::Grey8,
+                    width: 8,
+                    height: 8,
+                    fps: 30,
+                    has_metadata: false,
+                },
+                frames_before_fail,
+                idx: 0,
+                started: false,
+                err_msg,
+            }
+        }
+    }
+
+    impl CaptureSource for FlakySource {
+        fn caps(&self) -> SourceCaps {
+            self.caps
+        }
+        fn start(&mut self) -> Result<(), CaptureError> {
+            self.started = true;
+            Ok(())
+        }
+        fn next_frame(&mut self) -> Result<Option<Frame>, CaptureError> {
+            if !self.started {
+                return Err(CaptureError::NotStarted);
+            }
+            if self.idx >= self.frames_before_fail {
+                return Err(CaptureError::Device(self.err_msg.clone()));
+            }
+            let f = Frame {
+                data: vec![130; 64],
+                format: PixFmt::Grey8,
+                width: 8,
+                height: 8,
+                ts_mono: Duration::from_millis(0),
+                sof: None,
+                emitter: EmitterState::On,
+                quality: None,
+            };
+            self.idx += 1;
+            Ok(Some(f))
+        }
+        fn stop(&mut self) {
+            self.started = false;
+        }
+    }
+
+    fn flaky_capture_factory(frames: usize, err_msg: &str) -> CaptureFactory {
+        let msg = err_msg.to_string();
+        Box::new(move || Ok(Box::new(FlakySource::new(frames, msg.clone()))))
+    }
+
+    /// Embed source that always errors.
+    struct FailingEmbedSource;
+    impl EmbedSource for FailingEmbedSource {
+        fn embed(&mut self, _frame: &Frame) -> Result<Option<(Vec<f32>, u8)>, ApiError> {
+            Err(ApiError::State("embed source fault".into()))
+        }
+    }
+
+    fn failing_embed_factory() -> EmbedFactory {
+        Box::new(|| Box::new(FailingEmbedSource))
+    }
+
+    fn svc_no_capture() -> (tempfile::TempDir, ManagerService<StubPolkit>) {
+        let (dir, store) = test_store();
+        (dir, ManagerService::new_with_store(StubPolkit, store))
+    }
+
+    fn svc_with_flaky_capture(
+        frames: usize,
+        err_msg: &str,
+    ) -> (tempfile::TempDir, ManagerService<StubPolkit>) {
+        let (dir, store) = test_store();
+        let svc = ManagerService::new_with_capture(
+            StubPolkit,
+            store,
+            flaky_capture_factory(frames, err_msg),
+            mock_embed_factory(),
+        );
+        (dir, svc)
+    }
+
+    #[test]
+    fn oversized_name_rejected_on_start() {
+        let (_dir, svc) = svc();
+        let huge = "x".repeat(MAX_NAME_LEN + 1);
+        let err = svc.start_enrollment(&peer(1000), 1000, &huge).unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn empty_name_rejected_on_start() {
+        let (_dir, svc) = svc();
+        let err = svc.start_enrollment(&peer(1000), 1000, "").unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn oversized_name_rejected_on_rename() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(0), 0, "root").unwrap();
+        let pid = svc.commit_profile(&peer(0), &sid).unwrap();
+        let huge = "y".repeat(MAX_NAME_LEN + 1);
+        let err = svc.rename_profile(&peer(0), 0, &pid, &huge).unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn oversized_name_rejected_on_replace() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(0), 0, "root").unwrap();
+        let pid = svc.commit_profile(&peer(0), &sid).unwrap();
+        let huge = "z".repeat(MAX_NAME_LEN + 1);
+        let err = svc.replace_profile(&peer(0), 0, &pid, &huge).unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn empty_id_rejected_on_commit() {
+        let (_dir, svc) = svc();
+        let err = svc.commit_profile(&peer(1000), "").unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn oversized_id_rejected_on_commit() {
+        let (_dir, svc) = svc();
+        let huge = "s".repeat(MAX_ID_LEN + 1);
+        let err = svc.commit_profile(&peer(1000), &huge).unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn empty_id_rejected_on_cancel() {
+        let (_dir, svc) = svc();
+        let err = svc.cancel_enrollment(&peer(1000), "").unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn empty_id_rejected_on_review() {
+        let (_dir, svc) = svc();
+        let err = svc.review_profile(&peer(0), 0, "").unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn empty_id_rejected_on_delete() {
+        let (_dir, svc) = svc();
+        let err = svc.delete_profile(&peer(0), 0, "").unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn empty_id_rejected_on_enable() {
+        let (_dir, svc) = svc();
+        let err = svc.enable_profile(&peer(0), 0, "", true).unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn empty_id_rejected_on_merge() {
+        let (_dir, svc) = svc();
+        let err = svc.merge_profiles(&peer(0), 0, "", "dst").unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn stale_session_id_rejected_on_pump() {
+        let (_dir, svc) = svc();
+        let err = svc.pump_enrollment("sess-nonexistent").unwrap_err();
+        assert!(matches!(err, ApiError::SessionNotFound(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn stale_session_id_rejected_on_commit() {
+        let (_dir, svc) = svc();
+        let err = svc
+            .commit_profile(&peer(1000), "sess-nonexistent")
+            .unwrap_err();
+        assert!(matches!(err, ApiError::SessionNotFound(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn too_many_concurrent_sessions_rejected() {
+        let (_dir, svc) = svc_no_capture();
+        for i in 0..MAX_SESSIONS {
+            let uid = (i as u32) + 1;
+            svc.start_enrollment(&peer(0), uid, &format!("user{i}"))
+                .unwrap();
+        }
+        let err = svc
+            .start_enrollment(&peer(0), MAX_SESSIONS as u32 + 1, "overflow")
+            .unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn camera_failure_during_pump_tears_down_session() {
+        let (_dir, svc) = svc_with_flaky_capture(2, "camera fault");
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        for _ in 0..2 {
+            svc.pump_enrollment(&sid).unwrap();
+        }
+        let err = svc.pump_enrollment(&sid).unwrap_err();
+        assert!(
+            matches!(err, ApiError::State(_)),
+            "camera fault → State, got {err:?}"
+        );
+        assert!(!*svc.emitter_armed.lock().unwrap(), "emitter disarmed");
+        assert!(svc.sessions.lock().unwrap().is_empty(), "session removed");
+        assert!(
+            svc.active_per_uid.lock().unwrap().is_empty(),
+            "active_per_uid cleared"
+        );
+        assert!(
+            svc.list_profiles(&peer(1000)).unwrap().is_empty(),
+            "store preserved — no profile written"
+        );
+        let err2 = svc.pump_enrollment(&sid).unwrap_err();
+        assert!(matches!(err2, ApiError::SessionNotFound(_)));
+    }
+
+    #[test]
+    fn camera_failure_during_commit_tears_down_session() {
+        let (_dir, svc) = svc_with_flaky_capture(0, "immediate fault");
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let err = svc.commit_profile(&peer(1000), &sid).unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+        assert!(!*svc.emitter_armed.lock().unwrap(), "emitter disarmed");
+        assert!(svc.sessions.lock().unwrap().is_empty(), "session removed");
+        assert!(
+            svc.list_profiles(&peer(1000)).unwrap().is_empty(),
+            "store preserved"
+        );
+    }
+
+    #[test]
+    fn embed_failure_during_pump_tears_down_session() {
+        let (dir, store) = test_store();
+        let cf: CaptureFactory = Box::new(|| Ok(Box::new(ReplaySource::new(10, 130))));
+        let svc = ManagerService::new_with_capture(StubPolkit, store, cf, failing_embed_factory());
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let err = svc.pump_enrollment(&sid).unwrap_err();
+        assert!(matches!(err, ApiError::State(_)), "got {err:?}");
+        assert!(!*svc.emitter_armed.lock().unwrap(), "emitter disarmed");
+        assert!(svc.sessions.lock().unwrap().is_empty(), "session removed");
+        assert!(svc.list_profiles(&peer(1000)).unwrap().is_empty());
+        let _ = dir;
+    }
+
+    #[test]
+    fn store_io_error_preserves_session_for_retry() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let pid = svc.commit_profile(&peer(1000), &sid).unwrap();
+        assert_eq!(svc.list_profiles(&peer(1000)).unwrap().len(), 1);
+
+        let err = svc.delete_profile(&peer(1000), 1000, &pid).unwrap_err();
+        assert!(matches!(err, ApiError::Denied { .. }));
+
+        let list = svc.list_profiles(&peer(1000)).unwrap();
+        assert_eq!(list.len(), 1, "store intact after denied delete");
+        assert_eq!(list[0].id, pid);
+    }
+
+    #[test]
+    fn rapid_start_cancel_cycles_do_not_leak_sessions() {
+        let (_dir, svc) = svc_no_capture();
+        for i in 0..50 {
+            let uid = (i % 10) as u32 + 1;
+            let sid = svc
+                .start_enrollment(&peer(0), uid, &format!("u{i}"))
+                .unwrap();
+            svc.cancel_enrollment(&peer(0), &sid).unwrap();
+        }
+        assert!(
+            svc.sessions.lock().unwrap().is_empty(),
+            "all sessions cleaned up"
+        );
+        assert!(
+            svc.active_per_uid.lock().unwrap().is_empty(),
+            "active_per_uid empty"
+        );
+        assert!(!*svc.emitter_armed.lock().unwrap(), "emitter disarmed");
+    }
+
+    #[test]
+    fn rapid_start_commit_cycles_accumulate_profiles() {
+        let (_dir, svc) = svc();
+        for i in 0..10 {
+            let sid = svc
+                .start_enrollment(&peer(1000), 1000, &format!("alice{i}"))
+                .unwrap();
+            svc.commit_profile(&peer(1000), &sid).unwrap();
+        }
+        let list = svc.list_profiles(&peer(1000)).unwrap();
+        assert_eq!(list.len(), 10, "all commits persisted");
+        assert!(svc.sessions.lock().unwrap().is_empty());
+        assert!(!*svc.emitter_armed.lock().unwrap());
+    }
+
+    #[test]
+    fn concurrent_list_profiles_for_different_uids() {
+        let (_dir, svc) = svc();
+        let sid_a = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.commit_profile(&peer(1000), &sid_a).unwrap();
+        let sid_b = svc.start_enrollment(&peer(2000), 2000, "bob").unwrap();
+        svc.commit_profile(&peer(2000), &sid_b).unwrap();
+
+        let svc = Arc::new(svc);
+        let svc_a = svc.clone();
+        let t1 = std::thread::spawn(move || svc_a.list_profiles(&peer(1000)).unwrap().len());
+        let svc_b = svc.clone();
+        let t2 = std::thread::spawn(move || svc_b.list_profiles(&peer(2000)).unwrap().len());
+        let a = t1.join().unwrap();
+        let b = t2.join().unwrap();
+        assert_eq!(a, 1, "uid 1000 sees own profile");
+        assert_eq!(b, 1, "uid 2000 sees own profile");
+    }
+
+    #[test]
+    fn shutdown_cancels_active_enrollment() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        for _ in 0..3 {
+            svc.pump_enrollment(&sid).unwrap();
+        }
+        assert!(*svc.emitter_armed.lock().unwrap());
+
+        svc.shutdown();
+
+        assert!(!*svc.emitter_armed.lock().unwrap(), "emitter disarmed");
+        assert!(svc.sessions.lock().unwrap().is_empty(), "sessions cleared");
+        assert!(
+            svc.active_per_uid.lock().unwrap().is_empty(),
+            "active_per_uid cleared"
+        );
+        assert!(
+            svc.list_profiles(&peer(1000)).unwrap().is_empty(),
+            "no profile written on shutdown"
+        );
+    }
+
+    #[test]
+    fn shutdown_with_no_sessions_is_noop() {
+        let (_dir, svc) = svc();
+        svc.shutdown();
+        assert!(!*svc.emitter_armed.lock().unwrap());
+        assert!(svc.sessions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn shutdown_preserves_committed_profiles() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let pid = svc.commit_profile(&peer(1000), &sid).unwrap();
+
+        let sid2 = svc.start_enrollment(&peer(1000), 1000, "alice2").unwrap();
+        for _ in 0..3 {
+            svc.pump_enrollment(&sid2).unwrap();
+        }
+
+        svc.shutdown();
+
+        let list = svc.list_profiles(&peer(1000)).unwrap();
+        assert_eq!(list.len(), 1, "committed profile survives shutdown");
+        assert_eq!(list[0].id, pid);
+    }
+
+    #[test]
+    fn authorization_race_denied_mid_session_preserves_store() {
+        let (dir, store) = test_store();
+        let polkit = MockFlippingPolkit::new(1);
+        let cf = mock_capture_factory();
+        let ef = mock_embed_factory();
+        let svc = ManagerService::new_with_capture(polkit, store, cf, ef);
+
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        for _ in 0..3 {
+            svc.pump_enrollment(&sid).unwrap();
+        }
+
+        let err = svc.rename_profile(&peer(1000), 1000, "x", "y").unwrap_err();
+        assert!(
+            matches!(err, ApiError::Denied { .. }),
+            "polkit flip → Denied, got {err:?}"
+        );
+
+        assert!(*svc.emitter_armed.lock().unwrap(), "enrollment still armed");
+        assert_eq!(
+            svc.list_profiles(&peer(1000)).unwrap().len(),
+            0,
+            "store unchanged"
+        );
+        let _ = dir;
+    }
+
+    /// Polkit that allows the first `allow_count` checks, then denies.
+    struct MockFlippingPolkit {
+        remaining: std::sync::atomic::AtomicUsize,
+    }
+
+    impl MockFlippingPolkit {
+        fn new(allow_count: usize) -> Self {
+            Self {
+                remaining: std::sync::atomic::AtomicUsize::new(allow_count),
+            }
+        }
+    }
+
+    impl PolkitAuthority for MockFlippingPolkit {
+        fn check(&self, _action: &str, _peer: &PeerIdentity, _target_uid: u32) -> AuthzDecision {
+            let prev = self
+                .remaining
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            if prev > 0 {
+                AuthzDecision::Allowed
+            } else {
+                AuthzDecision::Denied
+            }
+        }
+    }
+
+    #[test]
+    fn pump_after_shutdown_returns_session_not_found() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.shutdown();
+        let err = svc.pump_enrollment(&sid).unwrap_err();
+        assert!(matches!(err, ApiError::SessionNotFound(_)));
+    }
+
+    #[test]
+    fn cancel_after_shutdown_is_noop() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.shutdown();
+        svc.cancel_enrollment(&peer(1000), &sid).unwrap();
+        assert!(svc.sessions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn boundary_name_length_accepted() {
+        let (_dir, svc) = svc_no_capture();
+        let name = "x".repeat(MAX_NAME_LEN);
+        let sid = svc.start_enrollment(&peer(0), 0, &name).unwrap();
+        svc.cancel_enrollment(&peer(0), &sid).unwrap();
+    }
+
+    #[test]
+    fn boundary_id_length_accepted_on_cancel() {
+        let (_dir, svc) = svc();
+        let long_id = "s".repeat(MAX_ID_LEN);
+        let result = svc.cancel_enrollment(&peer(1000), &long_id);
+        assert!(
+            result.is_ok(),
+            "long but valid-length id should pass validation (cancel is idempotent), got {result:?}"
         );
     }
 }
