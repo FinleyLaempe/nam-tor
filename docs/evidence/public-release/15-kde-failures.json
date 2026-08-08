@@ -1,0 +1,13 @@
+{
+  "task": 15,
+  "title": "KDE KCM flow failures and residual risks",
+  "failures": [],
+  "residual_risks": {
+    "runtime_dbus_untested": "C++ D-Bus calls and signal forwarding compile and link, but runtime behavior against a live system-bus daemon is not exercised in CI (no system-bus daemon in CI environment). The abi-smoke test verifies the C ABI only. Runtime verification requires the daemon running on the system bus (human-gated per AGENTS.md).",
+    "qml_visual_qa": "QML compiles via AOT (qmlcache) without warnings, but visual rendering and interactive behavior are not exercised in CI. Requires a Plasma 6 session with the KCM installed (human-gated).",
+    "polkit_pam_toggle": "setPamServiceEnabled is polkit-gated on the daemon side (org.namtor.configure-pam). The KCM only requests it; the polkit prompt appears at runtime. Not exercisable in CI.",
+    "clang_lsp_qt6_headers": "clang LSP reports false-positive 'file not found' for Qt6 headers (QAbstractListModel, QString) because the LSP config lacks Qt6 include paths. These are NOT compilation errors — cmake build succeeds. Pre-existing LSP config limitation, unrelated to this task.",
+    "qml_lsp_not_configured": "No QML LSP server configured (.qml extension). QML correctness verified via cmake AOT compile + qmlcache, not LSP."
+  },
+  "must_not_do_violations": "none — no changes to namtor-daemon, namtor-gnome, namtor-pam-config, namtor-store, namtor-layout, or packaging files"
+}

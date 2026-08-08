@@ -3,26 +3,32 @@
 // namtor_kcm.h — async D-Bus bridge QObject for the Nam-tor KCM (spec §9.3,
 // Tasks 22-24).
 //
-// Exposes the frozen `org.namtor.Manager` contract (Task 8) to QML as typed
-// QObject properties, Q_INVOKABLE methods, and Qt signals. All D-Bus calls
-// are asynchronous via QDBusPendingCall + QDBusPendingCallWatcher so the GUI
-// thread never blocks.
+// Exposes the frozen `org.namtor.Manager` (v1, Task 8) and `org.namtor.Manager2`
+// (v2, Task 1) contracts to QML as typed QObject properties, Q_INVOKABLE
+// methods, and Qt signals. All D-Bus calls are asynchronous via
+// QDBusPendingCall + QDBusPendingCallWatcher so the GUI thread never blocks.
+//
+// Bus: ALL calls go through QDBusConnection::systemBus() — the daemon is a
+// system service. The KCM never used the session bus.
 //
 // Cancellation: each in-flight call is tracked by a generation counter. When
 // the user cancels or restarts an operation, the generation is bumped; late
 // responses from the old generation are silently dropped (stale-response
 // sequencing).
 //
-// D-Bus signal forwarding: the bridge connects to the four frozen Manager
+// D-Bus signal forwarding: the bridge connects to the four frozen v1 Manager
 // signals (EnrollmentProgress, EnrollmentCompleted, ProfileChanged,
-// StatusChanged) and re-emits them as Qt signals. EnrollmentProgress also
-// updates the cached progress properties so QML can bind without inspecting
-// signal arguments. ProfileChanged triggers an automatic listProfiles refresh
-// so external mutations (another client, daemon self-action) are reflected.
+// StatusChanged) and the two v2 Manager2 signals (PamServicesChanged,
+// ProtectionStatusChanged) and re-emits them as Qt signals. EnrollmentProgress
+// also updates the cached progress properties so QML can bind without
+// inspecting signal arguments. ProfileChanged triggers an automatic
+// listProfiles refresh so external mutations are reflected. The v2 signals
+// trigger listPamServices / getProtectionStatus refreshes respectively.
 //
 // No biometric data (embeddings, frames, scores, thresholds) is exposed in
 // any property or signal — only ProfileInfo metadata, EnrollmentProgress
-// (quality bucket + coverage %), ReviewOutcome, and StatusReport.
+// (quality bucket + coverage %), ReviewOutcome, StatusReport, PamServiceInfo,
+// and ProtectionStatus.
 
 #ifndef NAMTOR_KCM_H_CPP
 #define NAMTOR_KCM_H_CPP
@@ -71,6 +77,14 @@ class NamtorKcm : public QObject {
     Q_PROPERTY(bool reviewNeedsReenroll READ reviewNeedsReenroll NOTIFY reviewReady)
     Q_PROPERTY(QString reviewQuality READ reviewQuality NOTIFY reviewReady)
 
+    // --- v2 ProtectionStatus (org.namtor.Manager2) ---
+    Q_PROPERTY(QString protectionSealing READ protectionSealing NOTIFY protectionStatusChanged)
+    Q_PROPERTY(bool protectionHasTpm READ protectionHasTpm NOTIFY protectionStatusChanged)
+    Q_PROPERTY(QString protectionWarning READ protectionWarning NOTIFY protectionStatusChanged)
+
+    // --- v2 PAM services (org.namtor.Manager2) ---
+    Q_PROPERTY(QVariantList pamServices READ pamServices NOTIFY pamServicesChanged)
+
 public:
     explicit NamtorKcm(QObject *parent = nullptr);
     ~NamtorKcm() override;
@@ -103,6 +117,14 @@ public:
     bool reviewNeedsReenroll() const;
     QString reviewQuality() const;
 
+    // v2 ProtectionStatus properties
+    QString protectionSealing() const;
+    bool protectionHasTpm() const;
+    QString protectionWarning() const;
+
+    // v2 PAM services property
+    QVariantList pamServices() const;
+
     // --- Q_INVOKABLE methods (frozen D-Bus contract, Task 8) ---
     Q_INVOKABLE void listProfiles();
     Q_INVOKABLE void startEnrollment(quint32 uid, const QString &name);
@@ -115,6 +137,14 @@ public:
     Q_INVOKABLE void mergeProfiles(quint32 uid, const QString &src, const QString &dst);
     Q_INVOKABLE void replaceProfile(quint32 uid, const QString &id, const QString &name);
     Q_INVOKABLE void getStatus();
+
+    // --- Q_INVOKABLE methods (v2 org.namtor.Manager2 contract, Task 1) ---
+    Q_INVOKABLE void listPamServices();
+    Q_INVOKABLE void setPamServiceEnabled(const QString &serviceId, bool enabled);
+    Q_INVOKABLE void getProtectionStatus();
+
+    // --- Refresh all state (convenience for Component.onCompleted) ---
+    Q_INVOKABLE void refresh();
 
     // --- Cancel all in-flight calls (stale-response sequencing) ---
     Q_INVOKABLE void cancelAllPending();
@@ -144,6 +174,10 @@ signals:
     // --- Review outcome (Task 23) ---
     void reviewReady(const QString &profileId, bool needsReenroll, const QString &quality);
 
+    // --- v2 signals (org.namtor.Manager2) ---
+    void pamServicesChanged();
+    void protectionStatusChanged();
+
 private:
     void setLoading(bool loading);
     void setError(const QString &error);
@@ -155,6 +189,9 @@ private:
     void handleCommitProfileReply(QDBusPendingCallWatcher *watcher, quint64 gen);
     void handleReviewProfileReply(QDBusPendingCallWatcher *watcher, quint64 gen);
     void handleVoidReply(QDBusPendingCallWatcher *watcher, quint64 gen);
+    void handleListPamServicesReply(QDBusPendingCallWatcher *watcher, quint64 gen);
+    void handleSetPamServiceEnabledReply(QDBusPendingCallWatcher *watcher, quint64 gen);
+    void handleGetProtectionStatusReply(QDBusPendingCallWatcher *watcher, quint64 gen);
     void connectDBusSignals();
 
 private slots:
@@ -162,12 +199,15 @@ private slots:
     void onEnrollmentCompletedDBus(const QDBusMessage &msg);
     void onProfileChangedDBus(const QDBusMessage &msg);
     void onStatusChangedDBus(const QDBusMessage &msg);
+    void onPamServicesChangedDBus(const QDBusMessage &msg);
+    void onProtectionStatusChangedDBus(const QDBusMessage &msg);
 
 private:
     bool m_abiOk;
     QString m_abiError;
     NamtorProfileModel *m_profileModel;
     QDBusInterface *m_iface;
+    QDBusInterface *m_iface2;
 
     bool m_daemonReachable;
     bool m_cameraPresent;
@@ -188,6 +228,14 @@ private:
     QString m_reviewProfileId;
     bool m_reviewNeedsReenroll;
     QString m_reviewQuality;
+
+    // v2 ProtectionStatus
+    QString m_protectionSealing;
+    bool m_protectionHasTpm;
+    QString m_protectionWarning;
+
+    // v2 PAM services (list of QVariantMap per PamServiceInfo)
+    QVariantList m_pamServices;
 
     quint64 m_generation;
     QVector<QDBusPendingCallWatcher *> m_pendingWatchers;

@@ -2,21 +2,27 @@
 //
 // namtor_kcm.cpp — async D-Bus bridge implementation for the Nam-tor KCM.
 //
-// All D-Bus calls go through QDBusInterface::asyncCall() + QDBusPendingCallWatcher.
-// The watcher's finished() signal fires on the GUI thread when the reply arrives
-// (or times out) — the GUI never blocks. Each call carries a generation counter;
-// if the user cancels or restarts, the generation is bumped and late replies
-// from the old generation are silently dropped (stale-response sequencing).
+// All D-Bus calls go through QDBusInterface::asyncCall() + QDBusPendingCallWatcher
+// on the SYSTEM bus (QDBusConnection::systemBus). The daemon is a system
+// service; the KCM never used the session bus.
 //
-// D-Bus signal forwarding: the four frozen Manager signals are connected in
-// the constructor via QDBusConnection::connect(). EnrollmentProgress updates
-// the cached progress properties (framesCaptured, qualityLabel,
-// coveragePercent) and re-emits as a Qt signal. ProfileChanged triggers an
-// automatic listProfiles() refresh so external mutations are reflected.
+// The watcher's finished() signal fires on the GUI thread when the reply
+// arrives (or times out) — the GUI never blocks. Each call carries a
+// generation counter; if the user cancels or restarts, the generation is
+// bumped and late replies from the old generation are silently dropped
+// (stale-response sequencing).
 //
-// No biometric data is handled here. The QObject carries only profile metadata,
-// coarse quality buckets, and aggregated status — all from the frozen Task 8
-// contract.
+// D-Bus signal forwarding: the four frozen v1 Manager signals plus the two
+// v2 Manager2 signals are connected in the constructor via
+// QDBusConnection::systemBus().connect(). EnrollmentProgress updates the
+// cached progress properties (framesCaptured, qualityLabel, coveragePercent)
+// and re-emits as a Qt signal. ProfileChanged triggers an automatic
+// listProfiles() refresh so external mutations are reflected. The v2
+// signals update the PAM services list and protection status respectively.
+//
+// No biometric data is handled here. The QObject carries only profile
+// metadata, coarse quality buckets, and aggregated status — all from the
+// frozen Task 8 (v1) and Task 1 (v2) contracts.
 
 #include "namtor_kcm.h"
 
@@ -61,6 +67,24 @@ struct WireStatusReport {
     bool emitter_armed;
 };
 Q_DECLARE_METATYPE(WireStatusReport)
+
+// --- v2 D-Bus wire structs (frozen Task 1 contract: org.namtor.Manager2) ---
+
+struct WirePamServiceInfo {
+    QString id;
+    QString display_name;
+    bool enabled;
+    QString compatibility;
+    QString description;
+};
+Q_DECLARE_METATYPE(WirePamServiceInfo)
+
+struct WireProtectionStatus {
+    QString sealing;
+    bool has_tpm;
+    QString warning;
+};
+Q_DECLARE_METATYPE(WireProtectionStatus)
 
 // --- QDBusArgument operators for wire structs ---
 
@@ -128,6 +152,38 @@ const QDBusArgument &operator>>(const QDBusArgument &arg, WireStatusReport &s)
     return arg;
 }
 
+QDBusArgument &operator<<(QDBusArgument &arg, const WirePamServiceInfo &p)
+{
+    arg.beginStructure();
+    arg << p.id << p.display_name << p.enabled << p.compatibility << p.description;
+    arg.endStructure();
+    return arg;
+}
+
+const QDBusArgument &operator>>(const QDBusArgument &arg, WirePamServiceInfo &p)
+{
+    arg.beginStructure();
+    arg >> p.id >> p.display_name >> p.enabled >> p.compatibility >> p.description;
+    arg.endStructure();
+    return arg;
+}
+
+QDBusArgument &operator<<(QDBusArgument &arg, const WireProtectionStatus &s)
+{
+    arg.beginStructure();
+    arg << s.sealing << s.has_tpm << s.warning;
+    arg.endStructure();
+    return arg;
+}
+
+const QDBusArgument &operator>>(const QDBusArgument &arg, WireProtectionStatus &s)
+{
+    arg.beginStructure();
+    arg >> s.sealing >> s.has_tpm >> s.warning;
+    arg.endStructure();
+    return arg;
+}
+
 // --- NamtorKcm ---
 
 static bool s_typesRegistered = false;
@@ -146,6 +202,12 @@ static void registerWireTypes()
     qDBusRegisterMetaType<WireStatusReport>();
     qRegisterMetaType<QVector<WireProfileInfo>>("QVector<WireProfileInfo>");
     qDBusRegisterMetaType<QVector<WireProfileInfo>>();
+    qRegisterMetaType<WirePamServiceInfo>("WirePamServiceInfo");
+    qDBusRegisterMetaType<WirePamServiceInfo>();
+    qRegisterMetaType<QVector<WirePamServiceInfo>>("QVector<WirePamServiceInfo>");
+    qDBusRegisterMetaType<QVector<WirePamServiceInfo>>();
+    qRegisterMetaType<WireProtectionStatus>("WireProtectionStatus");
+    qDBusRegisterMetaType<WireProtectionStatus>();
     s_typesRegistered = true;
 }
 
@@ -154,6 +216,7 @@ NamtorKcm::NamtorKcm(QObject *parent)
     , m_abiOk(false)
     , m_profileModel(new NamtorProfileModel(this))
     , m_iface(nullptr)
+    , m_iface2(nullptr)
     , m_daemonReachable(false)
     , m_cameraPresent(false)
     , m_emitterArmed(false)
@@ -164,6 +227,7 @@ NamtorKcm::NamtorKcm(QObject *parent)
     , m_framesCaptured(0)
     , m_coveragePercent(0)
     , m_reviewNeedsReenroll(false)
+    , m_protectionHasTpm(false)
     , m_generation(0)
 {
     registerWireTypes();
@@ -183,7 +247,14 @@ NamtorKcm::NamtorKcm(QObject *parent)
         QString::fromUtf8(namtor_kde_manager_bus_name()),
         QString::fromUtf8(namtor_kde_manager_object_path()),
         QStringLiteral("org.namtor.Manager"),
-        QDBusConnection::sessionBus(),
+        QDBusConnection::systemBus(),
+        this);
+
+    m_iface2 = new QDBusInterface(
+        QString::fromUtf8(namtor_kde_manager_bus_name()),
+        QString::fromUtf8(namtor_kde_manager_object_path()),
+        QStringLiteral("org.namtor.Manager2"),
+        QDBusConnection::systemBus(),
         this);
 
     connectDBusSignals();
@@ -198,14 +269,12 @@ NamtorKcm::~NamtorKcm()
 
 void NamtorKcm::connectDBusSignals()
 {
-    auto bus = QDBusConnection::sessionBus();
+    auto bus = QDBusConnection::systemBus();
     const QString service = QString::fromUtf8(namtor_kde_manager_bus_name());
     const QString path = QString::fromUtf8(namtor_kde_manager_object_path());
     const QString iface = QStringLiteral("org.namtor.Manager");
+    const QString iface2 = QStringLiteral("org.namtor.Manager2");
 
-    // Connect to each frozen Manager signal. Slots take QDBusMessage so the
-    // wire structs (WireEnrollmentProgress, WireStatusReport) don't need to
-    // be visible in the header — we parse the message arguments here.
     bus.connect(service, path, iface, QStringLiteral("EnrollmentProgress"),
         this, SLOT(onEnrollmentProgressDBus(QDBusMessage)));
     bus.connect(service, path, iface, QStringLiteral("EnrollmentCompleted"),
@@ -214,6 +283,11 @@ void NamtorKcm::connectDBusSignals()
         this, SLOT(onProfileChangedDBus(QDBusMessage)));
     bus.connect(service, path, iface, QStringLiteral("StatusChanged"),
         this, SLOT(onStatusChangedDBus(QDBusMessage)));
+
+    bus.connect(service, path, iface2, QStringLiteral("PamServicesChanged"),
+        this, SLOT(onPamServicesChangedDBus(QDBusMessage)));
+    bus.connect(service, path, iface2, QStringLiteral("ProtectionStatusChanged"),
+        this, SLOT(onProtectionStatusChangedDBus(QDBusMessage)));
 }
 
 // --- ABI properties ---
@@ -262,6 +336,16 @@ QString NamtorKcm::reviewProfileId() const { return m_reviewProfileId; }
 bool NamtorKcm::reviewNeedsReenroll() const { return m_reviewNeedsReenroll; }
 
 QString NamtorKcm::reviewQuality() const { return m_reviewQuality; }
+
+// --- v2 ProtectionStatus / PAM services properties ---
+
+QString NamtorKcm::protectionSealing() const { return m_protectionSealing; }
+
+bool NamtorKcm::protectionHasTpm() const { return m_protectionHasTpm; }
+
+QString NamtorKcm::protectionWarning() const { return m_protectionWarning; }
+
+QVariantList NamtorKcm::pamServices() const { return m_pamServices; }
 
 // --- State helpers ---
 
@@ -520,6 +604,61 @@ void NamtorKcm::replaceProfile(quint32 uid, const QString &id, const QString &na
             [this, gen, call]() { handleVoidReply(call, gen); });
 }
 
+// --- v2 Q_INVOKABLE methods (org.namtor.Manager2) ---
+
+void NamtorKcm::listPamServices()
+{
+    if (!m_abiOk || !m_iface2 || !m_iface2->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
+    const quint64 gen = ++m_generation;
+    auto *call = new QDBusPendingCallWatcher(m_iface2->asyncCall(QStringLiteral("ListPamServices")));
+    m_pendingWatchers.append(call);
+    connect(call, &QDBusPendingCallWatcher::finished, this,
+            [this, gen, call]() { handleListPamServicesReply(call, gen); });
+}
+
+void NamtorKcm::setPamServiceEnabled(const QString &serviceId, bool enabled)
+{
+    if (!m_abiOk || !m_iface2 || !m_iface2->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
+    QList<QVariant> args;
+    args << serviceId << enabled;
+    const quint64 gen = ++m_generation;
+    auto *call = new QDBusPendingCallWatcher(m_iface2->asyncCallWithArgumentList(
+        QStringLiteral("SetPamServiceEnabled"), args));
+    m_pendingWatchers.append(call);
+    connect(call, &QDBusPendingCallWatcher::finished, this,
+            [this, gen, call]() { handleSetPamServiceEnabledReply(call, gen); });
+}
+
+void NamtorKcm::getProtectionStatus()
+{
+    if (!m_abiOk || !m_iface2 || !m_iface2->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
+    const quint64 gen = ++m_generation;
+    auto *call = new QDBusPendingCallWatcher(m_iface2->asyncCall(QStringLiteral("GetProtectionStatus")));
+    m_pendingWatchers.append(call);
+    connect(call, &QDBusPendingCallWatcher::finished, this,
+            [this, gen, call]() { handleGetProtectionStatusReply(call, gen); });
+}
+
+void NamtorKcm::refresh()
+{
+    listProfiles();
+    getStatus();
+    listPamServices();
+    getProtectionStatus();
+}
+
 void NamtorKcm::cancelAllPending()
 {
     ++m_generation;
@@ -604,7 +743,43 @@ void NamtorKcm::onStatusChangedDBus(const QDBusMessage &msg)
     emit statusChanged();
 }
 
-// --- Reply handlers (stale-response sequencing via generation check) ---
+void NamtorKcm::onPamServicesChangedDBus(const QDBusMessage &msg)
+{
+    const auto args = msg.arguments();
+    if (args.isEmpty())
+        return;
+    const auto arg = args.at(0).value<QDBusArgument>();
+    QVector<WirePamServiceInfo> services;
+    arg >> services;
+
+    QVariantList out;
+    for (const auto &s : services) {
+        QVariantMap m;
+        m.insert(QStringLiteral("id"), s.id);
+        m.insert(QStringLiteral("displayName"), s.display_name);
+        m.insert(QStringLiteral("enabled"), s.enabled);
+        m.insert(QStringLiteral("compatibility"), s.compatibility);
+        m.insert(QStringLiteral("description"), s.description);
+        out.append(m);
+    }
+    m_pamServices = out;
+    emit pamServicesChanged();
+}
+
+void NamtorKcm::onProtectionStatusChangedDBus(const QDBusMessage &msg)
+{
+    const auto args = msg.arguments();
+    if (args.isEmpty())
+        return;
+    const auto arg = args.at(0).value<QDBusArgument>();
+    WireProtectionStatus s;
+    arg >> s;
+
+    m_protectionSealing = s.sealing;
+    m_protectionHasTpm = s.has_tpm;
+    m_protectionWarning = s.warning;
+    emit protectionStatusChanged();
+}
 
 static void removeWatcher(QVector<QDBusPendingCallWatcher *> &list, QDBusPendingCallWatcher *w)
 {
@@ -747,4 +922,72 @@ void NamtorKcm::handleVoidReply(QDBusPendingCallWatcher *watcher, quint64 gen)
     // After a void mutation (rename/enable/delete/merge/replace), refresh
     // the profile list so QML reflects the new state.
     listProfiles();
+}
+
+void NamtorKcm::handleListPamServicesReply(QDBusPendingCallWatcher *watcher, quint64 gen)
+{
+    removeWatcher(m_pendingWatchers, watcher);
+    if (gen != m_generation)
+        return;
+
+    QDBusPendingReply<QVector<WirePamServiceInfo>> reply = *watcher;
+    if (reply.isError()) {
+        setError(reply.error().message());
+        setLoading(false);
+        return;
+    }
+    setError({});
+    QVariantList out;
+    for (const auto &s : reply.value()) {
+        QVariantMap m;
+        m.insert(QStringLiteral("id"), s.id);
+        m.insert(QStringLiteral("displayName"), s.display_name);
+        m.insert(QStringLiteral("enabled"), s.enabled);
+        m.insert(QStringLiteral("compatibility"), s.compatibility);
+        m.insert(QStringLiteral("description"), s.description);
+        out.append(m);
+    }
+    m_pamServices = out;
+    emit pamServicesChanged();
+    setLoading(false);
+}
+
+void NamtorKcm::handleSetPamServiceEnabledReply(QDBusPendingCallWatcher *watcher, quint64 gen)
+{
+    removeWatcher(m_pendingWatchers, watcher);
+    if (gen != m_generation)
+        return;
+
+    QDBusPendingReply<bool> reply = *watcher;
+    if (reply.isError()) {
+        setError(reply.error().message());
+        setLoading(false);
+        return;
+    }
+    setError({});
+    // The daemon emits PamServicesChanged on success; refresh now so the UI
+    // reflects the toggle even if the signal arrives slightly later.
+    listPamServices();
+    setLoading(false);
+}
+
+void NamtorKcm::handleGetProtectionStatusReply(QDBusPendingCallWatcher *watcher, quint64 gen)
+{
+    removeWatcher(m_pendingWatchers, watcher);
+    if (gen != m_generation)
+        return;
+
+    QDBusPendingReply<WireProtectionStatus> reply = *watcher;
+    if (reply.isError()) {
+        setError(reply.error().message());
+        setLoading(false);
+        return;
+    }
+    setError({});
+    const auto &s = reply.value();
+    m_protectionSealing = s.sealing;
+    m_protectionHasTpm = s.has_tpm;
+    m_protectionWarning = s.warning;
+    emit protectionStatusChanged();
+    setLoading(false);
 }

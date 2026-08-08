@@ -1,0 +1,75 @@
+{
+  "task": 15,
+  "title": "Connect and complete KDE KCM flows on the system bus",
+  "status": "implemented",
+  "bus": "system",
+  "v1_interface": "org.namtor.Manager",
+  "v2_interface": "org.namtor.Manager2",
+  "changes": {
+    "namtor_kcm.cpp": [
+      "Changed QDBusConnection::sessionBus() to QDBusConnection::systemBus() at all 3 D-Bus sites (v1 iface creation, v2 iface creation, signal connect)",
+      "Added v2 QDBusInterface for org.namtor.Manager2 on system bus",
+      "Added WirePamServiceInfo (ssbss) and WireProtectionStatus (sbs) D-Bus wire structs + QDBusArgument operators + metatype registration",
+      "Added Q_INVOKABLE listPamServices(), setPamServiceEnabled(serviceId, enabled), getProtectionStatus()",
+      "Added Q_INVOKABLE refresh() (calls listProfiles + getStatus + listPamServices + getProtectionStatus)",
+      "Added v2 signal handlers: onPamServicesChangedDBus, onProtectionStatusChangedDBus",
+      "Added v2 reply handlers: handleListPamServicesReply, handleSetPamServiceEnabledReply, handleGetProtectionStatusReply",
+      "Preserved generation-based stale-response sequencing for all v1 and v2 async calls"
+    ],
+    "namtor_kcm.h": [
+      "Added Q_PROPERTY: protectionSealing, protectionHasTpm, protectionWarning, pamServices",
+      "Added Q_INVOKABLE: listPamServices, setPamServiceEnabled, getProtectionStatus, refresh",
+      "Added signals: pamServicesChanged, protectionStatusChanged",
+      "Added private slots: onPamServicesChangedDBus, onProtectionStatusChangedDBus",
+      "Added members: m_iface2, m_protectionSealing, m_protectionHasTpm, m_protectionWarning, m_pamServices"
+    ],
+    "main.qml": [
+      "Full rewrite to eliminate bridge/QML drift",
+      "Uses Namtor.NamtorKcm QML_SINGLETON directly (no property var bridge)",
+      "Every control calls a real NamtorKcm Q_INVOKABLE method or binds a real Q_PROPERTY",
+      "Enrollment flow: start (startEnrollment) -> progress (coveragePercent/qualityLabel/framesCaptured) -> review (reviewProfile) -> commit/cancel (commitProfile/cancelEnrollment)",
+      "Profile actions: list (profileList model), enable/disable (enableProfile), rename (renameProfile), replace (replaceProfile atomic), delete (deleteProfile)",
+      "Protection status display: protectionSealing, protectionHasTpm, protectionWarning",
+      "PAM services property wired (pamServices) for Task 16 UI controls",
+      "External signal refresh: ProfileChanged triggers listProfiles (bridge), StatusChanged updates status (bridge), PamServicesChanged updates pamServices (bridge), ProtectionStatusChanged updates protection status (bridge)",
+      "No recursive open: KCM does not open another instance of itself",
+      "No biometric data in UI (metadata, quality buckets, coverage %, protection status only)",
+      "Accessibility: all controls keyboard-reachable, Accessible.name/description, i18n()"
+    ],
+    "profile_model.h": "No changes needed — profile model is bus-agnostic, fed by bridge",
+    "profile_model.cpp": "No changes needed",
+    "CMakeLists.txt": "No changes needed — no new source files"
+  },
+  "flows_verified": {
+    "enrollment_start_progress_review_commit": "startEnrollment(uid,name) -> EnrollmentProgress signals update coveragePercent/qualityLabel/framesCaptured -> reviewProfile(uid,session) -> reviewReady signal updates reviewQuality/reviewNeedsReenroll -> commitProfile(session) -> enrollmentCompleted + listProfiles refresh",
+    "enrollment_cancel": "cancelEnrollment(session) bumps generation, clears state, discards stale replies",
+    "profile_list": "listProfiles() async call, generation-guarded reply updates NamtorProfileModel",
+    "profile_rename": "renameProfile(uid,id,name) -> handleVoidReply -> listProfiles refresh",
+    "profile_enable_disable": "enableProfile(uid,id,enabled) -> handleVoidReply -> listProfiles refresh",
+    "profile_delete": "deleteProfile(uid,id) -> handleVoidReply -> listProfiles refresh",
+    "profile_replace_atomic": "replaceProfile(uid,id,name) is a single daemon-side atomic call; handleVoidReply refreshes list. QML confirms before calling. Replace either fully succeeds or fully fails on the daemon side.",
+    "status_get": "getStatus() async -> handleGetStatusReply updates daemonReachable/cameraPresent/emitterArmed/apiVersion/profileList",
+    "protection_status": "getProtectionStatus() v2 async -> handleGetProtectionStatusReply updates protectionSealing/protectionHasTpm/protectionWarning",
+    "pam_services_list": "listPamServices() v2 async -> handleListPamServicesReply updates pamServices QVariantList",
+    "pam_service_toggle": "setPamServiceEnabled(serviceId,enabled) v2 async -> handleSetPamServiceEnabledReply -> listPamServices refresh (polkit-gated on daemon side)",
+    "external_signal_profile_changed": "onProfileChangedDBus -> listProfiles() refresh",
+    "external_signal_status_changed": "onStatusChangedDBus -> updates status properties + profileList",
+    "external_signal_pam_services_changed": "onPamServicesChangedDBus -> updates pamServices",
+    "external_signal_protection_status_changed": "onProtectionStatusChangedDBus -> updates protection status properties"
+  },
+  "build_verification": {
+    "cargo_build_namtor_kde": "pass (0.23s)",
+    "cargo_test_namtor_kde": "18 passed, 0 failed, 0 ignored",
+    "cargo_clippy_namtor_kde": "clean (-D warnings)",
+    "cargo_fmt_namtor_kde": "clean",
+    "cmake_build": "pass — libnamtorqml.so + namtor-abi-smoke built, 0 warnings, 0 errors",
+    "ctest_namtor_abi_smoke": "pass (100% tests passed)",
+    "qml_aot_compile": "pass — main_qml.cpp QML cache compiled without warnings"
+  },
+  "drift_elimination": {
+    "old_qml_methods_removed": ["bridge.refreshProfiles()", "bridge.refreshStatus()", "bridge.createProfile()", "bridge.startEnrollment(sid)", "bridge.lastProgress", "bridge.finishEnrollment()", "bridge.renameProfile(id,name)", "bridge.replaceProfile(id,)", "bridge.deleteProfile(id)"],
+    "new_qml_uses": "Namtor.NamtorKcm singleton with real Q_INVOKABLE methods and Q_PROPERTY bindings",
+    "stale_bridge_var": "removed (property var bridge: null eliminated)"
+  },
+  "spdx": "GPL-3.0-only on all modified .cpp/.h/.qml files"
+}
