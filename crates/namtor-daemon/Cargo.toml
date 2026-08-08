@@ -29,6 +29,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false, optional = true }
 zbus = { version = "5.18", features = ["p2p"] }
+zeroize = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -25,9 +25,12 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 use crate::acl::PeerCreds;
+use crate::daemon::CaptureFactory;
 use crate::manager::contract;
+use crate::manager::session::{EmbedSource, EnrollmentCapture, DEFAULT_MAX_RESERVOIR};
 use crate::manager::store::{map_store_error, NullProfileStore, ProfileStore};
 use crate::DaemonError;
+use namtor_capture::source::CaptureSource;
 use namtor_store::template::{ProfileEntry, ProfileId, ProfileRecord};
 use serde::{Deserialize, Serialize};
 use zbus::zvariant::Type;
@@ -258,13 +261,11 @@ pub struct StatusReport {
     pub emitter_armed: bool,
 }
 
-// Live enrollment session.
-#[derive(Debug)]
-struct Session {
-    target_uid: u32,
-    peer_uid: u32,
-    name: String,
-}
+/// Factory producing a fresh [`EmbedSource`] for each enrollment session.
+/// Stateless (`Fn`, not `FnMut`) so it can be shared across sessions.
+pub type EmbedFactory = Box<dyn Fn() -> Box<dyn EmbedSource> + Send>;
+
+type CaptureEmbedPair = (Option<Box<dyn CaptureSource>>, Option<Box<dyn EmbedSource>>);
 
 /// Reference `org.namtor.Manager` service backed by a durable [`ProfileStore`].
 ///
@@ -277,23 +278,27 @@ pub struct ManagerService<P: PolkitAuthority> {
     polkit: P,
     store: Arc<dyn ProfileStore>,
     store_lock: Mutex<()>,
-    sessions: Mutex<HashMap<String, Session>>,
+    sessions: Mutex<HashMap<String, EnrollmentCapture>>,
     active_per_uid: Mutex<HashMap<u32, String>>,
     emitter_armed: Mutex<bool>,
     signals: Mutex<Vec<ManagerSignal>>,
     store_gen: Mutex<u64>,
+    capture_factory: Mutex<Option<CaptureFactory>>,
+    embed_factory: Mutex<Option<EmbedFactory>>,
 }
 
 impl<P: PolkitAuthority> ManagerService<P> {
     /// Construct with a null store. Used by bus-service tests that exercise
     /// D-Bus mechanics, not profile persistence. Production code must use
-    /// [`Self::new_with_store`].
+    /// [`Self::new_with_store`] or [`Self::new_with_capture`].
     pub fn new(polkit: P) -> Self {
         Self::new_with_store(polkit, Arc::new(NullProfileStore))
     }
 
-    /// Construct with a durable profile store. The daemon passes a
-    /// [`TemplateProfileStore`] wrapping the real [`namtor_store::TemplateStore`].
+    /// Construct with a durable profile store but no capture/embed factory.
+    /// Enrollment sessions can be created (authorization/bus tests) but
+    /// produce no templates on commit. Production must use
+    /// [`Self::new_with_capture`] for real enrollment.
     pub fn new_with_store(polkit: P, store: Arc<dyn ProfileStore>) -> Self {
         Self {
             polkit,
@@ -304,7 +309,25 @@ impl<P: PolkitAuthority> ManagerService<P> {
             emitter_armed: Mutex::new(false),
             signals: Mutex::new(Vec::new()),
             store_gen: Mutex::new(0),
+            capture_factory: Mutex::new(None),
+            embed_factory: Mutex::new(None),
         }
+    }
+
+    /// Construct with a durable store and capture/embed factories for real
+    /// enrollment. The capture factory produces a fresh [`CaptureSource`] per
+    /// session (selected-camera capture); the embed factory produces a fresh
+    /// [`EmbedSource`] per session (recognition pipeline or mock).
+    pub fn new_with_capture(
+        polkit: P,
+        store: Arc<dyn ProfileStore>,
+        capture_factory: CaptureFactory,
+        embed_factory: EmbedFactory,
+    ) -> Self {
+        let svc = Self::new_with_store(polkit, store);
+        *lock(&svc.capture_factory) = Some(capture_factory);
+        *lock(&svc.embed_factory) = Some(embed_factory);
+        svc
     }
 
     fn authz(&self, action: &str, peer: &PeerIdentity, target_uid: u32) -> Result<(), ApiError> {
@@ -323,6 +346,47 @@ impl<P: PolkitAuthority> ManagerService<P> {
         format!("sess-{}", C.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// Open a fresh capture source + embedder for a new enrollment session.
+    /// Returns `(None, None)` when no factories are configured (bus/authz
+    /// tests); the session is created but produces no templates on commit.
+    fn build_capture_embed(&self) -> Result<CaptureEmbedPair, ApiError> {
+        let mut cf = lock(&self.capture_factory);
+        let capture = match cf.as_mut() {
+            Some(f) => Some(f().map_err(|e| ApiError::State(format!("capture: {e}")))?),
+            None => None,
+        };
+        let embed = lock(&self.embed_factory).as_ref().map(|f| f());
+        Ok((capture, embed))
+    }
+
+    /// Drive one capture→embed→reservoir step for a live session and queue an
+    /// `EnrollmentProgress` signal. Returns `Ok(None)` when the capture source
+    /// is exhausted. Not a wire method — internal plumbing for the daemon loop
+    /// / tests; the frozen contract exposes progress only as a signal.
+    pub fn pump_enrollment(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<EnrollmentProgress>, ApiError> {
+        let snapshot = {
+            let mut sessions = lock(&self.sessions);
+            let s = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| ApiError::SessionNotFound(session_id.into()))?;
+            match s.pump()? {
+                Some(snap) => snap,
+                None => return Ok(None),
+            }
+        };
+        let progress = EnrollmentProgress {
+            session_id: session_id.to_string(),
+            frames_captured: snapshot.frames_captured,
+            quality: snapshot.quality,
+            coverage_percent: snapshot.coverage_percent,
+        };
+        lock(&self.signals).push(ManagerSignal::EnrollmentProgress(progress.clone()));
+        Ok(Some(progress))
+    }
+
     /// Drain queued signals for the transport layer to emit on the bus. Not a
     /// wire method — internal plumbing for the reference impl.
     pub fn drain_signals(&self) -> Vec<ManagerSignal> {
@@ -336,12 +400,13 @@ impl<P: PolkitAuthority> ManagerService<P> {
         let mut sessions = lock(&self.sessions);
         let sids: Vec<String> = sessions
             .iter()
-            .filter(|(_, s)| s.peer_uid == peer.uid)
+            .filter(|(_, s)| s.peer_uid() == peer.uid)
             .map(|(k, _)| k.clone())
             .collect();
         for sid in sids {
-            if let Some(s) = sessions.remove(&sid) {
-                lock(&self.active_per_uid).remove(&s.target_uid);
+            if let Some(mut s) = sessions.remove(&sid) {
+                s.cancel();
+                lock(&self.active_per_uid).remove(&s.target_uid());
             }
         }
         let was_armed = *lock(&self.emitter_armed);
@@ -387,6 +452,19 @@ fn profile_entry_to_info(entry: &ProfileEntry) -> ProfileInfo {
         created: entry.profile.created_at_us / 1_000_000,
         last_used: entry.profile.last_used_us / 1_000_000,
     }
+}
+
+/// Derive a coarse [`QualityLabel`] from the stored templates' quality scores.
+/// An empty gallery or disabled profile yields `Low`; otherwise the mean
+/// template quality maps through [`QualityLabel::from_scalar`]. No score or
+/// threshold crosses the surface — only the coarse bucket.
+fn coarse_quality_for(entry: &ProfileEntry) -> QualityLabel {
+    if !entry.profile.enabled || entry.templates.is_empty() {
+        return QualityLabel::Low;
+    }
+    let avg: f32 =
+        entry.templates.iter().map(|t| t.quality).sum::<f32>() / entry.templates.len() as f32;
+    QualityLabel::from_scalar(avg)
 }
 
 fn now_us() -> u64 {
@@ -487,15 +565,17 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
             return Err(ApiError::SessionBusy(target_uid));
         }
         let sid = Self::gen_session_id();
-        active.insert(target_uid, sid.clone());
-        lock(&self.sessions).insert(
-            sid.clone(),
-            Session {
-                target_uid,
-                peer_uid: peer.uid,
-                name: name.to_string(),
-            },
+        let (capture, embed) = self.build_capture_embed()?;
+        let session = EnrollmentCapture::new(
+            target_uid,
+            peer.uid,
+            name.to_string(),
+            capture,
+            embed,
+            DEFAULT_MAX_RESERVOIR,
         );
+        active.insert(target_uid, sid.clone());
+        lock(&self.sessions).insert(sid.clone(), session);
         let was_armed = *lock(&self.emitter_armed);
         *lock(&self.emitter_armed) = true;
         if !was_armed {
@@ -505,9 +585,18 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
     }
 
     fn cancel_enrollment(&self, _peer: &PeerIdentity, session_id: &str) -> Result<(), ApiError> {
-        let mut sessions = lock(&self.sessions);
-        if let Some(s) = sessions.remove(session_id) {
-            lock(&self.active_per_uid).remove(&s.target_uid);
+        let disarmed = {
+            let mut sessions = lock(&self.sessions);
+            if let Some(mut s) = sessions.remove(session_id) {
+                let uid = s.target_uid();
+                s.cancel();
+                lock(&self.active_per_uid).remove(&uid);
+                true
+            } else {
+                false
+            }
+        };
+        if disarmed {
             let was_armed = *lock(&self.emitter_armed);
             *lock(&self.emitter_armed) = false;
             if was_armed {
@@ -518,21 +607,38 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
     }
 
     fn commit_profile(&self, _peer: &PeerIdentity, session_id: &str) -> Result<String, ApiError> {
-        let mut sessions = lock(&self.sessions);
-        let s = sessions
-            .remove(session_id)
-            .ok_or_else(|| ApiError::SessionNotFound(session_id.into()))?;
+        let (target_uid, name, finished) = {
+            let mut sessions = lock(&self.sessions);
+            let mut s = sessions
+                .remove(session_id)
+                .ok_or_else(|| ApiError::SessionNotFound(session_id.into()))?;
+            let uid = s.target_uid();
+            let name = s.name().to_string();
+            // If the session has a capture source, drain it to completion so
+            // start→commit without explicit pumps still produces templates.
+            if let Err(e) = s.pump_until_exhausted() {
+                s.cancel();
+                lock(&self.active_per_uid).remove(&uid);
+                let was_armed = *lock(&self.emitter_armed);
+                *lock(&self.emitter_armed) = false;
+                if was_armed {
+                    self.push_status_changed();
+                }
+                return Err(e);
+            }
+            let finished = s.finish()?;
+            (uid, name, finished)
+        };
         let was_armed = *lock(&self.emitter_armed);
         *lock(&self.emitter_armed) = false;
-        lock(&self.active_per_uid).remove(&s.target_uid);
-        drop(sessions);
+        lock(&self.active_per_uid).remove(&target_uid);
 
         let profile_id = format!("profile-{}", session_id);
         let record = ProfileRecord {
             profile_id: ProfileId(profile_id.clone()),
-            display_name: s.name,
+            display_name: name,
             enabled: true,
-            uid: s.target_uid,
+            uid: target_uid,
             model_id: PROFILE_MODEL_ID.into(),
             created_at_us: now_us(),
             schema_version: 1,
@@ -541,7 +647,7 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         {
             let _guard = lock(&self.store_lock);
             self.store
-                .create_profile(s.target_uid, record, Vec::new())
+                .create_profile(target_uid, record, finished.templates)
                 .map_err(map_store_error)?;
         }
         *lock(&self.store_gen) += 1;
@@ -551,7 +657,7 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
             profile_id: profile_id.clone(),
         });
         sigs.push(ManagerSignal::ProfileChanged {
-            uid: s.target_uid,
+            uid: target_uid,
             id: profile_id.clone(),
         });
         if was_armed {
@@ -571,14 +677,12 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
         let pid = ProfileId(id.into());
         let _guard = lock(&self.store_lock);
         let entry = self.store.get_profile(uid, &pid).map_err(map_store_error)?;
-        let quality = if entry.profile.enabled {
-            QualityLabel::High
-        } else {
-            QualityLabel::Low
-        };
+        let quality = coarse_quality_for(&entry);
+        let needs_reenroll =
+            !entry.profile.enabled || entry.templates.is_empty() || quality == QualityLabel::Low;
         let outcome = ReviewOutcome {
             profile_id: id.to_string(),
-            needs_reenroll: !entry.profile.enabled,
+            needs_reenroll,
             quality,
         };
         drop(_guard);
@@ -712,8 +816,12 @@ pub fn introspect_xml() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manager::session::MockEmbedSource;
     use crate::manager::store::TemplateProfileStore;
+    use namtor_capture::frame::{EmitterState, Frame, PixFmt};
+    use namtor_capture::source::{CaptureError, CaptureSource, SourceCaps, Spectrum};
     use namtor_store::TemplateStore;
+    use std::time::Duration;
 
     fn peer(uid: u32) -> PeerIdentity {
         PeerIdentity {
@@ -730,9 +838,83 @@ mod tests {
         (dir, Arc::new(TemplateProfileStore::new(Arc::new(ts))))
     }
 
+    /// Replay capture source: serves `n` grey frames filled with `byte`, then
+    /// returns `Ok(None)`. Used to drive enrollment sessions deterministically.
+    struct ReplaySource {
+        caps: SourceCaps,
+        frames: Vec<Frame>,
+        idx: usize,
+        started: bool,
+    }
+
+    impl ReplaySource {
+        fn new(n: usize, byte: u8) -> Self {
+            let frame = Frame {
+                data: vec![byte; 64],
+                format: PixFmt::Grey8,
+                width: 8,
+                height: 8,
+                ts_mono: Duration::from_millis(0),
+                sof: None,
+                emitter: EmitterState::On,
+                quality: None,
+            };
+            Self {
+                caps: SourceCaps {
+                    spectrum: Spectrum::Ir,
+                    format: PixFmt::Grey8,
+                    width: 8,
+                    height: 8,
+                    fps: 30,
+                    has_metadata: false,
+                },
+                frames: vec![frame; n],
+                idx: 0,
+                started: false,
+            }
+        }
+    }
+
+    impl CaptureSource for ReplaySource {
+        fn caps(&self) -> SourceCaps {
+            self.caps
+        }
+        fn start(&mut self) -> Result<(), CaptureError> {
+            self.started = true;
+            Ok(())
+        }
+        fn next_frame(&mut self) -> Result<Option<Frame>, CaptureError> {
+            if !self.started {
+                return Err(CaptureError::NotStarted);
+            }
+            if self.idx >= self.frames.len() {
+                return Ok(None);
+            }
+            let f = self.frames[self.idx].clone();
+            self.idx += 1;
+            Ok(Some(f))
+        }
+        fn stop(&mut self) {
+            self.started = false;
+        }
+    }
+
+    fn mock_capture_factory() -> CaptureFactory {
+        Box::new(|| Ok(Box::new(ReplaySource::new(12, 130))))
+    }
+
+    fn mock_embed_factory() -> EmbedFactory {
+        Box::new(|| Box::new(MockEmbedSource::new(8)))
+    }
+
     fn svc() -> (tempfile::TempDir, ManagerService<StubPolkit>) {
         let (dir, store) = test_store();
-        let svc = ManagerService::new_with_store(StubPolkit, store);
+        let svc = ManagerService::new_with_capture(
+            StubPolkit,
+            store,
+            mock_capture_factory(),
+            mock_embed_factory(),
+        );
         (dir, svc)
     }
 
@@ -1268,5 +1450,290 @@ mod tests {
             matches!(err, ApiError::State(_)),
             "null store commit should error, got {err:?}"
         );
+    }
+
+    // ---- Task 11: real enrollment capture wiring ----
+
+    #[test]
+    fn start_progress_review_finish_full_lifecycle() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        assert!(*svc.emitter_armed.lock().unwrap(), "emitter armed on start");
+
+        let mut last_progress: Option<EnrollmentProgress> = None;
+        for _ in 0..12 {
+            match svc.pump_enrollment(&sid).unwrap() {
+                Some(p) => last_progress = Some(p),
+                None => break,
+            }
+        }
+        let progress = last_progress.expect("at least one progress signal");
+        assert_eq!(progress.session_id, sid);
+        assert!(progress.frames_captured > 0, "frames were captured");
+        assert!(progress.coverage_percent <= 100);
+
+        let sigs = svc.drain_signals();
+        assert!(
+            sigs.iter()
+                .any(|s| matches!(s, ManagerSignal::EnrollmentProgress(_))),
+            "EnrollmentProgress signal emitted during capture"
+        );
+
+        let pid = svc.commit_profile(&peer(1000), &sid).unwrap();
+        assert!(
+            !*svc.emitter_armed.lock().unwrap(),
+            "emitter disarmed on commit"
+        );
+
+        let list = svc.list_profiles(&peer(1000)).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, pid);
+
+        let review = svc.review_profile(&peer(0), 1000, &pid).unwrap();
+        assert_eq!(review.profile_id, pid);
+        assert!(
+            matches!(
+                review.quality,
+                QualityLabel::Low | QualityLabel::Medium | QualityLabel::High
+            ),
+            "review returns coarse label, not a score"
+        );
+    }
+
+    #[test]
+    fn commit_writes_real_templates_from_reservoir() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let pid = svc.commit_profile(&peer(1000), &sid).unwrap();
+
+        let _guard = svc.store_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let entries = svc.store.list_profiles(1000).unwrap();
+        assert_eq!(entries.len(), 1);
+        let templates = &entries[0].templates;
+        assert!(
+            !templates.is_empty(),
+            "commit populates templates from the reservoir"
+        );
+        assert!(templates.len() <= 8, "at most SELECT_N templates stored");
+        assert!(templates[0].is_anchor, "first template is the anchor");
+        for t in templates {
+            assert!(!t.vector.is_empty(), "template vector is populated");
+        }
+    }
+
+    #[test]
+    fn busy_rejects_second_session_for_same_uid() {
+        let (_dir, svc) = svc();
+        let _sid1 = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let err = svc
+            .start_enrollment(&peer(1000), 1000, "alice2")
+            .unwrap_err();
+        assert!(
+            matches!(err, ApiError::SessionBusy(1000)),
+            "second session for same uid rejected, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn cancel_during_capturing_zeroizes_and_disarms() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        for _ in 0..3 {
+            svc.pump_enrollment(&sid).unwrap();
+        }
+        assert!(*svc.emitter_armed.lock().unwrap());
+        svc.cancel_enrollment(&peer(1000), &sid).unwrap();
+        assert!(!*svc.emitter_armed.lock().unwrap(), "emitter off on cancel");
+        assert!(
+            svc.list_profiles(&peer(1000)).unwrap().is_empty(),
+            "no profile written"
+        );
+        let gen = *svc.store_gen.lock().unwrap();
+        assert_eq!(gen, 0, "store generation unchanged on cancel");
+        let sigs = svc.drain_signals();
+        assert!(
+            !sigs
+                .iter()
+                .any(|s| matches!(s, ManagerSignal::EnrollmentCompleted { .. })),
+            "cancel must not emit EnrollmentCompleted"
+        );
+    }
+
+    #[test]
+    fn cancel_after_finish_not_possible_via_wire() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let _pid = svc.commit_profile(&peer(1000), &sid).unwrap();
+        let _ = svc.cancel_enrollment(&peer(1000), &sid);
+        let list = svc.list_profiles(&peer(1000)).unwrap();
+        assert_eq!(
+            list.len(),
+            1,
+            "committed profile survives post-commit cancel"
+        );
+    }
+
+    #[test]
+    fn cancel_unknown_session_is_noop() {
+        let (_dir, svc) = svc();
+        svc.cancel_enrollment(&peer(1000), "sess-nonexistent")
+            .unwrap();
+        assert!(!*svc.emitter_armed.lock().unwrap());
+    }
+
+    #[test]
+    fn disconnect_during_enrollment_cancels_and_disarms() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        for _ in 0..3 {
+            svc.pump_enrollment(&sid).unwrap();
+        }
+        assert!(*svc.emitter_armed.lock().unwrap());
+        svc.handle_disconnect(&peer(1000));
+        assert!(
+            !*svc.emitter_armed.lock().unwrap(),
+            "emitter off on disconnect"
+        );
+        assert!(
+            svc.list_profiles(&peer(1000)).unwrap().is_empty(),
+            "no profile written on disconnect"
+        );
+        let err = svc.pump_enrollment(&sid).unwrap_err();
+        assert!(
+            matches!(err, ApiError::SessionNotFound(_)),
+            "session removed on disconnect"
+        );
+    }
+
+    #[test]
+    fn removal_during_enrollment_preserves_old_profile() {
+        let (_dir, svc) = svc();
+        let sid1 = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let pid1 = svc.commit_profile(&peer(1000), &sid1).unwrap();
+
+        let sid2 = svc.start_enrollment(&peer(1000), 1000, "alice2").unwrap();
+        for _ in 0..3 {
+            svc.pump_enrollment(&sid2).unwrap();
+        }
+        svc.cancel_enrollment(&peer(1000), &sid2).unwrap();
+
+        let list = svc.list_profiles(&peer(1000)).unwrap();
+        assert_eq!(
+            list.len(),
+            1,
+            "old profile preserved after canceling re-enroll"
+        );
+        assert_eq!(list[0].id, pid1);
+    }
+
+    #[test]
+    fn daemon_restart_preserves_committed_profile_loses_in_progress() {
+        let (dir, store) = test_store();
+        let cf = mock_capture_factory();
+        let ef = mock_embed_factory();
+
+        let svc1 = ManagerService::new_with_capture(StubPolkit, store.clone(), cf, ef);
+        let sid1 = svc1.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let pid1 = svc1.commit_profile(&peer(1000), &sid1).unwrap();
+
+        let sid2 = svc1.start_enrollment(&peer(1000), 1000, "alice2").unwrap();
+        for _ in 0..5 {
+            svc1.pump_enrollment(&sid2).unwrap();
+        }
+        drop(svc1);
+
+        let cf2 = mock_capture_factory();
+        let ef2 = mock_embed_factory();
+        let svc2 = ManagerService::new_with_capture(StubPolkit, store, cf2, ef2);
+        let list = svc2.list_profiles(&peer(1000)).unwrap();
+        assert_eq!(list.len(), 1, "committed profile survives restart");
+        assert_eq!(list[0].id, pid1);
+        assert!(
+            svc2.pump_enrollment(&sid2).is_err(),
+            "in-progress session lost on restart"
+        );
+
+        let _ = dir;
+    }
+
+    #[test]
+    fn emitter_off_on_cancel_with_capture() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.pump_enrollment(&sid).unwrap();
+        assert!(*svc.emitter_armed.lock().unwrap());
+        svc.cancel_enrollment(&peer(1000), &sid).unwrap();
+        assert!(!*svc.emitter_armed.lock().unwrap());
+        let st = svc.get_status(&peer(1000)).unwrap();
+        assert!(!st.emitter_armed, "status reflects disarmed emitter");
+    }
+
+    #[test]
+    fn progress_signal_carries_no_biometrics() {
+        let (_dir, svc) = svc();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        svc.pump_enrollment(&sid).unwrap();
+        let sigs = svc.drain_signals();
+        for sig in &sigs {
+            if let ManagerSignal::EnrollmentProgress(p) = sig {
+                let json = serde_json::to_string(p).unwrap();
+                for token in [
+                    "embedding",
+                    "template",
+                    "pixel",
+                    "score",
+                    "0x",
+                    "nonce",
+                    "key",
+                    "threshold",
+                    "vec",
+                ] {
+                    assert!(
+                        !json.to_lowercase().contains(token),
+                        "progress signal leaked `{token}`: {json}"
+                    );
+                }
+                assert!(json.contains("frames_captured"));
+                assert!(json.contains("coverage_percent"));
+            }
+        }
+    }
+
+    #[test]
+    fn review_reflects_template_quality_not_enabled_flag() {
+        let (dir, store) = test_store();
+        let cf: CaptureFactory = Box::new(|| Ok(Box::new(ReplaySource::new(10, 130))));
+        let ef: EmbedFactory = Box::new(|| Box::new(MockEmbedSource::new(8)));
+        let svc = ManagerService::new_with_capture(StubPolkit, store, cf, ef);
+        let sid = svc.start_enrollment(&peer(0), 0, "root").unwrap();
+        let pid = svc.commit_profile(&peer(0), &sid).unwrap();
+
+        let review = svc.review_profile(&peer(0), 0, &pid).unwrap();
+        assert_eq!(
+            review.quality,
+            QualityLabel::High,
+            "high-quality templates → High label"
+        );
+
+        let _ = dir;
+    }
+
+    #[test]
+    fn no_capture_factory_commit_writes_empty_templates() {
+        let (dir, store) = test_store();
+        let svc = ManagerService::new_with_store(StubPolkit, store);
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let pid = svc.commit_profile(&peer(1000), &sid).unwrap();
+        assert_eq!(pid, format!("profile-{sid}"));
+
+        let _guard = svc.store_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let entries = svc.store.list_profiles(1000).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries[0].templates.is_empty(),
+            "no capture → empty templates (backward compat)"
+        );
+
+        let _ = dir;
     }
 }
