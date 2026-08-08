@@ -860,6 +860,25 @@ pub fn filter_log_lines(content: &str) -> String {
             let lower = line.to_lowercase();
             !LOG_FILTER_TERMS.iter().any(|term| lower.contains(term))
         })
+        .map(|line| {
+            let mut result = line.to_string();
+            let mut i = 0;
+            while i < result.len() {
+                let mut run_len = 0;
+                let start_idx = i;
+                while i < result.len() && result.as_bytes()[i].is_ascii_hexdigit() {
+                    run_len += 1;
+                    i += 1;
+                }
+                if run_len >= 32 {
+                    result.replace_range(start_idx..start_idx + run_len, "[redacted]");
+                    i = start_idx + 10;
+                } else {
+                    i += 1;
+                }
+            }
+            result
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
