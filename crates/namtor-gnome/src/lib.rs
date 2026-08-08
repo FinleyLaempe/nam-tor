@@ -20,9 +20,13 @@
 //! and is the only place GTK is constructed.
 
 pub mod client;
+pub mod components;
 pub mod fake;
+pub mod navigation;
 pub mod presenter;
 pub mod privacy;
+pub mod shell;
+pub mod view_model;
 
 #[cfg(feature = "dbus")]
 pub mod dbus_client;
@@ -35,7 +39,8 @@ pub use client::{
     ProfileInfo, QualityLabel, SessionId, StatusInfo,
 };
 pub use fake::{FakeManagerClient, Mode as FakeMode};
-pub use presenter::{
-    after, EnrollmentView, ErrorView, PendingMerge, PendingReplace, PresenterModel,
-    ProfilePresenter, ProfileRowView, QualityView, RecoveryHint,
+pub use presenter::ProfilePresenter;
+pub use view_model::{
+    ErrorView, PendingMerge, PendingReplace, PresenterModel, ProfileRowView, QualityView,
+    RecoveryHint,
 };

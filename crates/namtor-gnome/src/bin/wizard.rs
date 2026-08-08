@@ -118,6 +118,9 @@ fn build_ui(app: &adw::Application) {
         &message_label,
         &model,
     );
+    if model.is_loading {
+        status_label.set_label("Loading...");
+    }
 
     // Periodic refresh: poll enrollment progress while a session is active.
     let enroll_box = enrollment_box.clone();
@@ -247,6 +250,8 @@ fn render(
             },
             status.version.as_deref().unwrap_or("?"),
         ));
+    } else if model.is_loading {
+        status_label.set_label("Loading...");
     } else {
         status_label.set_label("Daemon status unknown");
     }

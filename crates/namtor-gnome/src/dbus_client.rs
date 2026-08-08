@@ -112,11 +112,11 @@ fn map_zbus_error(e: zbus::Error) -> ManagerError {
 
 impl ManagerClient for DbusManagerClient {
     fn list_profiles(&mut self) -> ManagerResult<Vec<ProfileInfo>> {
-        self.call::<Vec<ProfileInfo>, _>("list_profiles", &())
+        self.call::<Vec<ProfileInfo>, _>("ListProfiles", &())
     }
 
     fn create_profile(&mut self, name: &str) -> ManagerResult<SessionId> {
-        let raw: String = self.call::<String, _>("create_profile", &name)?;
+        let raw: String = self.call::<String, _>("StartEnrollment", &name)?;
         Ok(SessionId(raw))
     }
 
