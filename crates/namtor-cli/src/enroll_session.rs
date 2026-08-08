@@ -497,6 +497,7 @@ impl EnrollmentSession {
                     created_at_us: now,
                     schema_version: 1,
                     last_used_us: 0,
+                    extrinsics: None,
                 };
                 ctx.store.merge_profile(ctx.uid, profile, combined)?;
                 self.cancel_inner_zeroize();

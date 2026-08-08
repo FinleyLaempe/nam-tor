@@ -49,6 +49,25 @@ impl Drop for Template {
     }
 }
 
+/// Enrollment-fitted RGB↔IR extrinsics (spec §6.5). Stored with the
+/// enrollment record so the verify engine can run cross-sensor fusion
+/// without re-fitting the transform at auth time. Plain data — no
+/// biometric material, just the geometric transform + fit residual.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExtrinsicsRecord {
+    /// Affine transform coefficients `[a, b, c, d, e, f]`:
+    /// `x' = a*x + b*y + c`, `y' = d*x + e*y + f`.
+    pub affine: [f32; 6],
+    /// Mean L2 residual of the inlier correspondences (pixels).
+    pub residual_mean: f32,
+    /// Max L2 residual of the inlier correspondences (pixels).
+    pub residual_max: f32,
+    /// Number of inlier correspondences used for the final fit.
+    pub inliers: usize,
+    /// Device identity (USB VID:PID or path) recorded at enrollment.
+    pub device_identity: Option<String>,
+}
+
 /// Per-user enrollment metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrollmentMeta {
@@ -61,6 +80,10 @@ pub struct EnrollmentMeta {
     /// Normalisation parameters (z-norm): mean and std of impostor scores.
     pub znorm_mean: Option<f32>,
     pub znorm_std: Option<f32>,
+    /// Enrollment-fitted RGB↔IR extrinsics (spec §6.5). `None` for
+    /// single-sensor enrollment or when fusion is not yet fitted.
+    #[serde(default)]
+    pub extrinsics: Option<ExtrinsicsRecord>,
 }
 
 /// The full on-disk record: metadata + templates.
@@ -108,6 +131,10 @@ pub struct ProfileRecord {
     /// `ProfileInfo.last_used` (seconds).
     #[serde(default)]
     pub last_used_us: u64,
+    /// Enrollment-fitted RGB↔IR extrinsics (spec §6.5). `None` for
+    /// single-sensor enrollment or when fusion is not yet fitted.
+    #[serde(default)]
+    pub extrinsics: Option<ExtrinsicsRecord>,
 }
 
 /// A profile plus the templates enrolled under it.
@@ -154,6 +181,7 @@ mod tests {
                 num_templates: 8,
                 znorm_mean: Some(0.3),
                 znorm_std: Some(0.1),
+                extrinsics: None,
             },
             templates: vec![Template {
                 vector: vec![1.0; 128],

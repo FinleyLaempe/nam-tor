@@ -21,5 +21,6 @@ pub use crypto::{
 };
 pub use store::{StoreError, TemplateStore};
 pub use template::{
-    EnrollmentMeta, ProfileEntry, ProfileId, ProfileRecord, Template, TemplateRecord, UserContainer,
+    EnrollmentMeta, ExtrinsicsRecord, ProfileEntry, ProfileId, ProfileRecord, Template,
+    TemplateRecord, UserContainer,
 };

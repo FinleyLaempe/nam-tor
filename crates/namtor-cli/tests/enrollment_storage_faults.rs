@@ -34,6 +34,7 @@ fn test_record(uid: u32) -> TemplateRecord {
             num_templates: 1,
             znorm_mean: None,
             znorm_std: None,
+            extrinsics: None,
         },
         templates: vec![Template {
             vector: vec![0.5; 128],

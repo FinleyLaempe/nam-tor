@@ -264,6 +264,7 @@ pub fn run_enroll(
             num_templates,
             znorm_mean: None,
             znorm_std: None,
+            extrinsics: None,
         },
         templates,
     };

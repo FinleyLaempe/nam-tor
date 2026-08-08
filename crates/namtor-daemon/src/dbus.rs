@@ -759,6 +759,7 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
             created_at_us: now_us(),
             schema_version: 1,
             last_used_us: 0,
+            extrinsics: None,
         };
         {
             let _guard = lock(&self.store_lock);
@@ -1359,6 +1360,7 @@ mod tests {
             created_at_us: now_us(),
             schema_version: 1,
             last_used_us: 0,
+            extrinsics: None,
         };
         let err = svc
             .store

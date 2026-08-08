@@ -27,6 +27,7 @@
 
 use std::time::Duration;
 
+use namtor_store::ExtrinsicsRecord;
 use serde::{Deserialize, Serialize};
 
 /// Tolerance for the SOF/timestamp pairing (spec §6.5: pairs must be
@@ -202,6 +203,47 @@ impl EnrollmentTransform {
             (Some(recorded), Some(now)) => recorded == now,
             _ => true,
         }
+    }
+}
+
+impl From<&EnrollmentTransform> for ExtrinsicsRecord {
+    fn from(t: &EnrollmentTransform) -> Self {
+        ExtrinsicsRecord {
+            affine: [
+                t.affine.a, t.affine.b, t.affine.c, t.affine.d, t.affine.e, t.affine.f,
+            ],
+            residual_mean: t.residual.mean,
+            residual_max: t.residual.max,
+            inliers: t.residual.inliers,
+            device_identity: t.device_identity.clone(),
+        }
+    }
+}
+
+impl From<ExtrinsicsRecord> for EnrollmentTransform {
+    fn from(r: ExtrinsicsRecord) -> Self {
+        EnrollmentTransform {
+            affine: Affine2D {
+                a: r.affine[0],
+                b: r.affine[1],
+                c: r.affine[2],
+                d: r.affine[3],
+                e: r.affine[4],
+                f: r.affine[5],
+            },
+            residual: ResidualStats {
+                mean: r.residual_mean,
+                max: r.residual_max,
+                inliers: r.inliers,
+            },
+            device_identity: r.device_identity,
+        }
+    }
+}
+
+impl From<&ExtrinsicsRecord> for EnrollmentTransform {
+    fn from(r: &ExtrinsicsRecord) -> Self {
+        EnrollmentTransform::from(r.clone())
     }
 }
 
@@ -857,6 +899,38 @@ mod tests {
         let s = serde_json::to_string(&cfg).expect("ser");
         let back: FusionConfig = serde_json::from_str(&s).expect("de");
         assert_eq!(cfg, back);
+    }
+
+    /// `ExtrinsicsRecord` ↔ `EnrollmentTransform` round-trip preserves all
+    /// fields — the storage layer and the fusion engine agree on the data.
+    #[test]
+    fn extrinsics_record_roundtrip() {
+        let transform = EnrollmentTransform {
+            affine: Affine2D {
+                a: 1.1,
+                b: 0.05,
+                c: 3.0,
+                d: -0.02,
+                e: 0.9,
+                f: 1.5,
+            },
+            residual: ResidualStats {
+                mean: 0.7,
+                max: 1.2,
+                inliers: 6,
+            },
+            device_identity: Some("3277:0018".into()),
+        };
+        let record = ExtrinsicsRecord::from(&transform);
+        assert_eq!(record.affine, [1.1, 0.05, 3.0, -0.02, 0.9, 1.5]);
+        assert_eq!(record.residual_mean, 0.7);
+        assert_eq!(record.residual_max, 1.2);
+        assert_eq!(record.inliers, 6);
+        assert_eq!(record.device_identity.as_deref(), Some("3277:0018"));
+        let back = EnrollmentTransform::from(record);
+        assert_eq!(back.affine, transform.affine);
+        assert_eq!(back.residual, transform.residual);
+        assert_eq!(back.device_identity, transform.device_identity);
     }
 
     /// No biometric material leaks through the serialised `FusionOutcome` —

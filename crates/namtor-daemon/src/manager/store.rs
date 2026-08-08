@@ -260,6 +260,7 @@ mod tests {
             created_at_us: 1,
             schema_version: 1,
             last_used_us: 0,
+            extrinsics: None,
         }
     }
 

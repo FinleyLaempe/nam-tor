@@ -589,6 +589,7 @@ fn legacy_to_container(record: TemplateRecord) -> UserContainer {
                 created_at_us: record.meta.created_at_us,
                 schema_version: 1,
                 last_used_us: 0,
+                extrinsics: record.meta.extrinsics.clone(),
             },
             templates: record.templates,
         }],
@@ -611,6 +612,7 @@ mod tests {
                 num_templates: 1,
                 znorm_mean: None,
                 znorm_std: None,
+                extrinsics: None,
             },
             templates: vec![Template {
                 vector: vec![0.5; 128],
@@ -630,6 +632,7 @@ mod tests {
             created_at_us: 1,
             schema_version: 1,
             last_used_us: 0,
+            extrinsics: None,
         }
     }
 

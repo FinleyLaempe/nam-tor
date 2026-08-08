@@ -24,6 +24,10 @@ use namtor_recog::{normalize_score_scalar, RecognitionPipeline};
 use namtor_store::{StoreError, TemplateStore};
 use namtor_worker::WorkerError;
 
+use crate::fusion::{
+    geometric_identity_check, EnrollmentTransform, FusionEngine, FusionOutcome, GeometricResult,
+    RejectReason,
+};
 use crate::DaemonError;
 
 /// Default cosine-similarity match threshold. Spec §6.6 Tier 3: the threshold
@@ -40,6 +44,7 @@ pub struct VerifyEngine {
     store: TemplateStore,
     pad_config: PadConfig,
     match_threshold: f32,
+    fusion: Option<FusionEngine>,
 }
 
 /// Outcome of a single verify attempt.
@@ -107,6 +112,86 @@ impl VerifyOutcome {
     }
 }
 
+/// Cross-sensor fusion input: the RGB face bounding box + embedding produced
+/// by running the recognition pipeline on the paired RGB frame. Passed to
+/// [`apply_fusion`] alongside the IR outcome.
+#[derive(Debug, Clone)]
+pub struct RgbFusionInput {
+    /// RGB face bounding box `(x, y, w, h)` in the RGB frame (pixels).
+    pub face_box: (f32, f32, f32, f32),
+    /// L2-normalised RGB embedding.
+    pub embedding: Vec<f32>,
+}
+
+/// Bundled fusion context for [`VerifyEngine::verify_pair`]: the engine,
+/// the enrollment-fitted transform, and the optional RGB sensor data.
+/// `None` means no fusion is available (IR-only path).
+#[derive(Clone)]
+struct FusionContext<'a> {
+    engine: &'a FusionEngine,
+    extrinsics: &'a EnrollmentTransform,
+    rgb: Option<&'a RgbFusionInput>,
+}
+
+/// Apply cross-sensor RGB↔IR fusion to an IR verify outcome (spec §6.5).
+///
+/// Fusion may only veto a match, never rescue a non-match. When the IR path
+/// already returned `NoMatch`/`Unavailable`/`Refused`/`RateLimited`, the
+/// outcome is returned unchanged — fusion cannot upgrade it.
+///
+/// When the IR path returned `Match`:
+/// - No extrinsics or no RGB data → IR-only fallback (outcome unchanged).
+/// - Geometric identity check `Reject` → downgrade to `NoMatch` (split spoof:
+///   the RGB face is not where the enrollment transform predicts).
+/// - Geometric identity check `Invalid` → IR-only fallback (degenerate
+///   transform or bad box — fail closed by NOT fusing, but the IR match
+///   stands because the geometric check is unusable, not negative).
+/// - `FusionEngine::evaluate` `Rejected` → downgrade to `NoMatch`
+///   (cross-modal mismatch: IR and RGB see different faces).
+/// - `FusionEngine::evaluate` `Fused` → `Match` stands (cross-modal
+///   consistency confirms the IR match; the score is unchanged because the
+///   gallery match is already the IR score).
+/// - `FusionEngine::evaluate` `IrOnly` → `Match` stands (darkness or no RGB
+///   face — reduced protection, but the IR/PAD bar already covers this).
+pub fn apply_fusion(
+    ir_outcome: &VerifyOutcome,
+    ir_face_box: (f32, f32, f32, f32),
+    ir_embedding: &[f32],
+    rgb: Option<&RgbFusionInput>,
+    fusion: Option<&FusionEngine>,
+    extrinsics: Option<&EnrollmentTransform>,
+) -> VerifyOutcome {
+    if ir_outcome.verdict != Verdict::Match {
+        return ir_outcome.clone();
+    }
+    let (engine, transform) = match (fusion, extrinsics) {
+        (Some(e), Some(t)) => (e, t),
+        _ => return ir_outcome.clone(),
+    };
+    let rgb = match rgb {
+        Some(r) => r,
+        None => return ir_outcome.clone(),
+    };
+    match geometric_identity_check(
+        ir_face_box,
+        rgb.face_box,
+        &transform.affine,
+        engine.config().geometric_tolerance,
+    ) {
+        GeometricResult::Reject => VerifyOutcome::no_match("fusion: geometric mismatch"),
+        GeometricResult::Invalid => ir_outcome.clone(),
+        GeometricResult::Accept => {
+            let outcome = engine.evaluate(ir_embedding, Some(&rgb.embedding), transform, false);
+            match outcome {
+                FusionOutcome::Rejected {
+                    reason: RejectReason::CrossModalMismatch,
+                } => VerifyOutcome::no_match("fusion: cross-modal mismatch"),
+                FusionOutcome::Fused { .. } | FusionOutcome::IrOnly { .. } => ir_outcome.clone(),
+            }
+        }
+    }
+}
+
 impl VerifyEngine {
     pub fn new(
         yunet_path: &Path,
@@ -121,6 +206,7 @@ impl VerifyEngine {
             store,
             pad_config: PadConfig::default(),
             match_threshold: DEFAULT_MATCH_THRESHOLD,
+            fusion: None,
         })
     }
 
@@ -131,6 +217,11 @@ impl VerifyEngine {
 
     pub fn with_pad_config(mut self, cfg: PadConfig) -> Self {
         self.pad_config = cfg;
+        self
+    }
+
+    pub fn with_fusion(mut self, engine: FusionEngine) -> Self {
+        self.fusion = Some(engine);
         self
     }
 
@@ -156,7 +247,21 @@ impl VerifyEngine {
             return VerifyOutcome::no_match("empty enrollment");
         }
 
-        // 2. Capture frame pairs and attempt authentication.
+        // 2. Build fusion engine from enrollment extrinsics if present.
+        let fusion_engine = self.fusion.clone().or_else(|| {
+            record.meta.extrinsics.as_ref().map(|ext| {
+                let transform = EnrollmentTransform::from(ext);
+                FusionEngine::new(crate::fusion::FusionConfig {
+                    enrollment_transform: Some(transform.clone()),
+                    ..crate::fusion::FusionConfig::default()
+                })
+            })
+        });
+        let extrinsics = fusion_engine
+            .as_ref()
+            .and_then(|e| e.config().enrollment_transform.clone());
+
+        // 3. Capture frame pairs and attempt authentication.
         let mut last_on_frame: Option<Frame> = None;
         let mut last_off_frame: Option<Frame> = None;
         let mut last_outcome = VerifyOutcome::no_match("timeout");
@@ -188,12 +293,21 @@ impl VerifyEngine {
             // When we have a pair, run the full pipeline.
             if let (Some(on), Some(off)) = (&last_on_frame, &last_off_frame) {
                 let (on, off) = illuminated_first(on, off);
+                let fusion_ctx = match (&fusion_engine, &extrinsics) {
+                    (Some(e), Some(t)) => Some(FusionContext {
+                        engine: e,
+                        extrinsics: t,
+                        rgb: None,
+                    }),
+                    _ => None,
+                };
                 let outcome = self.verify_pair(
                     on,
                     off,
                     &record.templates,
                     &record.meta.znorm_mean,
                     &record.meta.znorm_std,
+                    fusion_ctx,
                 );
                 if outcome.verdict == Verdict::Match || outcome.verdict == Verdict::Refused {
                     return outcome;
@@ -208,7 +322,10 @@ impl VerifyEngine {
         last_outcome
     }
 
-    /// Run the full pipeline on a single On/Off frame pair.
+    /// Run the full pipeline on a single On/Off frame pair, optionally with
+    /// cross-sensor fusion (spec §6.5). When `fusion` + `extrinsics` + `rgb`
+    /// are all present, [`apply_fusion`] may veto an IR match that the RGB
+    /// sensor contradicts (split-spoof detection).
     fn verify_pair(
         &mut self,
         on: &Frame,
@@ -216,6 +333,7 @@ impl VerifyEngine {
         templates: &[namtor_store::Template],
         znorm_mean: &Option<f32>,
         znorm_std: &Option<f32>,
+        fusion: Option<FusionContext<'_>>,
     ) -> VerifyOutcome {
         let w = on.width;
         let h = on.height;
@@ -265,11 +383,31 @@ impl VerifyEngine {
         let normalized = normalize_score_scalar(best_score, *znorm_mean, *znorm_std);
 
         // 6. Threshold.
-        if normalized >= self.match_threshold {
+        let ir_outcome = if normalized >= self.match_threshold {
             VerifyOutcome::match_(normalized)
         } else {
-            VerifyOutcome::no_match("below threshold")
-        }
+            return VerifyOutcome::no_match("below threshold");
+        };
+
+        // 7. Cross-sensor fusion (spec §6.5). May veto an IR match.
+        let ir_face_box = (
+            result.detection.box_.x,
+            result.detection.box_.y,
+            result.detection.box_.w,
+            result.detection.box_.h,
+        );
+        let ctx = match fusion {
+            Some(c) => c,
+            None => return ir_outcome,
+        };
+        apply_fusion(
+            &ir_outcome,
+            ir_face_box,
+            &result.embedding.vector,
+            ctx.rgb,
+            Some(ctx.engine),
+            Some(ctx.extrinsics),
+        )
     }
 }
 
@@ -621,5 +759,202 @@ mod tests {
             fn stop(&mut self) {}
         }
         let _ = StubSource;
+    }
+
+    // ── Cross-sensor fusion integration tests (spec §6.5) ──
+
+    use crate::fusion::{Affine2D, EnrollmentTransform, FusionConfig, FusionEngine, ResidualStats};
+
+    fn test_transform() -> EnrollmentTransform {
+        EnrollmentTransform {
+            affine: Affine2D::IDENTITY,
+            residual: ResidualStats {
+                mean: 0.5,
+                max: 1.0,
+                inliers: 5,
+            },
+            device_identity: Some("3277:0018".into()),
+        }
+    }
+
+    fn test_fusion_engine() -> FusionEngine {
+        FusionEngine::new(FusionConfig {
+            enrollment_transform: Some(test_transform()),
+            ..FusionConfig::default()
+        })
+    }
+
+    fn rgb_input(face_box: (f32, f32, f32, f32), embedding: Vec<f32>) -> RgbFusionInput {
+        RgbFusionInput {
+            face_box,
+            embedding,
+        }
+    }
+
+    /// IR Match + RGB agrees (same embedding, co-located face) → Match stands.
+    #[test]
+    fn fusion_accepts_genuine_pair() {
+        let ir_outcome = VerifyOutcome::match_(0.9);
+        let ir_face = (100.0, 100.0, 40.0, 40.0);
+        let embedding = vec![0.5_f32; 128];
+        let rgb = rgb_input(ir_face, embedding.clone());
+        let engine = test_fusion_engine();
+        let extrinsics = test_transform();
+        let result = apply_fusion(
+            &ir_outcome,
+            ir_face,
+            &embedding,
+            Some(&rgb),
+            Some(&engine),
+            Some(&extrinsics),
+        );
+        assert_eq!(result.verdict, Verdict::Match);
+        assert!((result.score - 0.9).abs() < 1e-5);
+    }
+
+    /// IR Match + RGB disagrees (different embedding) → NoMatch (split spoof).
+    #[test]
+    fn fusion_rejects_split_spoof() {
+        let ir_outcome = VerifyOutcome::match_(0.9);
+        let ir_face = (100.0, 100.0, 40.0, 40.0);
+        let ir_embedding = vec![0.0_f32; 128];
+        let mut ir_emb = ir_embedding.clone();
+        ir_emb[0] = 1.0;
+        let mut rgb_emb = vec![0.0_f32; 128];
+        rgb_emb[1] = 1.0;
+        let rgb = rgb_input(ir_face, rgb_emb);
+        let engine = test_fusion_engine();
+        let extrinsics = test_transform();
+        let result = apply_fusion(
+            &ir_outcome,
+            ir_face,
+            &ir_emb,
+            Some(&rgb),
+            Some(&engine),
+            Some(&extrinsics),
+        );
+        assert_eq!(result.verdict, Verdict::NoMatch);
+    }
+
+    /// IR Match + RGB face shifted → NoMatch (geometric mismatch).
+    #[test]
+    fn fusion_rejects_geometric_mismatch() {
+        let ir_outcome = VerifyOutcome::match_(0.9);
+        let ir_face = (100.0, 100.0, 40.0, 40.0);
+        let rgb_face = (200.0, 100.0, 40.0, 40.0);
+        let embedding = vec![0.5_f32; 128];
+        let rgb = rgb_input(rgb_face, embedding.clone());
+        let engine = test_fusion_engine();
+        let extrinsics = test_transform();
+        let result = apply_fusion(
+            &ir_outcome,
+            ir_face,
+            &embedding,
+            Some(&rgb),
+            Some(&engine),
+            Some(&extrinsics),
+        );
+        assert_eq!(result.verdict, Verdict::NoMatch);
+    }
+
+    /// IR Match + no RGB data → IR-only fallback (Match stands).
+    #[test]
+    fn fusion_falls_back_when_no_rgb() {
+        let ir_outcome = VerifyOutcome::match_(0.9);
+        let ir_face = (100.0, 100.0, 40.0, 40.0);
+        let embedding = vec![0.5_f32; 128];
+        let engine = test_fusion_engine();
+        let extrinsics = test_transform();
+        let result = apply_fusion(
+            &ir_outcome,
+            ir_face,
+            &embedding,
+            None,
+            Some(&engine),
+            Some(&extrinsics),
+        );
+        assert_eq!(result.verdict, Verdict::Match);
+    }
+
+    /// IR Match + no extrinsics → IR-only fallback (Match stands).
+    #[test]
+    fn fusion_falls_back_when_no_extrinsics() {
+        let ir_outcome = VerifyOutcome::match_(0.9);
+        let ir_face = (100.0, 100.0, 40.0, 40.0);
+        let embedding = vec![0.5_f32; 128];
+        let rgb = rgb_input(ir_face, embedding.clone());
+        let result = apply_fusion(&ir_outcome, ir_face, &embedding, Some(&rgb), None, None);
+        assert_eq!(result.verdict, Verdict::Match);
+    }
+
+    /// IR NoMatch + RGB present → still NoMatch (fusion cannot rescue).
+    #[test]
+    fn fusion_cannot_rescue_nomatch() {
+        let ir_outcome = VerifyOutcome::no_match("below threshold");
+        let ir_face = (100.0, 100.0, 40.0, 40.0);
+        let embedding = vec![0.5_f32; 128];
+        let rgb = rgb_input(ir_face, embedding.clone());
+        let engine = test_fusion_engine();
+        let extrinsics = test_transform();
+        let result = apply_fusion(
+            &ir_outcome,
+            ir_face,
+            &embedding,
+            Some(&rgb),
+            Some(&engine),
+            Some(&extrinsics),
+        );
+        assert_eq!(result.verdict, Verdict::NoMatch);
+    }
+
+    /// IR Unavailable + fusion present → still Unavailable.
+    #[test]
+    fn fusion_preserves_unavailable() {
+        let ir_outcome = VerifyOutcome::unavailable("store error");
+        let ir_face = (100.0, 100.0, 40.0, 40.0);
+        let embedding = vec![0.5_f32; 128];
+        let rgb = rgb_input(ir_face, embedding.clone());
+        let engine = test_fusion_engine();
+        let extrinsics = test_transform();
+        let result = apply_fusion(
+            &ir_outcome,
+            ir_face,
+            &embedding,
+            Some(&rgb),
+            Some(&engine),
+            Some(&extrinsics),
+        );
+        assert_eq!(result.verdict, Verdict::Unavailable);
+    }
+
+    /// Proves fusion IMPROVES matching: an IR-only path would Match a split
+    /// spoof (IR face matches gallery), but the fused path catches the
+    /// cross-modal disagreement and downgrades to NoMatch.
+    #[test]
+    fn fusion_improves_over_single_spectrum() {
+        let ir_only = VerifyOutcome::match_(0.9);
+        assert_eq!(ir_only.verdict, Verdict::Match);
+
+        let ir_face = (100.0, 100.0, 40.0, 40.0);
+        let mut ir_emb = vec![0.0_f32; 128];
+        ir_emb[0] = 1.0;
+        let mut rgb_emb = vec![0.0_f32; 128];
+        rgb_emb[1] = 1.0;
+        let rgb = rgb_input(ir_face, rgb_emb);
+        let engine = test_fusion_engine();
+        let extrinsics = test_transform();
+        let fused = apply_fusion(
+            &ir_only,
+            ir_face,
+            &ir_emb,
+            Some(&rgb),
+            Some(&engine),
+            Some(&extrinsics),
+        );
+        assert_eq!(
+            fused.verdict,
+            Verdict::NoMatch,
+            "fusion must catch the split spoof that IR-only accepts"
+        );
     }
 }
