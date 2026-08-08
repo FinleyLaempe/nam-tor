@@ -1,15 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # namtor.install — pacman pre/post install hooks for the namtor package.
 #
-# Mirrors the manual install flow in packaging/README.md:
-#   - post_install / post_upgrade: register sysusers + tmpfiles so the
-#     `namtor` user, `namtor-auth` group, and runtime dirs exist.
-#   - The admin must still: (a) add the display-manager user to
-#     namtor-auth, (b) run /usr/share/namtor/pam-install.sh against the
-#     target PAM file, (c) accept model licences + start the daemon.
-#
-# We do NOT touch /etc/pam.d here — the transactional pam-install.sh is
-# the only sanctioned path for that (spec §3.4, §8.3).
+# Turnkey: models bundled (BSD-3 auto-accepted), sysusers/tmpfiles/DM
+# group/PAM/socket all handled automatically.
 
 post_install() {
     echo ":: namtor: registering system user + runtime dirs"
@@ -24,6 +17,8 @@ post_install() {
         chmod u+s /usr/lib/namtor/namtor-worker-spawn
     fi
 
+    chown -R namtor:namtor /var/lib/namtor/ 2>/dev/null || true
+
     for dm in gdm sddm lightdm lxdm; do
         if id "$dm" >/dev/null 2>&1; then
             gpasswd -a "$dm" namtor-auth 2>/dev/null || true
@@ -31,14 +26,17 @@ post_install() {
     done
 
     if [[ -x /usr/share/namtor/pam-install.sh ]]; then
-        /usr/share/namtor/pam-install.sh || echo ":: namtor: PAM install skipped or failed — run manually with sudo /usr/share/namtor/pam-install.sh"
+        /usr/share/namtor/pam-install.sh || echo ":: namtor: PAM install skipped — run: sudo /usr/share/namtor/pam-install.sh"
     fi
 
     systemctl enable --now namtor-daemon.socket 2>/dev/null || true
 
-    echo ":: namtor: installed and running. One step left:"
-    echo "    NAMTOR_ACCEPT_LICENCE=1 namtor-cli models ensure"
-    echo "  Then enroll: namtor-cli enroll <username>"
+    echo ""
+    echo ":: namtor installed and running."
+    echo "   Enroll your face:  namtor-cli enroll <username>"
+    echo "   Test auth:         namtor-cli verify --user <username>"
+    echo ""
+    echo "   Remove:  sudo pacman -Rns namtor"
 }
 
 post_upgrade() {

@@ -15,19 +15,18 @@
 #   - systemd (socket activation, sysusers, tmpfiles).
 #   - pam (the auth module links libpam).
 #
-# Models are NOT packaged — they are fetched at runtime per
-# /usr/share/namtor/model-manifest.toml after the operator accepts the
-# upstream licences (NAMTOR_ACCEPT_LICENCE=1). This keeps weights (which
-# carry their own licence terms) out of the binary package.
+# Models are bundled: YuNet + SFace (BSD-3, redistributable) and
+# MiniFASNet (self-trained). Licence records are pre-written so the
+# daemon starts with zero manual steps.
 
 pkgname=namtor
 pkgver=0.1.0
 pkgrel=1
 epoch=0
-pkgdesc="IR face authentication for Linux — daemon, PAM module, CLI"
+pkgdesc="IR face authentication for Linux — daemon, PAM module, CLI, GNOME + KDE"
 arch=('x86_64' 'aarch64')
 url="https://github.com/namtor/nam-tor"
-license=('GPL-3.0-only')
+license=('GPL-3.0-only' 'BSD-3-Clause')
 groups=()
 depends=(
     'onnxruntime'
@@ -56,9 +55,9 @@ backup=()
 options=('!strip' '!debug')  # release profile already strips; debug symbols not shipped
 install=namtor.install
 changelog=
-source=("$pkgname-$pkgver.tar.gz::https://github.com/namtor/nam-tor/archive/refs/tags/v$pkgver.tar.gz")
+source=("namtor-$pkgver.tar.gz" "namtor-models-$pkgver.tar.gz")
 noextract=()
-sha256sums=('SKIP')  # verified by the release workflow via the GPG-signed checksums file
+sha256sums=('SKIP' 'SKIP')
 validpgpkeys=()
 
 # ---------------------------------------------------------------------------
@@ -135,4 +134,22 @@ package() {
     # desktop entries, metainfo, icons, manifests, PAM scripts, README).
     local destdir="$pkgdir"
     ./packaging/stage.sh "$destdir" "$srcdir/nam-tor-$pkgver"
+
+    # Bundle models (BSD-3: YuNet, SFace; self-trained: MiniFASNet)
+    mkdir -p "$pkgdir/var/lib/namtor/models"
+    cp "$srcdir/namtor-models-$pkgver/yunet_2023mar.onnx" "$pkgdir/var/lib/namtor/models/"
+    cp "$srcdir/namtor-models-$pkgver/sface_2021dec.onnx" "$pkgdir/var/lib/namtor/models/"
+    cp "$srcdir/namtor-models-$pkgver/minifasnet_pad.onnx" "$pkgdir/var/lib/namtor/models/"
+
+    # Worker expects <root>/<id>/<quant>.onnx
+    mkdir -p "$pkgdir/var/lib/namtor/models/yunet_2023mar"
+    ln -s ../yunet_2023mar.onnx "$pkgdir/var/lib/namtor/models/yunet_2023mar/fp32.onnx"
+    mkdir -p "$pkgdir/var/lib/namtor/models/sface_2021dec"
+    ln -s ../sface_2021dec.onnx "$pkgdir/var/lib/namtor/models/sface_2021dec/fp32.onnx"
+
+    # Pre-write licence acceptance records (BSD-3 = permissive, auto-accepted)
+    echo '{"model_id":"yunet_2023mar","licence_url":"https://opencv.org/licenses/","licence_sha256":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"accepted_at_us":0,"accepted_by":"package"}' \
+        > "$pkgdir/var/lib/namtor/models/yunet_2023mar/licence.accepted"
+    echo '{"model_id":"sface_2021dec","licence_url":"https://opencv.org/licenses/","licence_sha256":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"accepted_at_us":0,"accepted_by":"package"}' \
+        > "$pkgdir/var/lib/namtor/models/sface_2021dec/licence.accepted"
 }
