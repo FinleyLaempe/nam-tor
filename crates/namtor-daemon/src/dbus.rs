@@ -103,17 +103,28 @@ pub struct ReviewOutcome {
 }
 
 /// Identity of a D-Bus peer, resolved from `SO_PEERCRED` + `/proc/<pid>/cmdline`.
+///
+/// `bus_name` is the unique D-Bus connection name (e.g. `:1.42`) from the
+/// message header — set by the bus daemon, not forgeable by the peer. It is
+/// required as the polkit subject when checking authorization against the real
+/// `org.freedesktop.PolicyKit1.Authority`. An empty `bus_name` means the
+/// sender vanished (or the identity was built from raw socket credentials
+/// without a bus context) and polkit checks fail closed (`Denied`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerIdentity {
     pub uid: u32,
     pub pid: i32,
     pub cmdline: String,
+    pub bus_name: String,
 }
 
 impl PeerIdentity {
     /// Build a peer identity from socket credentials. Reads `/proc/<pid>/cmdline`
     /// on a best-effort basis (Linux only); a missing or unreadable cmdline is
-    /// represented as an empty string rather than an error.
+    /// represented as an empty string rather than an error. `bus_name` is empty
+    /// — this constructor is for the PAM socket path where there is no D-Bus
+    /// sender. The bus service (task 9) populates `bus_name` from the message
+    /// header.
     pub fn from_creds(c: &PeerCreds) -> Self {
         let cmdline = std::fs::read(format!("/proc/{}/cmdline", c.pid))
             .ok()
@@ -129,6 +140,7 @@ impl PeerIdentity {
             uid: c.uid,
             pid: c.pid,
             cmdline,
+            bus_name: String::new(),
         }
     }
 }
@@ -146,24 +158,13 @@ pub trait PolkitAuthority {
     fn check(&self, action: &str, peer: &PeerIdentity, target_uid: u32) -> AuthzDecision;
 }
 
-/// Stub polkit authority: root is admin, self-enrollment is allowed for own uid,
-/// everything else is denied. Sufficient for the in-memory reference impl.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SystemPolkit;
+/// Real polkit authority backed by `org.freedesktop.PolicyKit1.Authority` on the
+/// system bus. See [`crate::manager::polkit`] for the full implementation.
+pub use crate::manager::polkit::SystemPolkit;
 
-impl PolkitAuthority for SystemPolkit {
-    fn check(&self, action: &str, peer: &PeerIdentity, target_uid: u32) -> AuthzDecision {
-        let admin = peer.uid == 0;
-        match action {
-            action::ENROLL_SELF if peer.uid == target_uid => AuthzDecision::Allowed,
-            action::ENROLL_SELF if admin => AuthzDecision::Allowed,
-            action::ENROLL_OTHER | action::DELETE | action::CONFIGURE if admin => {
-                AuthzDecision::Allowed
-            }
-            _ => AuthzDecision::Denied,
-        }
-    }
-}
+/// Stub polkit authority for tests that exercise D-Bus mechanics and profile
+/// persistence, not real authorization. See [`crate::manager::polkit`].
+pub use crate::manager::polkit::StubPolkit;
 
 /// API-level error, mapped to `DaemonError` at the boundary.
 #[derive(Debug, thiserror::Error)]
@@ -719,6 +720,7 @@ mod tests {
             uid,
             pid: 1,
             cmdline: "test".into(),
+            bus_name: format!(":1.{}", uid),
         }
     }
 
@@ -728,9 +730,9 @@ mod tests {
         (dir, Arc::new(TemplateProfileStore::new(Arc::new(ts))))
     }
 
-    fn svc() -> (tempfile::TempDir, ManagerService<SystemPolkit>) {
+    fn svc() -> (tempfile::TempDir, ManagerService<StubPolkit>) {
         let (dir, store) = test_store();
-        let svc = ManagerService::new_with_store(SystemPolkit, store);
+        let svc = ManagerService::new_with_store(StubPolkit, store);
         (dir, svc)
     }
 
@@ -1017,13 +1019,13 @@ mod tests {
     fn restart_persistence_across_manager_instances() {
         let (dir, store) = test_store();
 
-        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let svc1 = ManagerService::new_with_store(StubPolkit, store.clone());
         let sid = svc1.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         let pid = svc1.commit_profile(&peer(1000), &sid).unwrap();
 
         drop(svc1);
 
-        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let svc2 = ManagerService::new_with_store(StubPolkit, store);
         let list = svc2.list_profiles(&peer(1000)).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, pid);
@@ -1075,7 +1077,7 @@ mod tests {
     fn corrupt_store_errors_gracefully() {
         let (dir, store) = test_store();
 
-        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let svc1 = ManagerService::new_with_store(StubPolkit, store.clone());
         let sid = svc1.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         svc1.commit_profile(&peer(1000), &sid).unwrap();
         drop(svc1);
@@ -1089,7 +1091,7 @@ mod tests {
         }
         std::fs::write(&path, &data).unwrap();
 
-        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let svc2 = ManagerService::new_with_store(StubPolkit, store);
         let err = svc2.list_profiles(&peer(1000)).unwrap_err();
         assert!(
             matches!(err, ApiError::State(_) | ApiError::Io(_)),
@@ -1168,13 +1170,13 @@ mod tests {
     fn rename_persists_across_restart() {
         let (dir, store) = test_store();
 
-        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let svc1 = ManagerService::new_with_store(StubPolkit, store.clone());
         let sid = svc1.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         let pid = svc1.commit_profile(&peer(1000), &sid).unwrap();
         svc1.rename_profile(&peer(0), 1000, &pid, "Alice").unwrap();
         drop(svc1);
 
-        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let svc2 = ManagerService::new_with_store(StubPolkit, store);
         let list = svc2.list_profiles(&peer(1000)).unwrap();
         assert_eq!(list[0].name, "Alice");
 
@@ -1185,13 +1187,13 @@ mod tests {
     fn enable_disable_persists_across_restart() {
         let (dir, store) = test_store();
 
-        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let svc1 = ManagerService::new_with_store(StubPolkit, store.clone());
         let sid = svc1.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         let pid = svc1.commit_profile(&peer(1000), &sid).unwrap();
         svc1.enable_profile(&peer(0), 1000, &pid, false).unwrap();
         drop(svc1);
 
-        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let svc2 = ManagerService::new_with_store(StubPolkit, store);
         let list = svc2.list_profiles(&peer(1000)).unwrap();
         assert!(!list[0].enabled, "disabled state persists");
 
@@ -1202,13 +1204,13 @@ mod tests {
     fn delete_persists_across_restart() {
         let (dir, store) = test_store();
 
-        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let svc1 = ManagerService::new_with_store(StubPolkit, store.clone());
         let sid = svc1.start_enrollment(&peer(1000), 1000, "alice").unwrap();
         let pid = svc1.commit_profile(&peer(1000), &sid).unwrap();
         svc1.delete_profile(&peer(0), 1000, &pid).unwrap();
         drop(svc1);
 
-        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let svc2 = ManagerService::new_with_store(StubPolkit, store);
         assert!(svc2.list_profiles(&peer(1000)).unwrap().is_empty());
 
         let _ = dir;
@@ -1218,7 +1220,7 @@ mod tests {
     fn merge_persists_across_restart() {
         let (dir, store) = test_store();
 
-        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let svc1 = ManagerService::new_with_store(StubPolkit, store.clone());
         let sid_a = svc1.start_enrollment(&peer(0), 0, "a").unwrap();
         let pid_a = svc1.commit_profile(&peer(0), &sid_a).unwrap();
         let sid_b = svc1.start_enrollment(&peer(0), 0, "b").unwrap();
@@ -1226,7 +1228,7 @@ mod tests {
         svc1.merge_profiles(&peer(0), 0, &pid_a, &pid_b).unwrap();
         drop(svc1);
 
-        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let svc2 = ManagerService::new_with_store(StubPolkit, store);
         let list = svc2.list_profiles(&peer(0)).unwrap();
         assert_eq!(list.len(), 1, "merge persisted: src removed, dst remains");
         assert_eq!(list[0].id, pid_b);
@@ -1238,13 +1240,13 @@ mod tests {
     fn replace_persists_across_restart() {
         let (dir, store) = test_store();
 
-        let svc1 = ManagerService::new_with_store(SystemPolkit, store.clone());
+        let svc1 = ManagerService::new_with_store(StubPolkit, store.clone());
         let sid = svc1.start_enrollment(&peer(1000), 1000, "old").unwrap();
         let pid = svc1.commit_profile(&peer(1000), &sid).unwrap();
         svc1.replace_profile(&peer(0), 1000, &pid, "new").unwrap();
         drop(svc1);
 
-        let svc2 = ManagerService::new_with_store(SystemPolkit, store);
+        let svc2 = ManagerService::new_with_store(StubPolkit, store);
         let list = svc2.list_profiles(&peer(1000)).unwrap();
         assert_eq!(list[0].name, "new");
 
@@ -1253,13 +1255,13 @@ mod tests {
 
     #[test]
     fn null_store_list_returns_empty() {
-        let svc = ManagerService::new(SystemPolkit);
+        let svc = ManagerService::new(StubPolkit);
         assert!(svc.list_profiles(&peer(1000)).unwrap().is_empty());
     }
 
     #[test]
     fn null_store_commit_errors() {
-        let svc = ManagerService::new(SystemPolkit);
+        let svc = ManagerService::new(StubPolkit);
         let sid = svc.start_enrollment(&peer(0), 0, "root").unwrap();
         let err = svc.commit_profile(&peer(0), &sid).unwrap_err();
         assert!(

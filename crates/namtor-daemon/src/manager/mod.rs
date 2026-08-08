@@ -3,4 +3,5 @@
 
 pub mod bus;
 pub mod contract;
+pub mod polkit;
 pub mod store;

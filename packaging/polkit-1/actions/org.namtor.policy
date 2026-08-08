@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+
+<policyconfig>
+
+  <vendor>Nam-tor</vendor>
+  <vendor_url>https://github.com/nam-tor/nam-tor</vendor_url>
+
+  <!-- Enroll one's own face template. Safe by default — a user is always
+       allowed to enroll their own biometric profile. -->
+  <action id="org.namtor.enroll-self">
+    <description>Enroll own face profile</description>
+    <message>Authentication is required to enroll your own face profile.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>yes</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <!-- Enroll a face template for a different user. Requires admin auth and
+       is retained for the session (auth_admin_keep). -->
+  <action id="org.namtor.enroll-other">
+    <description>Enroll another user's face profile</description>
+    <message>Authentication is required to enroll a face profile for another user.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <!-- Delete a face profile. Destructive — requires admin auth, retained. -->
+  <action id="org.namtor.delete">
+    <description>Delete a face profile</description>
+    <message>Authentication is required to delete a face profile.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <!-- Configure profile settings (rename, enable/disable, review, merge,
+       replace). Requires admin auth, retained. -->
+  <action id="org.namtor.configure">
+    <description>Configure face profile settings</description>
+    <message>Authentication is required to configure face profile settings.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+</policyconfig>

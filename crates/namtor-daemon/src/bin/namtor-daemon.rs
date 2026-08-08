@@ -205,7 +205,10 @@ fn start_manager_bus(
         }
     };
     let profile_store: Arc<dyn ProfileStore> = Arc::new(TemplateProfileStore::new(store));
-    let svc = Arc::new(ManagerService::new_with_store(SystemPolkit, profile_store));
+    let svc = Arc::new(ManagerService::new_with_store(
+        SystemPolkit::default(),
+        profile_store,
+    ));
     match ManagerBusService::start_system(svc) {
         Ok(bus) => Some(bus),
         Err(e) => {

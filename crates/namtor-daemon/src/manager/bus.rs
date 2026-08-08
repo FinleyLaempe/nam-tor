@@ -79,6 +79,7 @@ impl ManagerIface {
             uid,
             pid,
             cmdline: String::new(),
+            bus_name: sender.as_str().to_string(),
         })
     }
 
@@ -423,7 +424,7 @@ mod tests {
     use zbus::blocking::fdo::IntrospectableProxy;
 
     fn new_svc() -> Arc<Svc> {
-        Arc::new(ManagerService::new(SystemPolkit))
+        Arc::new(ManagerService::new(SystemPolkit::for_testing()))
     }
 
     /// p2p introspection must declare the frozen method/signal/property set.

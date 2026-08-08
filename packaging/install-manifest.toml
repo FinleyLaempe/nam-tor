@@ -176,6 +176,23 @@ group = "root"
 symlink = false
 
 # ---------------------------------------------------------------------------
+# Polkit policy definitions
+# ---------------------------------------------------------------------------
+[[dirs]]
+path = "/usr/share/polkit-1/actions"
+mode = "0755"
+owner = "root"
+group = "root"
+
+[[files]]
+dest = "/usr/share/polkit-1/actions/org.namtor.policy"
+src = "packaging/polkit-1/actions/org.namtor.policy"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+# ---------------------------------------------------------------------------
 # Manifests themselves (installed for the daemon to consult at startup)
 # ---------------------------------------------------------------------------
 [[files]]
