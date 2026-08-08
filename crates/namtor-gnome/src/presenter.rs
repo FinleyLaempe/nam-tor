@@ -11,10 +11,7 @@
 //! returns the new [`PresenterModel`] so the view can diff against the
 //! previous render.
 
-use crate::client::{
-    FinishResult, ManagerClient, ManagerError, ProfileId,
-    SessionId,
-};
+use crate::client::{FinishResult, ManagerClient, ManagerError, ProfileId, SessionId};
 use crate::view_model::*;
 /// State machine. Constructed with any [`ManagerClient`]; the view holds one
 /// of these and calls action methods in response to signal handlers.
@@ -37,6 +34,7 @@ impl<C: ManagerClient> ProfilePresenter<C> {
                 profiles: Vec::new(),
                 status: None,
                 enrollment: None,
+                review: None,
                 pending_merge: None,
                 pending_replace: None,
                 error: None,
@@ -186,6 +184,36 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             }
             Err(err) => self.set_error(&err),
         }
+        &self.model
+    }
+
+    pub fn request_review(&mut self) -> &PresenterModel {
+        let Some(enrollment) = self.model.enrollment.clone() else {
+            return &self.model;
+        };
+        let session = SessionId(enrollment.session_id);
+        match self.client.get_progress(&session) {
+            Ok(progress) => {
+                self.model.review = Some(ReviewView {
+                    coverage_percent: progress.coverage_percent,
+                    quality_label: progress.quality_label.as_str().into(),
+                    template_count: progress.frames_captured,
+                });
+            }
+            Err(err) => self.set_error(&err),
+        }
+        &self.model
+    }
+
+    pub fn commit_profile(&mut self) -> &PresenterModel {
+        let Some(_review) = self.model.review.clone() else {
+            return &self.model;
+        };
+        &self.model
+    }
+
+    pub fn retry_enrollment(&mut self) -> &PresenterModel {
+        self.model.review = None;
         &self.model
     }
 

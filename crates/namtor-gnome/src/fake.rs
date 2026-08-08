@@ -350,6 +350,5 @@ impl ManagerClient for FakeManagerClient {
             version: Some("0.1.0".into()),
             always_on_emitter: false,
         })
-
     }
 }

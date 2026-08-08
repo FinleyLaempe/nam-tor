@@ -44,17 +44,26 @@ impl ProfileListView {
                     .orientation(Orientation::Horizontal)
                     .spacing(8)
                     .build();
+                row_box.set_accessible_role(AccessibleRole::ListItem);
+
                 let name = Label::builder()
                     .label(&row.name)
                     .halign(gtk4::Align::Start)
                     .hexpand(true)
                     .build();
                 name.set_accessible_role(AccessibleRole::ListItem);
+                name.update_property(&[gtk4::accessible::Property::Label(&row.name)]);
+
                 let toggle = CheckButton::builder()
                     .label("Enabled")
                     .active(row.enabled)
                     .build();
                 toggle.set_accessible_role(AccessibleRole::Checkbox);
+                toggle.update_property(&[gtk4::accessible::Property::Label(&format!(
+                    "Enable profile {}",
+                    row.name
+                ))]);
+
                 let last = Label::builder()
                     .label(format!(
                         "last used: {}",
@@ -64,6 +73,10 @@ impl ProfileListView {
                     ))
                     .css_classes(["dim-label", "caption"])
                     .build();
+                last.update_property(&[gtk4::accessible::Property::Description(
+                    "Timestamp of last successful authentication",
+                )]);
+
                 row_box.append(&name);
                 row_box.append(&toggle);
                 row_box.append(&last);

@@ -7,7 +7,9 @@
 pub mod enrollment;
 pub mod profile_list;
 pub mod recovery;
+pub mod review;
 
 pub use enrollment::EnrollmentViewComponent;
 pub use profile_list::ProfileListView;
 pub use recovery::RecoveryView;
+pub use review::ReviewViewComponent;

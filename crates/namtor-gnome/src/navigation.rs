@@ -12,6 +12,7 @@ use crate::view_model::PresenterModel;
 pub enum Page {
     Main,
     Enrollment,
+    Review,
     Recovery,
 }
 
@@ -19,6 +20,7 @@ pub struct Navigation {
     shell: Shell,
     main_page: ProfileListView,
     enrollment_page: EnrollmentViewComponent,
+    review_page: crate::components::review::ReviewViewComponent,
     recovery_page: RecoveryView,
 }
 
@@ -28,6 +30,7 @@ impl Navigation {
             shell,
             main_page: ProfileListView::new(),
             enrollment_page: EnrollmentViewComponent::new(),
+            review_page: crate::components::review::ReviewViewComponent::new(),
             recovery_page: RecoveryView::new(),
         }
     }
@@ -41,13 +44,22 @@ impl Navigation {
             }
         }
 
+        if let Some(review) = &model.review {
+            self.shell.set_content(self.review_page.render(
+                review,
+                || {}, // TODO: wire to presenter
+                || {}, // TODO: wire to presenter
+                || {}, // TODO: wire to presenter
+            ));
+            return;
+        }
+
         if let Some(enrollment) = &model.enrollment {
-            self.shell
-                .set_content(self.enrollment_page.render(
-                    Some(enrollment),
-                    |_| {}, // TODO: wire to presenter
-                    || {}, // TODO: wire to presenter
-                ));
+            self.shell.set_content(self.enrollment_page.render(
+                Some(enrollment),
+                |_| {}, // TODO: wire to presenter
+                || {},  // TODO: wire to presenter
+            ));
             return;
         }
 

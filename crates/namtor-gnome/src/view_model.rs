@@ -71,20 +71,29 @@ impl RecoveryHint {
             crate::client::ManagerError::DaemonUnavailable(detail) => Some(Self {
                 title: "Nam-tor daemon is not running".into(),
                 steps: vec![
-                    "Start it with: systemctl --user start namtor-daemon".into(),
-                    format!("Detail: {detail}"),
+                    "Verify the daemon is enabled: systemctl --user is-enabled namtor-daemon"
+                        .into(),
+                    "Start the daemon: systemctl --user start namtor-daemon".into(),
+                    "Check logs for failures: journalctl --user -u namtor-daemon".into(),
+                    format!("Technical detail: {detail}"),
                 ],
             }),
             crate::client::ManagerError::ServiceNotRegistered => Some(Self {
-                title: "Nam-tor service is not registered on the session bus".into(),
+                title: "Nam-tor service is not registered".into(),
                 steps: vec![
-                    "Install the namtor-daemon D-Bus service file".into(),
-                    "Then run: systemctl --user start namtor-daemon".into(),
+                    "The D-Bus service file is missing or corrupted".into(),
+                    "Reinstall the namtor-daemon package to restore service files".into(),
+                    "Restart the session or run: systemctl --user daemon-reload".into(),
                 ],
             }),
             crate::client::ManagerError::PolkitDenied(detail) => Some(Self {
                 title: "Administrator approval required".into(),
-                steps: vec![format!("Polkit denied: {detail}")],
+                steps: vec![
+                    "The operation requires elevated privileges".into(),
+                    "Ensure your user is in the 'namtor-auth' group".into(),
+                    "Run: sudo usermod -aG namtor-auth $USER then log out and back in".into(),
+                    format!("Polkit detail: {detail}"),
+                ],
             }),
             _ => None,
         }
@@ -94,10 +103,18 @@ impl RecoveryHint {
 /// View model rendered by the GTK window. Every field is plain data the view
 /// can serialize into Atk roles and gettext strings.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewView {
+    pub coverage_percent: u32,
+    pub quality_label: String,
+    pub template_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PresenterModel {
     pub profiles: Vec<ProfileRowView>,
     pub status: Option<StatusInfo>,
     pub enrollment: Option<EnrollmentView>,
+    pub review: Option<ReviewView>,
     pub pending_merge: Option<PendingMerge>,
     pub pending_replace: Option<PendingReplace>,
     pub error: Option<ErrorView>,

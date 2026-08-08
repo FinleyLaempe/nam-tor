@@ -18,6 +18,12 @@
 //!
 //! The wizard binary (`namtor-enroll-wizard`) lives in `src/bin/wizard.rs`
 //! and is the only place GTK is constructed.
+//!
+//! ---------------------------------------------------------------------------
+
+pub fn tr(s: &str) -> String {
+    s.to_string()
+}
 
 pub mod client;
 pub mod components;

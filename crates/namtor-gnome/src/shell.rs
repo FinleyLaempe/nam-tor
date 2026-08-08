@@ -31,9 +31,16 @@ impl Shell {
             .spacing(8)
             .build();
 
+        // Ensure the content area can scroll when text is enlarged or window is small
+        let scrolled = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .vscrollbar_policy(gtk4::PolicyType::Automatic)
+            .child(&content_area)
+            .build();
+
         let toolbar_view = adw::ToolbarView::builder().build();
         toolbar_view.add_top_bar(&header);
-        toolbar_view.set_content(Some(&content_area));
+        toolbar_view.set_content(Some(&scrolled));
 
         let window = adw::ApplicationWindow::builder()
             .application(app)
