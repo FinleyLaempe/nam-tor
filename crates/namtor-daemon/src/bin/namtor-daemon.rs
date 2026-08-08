@@ -31,6 +31,7 @@ use namtor_daemon::manager::store::{ProfileStore, TemplateProfileStore};
 use namtor_daemon::startup;
 use namtor_daemon::supervisor::ChildSupervisor;
 use namtor_daemon::verify::VerifyEngine;
+use namtor_layout::{InstallRoot, LayoutPaths};
 use namtor_store::TemplateStore;
 use tracing_subscriber::EnvFilter;
 
@@ -86,25 +87,30 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "namtor-daemon starting"
     );
 
-    let socket_path = PathBuf::from(
-        std::env::var("NAMTOR_SOCKET").unwrap_or_else(|_| "/run/namtor/auth.sock".into()),
+    let layout = LayoutPaths::resolve(
+        std::path::Path::new("/"),
+        std::path::Path::new("/usr/share/namtor/install-manifest.toml"),
+        InstallRoot::Installed,
     );
-    let models_dir = PathBuf::from(
-        std::env::var("NAMTOR_MODELS_DIR").unwrap_or_else(|_| "/var/lib/namtor/models".into()),
-    );
-    let store_dir = PathBuf::from(
-        std::env::var("NAMTOR_STORE_DIR").unwrap_or_else(|_| "/var/lib/namtor/templates".into()),
-    );
-    let key_path = PathBuf::from(
-        std::env::var("NAMTOR_KEY_PATH").unwrap_or_else(|_| "/var/lib/namtor/templates.key".into()),
-    );
-    let worker_bin = PathBuf::from(
-        std::env::var("NAMTOR_WORKER_BIN").unwrap_or_else(|_| "namtor-worker".into()),
-    );
-    let backoff_path = PathBuf::from(
-        std::env::var("NAMTOR_BACKOFF_PATH")
-            .unwrap_or_else(|_| "/var/lib/namtor/backoff.json".into()),
-    );
+
+    let socket_path = std::env::var("NAMTOR_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or(layout.daemon_socket);
+    let models_dir = std::env::var("NAMTOR_MODELS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or(layout.models_dir);
+    let store_dir = std::env::var("NAMTOR_STORE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or(layout.templates_dir);
+    let key_path = std::env::var("NAMTOR_KEY_PATH")
+        .map(PathBuf::from)
+        .unwrap_or(layout.key_path);
+    let worker_bin = std::env::var("NAMTOR_WORKER_BIN")
+        .map(PathBuf::from)
+        .unwrap_or(layout.worker_bin);
+    let backoff_path = std::env::var("NAMTOR_BACKOFF_PATH")
+        .map(PathBuf::from)
+        .unwrap_or(layout.backoff_path);
 
     let yunet_path = models_dir.join("yunet_2023mar.onnx");
     let sface_path = models_dir.join("sface_2021dec.onnx");

@@ -296,3 +296,48 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+
+# ---------------------------------------------------------------------------
+# Transactional PAM integration scripts (admin runs explicitly — never
+# invoked automatically; the admin chooses the target PAM file).
+# ---------------------------------------------------------------------------
+[[files]]
+dest = "/usr/share/namtor/pam-install.sh"
+src = "packaging/pam-install.sh"
+mode = "0755"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/share/namtor/pam-uninstall.sh"
+src = "packaging/pam-uninstall.sh"
+mode = "0755"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/share/namtor/pam-preflight.sh"
+src = "packaging/pam-preflight.sh"
+mode = "0755"
+owner = "root"
+group = "root"
+symlink = false
+
+# ---------------------------------------------------------------------------
+# Packaging README (documents the install flow for operators)
+# ---------------------------------------------------------------------------
+[[dirs]]
+path = "/usr/share/doc/namtor"
+mode = "0755"
+owner = "root"
+group = "root"
+
+[[files]]
+dest = "/usr/share/doc/namtor/README.md"
+src = "packaging/README.md"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false

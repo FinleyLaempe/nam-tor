@@ -8,7 +8,11 @@
 pub mod diagnostics;
 pub mod enroll;
 pub mod enroll_session;
-pub mod install_layout;
 pub mod list;
 pub mod status;
 pub mod verify;
+
+// Re-export the install-layout contract from the shared `namtor-layout`
+// crate so existing consumers (`crate::install_layout::...`) continue to
+// work without a separate module file.
+pub use namtor_layout as install_layout;

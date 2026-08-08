@@ -91,15 +91,6 @@ cargo test --workspace -- --skip concurrent_connections_serialise --test-threads
 # Deterministic staging from packaging/install-manifest.toml.
 ./packaging/stage.sh "%{buildroot}" "%{_builddir}/nam-tor-%{version}"
 
-# Transactional PAM integration scripts (admin runs explicitly — never
-# invoked automatically; the admin chooses the target PAM file).
-install -Dm755 packaging/pam-install.sh   %{buildroot}%{_datadir}/namtor/pam-install.sh
-install -Dm755 packaging/pam-uninstall.sh %{buildroot}%{_datadir}/namtor/pam-uninstall.sh
-install -Dm755 packaging/pam-preflight.sh %{buildroot}%{_datadir}/namtor/pam-preflight.sh
-
-# README documenting the install flow.
-install -Dm644 packaging/README.md %{buildroot}%{_defaultdocdir}/%{name}/README.md
-
 %files
 %license COPYING.md
 %doc %{_defaultdocdir}/%{name}/README.md
@@ -119,9 +110,14 @@ install -Dm644 packaging/README.md %{buildroot}%{_defaultdocdir}/%{name}/README.
 %{_datadir}/namtor/pam-install.sh
 %{_datadir}/namtor/pam-uninstall.sh
 %{_datadir}/namtor/pam-preflight.sh
+%{_datadir}/dbus-1/system-services/org.namtor.Manager.service
+%{_datadir}/polkit-1/actions/org.namtor.policy
 %{_datadir}/applications/org.namtor.Wizard.desktop
 %{_datadir}/metainfo/org.namtor.Wizard.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/org.namtor.Wizard.svg
+%{_datadir}/applications/org.namtor.kcm.desktop
+%{_datadir}/metainfo/org.namtor.kcm.metainfo.xml
+%{_datadir}/icons/hicolor/scalable/apps/org.namtor.kcm.svg
 
 %pre
 # Register the system user + runtime dirs before the unit files are

@@ -51,10 +51,6 @@ override_dh_auto_test:
 # ---------------------------------------------------------------------------
 override_dh_auto_install:
 	./packaging/stage.sh debian/namtor .
-	install -Dm755 packaging/pam-install.sh   debian/namtor/usr/share/namtor/pam-install.sh
-	install -Dm755 packaging/pam-uninstall.sh debian/namtor/usr/share/namtor/pam-uninstall.sh
-	install -Dm755 packaging/pam-preflight.sh debian/namtor/usr/share/namtor/pam-preflight.sh
-	install -Dm644 packaging/README.md        debian/namtor/usr/share/doc/namtor/README.md
 
 # ---------------------------------------------------------------------------
 # override_dh_missing: the manifest handles every file; do not let

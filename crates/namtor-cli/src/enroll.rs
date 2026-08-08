@@ -418,11 +418,13 @@ impl Drop for EmitterGuard {
 }
 
 fn emitter_cfg() -> Option<namtor_hwdb::quirks::EmitterCfg> {
-    let candidates = [
-        std::path::PathBuf::from("/usr/share/namtor/quirks/devices"),
-        std::path::PathBuf::from("quirks/devices"),
-        std::path::PathBuf::from("../quirks/devices"),
-    ];
+    let layout = namtor_layout::LayoutPaths::resolve(
+        std::path::Path::new("/"),
+        std::path::Path::new("/usr/share/namtor/install-manifest.toml"),
+        namtor_layout::InstallRoot::Installed,
+    );
+    let mut candidates = layout.quirks_dirs.clone();
+    candidates.push(std::path::PathBuf::from("../quirks/devices"));
     for dir in &candidates {
         if let Ok(db) = namtor_hwdb::quirks::load_quirks_dir(dir) {
             if let Some(e) = db.entries.get("3277:0018") {

@@ -86,8 +86,6 @@ fn scan_file(path: &Path) -> Vec<Violation> {
             }
         }
 
-
-
         // Skip lines inside test modules.
         if in_test_mod {
             continue;
@@ -118,7 +116,6 @@ fn scan_file(path: &Path) -> Vec<Violation> {
                 content: trimmed.to_string(),
             });
         }
-
     }
 
     violations
@@ -147,7 +144,7 @@ fn no_unwrap_or_expect_in_non_test_code() {
 
     let crates_dir = workspace_root.join("crates");
     let mut source_files = Vec::new();
-    
+
     if let Ok(crate_entries) = fs::read_dir(&crates_dir) {
         for crate_entry in crate_entries.flatten() {
             let src_dir = crate_entry.path().join("src");
@@ -167,7 +164,6 @@ fn no_unwrap_or_expect_in_non_test_code() {
         }
     }
 
-
     assert!(
         !source_files.is_empty(),
         "expected to find source files under crates/*/src/"
@@ -179,9 +175,8 @@ fn no_unwrap_or_expect_in_non_test_code() {
     }
 
     if !all_violations.is_empty() {
-        let mut report = String::from(
-            "G5.6 violation — .unwrap() or .expect( found in non-test source code:\n",
-        );
+        let mut report =
+            String::from("G5.6 violation — .unwrap() or .expect( found in non-test source code:\n");
         for v in &all_violations {
             report.push_str(&format!("  {}:{}: {}\n", v.file, v.line, v.content));
         }

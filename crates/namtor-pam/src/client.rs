@@ -189,6 +189,15 @@ mod tests {
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
 
+    #[test]
+    fn default_socket_matches_layout_contract() {
+        assert_eq!(
+            DEFAULT_SOCKET,
+            namtor_layout::PAM_DEFAULT_SOCKET,
+            "PAM DEFAULT_SOCKET must match the install-layout contract constant"
+        );
+    }
+
     /// A tiny in-process daemon that speaks the protocol and returns a fixed verdict.
     fn mock_daemon(path: &Path, verdict: Verdict) -> std::thread::JoinHandle<std::io::Result<()>> {
         let listener = UnixListener::bind(path).unwrap();

@@ -16,5 +16,6 @@ serde_json = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 namtor-daemon = { path = "../namtor-daemon" }
+namtor-layout = { path = "../namtor-layout" }
 namtor-proto = { path = "../namtor-proto" }
 nix = { version = "0.29", features = ["user"] }

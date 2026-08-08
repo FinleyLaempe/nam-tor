@@ -1531,6 +1531,7 @@ dependencies = [
  "namtor-camera",
  "namtor-capture",
  "namtor-hwdb",
+ "namtor-layout",
  "namtor-pam",
  "namtor-proto",
  "namtor-recog",
@@ -1563,6 +1564,7 @@ dependencies = [
  "namtor-capture",
  "namtor-eval",
  "namtor-hwdb",
+ "namtor-layout",
  "namtor-pad",
  "namtor-proto",
  "namtor-recog",
@@ -1633,6 +1635,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "namtor-layout"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tempfile",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "namtor-pad"
 version = "0.1.0"
 dependencies = [
@@ -1648,6 +1659,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "namtor-daemon",
+ "namtor-layout",
  "namtor-proto",
  "nix",
  "serde_json",

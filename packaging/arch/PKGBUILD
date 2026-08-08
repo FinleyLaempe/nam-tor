@@ -101,14 +101,4 @@ package() {
 
     local destdir="$pkgdir"
     ./packaging/stage.sh "$destdir" "$srcdir/nam-tor-$pkgver"
-
-    # Transactional PAM integration scripts (shipped for the admin to run
-    # explicitly — they are NOT invoked automatically by the package; the
-    # admin chooses the target PAM file).
-    install -Dm755 packaging/pam-install.sh   "$destdir/usr/share/namtor/pam-install.sh"
-    install -Dm755 packaging/pam-uninstall.sh "$destdir/usr/share/namtor/pam-uninstall.sh"
-    install -Dm755 packaging/pam-preflight.sh "$destdir/usr/share/namtor/pam-preflight.sh"
-
-    # README documenting the install flow
-    install -Dm644 packaging/README.md "$destdir/usr/share/doc/namtor/README.md"
 }

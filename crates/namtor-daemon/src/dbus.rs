@@ -1367,7 +1367,7 @@ mod tests {
             .create_profile(1000, record, Vec::new())
             .unwrap_err();
         assert!(matches!(
-            namtor_store::store::StoreError::from(err),
+            err,
             namtor_store::store::StoreError::ProfileExists(_)
         ));
     }

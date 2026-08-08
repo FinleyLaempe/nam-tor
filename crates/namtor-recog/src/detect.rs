@@ -74,7 +74,7 @@ impl FaceDetector {
         let input = preprocess(frame, width, height, iw, ih);
 
         let outputs = self.backend.run_multi(&self.loaded, &input)?;
-        let detections = postprocess_multi(
+        postprocess_multi(
             &outputs,
             iw,
             ih,
@@ -82,8 +82,7 @@ impl FaceDetector {
             height,
             self.score_threshold,
             self.nms_threshold,
-        );
-        Ok(detections?)
+        )
     }
 }
 
