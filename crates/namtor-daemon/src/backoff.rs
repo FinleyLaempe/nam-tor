@@ -182,6 +182,17 @@ impl BackoffStore {
         self.states.get(&uid).map_or(0, |s| s.remaining_ms(now))
     }
 
+    /// Number of uids currently tracked. Observable for startup logging.
+    pub fn uid_count(&self) -> usize {
+        self.states.len()
+    }
+
+    /// Persisted attempt count for `uid` (0 if untracked). This is the durable
+    /// signal that survives a restart; the in-memory lock window does not.
+    pub fn attempts(&self, uid: u32) -> u32 {
+        self.states.get(&uid).map_or(0, |s| s.attempts())
+    }
+
     /// Persist the store to `path` atomically: write to a sibling temp file,
     /// fsync, then rename over the target. A crash after the temp write but
     /// before rename leaves the old file (or none) intact.

@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use namtor_daemon::acl::resolve_namtor_auth_gid;
+use namtor_daemon::backoff::{BackoffConfig, BackoffStore};
 use namtor_daemon::daemon::Daemon;
 use namtor_daemon::dbus::{ManagerService, SystemPolkit};
 use namtor_daemon::dispatch::DaemonDispatcher;
@@ -100,6 +101,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let worker_bin = PathBuf::from(
         std::env::var("NAMTOR_WORKER_BIN").unwrap_or_else(|_| "namtor-worker".into()),
     );
+    let backoff_path = PathBuf::from(
+        std::env::var("NAMTOR_BACKOFF_PATH")
+            .unwrap_or_else(|_| "/var/lib/namtor/backoff.json".into()),
+    );
 
     let yunet_path = models_dir.join("yunet_2023mar.onnx");
     let sface_path = models_dir.join("sface_2021dec.onnx");
@@ -150,7 +155,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         capture_factory,
     )?;
 
-    let dispatcher = Arc::new(DaemonDispatcher::new(daemon, verify));
+    // Load persistent per-uid backoff state (spec §8.4). A missing file is the
+    // normal first-boot state and yields an empty store; a corrupt file errors
+    // out so an operator inspects it rather than silently resetting an
+    // in-progress bruteforce defence.
+    let backoff = BackoffStore::load(&backoff_path, BackoffConfig::default())?;
+    tracing::info!(
+        path = %backoff_path.display(),
+        uids = backoff.uid_count(),
+        "backoff store loaded"
+    );
+
+    let dispatcher = Arc::new(DaemonDispatcher::new(
+        daemon,
+        verify,
+        backoff,
+        Some(backoff_path),
+        SystemClock,
+    ));
 
     let auth_gid = resolve_namtor_auth_gid().unwrap_or_else(|_| {
         tracing::warn!("namtor-auth group not found — allowing all connections");
