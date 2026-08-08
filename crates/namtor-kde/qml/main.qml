@@ -123,11 +123,111 @@ KCM.SimpleKCM {
 
         Kirigami.Heading {
             Kirigami.FormData.isSection: true
-            text: i18n("Profiles")
+            text: i18n("Authentication uses")
             level: 2
             Accessible.role: Accessible.Header
             Accessible.name: text
         }
+
+        QQC2.Label {
+            text: i18n("Detected PAM authentication services. Toggle face authentication per service. High-impact services require confirmation.")
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+            font: Kirigami.Theme.smallFont
+            color: Kirigami.Theme.disabledTextColor
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+
+        Repeater {
+            id: pamRepeater
+            model: Namtor.NamtorKcm.pamServices
+
+            Kirigami.Card {
+                required property string id
+                required property string displayName
+                required property bool enabled
+                required property string compatibility
+                required property string description
+
+                Layout.fillWidth: true
+                focusPolicy: Qt.StrongFocus
+                Accessible.role: Accessible.ListItem
+                Accessible.name: i18n("PAM service %1, %2, %3",
+                                      displayName,
+                                      compatibility,
+                                      enabled ? i18n("enabled") : i18n("disabled"))
+                Accessible.description: description
+
+                contentItem: RowLayout {
+                    spacing: Kirigami.Units.largeSpacing
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: Kirigami.Units.smallSpacing
+
+                        Kirigami.Title {
+                            text: displayName
+                            elide: Text.ElideRight
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: text
+                        }
+                        QQC2.Label {
+                            text: description
+                            font: Kirigami.Theme.smallFont
+                            color: Kirigami.Theme.disabledTextColor
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: text
+                        }
+                        QQC2.Label {
+                            text: i18n("Compatibility: %1").arg(compatibility)
+                            font: Kirigami.Theme.smallFont
+                            color: compatibility === "risky"
+                                   ? Kirigami.Theme.negativeTextColor
+                                   : (compatibility === "unsupported"
+                                      ? Kirigami.Theme.negativeTextColor
+                                      : Kirigami.Theme.positiveTextColor)
+                            visible: compatibility.length > 0
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: text
+                        }
+                        QQC2.Label {
+                            text: compatibility === "unsupported"
+                                  ? i18n("This service is incompatible and cannot be enabled.")
+                                  : (compatibility === "risky"
+                                     ? i18n("High-impact: confirmation required before enabling.")
+                                     : "")
+                            visible: compatibility === "unsupported" || compatibility === "risky"
+                            font: Kirigami.Theme.smallFont
+                            color: Kirigami.Theme.negativeTextColor
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: text
+                        }
+                    }
+
+                    QQC2.Switch {
+                        checked: enabled
+                        enabled: compatibility !== "unsupported"
+                        Accessible.role: Accessible.Switch
+                        Accessible.name: i18n("Toggle %1").arg(displayName)
+                        onToggled: {
+                            if (checked && Namtor.NamtorKcm.isHighImpact(compatibility)) {
+                                pamConfirmDialog.openFor(id, displayName)
+                                checked = Qt.binding(function() { return enabled })
+                            } else {
+                                Namtor.NamtorKcm.setPamServiceEnabled(id, checked)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Kirigami.Heading {
 
         Repeater {
             id: profileRepeater
@@ -515,6 +615,58 @@ KCM.SimpleKCM {
                     onClicked: deleteDialog.close()
                 }
             }
+        }
+    }
+
+    // ---- High-impact PAM service confirmation ----
+    QQC2.Dialog {
+        id: pamConfirmDialog
+        property string serviceId: ""
+        property string serviceName: ""
+        title: i18n("Enable %1 — High-Impact Service").arg(serviceName)
+        modal: true
+        focus: true
+
+        function openFor(sid, sname) {
+            pamConfirmDialog.serviceId = sid
+            pamConfirmDialog.serviceName = sname
+            pamConfirmText.text = Namtor.NamtorKcm.highImpactWarning()
+            pamConfirmDialog.open()
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Kirigami.Units.largeSpacing
+            QQC2.Label {
+                id: pamConfirmText
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                color: Kirigami.Theme.negativeTextColor
+                Accessible.role: Accessible.StaticText
+                Accessible.name: text
+            }
+        }
+
+        footer: QQC2.DialogButtonBox {
+            QQC2.Button {
+                text: i18n("Cancel")
+                QQC2.DialogButtonBox.buttonRole: QQC2.DialogButtonBox.RejectRole
+                Accessible.role: Accessible.Button
+                Accessible.name: text
+            }
+            QQC2.Button {
+                text: i18n("I understand, enable anyway")
+                QQC2.DialogButtonBox.buttonRole: QQC2.DialogButtonBox.AcceptRole
+                Kirigami.Theme.colorSet: Kirigami.Theme.View
+                Accessible.role: Accessible.Button
+                Accessible.name: text
+            }
+        }
+
+        onAccepted: {
+            Namtor.NamtorKcm.setPamServiceEnabled(pamConfirmDialog.serviceId, true)
+        }
+        onRejected: {
+            // Switch reverts — the PamServicesChanged signal refreshes the list.
         }
     }
 }

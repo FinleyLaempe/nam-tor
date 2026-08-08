@@ -1,0 +1,80 @@
+{
+  "task": "16-pam-ui-pass",
+  "description": "Add independent PAM-service controls to both GNOME and KDE settings surfaces",
+  "date": "2026-08-09",
+  "tests": {
+    "presenter_flow": {
+      "total": 25,
+      "passed": 25,
+      "failed": 0,
+      "pam_specific": [
+        "pam_service_toggle_works",
+        "pam_service_row_view_has_no_biometrics",
+        "unsupported_pam_service_cannot_be_toggled",
+        "failed_pam_toggle_reverts_to_previous_state",
+        "high_impact_pam_service_requires_confirmation",
+        "high_impact_warning_contains_required_phrases",
+        "disabling_risky_service_needs_no_confirmation",
+        "set_pam_service_enabled_refuses_unsupported"
+      ],
+      "names": [
+        "happy_path_start_enroll_commit_lists_profile",
+        "daemon_unavailable_shows_error_and_recovery",
+        "cancel_mid_enrollment_cleans_up",
+        "polkit_denied_shows_auth_error",
+        "low_diversity_shows_guidance",
+        "merge_profiles_requires_confirmation",
+        "rename_enable_disable_delete_flow",
+        "replace_profile_requires_confirmation",
+        "service_not_registered_has_recovery_hint",
+        "duplicate_profile_name_surfaces_exists",
+        "commit_profile_persists_to_store",
+        "enrollment_persists_across_reconnect",
+        "reconnect_restores_state",
+        "pam_service_toggle_works",
+        "protection_status_surfaced",
+        "review_flow_stages_and_commits",
+        "cancel_pending_safe_when_idle",
+        "pam_service_row_view_has_no_biometrics",
+        "dbus_client_uses_system_bus",
+        "unsupported_pam_service_cannot_be_toggled",
+        "failed_pam_toggle_reverts_to_previous_state",
+        "high_impact_pam_service_requires_confirmation",
+        "high_impact_warning_contains_required_phrases",
+        "disabling_risky_service_needs_no_confirmation",
+        "set_pam_service_enabled_refuses_unsupported"
+      ]
+    },
+    "privacy_scan": {
+      "total": 8,
+      "passed": 8,
+      "failed": 0
+    },
+    "namtor_kde": {
+      "total": 21,
+      "passed": 21,
+      "failed": 0
+    }
+  },
+  "clippy": "clean (namtor-gnome + namtor-kde, no warnings)",
+  "gnome_changes": {
+    "view_model": "Added PendingPamToggle struct (id, display_name, enabled, high_impact) and pending_pam_toggle field to PresenterModel",
+    "presenter": "Added request_pam_toggle (stages risky enables, refuses unsupported), confirm_pam_toggle, cancel_pam_toggle; set_pam_service_enabled gains defence-in-depth unsupported guard",
+    "fake": "Expanded PAM service mock: gdm-password (Safe), sddm (Risky), sudo (Risky), su (Risky), polkit (Risky), systemd-user (Safe), fingerprint-auth (Unsupported); added is_pam_service_enabled test helper",
+    "pam_services_component": "Rewritten: gtk::Switch toggles, compatibility labels with warning/error CSS, unsupported switches greyed out (set_sensitive(false)), adw::MessageDialog for high-impact confirmation with HIGH_IMPACT_WARNING constant, Rc<RefCell<Presenter>> for callback mutation, keyboard-navigable (GTK default Tab/Space/Escape)",
+    "wizard": "Restructured to Rc<RefCell<ProfilePresenter>> for interactive callbacks; PAM section rendered separately via render_pam_services"
+  },
+  "kde_changes": {
+    "main_qml": "Added 'Authentication uses' section: Repeater over NamtorKcm.pamServices, QQC2.Switch per service, compatibility labels with color coding, unsupported switches disabled, high-impact confirmation QQC2.Dialog with highImpactWarning text",
+    "namtor_kcm_h": "Added Q_INVOKABLE highImpactWarning() and Q_INVOKABLE isHighImpact(compatibility) methods",
+    "namtor_kcm_cpp": "Implemented highImpactWarning() returning the regulatory warning text, isHighImpact() checking compatibility == 'risky'"
+  },
+  "high_impact_warning_text": "FAR/FRR and real-attack PAD gates remain unmeasured. Enabling face authentication is experimental and not recommended for security-sensitive use.",
+  "unsupported_greyed_out": true,
+  "failed_toggle_reverts": true,
+  "confirmation_required_for_high_impact": true,
+  "no_biometric_data_exposed": true,
+  "no_arbitrary_pam_paths": true,
+  "keyboard_accessible": true,
+  "identical_ids_across_desktops": true
+}

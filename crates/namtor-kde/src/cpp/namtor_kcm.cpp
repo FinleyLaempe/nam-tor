@@ -416,6 +416,21 @@ QString NamtorKcm::profileNameById(const QString &id) const
     return {};
 }
 
+// --- v2 PAM high-impact helpers ---
+
+QString NamtorKcm::highImpactWarning() const
+{
+    return QStringLiteral(
+        "FAR/FRR and real-attack PAD gates remain unmeasured. "
+        "Enabling face authentication is experimental and "
+        "not recommended for security-sensitive use.");
+}
+
+bool NamtorKcm::isHighImpact(const QString &compatibility) const
+{
+    return compatibility.compare(QStringLiteral("risky"), Qt::CaseInsensitive) == 0;
+}
+
 // --- Q_INVOKABLE methods (frozen D-Bus contract) ---
 
 void NamtorKcm::listProfiles()

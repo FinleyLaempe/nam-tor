@@ -5,6 +5,7 @@
 //! ensuring consistency with the design system defined in `DESIGN.md`.
 
 pub mod enrollment;
+pub mod pam_services;
 pub mod profile_list;
 pub mod recovery;
 pub mod review;

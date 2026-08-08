@@ -1,0 +1,40 @@
+{
+  "task": "16-pam-ui-failures",
+  "description": "Failure modes tested for PAM service controls in GNOME and KDE settings",
+  "date": "2026-08-09",
+  "failure_modes": [
+    {
+      "mode": "unsupported_service_toggle_refused",
+      "test": "unsupported_pam_service_cannot_be_toggled",
+      "behavior": "request_pam_toggle refuses with error 'incompatible', no confirmation staged, service stays disabled. set_pam_service_enabled also refuses (defence-in-depth). View greys out the switch (set_sensitive(false))."
+    },
+    {
+      "mode": "failed_toggle_reverts",
+      "test": "failed_pam_toggle_reverts_to_previous_state",
+      "behavior": "On polkit denial, client returns Err, presenter sets error, refresh() re-reads unchanged state. Model shows old (disabled) value — switch reverts on next render."
+    },
+    {
+      "mode": "high_impact_requires_confirmation",
+      "test": "high_impact_pam_service_requires_confirmation",
+      "behavior": "Enabling a Risky service stages PendingPamToggle in model; service NOT enabled until confirm_pam_toggle called. Cancel clears pending, service stays disabled. Confirm applies the toggle."
+    },
+    {
+      "mode": "high_impact_warning_text",
+      "test": "high_impact_warning_contains_required_phrases",
+      "behavior": "HIGH_IMPACT_WARNING constant must contain 'FAR/FRR', 'real-attack PAD', 'experimental', 'not recommended for security-sensitive use'. Dialog renders this verbatim."
+    },
+    {
+      "mode": "disable_needs_no_confirmation",
+      "test": "disabling_risky_service_needs_no_confirmation",
+      "behavior": "Disabling a risky service applies immediately — no confirmation dialog needed. Only enabling risky services is gated."
+    }
+  ],
+  "not_tested_display_only": [
+    "GTK adw::MessageDialog rendering (requires display server)",
+    "QML QQC2.Dialog rendering (requires KDE Plasma runtime)",
+    "Keyboard navigation (Tab/Enter/Space/Escape) — GTK and Qt defaults, not unit-testable"
+  ],
+  "no_false_positives": true,
+  "no_tests_deleted": true,
+  "no_tests_weakened": true
+}

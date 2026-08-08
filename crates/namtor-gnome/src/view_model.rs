@@ -5,7 +5,10 @@
 //! The `ProfilePresenter` transforms `ManagerClient` responses into these
 //! views, which the GTK shell then renders.
 
-use crate::client::{EnrollmentProgress, QualityLabel, StatusInfo};
+use crate::client::{
+    EnrollmentProgress, PamServiceCompatibility, PamServiceInfo, ProtectionKeyKind,
+    ProtectionStatus, QualityLabel, StatusReport,
+};
 
 /// Coarse quality bucket the user sees, plus a guidance flag the view renders
 /// as an accessibility-friendly alert when diversity is low.
@@ -42,7 +45,8 @@ pub struct ProfileRowView {
     pub name: String,
     pub enabled: bool,
     pub created: u64,
-    pub last_used: Option<u64>,
+    /// `0` means the profile has never authenticated.
+    pub last_used: u64,
 }
 
 impl ProfileRowView {
@@ -71,10 +75,9 @@ impl RecoveryHint {
             crate::client::ManagerError::DaemonUnavailable(detail) => Some(Self {
                 title: "Nam-tor daemon is not running".into(),
                 steps: vec![
-                    "Verify the daemon is enabled: systemctl --user is-enabled namtor-daemon"
-                        .into(),
-                    "Start the daemon: systemctl --user start namtor-daemon".into(),
-                    "Check logs for failures: journalctl --user -u namtor-daemon".into(),
+                    "Verify the daemon is enabled: systemctl is-enabled namtor-daemon".into(),
+                    "Start the daemon: sudo systemctl start namtor-daemon".into(),
+                    "Check logs for failures: journalctl -u namtor-daemon".into(),
                     format!("Technical detail: {detail}"),
                 ],
             }),
@@ -83,10 +86,10 @@ impl RecoveryHint {
                 steps: vec![
                     "The D-Bus service file is missing or corrupted".into(),
                     "Reinstall the namtor-daemon package to restore service files".into(),
-                    "Restart the session or run: systemctl --user daemon-reload".into(),
+                    "Restart the system bus: sudo systemctl reload dbus".into(),
                 ],
             }),
-            crate::client::ManagerError::PolkitDenied(detail) => Some(Self {
+            crate::client::ManagerError::Denied(detail) => Some(Self {
                 title: "Administrator approval required".into(),
                 steps: vec![
                     "The operation requires elevated privileges".into(),
@@ -102,25 +105,34 @@ impl RecoveryHint {
 
 /// View model rendered by the GTK window. Every field is plain data the view
 /// can serialize into Atk roles and gettext strings.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReviewView {
-    pub coverage_percent: u32,
+    pub profile_id: String,
+    pub needs_reenroll: bool,
     pub quality_label: String,
-    pub template_count: u32,
+    pub coverage_percent: u32,
+    pub frames_captured: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PresenterModel {
     pub profiles: Vec<ProfileRowView>,
-    pub status: Option<StatusInfo>,
+    pub status: Option<StatusReport>,
+    /// v2: template storage protection status.
+    pub protection: Option<ProtectionStatus>,
+    /// v2: detected PAM auth services.
+    pub pam_services: Vec<PamServiceRowView>,
     pub enrollment: Option<EnrollmentView>,
     pub review: Option<ReviewView>,
     pub pending_merge: Option<PendingMerge>,
     pub pending_replace: Option<PendingReplace>,
+    /// v2: staged PAM toggle awaiting high-impact confirmation.
+    pub pending_pam_toggle: Option<PendingPamToggle>,
     pub error: Option<ErrorView>,
     pub message: Option<String>,
     pub is_loading: bool,
-    pub reduced_protection_warning: bool,
+    /// True when the daemon reports the IR emitter is armed (always-on).
+    pub emitter_armed_warning: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,7 +145,7 @@ pub struct EnrollmentView {
 
 impl EnrollmentView {
     pub fn from_progress(p: EnrollmentProgress) -> Self {
-        let quality = QualityView::from_label(p.quality_label);
+        let quality = QualityView::from_label(p.quality);
         Self {
             session_id: p.session_id,
             frames_captured: p.frames_captured,
@@ -158,9 +170,77 @@ pub struct PendingReplace {
     pub new_name: String,
 }
 
+/// v2: staged PAM service toggle awaiting high-impact confirmation. The view
+/// shows the experimental-risk warning dialog and only calls
+/// [`crate::presenter::ProfilePresenter::confirm_pam_toggle`] if the user
+/// acknowledges.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPamToggle {
+    pub id: String,
+    pub display_name: String,
+    pub enabled: bool,
+    pub high_impact: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorView {
     pub title: String,
     pub detail: String,
     pub recovery: Option<RecoveryHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PamServiceRowView {
+    pub id: String,
+    pub display_name: String,
+    pub enabled: bool,
+    pub compatibility: PamServiceCompatibility,
+    pub description: String,
+}
+
+impl PamServiceRowView {
+    pub fn from_info(info: PamServiceInfo) -> Self {
+        Self {
+            id: info.id,
+            display_name: info.display_name,
+            enabled: info.enabled,
+            compatibility: info.compatibility,
+            description: info.description,
+        }
+    }
+}
+
+/// v2: human-readable protection status for the settings panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtectionStatusView {
+    pub sealing: String,
+    pub has_tpm: bool,
+    pub warning: String,
+}
+
+impl ProtectionStatusView {
+    pub fn from_status(status: &ProtectionStatus) -> Self {
+        Self {
+            sealing: status.sealing.as_str().into(),
+            has_tpm: status.has_tpm,
+            warning: status.warning.clone(),
+        }
+    }
+}
+
+/// Convenience: the sealing kind as a human-readable label.
+pub fn sealing_label(kind: ProtectionKeyKind) -> &'static str {
+    match kind {
+        ProtectionKeyKind::Tpm2 => "TPM2 (hardware-bound)",
+        ProtectionKeyKind::Software => "Software AES-256-GCM (file fallback)",
+    }
+}
+
+/// Convenience: the PAM compatibility as a human-readable label.
+pub fn compatibility_label(c: PamServiceCompatibility) -> &'static str {
+    match c {
+        PamServiceCompatibility::Safe => "Safe",
+        PamServiceCompatibility::Unsupported => "Unsupported",
+        PamServiceCompatibility::Risky => "Risky (high-impact)",
+    }
 }

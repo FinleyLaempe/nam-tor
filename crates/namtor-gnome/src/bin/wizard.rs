@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Nam-tor management UI — GTK4 + libadwaita front-end for the
-//! `org.namtor.Manager` D-Bus service (spec §9.1, §9.2, task 26).
+//! `org.namtor.Manager` (v1) and `org.namtor.Manager2` (v2) D-Bus services
+//! on the **system bus** (spec §9.1, §9.2, task 14).
 //!
 //! The binary constructs a [`ProfilePresenter`] over a live
 //! [`DbusManagerClient`] and renders the resulting [`PresenterModel`] as a
@@ -9,7 +10,9 @@
 //!
 //! Usage: namtor-enroll-wizard
 
+use std::cell::RefCell;
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use gio::ApplicationFlags;
 use gtk4::prelude::*;
@@ -17,7 +20,19 @@ use gtk4::{AccessibleRole, Align, Box as GtkBox, Label, Orientation, ScrolledWin
 use libadwaita as adw;
 use libadwaita::prelude::AdwApplicationWindowExt;
 
-use namtor_gnome::{presenter::ProfilePresenter, DbusManagerClient, PresenterModel};
+use namtor_gnome::components::pam_services::render_pam_services;
+use namtor_gnome::presenter::ProfilePresenter;
+use namtor_gnome::DbusManagerClient;
+
+/// Get the current user's uid. SAFETY: `getuid()` is always safe to call.
+fn current_uid() -> u32 {
+    extern "C" {
+        fn getuid() -> u32;
+    }
+    // SAFETY: getuid() is a POSIX function that never fails and has no
+    // preconditions.
+    unsafe { getuid() }
+}
 
 fn main() -> ExitCode {
     let app = adw::Application::builder()
@@ -73,6 +88,18 @@ fn build_ui(app: &adw::Application) {
         .build();
     content.append(&enrollment_box);
 
+    let pam_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .build();
+    content.append(&pam_box);
+
+    let protection_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .build();
+    content.append(&protection_box);
+
     let error_label = Label::builder()
         .halign(Align::Start)
         .css_classes(["error"])
@@ -95,45 +122,52 @@ fn build_ui(app: &adw::Application) {
         .application(app)
         .title("Nam-tor — Face Profiles")
         .default_width(560)
-        .default_height(420)
+        .default_height(560)
         .content(&toolbar_view)
         .build();
 
-    // Attempt to connect to the session-bus service. If it is unavailable,
-    // show recovery guidance instead of crashing.
-    let mut presenter = match DbusManagerClient::connect() {
-        Ok(client) => ProfilePresenter::new(client),
+    let presenter = match DbusManagerClient::connect() {
+        Ok(client) => ProfilePresenter::new(client, current_uid()),
         Err(err) => {
             render_unreachable(&window, &err);
             window.present();
             return;
         }
     };
-    let model = presenter.refresh().clone();
+    let presenter_rc = Rc::new(RefCell::new(presenter));
+    {
+        let mut p = presenter_rc.borrow_mut();
+        p.refresh();
+    }
+
     render(
         &profiles_box,
         &enrollment_box,
+        &protection_box,
         &status_label,
         &error_label,
         &message_label,
-        &model,
+        &presenter_rc.borrow().model().clone(),
     );
-    if model.is_loading {
-        status_label.set_label("Loading...");
-    }
+    render_pam_services(&pam_box, &presenter_rc);
 
-    // Periodic refresh: poll enrollment progress while a session is active.
     let enroll_box = enrollment_box.clone();
     let profiles_box_clone = profiles_box.clone();
+    let protection_clone = protection_box.clone();
     let status_clone = status_label.clone();
     let error_clone = error_label.clone();
     let message_clone = message_label.clone();
+    let rc_for_timer = Rc::clone(&presenter_rc);
     glib::source::timeout_add_local(std::time::Duration::from_millis(500), move || {
-        if presenter.model().enrollment.is_some() {
-            let m = presenter.poll_enrollment().clone();
+        let mut p = rc_for_timer.borrow_mut();
+        if p.model().enrollment.is_some() {
+            p.poll_progress();
+            let m = p.model().clone();
+            drop(p);
             render(
                 &profiles_box_clone,
                 &enroll_box,
+                &protection_clone,
                 &status_clone,
                 &error_clone,
                 &message_clone,
@@ -146,13 +180,15 @@ fn build_ui(app: &adw::Application) {
     window.present();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render(
     profiles_box: &GtkBox,
     enrollment_box: &GtkBox,
+    protection_box: &GtkBox,
     status_label: &Label,
     error_label: &Label,
     message_label: &Label,
-    model: &PresenterModel,
+    model: &namtor_gnome::PresenterModel,
 ) {
     while let Some(child) = profiles_box.first_child() {
         profiles_box.remove(&child);
@@ -183,9 +219,11 @@ fn render(
             let last = Label::builder()
                 .label(format!(
                     "last used: {}",
-                    row.last_used
-                        .map(|t| format!("epoch {t}"))
-                        .unwrap_or_else(|| "never".into())
+                    if row.last_used == 0 {
+                        "never".to_string()
+                    } else {
+                        format!("epoch {}", row.last_used)
+                    }
                 ))
                 .css_classes(["dim-label", "caption"])
                 .build();
@@ -235,20 +273,48 @@ fn render(
         enrollment_box.append(&frame);
     }
 
+    while let Some(child) = protection_box.first_child() {
+        protection_box.remove(&child);
+    }
+    if let Some(protection) = &model.protection {
+        let prot_title = Label::builder()
+            .label("Template Protection")
+            .halign(Align::Start)
+            .css_classes(["heading"])
+            .build();
+        protection_box.append(&prot_title);
+        let sealing = format!(
+            "Sealing: {} (TPM: {})",
+            protection.sealing.as_str(),
+            if protection.has_tpm { "yes" } else { "no" }
+        );
+        let row = Label::builder()
+            .label(&sealing)
+            .halign(Align::Start)
+            .css_classes(["body"])
+            .build();
+        protection_box.append(&row);
+        if !protection.warning.is_empty() {
+            let warn = Label::builder()
+                .label(&protection.warning)
+                .halign(Align::Start)
+                .css_classes(["warning"])
+                .wrap(true)
+                .build();
+            protection_box.append(&warn);
+        }
+    }
+
     if let Some(status) = &model.status {
         status_label.set_label(&format!(
-            "Daemon {}  ·  Camera {}  ·  v{}",
-            if status.daemon_reachable {
-                "up"
+            "API v{}  ·  {} profile(s)  ·  Emitter {}",
+            status.api_version,
+            status.profiles.len(),
+            if status.emitter_armed {
+                "armed"
             } else {
-                "down"
+                "disarmed"
             },
-            if status.camera_present {
-                "present"
-            } else {
-                "absent"
-            },
-            status.version.as_deref().unwrap_or("?"),
         ));
     } else if model.is_loading {
         status_label.set_label("Loading...");

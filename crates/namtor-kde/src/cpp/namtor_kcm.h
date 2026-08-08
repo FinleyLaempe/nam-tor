@@ -156,6 +156,10 @@ public:
     // --- Profile lookup by id (removes QML index coupling) ---
     Q_INVOKABLE QString profileNameById(const QString &id) const;
 
+    // --- v2 PAM high-impact helpers for QML ---
+    Q_INVOKABLE QString highImpactWarning() const;
+    Q_INVOKABLE bool isHighImpact(const QString &compatibility) const;
+
 signals:
     // --- Frozen signal set (Task 8: 4 signals) ---
     void enrollmentProgress(const QString &session, quint32 framesCaptured,
