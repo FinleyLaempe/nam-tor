@@ -1,0 +1,64 @@
+{
+  "scenarios": [
+    {
+      "name": "Enrollment Setup",
+      "description": "User opens 'Add Profile' view",
+      "assertions": [
+        {
+          "element": "title",
+          "expected": "Add New Profile",
+          "role": "heading"
+        },
+        {
+          "element": "name_entry",
+          "expected": "TextBox",
+          "role": "textbox",
+          "accessible_name": "Profile Name"
+        },
+        {
+          "element": "privacy_notice",
+          "expected": "Your biometric templates are encrypted and stored locally on this device. No biometric data leaves the system.",
+          "role": "text"
+        },
+        {
+          "element": "start_button",
+          "expected": "Start Enrollment",
+          "role": "button"
+        }
+      ]
+    },
+    {
+      "name": "Enrollment Capture",
+      "description": "User is actively capturing frames",
+      "assertions": [
+        {
+          "element": "progress_label",
+          "expected": "Frames captured: [N] · Coverage: [X]%",
+          "role": "text"
+        },
+        {
+          "element": "quality_alert",
+          "expected": "Low quality — look at the camera and slowly turn your head left and right.",
+          "role": "alert",
+          "condition": "quality == low"
+        },
+        {
+          "element": "progress_bar",
+          "expected": "fraction == coverage_percent / 100",
+          "role": "progressbar"
+        }
+      ]
+    },
+    {
+      "name": "Enrollment Cancel",
+      "description": "User cancels during capture",
+      "assertions": [
+        {
+          "element": "cancel_button",
+          "expected": "Cancel",
+          "role": "button"
+        }
+      ]
+    }
+  ]
+}

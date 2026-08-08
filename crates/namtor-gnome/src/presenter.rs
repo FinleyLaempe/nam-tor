@@ -42,6 +42,7 @@ impl<C: ManagerClient> ProfilePresenter<C> {
                 error: None,
                 message: None,
                 is_loading: false,
+                reduced_protection_warning: false,
             },
             name_index: std::collections::HashMap::new(),
             pending_task: None,
@@ -73,7 +74,10 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             Err(err) => self.set_error(&err),
         }
         match self.client.status() {
-            Ok(status) => self.model.status = Some(status),
+            Ok(status) => {
+                self.model.reduced_protection_warning = status.always_on_emitter;
+                self.model.status = Some(status);
+            }
             Err(err) if self.model.error.is_none() => self.set_error(&err),
             Err(_) => {}
         }
@@ -81,11 +85,37 @@ impl<C: ManagerClient> ProfilePresenter<C> {
         &self.model
     }
 
-    /// Begin a new enrollment. On success the presenter enters the
-    /// `enrolling` state and the view switches to the capture page.
     pub fn create_profile(&mut self, name: &str) -> &PresenterModel {
         self.model.error = None;
         self.model.message = None;
+
+        if name.trim().is_empty() {
+            self.model.error = Some(ErrorView {
+                title: "Invalid name".into(),
+                detail: "Profile name cannot be empty".into(),
+                recovery: None,
+            });
+            return &self.model;
+        }
+
+        if name.len() > 64 {
+            self.model.error = Some(ErrorView {
+                title: "Invalid name".into(),
+                detail: "Profile name is too long (max 64 characters)".into(),
+                recovery: None,
+            });
+            return &self.model;
+        }
+
+        if self.name_index.values().any(|n| n == name) {
+            self.model.error = Some(ErrorView {
+                title: "Duplicate name".into(),
+                detail: format!("A profile named '{name}' already exists"),
+                recovery: None,
+            });
+            return &self.model;
+        }
+
         match self.client.create_profile(name) {
             Ok(session) => match self.client.start_enrollment(&session) {
                 Ok(()) => match self.client.get_progress(&session) {
@@ -101,9 +131,6 @@ impl<C: ManagerClient> ProfilePresenter<C> {
         &self.model
     }
 
-    /// Poll the live enrollment. The view calls this on a refresh tick; the
-    /// presenter surfaces quality guidance as soon as the daemon reports
-    /// `quality_label == "low"`.
     pub fn poll_enrollment(&mut self) -> &PresenterModel {
         let Some(enrollment) = self.model.enrollment.clone() else {
             return &self.model;
@@ -113,7 +140,11 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             Ok(progress) => {
                 self.model.enrollment = Some(EnrollmentView::from_progress(progress));
             }
-            Err(err) => self.set_error(&err),
+            Err(err) => {
+                // If the daemon is unavailable, we set an error.
+                // The view will likely show the RecoveryView.
+                self.set_error(&err);
+            }
         }
         &self.model
     }
@@ -179,6 +210,14 @@ impl<C: ManagerClient> ProfilePresenter<C> {
     /// and only calls [`Self::confirm_merge`] if the user accepts.
     pub fn request_merge(&mut self, src_id: &str, dst_id: &str) -> &PresenterModel {
         self.model.error = None;
+        if src_id == dst_id {
+            self.model.error = Some(ErrorView {
+                title: "Invalid merge".into(),
+                detail: "Cannot merge a profile with itself".into(),
+                recovery: None,
+            });
+            return &self.model;
+        }
         let src_name = self.name_index.get(src_id).cloned();
         let dst_name = self.name_index.get(dst_id).cloned();
         match (src_name, dst_name) {
@@ -276,6 +315,22 @@ impl<C: ManagerClient> ProfilePresenter<C> {
 
     pub fn rename_profile(&mut self, id: &str, new_name: &str) -> &PresenterModel {
         self.model.error = None;
+        if new_name.trim().is_empty() {
+            self.model.error = Some(ErrorView {
+                title: "Invalid name".into(),
+                detail: "Profile name cannot be empty".into(),
+                recovery: None,
+            });
+            return &self.model;
+        }
+        if self.name_index.values().any(|n| n == new_name) {
+            self.model.error = Some(ErrorView {
+                title: "Duplicate name".into(),
+                detail: "A profile with this name already exists".into(),
+                recovery: None,
+            });
+            return &self.model;
+        }
         match self.client.rename_profile(&ProfileId(id.into()), new_name) {
             Ok(()) => {
                 self.model.message = Some(format!("Renamed profile to '{new_name}'"));

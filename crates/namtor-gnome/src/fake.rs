@@ -347,7 +347,9 @@ impl ManagerClient for FakeManagerClient {
             daemon_reachable: true,
             camera_present: true,
             active_profile: None,
-            version: Some("0.1.0-fake".into()),
+            version: Some("0.1.0".into()),
+            always_on_emitter: false,
         })
+
     }
 }

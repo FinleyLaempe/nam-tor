@@ -105,6 +105,7 @@ pub struct StatusInfo {
     pub camera_present: bool,
     pub active_profile: Option<String>,
     pub version: Option<String>,
+    pub always_on_emitter: bool,
 }
 
 /// All ways a manager call can fail that the UI must distinguish. These map

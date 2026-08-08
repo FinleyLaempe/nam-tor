@@ -1,0 +1,53 @@
+{
+  "task": "18",
+  "description": "GNOME profile actions — AT-SPI scenarios",
+  "scenarios": [
+    {
+      "name": "rename_profile",
+      "steps": ["select profile", "choose rename from action menu", "enter new name", "confirm"],
+      "validation": ["empty name rejected", "duplicate name rejected", "success refreshes list"],
+      "a11y": ["action menu keyboard navigable", "text entry has accessible name"]
+    },
+    {
+      "name": "enable_disable",
+      "steps": ["toggle enabled switch on profile row"],
+      "validation": ["switch state persists after refresh", "matches store state"],
+      "a11y": ["switch has accessible role Checkbox", "accessible name includes profile name"]
+    },
+    {
+      "name": "delete_profile",
+      "steps": ["select profile", "choose delete from action menu", "confirm in dialog"],
+      "validation": ["confirmation dialog shown", "profile removed after confirm", "cancel preserves profile"],
+      "a11y": ["dialog has accessible name", "confirm button has destructive role"]
+    },
+    {
+      "name": "merge_profiles",
+      "steps": ["select source profile", "choose merge", "select destination", "confirm"],
+      "validation": ["self-merge prevented", "merge writes to store", "source removed after merge"],
+      "a11y": ["merge dialog lists both profiles by name"]
+    },
+    {
+      "name": "replace_profile",
+      "steps": ["select profile", "choose replace", "confirm"],
+      "validation": ["old profile preserved until replacement succeeds", "confirmation required"],
+      "a11y": ["warning text has accessible role Alert"]
+    },
+    {
+      "name": "reduced_protection_warning_r9",
+      "steps": ["daemon reports always_on_emitter", "profile list view renders"],
+      "validation": ["warning banner shown with accessible name", "full-protection fixture does NOT show banner"],
+      "a11y": ["banner has AccessibleRole::Alert", "named 'reduced-protection-warning'"]
+    },
+    {
+      "name": "stale_state",
+      "steps": ["profile deleted by another client", "refresh profile list"],
+      "validation": ["stale profile not shown after refresh", "no crash"]
+    },
+    {
+      "name": "polkit_denied",
+      "steps": ["request destructive action", "polkit denies"],
+      "validation": ["error shown", "profile list unchanged (rollback)"]
+    }
+  ],
+  "privacy": "No scores, thresholds, embeddings, or biometric images in any UI element"
+}
