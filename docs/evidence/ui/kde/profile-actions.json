@@ -1,0 +1,157 @@
+{
+  "task": "24",
+  "description": "KDE KCM profile management — Qt Quick test scenarios",
+  "driver": "Qt Quick QML engine with QAccessible / Qt Test (QSignalSpy) and the Rust p2p fake bus",
+  "scenarios": [
+    {
+      "name": "rename_profile",
+      "steps": [
+        "select profile",
+        "open rename sheet",
+        "enter new name",
+        "confirm"
+      ],
+      "validation": [
+        "empty name rejected with inline error",
+        "duplicate name rejected (DuplicateName from manager)",
+        "success refreshes list via ProfileChanged signal",
+        "list state persists after daemon restart"
+      ],
+      "a11y": [
+        "rename sheet keyboard navigable",
+        "TextField has Accessible.name i18n('Profile name')",
+        "confirm button has Accessible.role Button and i18n name"
+      ]
+    },
+    {
+      "name": "enable_disable",
+      "steps": [
+        "toggle enabled switch on profile card"
+      ],
+      "validation": [
+        "EnableProfile call round-trips; switch state matches store after refresh",
+        "state persists after daemon restart",
+        "disabled profile does not match on verify (daemon-side; KCM only reflects state)"
+      ],
+      "a11y": [
+        "switch has Accessible.role CheckBox",
+        "Accessible.name includes profile name via i18n interpolation"
+      ]
+    },
+    {
+      "name": "delete_profile",
+      "steps": [
+        "select profile",
+        "choose delete from action menu",
+        "confirm in dialog"
+      ],
+      "validation": [
+        "confirmation dialog shown with profile name",
+        "profile removed after confirm",
+        "cancel preserves profile",
+        "DeleteProfile on cross-uid target triggers polkit"
+      ],
+      "a11y": [
+        "dialog has Accessible.name with i18n text",
+        "confirm button has destructive styling and Accessible.role Button",
+        "dialog is keyboard dismissible"
+      ]
+    },
+    {
+      "name": "merge_profiles",
+      "steps": [
+        "select source profile",
+        "choose merge",
+        "select destination profile",
+        "confirm"
+      ],
+      "validation": [
+        "self-merge prevented (source == destination rejected client-side and server-side)",
+        "merge writes combined templates to destination via store transaction",
+        "source profile removed after successful merge",
+        "merge rollback on store error preserves both profiles"
+      ],
+      "a11y": [
+        "merge dialog lists both profiles by name with Accessible.role StaticText",
+        "destination selector is keyboard navigable"
+      ]
+    },
+    {
+      "name": "replace_profile",
+      "steps": [
+        "select profile",
+        "choose replace",
+        "confirm in dialog",
+        "run new enrollment",
+        "press Finish"
+      ],
+      "validation": [
+        "old profile preserved until replacement CommitProfile succeeds",
+        "confirmation required before starting replacement capture",
+        "on replacement success, old templates overwritten atomically",
+        "cancel mid-replacement preserves old profile"
+      ],
+      "a11y": [
+        "replace warning has Accessible.role Alert with i18n name including profile name",
+        "confirm and cancel buttons have Accessible.role Button"
+      ]
+    },
+    {
+      "name": "reduced_protection_warning_r9",
+      "steps": [
+        "daemon reports always_on_emitter status (R9 reduced-protection fixture)",
+        "profile list view renders",
+        "full-protection fixture: daemon reports normal emitter",
+        "profile list view renders"
+      ],
+      "validation": [
+        "R9 fixture: warning banner shown with i18n text explaining always-on emitter risk",
+        "full-protection fixture: banner NOT shown",
+        "banner presence driven by StatusReport always_on_emitter field, not a heuristic"
+      ],
+      "a11y": [
+        "banner has Accessible.role Alert",
+        "Accessible.name set to i18n('Reduced protection: emitter does not turn off')",
+        "banner is keyboard reachable and live-announced"
+      ]
+    },
+    {
+      "name": "stale_state",
+      "steps": [
+        "profile deleted by another client (or daemon restart)",
+        "ProfileChanged signal received",
+        "refresh profile list"
+      ],
+      "validation": [
+        "stale profile removed from list after refresh",
+        "no crash, no dangling QML references",
+        "late async replies dropped via generation counter mismatch"
+      ],
+      "a11y": [
+        "list update announced via Accessible.role List with live region"
+      ]
+    },
+    {
+      "name": "polkit_denied",
+      "steps": [
+        "request destructive action (delete / merge / replace) on cross-uid target",
+        "polkit denies"
+      ],
+      "validation": [
+        "manager returns PermissionDenied",
+        "KCM shows error message with reason",
+        "profile list unchanged (rollback)",
+        "no store mutation occurred"
+      ],
+      "a11y": [
+        "error rendered with Accessible.role Alert",
+        "Accessible.name i18n-wrapped with action context"
+      ]
+    }
+  ],
+  "privacy": "No scores, thresholds, embeddings, frames, PAD detail, or biometric images in any QML element; match confidence shown as coarse non-numeric buckets",
+  "withheld": {
+    "kcmshell6_runtime_load": "kcmshell6 / plasma-systemsettings not installed; runtime QML loading in a real Plasma session is the next HIL step",
+    "screen_reader_orca": "no orca / no running Plasma session; structural a11y roles asserted by source audit"
+  }
+}

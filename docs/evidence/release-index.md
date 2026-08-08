@@ -39,8 +39,8 @@ marked `(defined)`.
 
 ### CI and packaging
 
-- `docs/evidence/ci-baseline.md` — CI security gates (G5.1 / G5.2 / G5.4
-  structural checks) and the baseline they enforce.
+- `docs/evidence/ci-baseline.md` — CI security gates (G5.1 / G5.2 / G5.4 /
+  G5.6 structural checks) and the baseline they enforce.
 - `docs/evidence/install-manifest.json` — install tree manifest recorded by
   the disposable-container install step.
 - `docs/evidence/package-matrix.json` — package matrix definition (distro,
@@ -49,8 +49,31 @@ marked `(defined)`.
   the matrix.
 - `docs/evidence/rc-package-matrix.json` — RC package lifecycle results
   (build, install, upgrade, uninstall) per matrix cell.
-- `docs/evidence/rc-package-matrix.md` (defined) — human-readable summary of
-  the RC package matrix results.
+- `docs/evidence/rc-package-matrix.md` — human-readable summary of the RC
+  package matrix results.
+
+### Packaging evidence
+
+- `docs/evidence/packaging/install-layout.md` — install tree layout, paths,
+  and ownership.
+- `docs/evidence/packaging/distro-packages.md` — distro package build and
+  test results (Arch, Fedora, Debian).
+- `docs/evidence/packaging/pam-install.md` — transactional PAM install
+  lifecycle evidence.
+- `docs/evidence/packaging/systemd-hardening.md` — systemd unit hardening
+  (service isolation, capabilities, restrictions).
+- `docs/evidence/packaging/model-acquisition.md` — model weight acquisition
+  and licence acceptance flow.
+- `docs/evidence/packaging/diagnostics.md` — diagnostics bundle privacy and
+  portability.
+- `docs/evidence/packaging/signatures-sbom.md` — release signatures and SBOM
+  generation evidence.
+- `docs/evidence/packaging/reproducible-build.json` — reproducible build
+  verification (hash, environment, flags).
+- `docs/evidence/packaging/namtor.cyclonedx.json` — CycloneDX SBOM.
+- `docs/evidence/packaging/namtor.spdx.json` — SPDX SBOM.
+- `docs/evidence/packaging/namtor.provenance.json` — SLSA provenance
+  attestation.
 
 ### G1 hardware-in-the-loop
 
@@ -60,11 +83,19 @@ marked `(defined)`.
   mode, firmware-strobed confirmation).
 - `docs/evidence/g1-s3-20x.jsonl` — S3 suspend/resume 20x cycle results
   (simulated; real S3 WITHHELD pending hardware access).
+- `docs/evidence/g1-hardware-lifecycle.md` — G1 hardware lifecycle gate
+  summary (selection, MSXU, teardown, hotplug, S3).
 - `docs/evidence/g1-final.md` — G1 HIL gate suite summary (Markdown).
 - `docs/evidence/g1-final.json` — G1 HIL gate suite summary (machine-readable).
 
 ### G2 through G4 (recognition and liveness)
 
+- `docs/evidence/g2-latency-reliability.md` — G2 latency and reliability
+  gate summary (median, p95, cold-start).
+- `docs/evidence/g3-biometric-eval.md` — G3 biometric evaluation gate
+  summary (FAR, FRR, DET curve, N, CIs).
+- `docs/evidence/g4-presentation-attack.md` — G4 presentation attack
+  detection gate summary (per-attack APCER, BPCER).
 - `ml/reports/production-eval.md` — G2 to G4 evaluation protocol, metrics,
   and results (FAR, FRR, PAD error rates).
 - `ml/reports/analytic-pad-calibration.md` — analytic PAD gate calibration
@@ -81,21 +112,52 @@ marked `(defined)`.
 - `docs/evidence/r5-cohort.md` — z-norm cohort definition, licence status,
   and measured normalisation impact.
 
-### G5 security and TPM
+### Trust evidence
 
-- `docs/evidence/g5-tpm.md` — TPM2 sealing status (stub / file fallback;
-  cross-hardware TPM WITHHELD).
+- `docs/evidence/trust/g5-security-proof.md` — G5 security proof: gate
+  matrix, mutation testing, binary hashes, forbidden-data assertion receipt.
+- `docs/evidence/trust/tpm2-lifecycle.md` — TPM2 sealing lifecycle (create,
+  unseal, corruption, migration, cross-hardware WITHHELD).
+- `docs/evidence/trust/fusion.md` — RGB-IR fusion status (extrinsics,
+  alignment, geometric identity, WITHHELD).
+- `docs/evidence/trust/znorm.md` — z-norm score normalisation status (cohort
+  selection, calibration, WITHHELD).
+- `docs/evidence/trust/pad-calibration.md` — analytic PAD calibration status
+  (thresholds, attack corpus, WITHHELD).
+- `docs/evidence/trust/learned-pad.md` — learned PAD (MiniFASNet) status
+  (synthetic-only, deployment, production selection WITHHELD).
+- `docs/evidence/trust/int8-eval.md` — INT8 vs FP32 evaluation status (Path
+  B architectural decision, measurement WITHHELD).
+- `docs/evidence/trust/backoff.md` — per-uid authentication backoff and
+  rate limiting evidence.
+- `docs/evidence/g5-tpm.md` — TPM2 sealing status (legacy reference;
+  superseded by trust/tpm2-lifecycle.md).
 - `docs/evidence/g5-fault-matrix.json` — security fault matrix (per-failure
   mode, detection, fail-closed behaviour).
 - `docs/evidence/g5-rate-limit.json` — rate limiting measurements (lockout,
   backoff, per-uid bounds).
 
+### G5 desktop end-to-end
+
+- `docs/evidence/g5-desktop-e2e.md` — G5 desktop end-to-end gate summary
+  (PAM, sandbox, fail-closed, log privacy, TPM).
+
+### G6 install matrix
+
+- `docs/evidence/g6-install-matrix.md` — G6 install matrix gate summary
+  (distro, arch, build, install, smoke, upgrade, uninstall).
+
+### G7 status reconciliation
+
+- `docs/evidence/g7-status-reconciliation.md` — G7 status reconciliation
+  gate summary (ledger consistency, claim fidelity, WITHHELD visibility).
+
 ### RC production gates
 
-- `docs/evidence/rc-g2-g5.md` (defined) — RC production gates G2 to G5
-  summary.
-- `docs/evidence/rc-g2-g5.json` (defined) — RC production gates G2 to G5
+- `docs/evidence/rc-g2-g5.md` — RC production gates G2 to G5 summary.
+- `docs/evidence/rc-g2-g5.json` — RC production gates G2 to G5
   machine-readable results.
+- `docs/evidence/release-candidate.md` — release candidate evidence summary.
 
 ### Data collection
 
@@ -112,14 +174,66 @@ marked `(defined)`.
 ### Desktop integration
 
 - `docs/evidence/dbus-contract.xml` — D-Bus API contract (Profile service).
+- `docs/evidence/manager-contract.md` — manager wire contract
+  reconciliation (methods, signals, version negotiation).
+- `docs/evidence/manager-bus-runtime.md` — system-bus zbus service runtime
+  evidence (introspection, ownership, shutdown).
+- `docs/evidence/manager-store-integration.md` — manager profile lifecycle
+  backed by encrypted TemplateStore.
+- `docs/evidence/manager-enrollment.md` — manager transactional enrollment
+  sessions.
+- `docs/evidence/manager-polkit.md` — polkit peer identity and authorization
+  evidence.
+- `docs/evidence/manager-disconnect.md` — manager disconnect and
+  cancellation fault handling.
+- `docs/evidence/manager-fault-matrix.md` — manager fault matrix.
 - `docs/evidence/gnome-qa/report.md` — GNOME wizard and settings QA results.
+- `docs/evidence/ui/gnome/enrollment.json` — GNOME enrollment AT-SPI
+  scenarios.
+- `docs/evidence/ui/gnome/profile-actions.json` — GNOME profile actions
+  AT-SPI scenarios.
+- `docs/evidence/ui/gnome/accessibility.md` — GNOME accessibility audit.
+- `docs/evidence/ui/gnome/gnome-shell-qa.md` — GNOME Shell QA.
+- `docs/evidence/ui/gnome/package-qa.md` — GNOME package QA.
+- `docs/evidence/ui/gnome/review.json` — GNOME review scenarios.
 - `docs/evidence/kde-qa/report.md` — KDE KCM QA results.
+- `docs/evidence/ui/kde/build.md` — KDE KCM build evidence.
+- `docs/evidence/ui/kde/bridge.json` — KDE async D-Bus bridge and profile
+  model.
+- `docs/evidence/ui/kde/enrollment.json` — KDE enrollment Qt Quick
+  scenarios.
+- `docs/evidence/ui/kde/profile-actions.json` — KDE profile management Qt
+  Quick scenarios.
+- `docs/evidence/ui/kde/package-qa.md` — KDE KCM package QA.
 
 ### Diagnostics and presence
 
 - `docs/evidence/diagnostics.md` — diagnostics surface (status, logs,
   health checks).
-- `docs/evidence/presence-hil.md` (defined) — presence mode HIL results.
+- `docs/evidence/diagnostics-portability.md` — diagnostics portability
+  (no hardcoded paths, device-independent).
+- `docs/evidence/daemon-observability.md` — daemon structured logging and
+  startup state evidence.
+- `docs/evidence/protocol-lifecycle.md` — auth protocol lifecycle (Release
+  semantics, peer close, capture/emitter release).
+- `docs/evidence/failure-contract.md` — safe failure context (typed external
+  codes, PAM fail-closed, PAD veto indistinguishable from NoMatch).
+- `docs/evidence/concurrency-flake.md` — camera-lock deadlock elimination
+  evidence.
+- `docs/evidence/enrollment-storage-faults.md` — enrollment ownership and
+  atomicity fault evidence.
+- `docs/evidence/live-topology-hil.md` — live camera topology HIL evidence.
+- `docs/evidence/presence-hil.md` — presence mode HIL results.
+- `docs/evidence/depth-status.md` — depth capability status and path
+  forward.
+- `docs/evidence/hardware-compatibility.md` — hardware flywheel: supported,
+  quirks, and unsupported devices.
+- `docs/evidence/collection-protocol.md` — consented collection protocol
+  (ConsentRecord, per-session IDs, withdrawal, differential stats).
+- `docs/evidence/profile-schema.json` — profile schema definition.
+- `docs/evidence/enrollment-ranking.json` — enrollment ranking and
+  reservoir configuration.
+- `docs/evidence/decision-policy.json` — decision policy configuration.
 
 ## 3. Claims Policy
 

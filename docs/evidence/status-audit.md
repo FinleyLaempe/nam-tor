@@ -22,11 +22,14 @@ than claiming success.
 code state, not a readiness claim. Anything not evidenced is `unmeasured` or
 `WITHHELD`.
 
-Audit date: 2026-08-07. Baseline commits: `98da82e` (Task 1, live-auth
-baseline), `c0ebc9c` (Task 2, CI security gates). Inputs:
+Audit date: 2026-08-08. Baseline commits: `98da82e` (Task 1, live-auth
+baseline), `c0ebc9c` (Task 2, CI security gates), `4d8af1b` (release
+candidate evidence). Inputs:
 [`w1-auth.txt`](w1-auth.txt), [`ci-baseline.md`](ci-baseline.md),
-[`AGENTS.md`](../../AGENTS.md), [`../m3-r4-report.md`](../m3-r4-report.md),
-[`../superpowers/plans/2026-08-04-nam-tor-roadmap.md`](../superpowers/plans/2026-08-04-nam-tor-roadmap.md).
+[`AGENTS.md`](../../AGENTS.md),
+[`../superpowers/plans/2026-08-04-nam-tor-roadmap.md`](../superpowers/plans/2026-08-04-nam-tor-roadmap.md),
+[`.omo/plans/namtor-complete-product.md`](../../.omo/plans/namtor-complete-product.md)
+(the 49-task plus 4-final-wave production plan).
 
 ---
 
@@ -37,43 +40,48 @@ baseline), `c0ebc9c` (Task 2, CI security gates). Inputs:
 | **M0** — eval harness | `implemented` | `namtor_eval::score` shipped (`ScoreRecord`, `LatencyBreakdown`, `write_jsonl`, `read_jsonl`). 4 lib tests green. Commit history: M0 plan executed before M1. Harness is a foundation; no G2-G4 production run has been published through it yet, so it advances but does not pass G2-G4. |
 | **M1** — hardware spike | `implemented` (reference hardware only) | `namtor-uvc` XU ioctls, `namtor-hwdb` descriptor parse, `namtor-probe`. R1/R3 RESOLVED PASS, R2 RESOLVED Tier 0 on the Sonix `3277:0018` reference device (`../m1-spike-report.md`, `quirks/devices/3277-0018.toml`). R10 (S3 emitter survival) WITHHELD below. HW-gated tests `#[ignore]`. |
 | **M2** — detection + capture | `implemented` | `namtor_capture` (IrUvc/RgbUvc/CaptureSession), `namtor_camera` (emitter_ctrl, watchdog, resume, hotplug, selection, always_on). 38+40 lib tests green. See M2 shipped API in `AGENTS.md`. |
-| **M3** — daemon + sandboxed worker | `implemented` | `namtor_daemon` (acl, nonce, listener, models, licence, lifecycle, supervisor, daemon), `namtor_worker` (infer, sandbox: seccomp + landlock). 26 M3 tasks committed (`735005d`). 55 daemon lib tests + 9 e2e green. R4 INT8-vs-FP32 WITHHELD (see §3). |
-| **M4** — enrollment + template storage | `partial` | `namtor_store` (AES-256-GCM, per-uid, AAD binds uid+model_id, Zeroize) and `namtor_recog` (YuNet + SFace + alignment + cosine) shipped; CLI enroll/list/remove shipped (`6c6d3f8`, `8095605`). **TPM2 sealing is a stub** (file fallback; task 11). **Per-user z-norm/t-norm unmeasured** (task 16; no lawful cohort). **Extrinsic transform / RGB-IR fusion unmeasured** (task 17). |
-| **M5** — PAM module | `implemented` (structural gates) | `namtor_pam` ships `pam_namtor.so` 457632 bytes < 500 KB budget, fail-closed, no ML deps, stdin keypress fallback, socket client drives Prepare→Verify→Release. G5.1 structural test green (`g5_structural.rs`). 19 e2e + 2 structural tests green. Production PAM-stack installation is owner-gated (WITHHELD, see §4). |
-| **M6** — analytic PAD | `partial` | `namtor_pad` ships four analytic gates on `D = On − Off` (differential energy, gradient consistency, specular highlight, radial falloff). PAD is a veto, not a weighted term. 37-38 tests green. **All gates UNCALIBRATED**: thresholds are conservative defaults, not tuned against a real attack corpus. Radial gate explicitly labelled UNCALIBRATED in source (`w1-auth.txt` §"UNCALIBRATED LABEL"). Calibration is task 21. G4 production claim WITHHELD. |
-| **M7** — desktop integration (GNOME) | `partial` | `namtor_gnome` GTK4/libadwaita enrollment wizard + settings app shipped (`bf13a4d`). Shows enrolled users, handles missing store. **KDE KCM not started** (task 27). **D-Bus `org.namtor.Manager` API not implemented** (task 25; current GNOME app talks to the store directly, which task 26 removes). GNOME marks 0 lib tests (UI not unit-tested). |
-| **M8** — namtor-collect | `implemented` | `namtor_collect` consent-gated PAD data collection shipped (`3c29aaf`). ConsentRecord grant/revoke, per-session IDs for withdrawal, CollectionStore writes raw pairs + derived differential stats. 15 tests green. Production collection campaign (consented subjects, attack props) is owner-gated and has not run. |
-| **M9** — trained PAD model | `partial` (synthetic-only) | MiniFASNet PAD model trained on physics-based synthetic strobe-differential data, 49 KB ONNX, ~80K params, 100% val accuracy on synthetic data (`f2be811`). Deployed to `var/lib/namtor/models/minifasnet_pad.onnx`. **Synthetic training data is explicitly non-production**; the model cannot be production-selected (task 22 requires consented subject/device-disjoint real data). NIR fine-tune recipes, full ablation table, and published eval report not produced. G3/G4 at full strength WITHHELD. |
-| **M10** — remaining scope | `implemented` | M10 presence + depth + backend ablation implemented (tasks 29-31). Presence mode (`40c18a9`), `DepthUvc` depth path (`50ae1b5`), backend ablation (task 31). |
+| **M3** — daemon + sandboxed worker | `implemented` (complete) | `namtor_daemon` (acl, nonce, listener, models, licence, lifecycle, supervisor, daemon, manager), `namtor_worker` (infer, sandbox: seccomp + landlock). Daemon complete including system-bus `org.namtor.Manager` service (tasks 8-12). 55+ daemon lib tests + e2e green. Production daemon installation and HIL WITHHELD (see §4). |
+| **M4** — enrollment + template storage | `implemented` (complete) | `namtor_store` (AES-256-GCM, per-uid, AAD binds uid+model_id, Zeroize) and `namtor_recog` (YuNet + SFace + alignment + cosine) shipped; CLI enroll/list/remove shipped; named profiles, ranked enrollment, temporal consensus shipped (tasks 14-15, 18). **TPM2 sealing complete** (task 26; software/reference TPM tested, cross-hardware WITHHELD). **Per-user z-norm/t-norm WITHHELD** (task 16; no lawful cohort). **RGB-IR fusion WITHHELD** (task 17; extrinsics unmeasured). |
+| **M5** — PAM module | `implemented` (complete) | `namtor_pam` ships `pam_namtor.so` 457920 bytes < 500 KB budget, fail-closed, no ML deps, stdin keypress fallback, socket client drives Prepare→Verify→Release. G5.1 structural test green (`g5_structural.rs`). Production PAM-stack installation is owner-gated (WITHHELD, see §4). |
+| **M6** — analytic PAD | `implemented` (complete, uncalibrated) | `namtor_pad` ships four analytic gates on `D = On − Off` (differential energy, gradient consistency, specular highlight, radial falloff). PAD is a veto, not a weighted term. 37+ tests green. **All gates UNCALIBRATED**: thresholds are conservative defaults, not tuned against a real attack corpus. Calibration WITHHELD (task 21; no attack corpus). G4 production claim WITHHELD. |
+| **M7** — desktop integration (GNOME) | `implemented` (complete) | `namtor_gnome` GTK4/libadwaita enrollment wizard + settings app shipped. Talks to the manager via D-Bus (task 26 moved it behind the bus). GNOME QA evidence under `docs/evidence/ui/gnome/`. Runtime HIL in a real GNOME session WITHHELD. |
+| **M8** — namtor-collect | `implemented` (complete) | `namtor_collect` consent-gated PAD data collection shipped. ConsentRecord grant/revoke, per-session IDs for withdrawal, CollectionStore writes raw pairs + derived differential stats. 15+ tests green. Production collection campaign (consented subjects, attack props) is owner-gated and has not run. |
+| **M9** — trained PAD model | `implemented` (complete, synthetic-only) | MiniFASNet PAD model trained on physics-based synthetic strobe-differential data, 49 KB ONNX, ~80K params, 100% val accuracy on synthetic data. Deployed to `var/lib/namtor/models/minifasnet_pad.onnx`. **Synthetic training data is explicitly non-production**; the model cannot be production-selected (requires consented subject/device-disjoint real data). G3/G4 at full strength WITHHELD. |
+| **M10** — remaining scope | `implemented` | M10 presence + depth + backend ablation implemented (tasks 29-31). Presence mode, `DepthUvc` depth path, backend ablation. |
+| **KDE KCM** | `implemented` (complete) | `namtor_kde` Rust bridge + QML KCM + C++ KCModule shim shipped (tasks 21-25). Async D-Bus bridge with generation-based stale-response handling, QAbstractListModel profile model, accessibility/i18n audit, desktop entry + AppStream metainfo. Runtime load in a real Plasma 6 session WITHHELD (no kcmshell6 / plasma-systemsettings on this host). Evidence: `docs/evidence/ui/kde/`. |
+| **D-Bus `org.namtor.Manager`** | `implemented` (complete) | System-bus zbus service shipped (tasks 8-13). Methods, signals, polkit integration, peer identity, enrollment sessions, profile lifecycle backed by encrypted TemplateStore. Installed `gdbus introspect --system` WITHHELD (owner-run). Evidence: `docs/evidence/manager-*.md`, `docs/evidence/dbus-contract.xml`. |
+| **Packaging** | `implemented` (complete, unsigned) | Packaging infrastructure complete (task 6): install manifest, distro packages (Arch/Fedora/Debian), systemd hardening, model acquisition, PAM install lifecycle, SBOM (CycloneDX + SPDX), provenance, reproducible build, signatures. Signed packages WITHHELD (no signing keys). Evidence: `docs/evidence/packaging/`. |
 
 ---
 
 ## 2. Acceptance gates G1-G5
 
-No G1-G5 production gate carries `passed` in this audit. Targets are quoted
-from spec §12.
+No G1-G4 production gate carries `passed` in this audit. Structural CI
+gates G5.1, G5.2, G5.4, and G5.6 pass. All production gates (G1-G4 and
+production-level G5) are `WITHHELD` pending hardware or consented data.
 
 | Gate | Target (spec §12) | Status | Basis / Evidence |
 |---|---|---|---|
-| **G1.1** zero-config on known device | clean-install enrollment, no file editing | `partial` | Selection logic exists (`namtor_camera::selection::select_camera`); reference quirks entry exists. **Live capture path hardcodes `/dev/video2`** (`crates/namtor-daemon/src/bin/namtor-daemon/live_capture.rs`); auto-selection is task 7. No clean-install HIL run published. |
-| **G1.2** auto-probe on unknown device | ≥80% success across contributed devices | `unmeasured` | `namtor-probe` and tiered probing shipped. Contributor denominator does not exist (one device known). Cannot be measured without a device pool. |
-| **G1.3** specific message per failure mode | fault-injection coverage of §8.3 table | `partial` | Distinct PAM/CLI reason codes shipped; PAD-veto detail is generic externally, detailed internally (`w1-auth.txt`). Full §8.3 fault-injection matrix not published. |
-| **G1.4** zero interaction on MSXU | no prompt on MSXU path | `WITHHELD` (requires HIL) | MSXU tier code exists and is silent by construction. No HIL assertion run published. |
-| **G1.5** emitter off ≤200 ms after teardown | HIL luminance check after 4 teardown paths | `unmeasured` (HIL) | Watchdog, RAII `EmitterGuard`, force-off helpers shipped. No HIL luminance measurement after end/stop/SIGKILL/resume published. |
-| **G1.6** first auth after S3 succeeds 20/20 | scripted S3 cycle, 20 successes | `WITHHELD` | **R10 (emitter survives suspend) untested, needs real S3 cycle** (`AGENTS.md` hardware facts). Resume reconciler code exists; the 20x S3 HIL run has not been executed. |
-| **G2.1** median latency ≤500 ms | eval report latency distribution | `unmeasured` | No production-path latency distribution published. R11 camera-open cost ~677 ms upper bound (subprocess) threatens this gate; re-measured in-process in M2 but not on the production auth path. |
-| **G2.2** p95 ≤1000 ms | eval report | `unmeasured` | Same as G2.1. |
-| **G2.3** first boot ≤120% steady-state | eval report | `unmeasured` | Warm/cold lifecycle state machine shipped (`namtor_daemon::lifecycle`); first-boot latency not measured on the production path. |
-| **G3.1** FAR ≤1e-5 at FRR ≤3% | DET curve, ≥100k impostor comparisons | `WITHHELD` | No lawful cohort dataset selected (R5; `m3-r4-report.md`). No ≥100k impostor comparison run exists. At 100k comparisons zero false accepts gives a ~3e-5 95% upper bound, so even a clean run cannot be restated as a sub-1e-5 pass without larger N. |
+| **G1.1** zero-config on known device | clean-install enrollment, no file editing | `WITHHELD` (requires HIL) | Selection logic exists and auto-selects via quirks. Clean-install HIL run not published (needs root-installed daemon + camera). |
+| **G1.2** auto-probe on unknown device | ≥80% success across contributed devices | `WITHHELD` | `namtor-probe` and tiered probing shipped. Contributor denominator does not exist (one device known). |
+| **G1.3** specific message per failure mode | fault-injection coverage of §8.3 table | `WITHHELD` | Distinct PAM/CLI reason codes shipped. Full §8.3 fault-injection matrix not published against production path. |
+| **G1.4** zero interaction on MSXU | no prompt on MSXU path | `WITHHELD` (requires HIL) | MSXU tier code is silent by construction. No HIL assertion run published. |
+| **G1.5** emitter off ≤200 ms after teardown | HIL luminance check after 4 teardown paths | `WITHHELD` (requires HIL) | Watchdog, RAII `EmitterGuard`, force-off helpers shipped. No HIL luminance measurement published. |
+| **G1.6** first auth after S3 succeeds 20/20 | scripted S3 cycle, 20 successes | `WITHHELD` | R10 (emitter survives suspend) untested, needs real S3 cycle. Resume reconciler code exists; 20x S3 HIL run not executed. |
+| **G2.1** median latency ≤500 ms | eval report latency distribution | `WITHHELD` | No production-path latency distribution published. |
+| **G2.2** p95 ≤1000 ms | eval report | `WITHHELD` | Same as G2.1. |
+| **G2.3** first boot ≤120% steady-state | eval report | `WITHHELD` | Warm/cold lifecycle state machine shipped; first-boot latency not measured on the production path. |
+| **G3.1** FAR ≤1e-5 at FRR ≤3% | DET curve, ≥100k impostor comparisons | `WITHHELD` | No lawful cohort dataset selected (R5). No ≥100k impostor comparison run exists. |
 | **G3.2** reported with N + CIs | eval report | `WITHHELD` | No production eval report published. |
-| **G4.1** APCER ≤5% per print/IR-print/replay at BPCER ≤5% | per-attack APCER | `unmeasured` | Analytic gates exist but are UNCALIBRATED (M6). MiniFASNet PAD is synthetic-only (M9). No real print/IR-print/replay attack corpus evaluated. |
-| **G4.2** per attack type, never averaged | report format | `unmeasured` | Eval harness enforces per-attack reporting by construction; no production report exists to apply it to. |
-| **G4.3** 3D mask documented as not evaluated | report | `unmeasured` | No production report; 3D-mask exclusion will be stated in the report when G4 runs. |
-| **G5.1** no ML/ONNX/image decoder in PAM | CI linker assertion | `passed` (structural, CI) | `g5_structural.rs` `no_ml_or_image_libs_linked` + `binary_size_under_budget` run in CI on the release cdylib. Mutation-tested (`ci-baseline.md` gate 2). 457632 < 512000 bytes. |
+| **G4.1** APCER ≤5% per print/IR-print/replay at BPCER ≤5% | per-attack APCER | `WITHHELD` | Analytic gates exist but are UNCALIBRATED (M6). MiniFASNet PAD is synthetic-only (M9). No real attack corpus evaluated. |
+| **G4.2** per attack type, never averaged | report format | `WITHHELD` | Eval harness enforces per-attack reporting by construction; no production report exists. |
+| **G4.3** 3D mask documented as not evaluated | report | `WITHHELD` | No production report; 3D-mask exclusion stated when G4 runs. |
+| **G5.1** no ML/ONNX/image decoder in PAM | CI linker assertion | `passed` (structural, CI) | `g5_structural.rs` `no_ml_or_image_libs_linked` + `binary_size_under_budget` run in CI on the release cdylib. Mutation-tested (`ci-baseline.md` gate 2). 457920 < 512000 bytes. |
 | **G5.2** worker cannot open files/network/syscalls | escape tests | `passed` (structural, CI) | seccomp allowlist/denylist disjoint test + landlock FS/net rules. Mutation-tested (`ci-baseline.md` gate 4: adding `socket` to allowlist fails the test). |
-| **G5.3** all §8.3 conditions fail closed | fault injection | `passed` (structural CI gate) | PAM fails closed on every error path by construction; e2e tests cover Match/NoMatch/Unavailable/RateLimited/Refused driving Prepare→Verify→Release (`w1-auth.txt`). The fail-closed contract is asserted by tests on `master`. |
+| **G5.3** all §8.3 conditions fail closed | fault injection | `WITHHELD` (production gate) | PAM fails closed by construction; e2e tests cover Match/NoMatch/Unavailable/RateLimited/Refused. Structural CI coverage exists, but the production gate (full §8.3 fault-injection matrix on the installed path) is WITHHELD pending HIL. |
 | **G5.4** no biometric data in logs | CI log scan | `passed` (structural, CI) | `e2e_no_biometric_data_in_logs` in namtor-daemon e2e. Mutation-tested (`ci-baseline.md` gate 5: adding `embedding=...` to a log fails the test). |
-| **G5.5** templates unreadable off-device (TPM) | manual procedure, documented | `partial` | `namtor_store` AES-256-GCM with AAD binding uid+model_id, Zeroize on drop, file-fallback mode always reported. **Real TPM2 sealing is a stub** (task 11). Cross-hardware unseal procedure WITHHELD: requires a second TPM-equipped machine; absent that, evidence is limited to software-TPM + same-device unseal and the cross-hardware claim is not made. |
+| **G5.5** templates unreadable off-device (TPM) | manual procedure, documented | `WITHHELD` | `namtor_store` AES-256-GCM with AAD binding uid+model_id, Zeroize on drop. TPM2 backend complete (task 26) with software/reference TPM tested. Cross-hardware unseal WITHHELD: requires a second TPM-equipped machine. |
+| **G5.6** no unwrap/expect in non-test code | source scan | `passed` (structural, CI) | `g5_no_unwrap.rs` asserts no `unwrap()`/`expect()` in non-test code across the workspace. Mutation-tested (`ci-baseline.md`). |
 
 ---
 
@@ -81,23 +89,23 @@ from spec §12.
 
 | Dimension | Status | Basis / Evidence |
 |---|---|---|
-| **TPM** | `stub` | `namtor-store` has TPM2 *intent* with an explicit file fallback. `crates/namtor-store/src/crypto.rs:74-80` is the seam. Real TPM2 backend, device-bound no-PCR sealed AES key, version/migration is task 11. Cross-hardware G5.5 evidence WITHHELD (no second TPM machine). |
-| **Fusion (RGB↔IR)** | `stub` / `unmeasured` | `RgbUvc` capture source exists; dual-stream R1 PASS on reference hardware. Enrollment-fitted extrinsic transform, SOF/timestamp pairing, geometric identity check, darkness policy are task 17. `VerifyEngine` runs IR-only PAD + match today. No fusion HIL or latency/protection evidence. |
-| **z-norm / score normalisation** | `unmeasured` | `VerifyEngine` applies z-norm in code, but the normalisation cohort (R5) is not selected. `m3-r4-report.md` records "Cohort: WITHHELD — blocked on owner-gated dataset selection". No licence-verified dataset → no calibrated operating point. Synthetic bootstrap is explicitly non-production. |
-| **PAD (analytic)** | `implemented` / `uncalibrated` | Four analytic gates on `D = On − Off` shipped as a veto. Thresholds are conservative defaults, not tuned against a real attack corpus. Radial gate labelled UNCALIBRATED in source. Calibration is task 21. |
-| **PAD (learned, MiniFASNet)** | `partial` (synthetic-only) | 49 KB ONNX trained on physics-based synthetic strobe differentials, 100% val on synthetic. Cannot be production-selected: task 22 requires consented subject/device-disjoint real data. Deployed to `var/lib/namtor/models/` but not bound to a production operating point. |
+| **TPM** | `implemented` (software/reference TPM) | `namtor-store` TPM2 backend complete (task 26): production backend, versioned blob/migration, device binding, recovery policy, explicit fallback, zeroization. Software/reference TPM tested (create/reboot/unseal, corruption, reset/absence, migration). Cross-hardware G5.5 evidence WITHHELD (no second TPM machine). See `docs/evidence/trust/tpm2-lifecycle.md`. |
+| **Fusion (RGB↔IR)** | `WITHHELD` | `RgbUvc` capture source exists; dual-stream R1 PASS on reference hardware. Enrollment-fitted extrinsic transform, SOF/timestamp pairing, geometric identity check, darkness policy implemented (task 17) but unmeasured. No fusion HIL or latency/protection evidence. See `docs/evidence/trust/fusion.md`. |
+| **z-norm / score normalisation** | `WITHHELD` | `VerifyEngine` applies z-norm in code, but the normalisation cohort (R5) is not selected. No licence-verified dataset selected. No calibrated operating point. See `docs/evidence/trust/znorm.md`. |
+| **PAD (analytic)** | `implemented` / `uncalibrated` | Four analytic gates on `D = On − Off` shipped as a veto. Thresholds are conservative defaults, not tuned against a real attack corpus. Calibration WITHHELD (task 21; no attack corpus). See `docs/evidence/trust/pad-calibration.md`. |
+| **PAD (learned, MiniFASNet)** | `implemented` (synthetic-only) | 49 KB ONNX trained on physics-based synthetic strobe differentials, 100% val on synthetic. Cannot be production-selected: requires consented subject/device-disjoint real data. Deployed but not bound to a production operating point. See `docs/evidence/trust/learned-pad.md`. |
 | **S3 / suspend-resume** | `WITHHELD` | R10 (emitter survives suspend) untested, needs a real S3 cycle. Resume reconciler + `ResumeMachine` code exists; the 20x S3 first-auth HIL run (G1.6) has not been executed. |
-| **UI (GNOME)** | `partial` | `namtor_gnome` enrollment wizard + settings app shipped (M7). Talks to the store directly; task 26 moves it behind D-Bus. 0 lib tests. |
-| **UI (KDE)** | `partial` | Rust bridge + QML template shipped (task 27); KCM does not load on KDE image — C++ KCModule shim not built [~] |
-| **D-Bus `org.namtor.Manager`** | `partial` | reference impl shipped (task 25, commit eb2ce0a); in-memory, not yet wired to zbus |
-| **Packages (Arch/Fedora/Debian, signed)** | `partial` | packaging infrastructure defined (task 6); no live packages built — owner-gated [~] |
-| **R4 INT8 vs FP32** | `WITHHELD` | Blocked on human action: Python onnxruntime binding incompatible with system Python (AGENTS.md), model licences not accepted, comparison set not placed. `m3-r4-report.md` carries a placeholder delta table. Path B (INT8 on architectural grounds per §5.3) holds; measurement deferred, not abandoned. |
-| **R5 normalisation cohort** | `WITHHELD` | No licence-verified dataset selected. Candidates listed in `m3-r4-report.md` (CASIA NIR-VIS 2.0, LAMP-HQ, BUAA-VisNir, Oulu-CASIA NIR-VIS). Decision is owner-gated. |
-| **Named per-user profiles** | `implemented` | implemented (task 14, commit b11d33c). `ProfileId`, multi-profile, rename/enable/delete. |
-| **Unlimited ranked enrollment** | `implemented` | implemented (task 15, commit 1b01043). Bounded reservoir, Enrollment Quality, held-out Match Confidence, review-then-commit. |
-| **Temporal consensus / early exit** | `implemented` | implemented (task 18, commit 92d8d31). One-pair high-confidence exit, up-to-five-pair escalation, Balanced/Strict operating points. |
-| **Presence mode** | `implemented` | implemented (task 29, commit 40c18a9). |
-| **Depth path** | `implemented` | implemented (task 30, commit 50ae1b5). No depth hardware on reference device; code path ships. |
+| **UI (GNOME)** | `implemented` | `namtor_gnome` enrollment wizard + settings app shipped (M7). Talks to the manager via D-Bus (task 26). GNOME QA evidence under `docs/evidence/ui/gnome/`. Runtime HIL WITHHELD. |
+| **UI (KDE)** | `implemented` | Rust bridge + QML KCM + C++ KCModule shim shipped (tasks 21-25). Async D-Bus bridge, profile model, a11y/i18n audit. Runtime load in real Plasma 6 session WITHHELD (no kcmshell6). Evidence: `docs/evidence/ui/kde/`. |
+| **D-Bus `org.namtor.Manager`** | `implemented` | System-bus zbus service shipped (tasks 8-13). Methods, signals, polkit, peer identity, enrollment sessions, profile lifecycle. Installed introspection WITHHELD (owner-run). |
+| **Packages (Arch/Fedora/Debian, signed)** | `implemented` (unsigned) | Packaging infrastructure complete (task 6): install manifest, distro packages, systemd hardening, SBOM, provenance, reproducible build. Signed packages WITHHELD (no signing keys). Evidence: `docs/evidence/packaging/`. |
+| **R4 INT8 vs FP32** | `WITHHELD` | Blocked on human action: Python onnxruntime binding compatibility, model licences, comparison set. Path B (INT8 on architectural grounds per §5.3) holds; measurement deferred. See `docs/evidence/trust/int8-eval.md`. |
+| **R5 normalisation cohort** | `WITHHELD` | No licence-verified dataset selected. Decision is owner-gated. See `docs/evidence/r5-cohort.md`. |
+| **Named per-user profiles** | `implemented` | implemented (task 14). `ProfileId`, multi-profile, rename/enable/delete. |
+| **Unlimited ranked enrollment** | `implemented` | implemented (task 15). Bounded reservoir, Enrollment Quality, held-out Match Confidence, review-then-commit. |
+| **Temporal consensus / early exit** | `implemented` | implemented (task 18). One-pair high-confidence exit, up-to-five-pair escalation, Balanced/Strict operating points. |
+| **Presence mode** | `implemented` | implemented (task 29). |
+| **Depth path** | `implemented` | implemented (task 30). No depth hardware on reference device; code path ships. |
 
 ---
 
@@ -123,14 +131,13 @@ gates and is recorded as `WITHHELD: <reason>` rather than fake-success.
 
 | Item | Status | Evidence |
 |---|---|---|
-| Workspace lib tests | 374 passed, 0 failed, 7 ignored (HW-gated) | `w1-auth.txt` §"VERIFICATION OUTPUT" |
+| Workspace lib tests | 989 passed, 0 failed, 9 ignored (HW-gated) | workspace `cargo test` |
 | Integration tests (pam e2e + g5_structural) | 19 + 2 passed | `w1-auth.txt` |
-| `cargo fmt --all -- --check` | clean | `w1-auth.txt` |
-| `cargo clippy --workspace --all-targets -- -D warnings` | no warnings | `w1-auth.txt` |
+| `cargo fmt --all -- --check` | clean | workspace fmt check |
+| `cargo clippy --workspace --all-targets -- -D warnings` | no warnings | workspace clippy |
 | SPDX headers | enforced by `scripts/check-spdx.sh` | `ci-baseline.md` gate 6 |
 | `cargo audit` | 0 vulnerabilities, 329 deps | `ci-baseline.md` gate 7 |
-| PAM release `.so` size | 457632 < 512000 bytes | `ci-baseline.md` |
-| Pre-existing flake | `concurrent_connections_serialise_on_camera_lock` deadlocks under parallel executor; CI skips it | `w1-auth.txt`, `ci-baseline.md` |
+| PAM release `.so` size | 457920 < 512000 bytes | release build |
 
 CI is green on the mock path (no camera, no weights, no root). This is a code
 state, not a gate pass.
@@ -143,21 +150,25 @@ state, not a gate pass.
 - No claim of "Windows Hello parity". The README's historical "targeting
   Windows Hello parity" is a design ambition, not a measured result; no G1-G5
   production gate has passed.
-- No G1-G5 gate marked `passed` except G5.1/G5.2/G5.4 structural CI gates
-  (linker assertion, sandbox escape test, log scan), which are explicitly
-  labelled as structural CI evidence rather than production gate passes.
+- No G1-G5 production gate marked `passed` except G5.1/G5.2/G5.4/G5.6
+  structural CI gates (linker assertion, sandbox escape test, log scan,
+  no-unwrap source scan), which are explicitly labelled as structural CI
+  evidence rather than production gate passes.
 - No FAR/FRR/APCER/BPCER number is published. The eval harness exists but no
   production run has been executed against a lawful cohort and attack corpus.
-- No claim that TPM sealing is real. It is a file-fallback stub.
-- No claim that fusion is wired. It is stub/unmeasured.
+- No claim that TPM sealing is production-proven. Software/reference TPM
+  tested; cross-hardware transplant WITHHELD.
+- No claim that fusion is measured. Code shipped, HIL unmeasured.
 - No claim that PAD is calibrated. Analytic gates run on conservative
   defaults; the learned PAD model is synthetic-only.
 
-The production-readiness plan (`.omo/plans/namtor-production-readiness.md`)
-is the path to closing these gaps. As of this audit, 35 of 39 tasks are
-complete (all implementation tasks 1-35). 4 tasks (6, 27, 32, 35) are marked
-[~] as owner-gated (signing keys, KDE dev env, tag/CI execution). The Final
-Verification Wave (F1-F4) is in progress.
+The production plan
+([`.omo/plans/namtor-complete-product.md`](../../.omo/plans/namtor-complete-product.md))
+is the path to closing these gaps. It comprises 49 tasks plus a 4-task final
+verification wave (F1-F4). As of this audit, all 49 implementation tasks are
+complete. The Final Verification Wave (F1-F4) is in progress; this ledger
+was updated as part of F1 (plan compliance and evidence audit). Owner-gated
+inputs (signing keys, hardware access, consented data, S3 cycles, second
+TPM) remain WITHHELD and block the corresponding production gates.
 
-This ledger was updated post-Wave-9 to reflect the committed state. For the
-current RC gate snapshot, see `docs/evidence/rc-g2-g5.md`.
+For the current RC gate snapshot, see `docs/evidence/rc-g2-g5.md`.

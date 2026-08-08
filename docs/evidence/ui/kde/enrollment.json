@@ -1,0 +1,130 @@
+{
+  "task": "23",
+  "description": "KDE KCM enrollment and review — Qt Quick test scenarios",
+  "driver": "Qt Quick QML engine with QAccessible / Qt Test (QSignalSpy) and the Rust p2p fake bus",
+  "scenarios": [
+    {
+      "name": "happy_path",
+      "steps": [
+        "open Add Profile sheet",
+        "enter unique profile name",
+        "read privacy notice",
+        "press Start Enrollment",
+        "receive EnrollmentProgress signals with frames_captured, quality_label, coverage_percent",
+        "wait for EnrollmentCompleted",
+        "open review view with coarse quality buckets",
+        "press Finish (CommitProfile)"
+      ],
+      "validation": [
+        "progress bar fraction == coverage_percent / 100",
+        "quality_label is a coarse bucket, never a numeric score",
+        "review shows held-out Match Confidence as a bucket, not a number",
+        "CommitProfile writes profile to store; profile list refreshes via ProfileChanged",
+        "emitter turns off after commit"
+      ],
+      "a11y": [
+        "Accessible.role set on every interactive control (Button, TextField, ProgressBar)",
+        "Accessible.name on name entry includes i18n('Profile name')",
+        "progress announcements use i18n with coverage_percent interpolation",
+        "all controls keyboard reachable via Tab and Activate"
+      ]
+    },
+    {
+      "name": "duplicate_name",
+      "steps": [
+        "open Add Profile sheet",
+        "enter a name that already exists for the target uid",
+        "press Start Enrollment"
+      ],
+      "validation": [
+        "manager returns DuplicateName error",
+        "KCM shows inline error text without starting capture",
+        "emitter stays off, no session created",
+        "profile list unchanged"
+      ],
+      "a11y": [
+        "error text has Accessible.role Alert and Accessible.name set",
+        "focus returns to name entry field for correction"
+      ]
+    },
+    {
+      "name": "polkit_denial",
+      "steps": [
+        "open Add Profile sheet",
+        "enter name and press Start Enrollment",
+        "polkit denies enroll-other for a cross-uid target"
+      ],
+      "validation": [
+        "manager returns PermissionDenied",
+        "KCM shows polkit denial message",
+        "no capture session started, emitter off",
+        "profile list unchanged (rollback)"
+      ],
+      "a11y": [
+        "denial message has Accessible.role Alert",
+        "Alert name is i18n-wrapped"
+      ]
+    },
+    {
+      "name": "camera_or_daemon_loss",
+      "steps": [
+        "start enrollment on a reachable daemon with camera present",
+        "mid-session: daemon disconnects or camera disappears (StatusChanged flips daemonReachable or cameraPresent to false)"
+      ],
+      "validation": [
+        "in-flight async call drops via generation mismatch, no GUI thread block",
+        "KCM surfaces error state via error property",
+        "emitter release left to daemon; KCM does not assume ownership",
+        "profile list preserved, no partial profile committed",
+        "cancelAllPending clears stale watchers"
+      ],
+      "a11y": [
+        "error property rendered with Accessible.role Alert",
+        "status labels update with Accessible.name reflecting state"
+      ]
+    },
+    {
+      "name": "cancel",
+      "steps": [
+        "start enrollment",
+        "press Cancel during capture"
+      ],
+      "validation": [
+        "CancelEnrollment is idempotent (second call is a no-op)",
+        "enrollment session discarded, no CommitProfile sent",
+        "emitter turns off",
+        "profile list unchanged",
+        "late EnrollmentProgress signals ignored via stale session_id filter"
+      ],
+      "a11y": [
+        "Cancel button has Accessible.role Button and i18n name",
+        "focus returns to Add Profile entry point"
+      ]
+    },
+    {
+      "name": "replacement_rollback",
+      "steps": [
+        "select an existing profile",
+        "choose Replace from action menu",
+        "confirm replace dialog",
+        "start replacement enrollment",
+        "abort via Cancel or daemon loss before Finish"
+      ],
+      "validation": [
+        "old profile preserved until replacement CommitProfile succeeds",
+        "on abort, old profile remains in store and list",
+        "no partial template written to store",
+        "emitter off after abort"
+      ],
+      "a11y": [
+        "replace dialog message has Accessible.role Alert with i18n name including profile name",
+        "confirm and cancel buttons have Accessible.role Button with i18n names"
+      ]
+    }
+  ],
+  "privacy": "No scores, thresholds, embeddings, frames, PAD detail, or biometric images in any QML element; quality labels are coarse non-numeric buckets; coverage_percent is integer 0-100",
+  "withheld": {
+    "kcmshell6_runtime_load": "kcmshell6 / plasma-systemsettings not installed; runtime QML loading in a real Plasma session is the next HIL step",
+    "screen_reader_orca": "no orca / no running Plasma session; structural a11y roles asserted by source audit"
+  }
+}
