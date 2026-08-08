@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
 // namtor_kcm.h — async D-Bus bridge QObject for the Nam-tor KCM (spec §9.3,
-// Task 22).
+// Tasks 22-24).
 //
 // Exposes the frozen `org.namtor.Manager` contract (Task 8) to QML as typed
 // QObject properties, Q_INVOKABLE methods, and Qt signals. All D-Bus calls
@@ -12,6 +12,13 @@
 // the user cancels or restarts an operation, the generation is bumped; late
 // responses from the old generation are silently dropped (stale-response
 // sequencing).
+//
+// D-Bus signal forwarding: the bridge connects to the four frozen Manager
+// signals (EnrollmentProgress, EnrollmentCompleted, ProfileChanged,
+// StatusChanged) and re-emits them as Qt signals. EnrollmentProgress also
+// updates the cached progress properties so QML can bind without inspecting
+// signal arguments. ProfileChanged triggers an automatic listProfiles refresh
+// so external mutations (another client, daemon self-action) are reflected.
 //
 // No biometric data (embeddings, frames, scores, thresholds) is exposed in
 // any property or signal — only ProfileInfo metadata, EnrollmentProgress
@@ -26,6 +33,7 @@
 #include <QObject>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
+#include <QtDBus/QDBusMessage>
 
 class QDBusInterface;
 class QDBusPendingCallWatcher;
@@ -50,6 +58,19 @@ class NamtorKcm : public QObject {
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
     Q_PROPERTY(quint32 apiVersion READ apiVersion NOTIFY statusChanged)
 
+    // --- Enrollment state (Task 23) ---
+    Q_PROPERTY(quint32 currentUid READ currentUid CONSTANT)
+    Q_PROPERTY(QString currentSession READ currentSession NOTIFY currentSessionChanged)
+    Q_PROPERTY(bool enrollmentActive READ enrollmentActive NOTIFY enrollmentActiveChanged)
+    Q_PROPERTY(quint32 framesCaptured READ framesCaptured NOTIFY enrollmentProgress)
+    Q_PROPERTY(QString qualityLabel READ qualityLabel NOTIFY enrollmentProgress)
+    Q_PROPERTY(quint32 coveragePercent READ coveragePercent NOTIFY enrollmentProgress)
+
+    // --- Review state (Task 23) ---
+    Q_PROPERTY(QString reviewProfileId READ reviewProfileId NOTIFY reviewReady)
+    Q_PROPERTY(bool reviewNeedsReenroll READ reviewNeedsReenroll NOTIFY reviewReady)
+    Q_PROPERTY(QString reviewQuality READ reviewQuality NOTIFY reviewReady)
+
 public:
     explicit NamtorKcm(QObject *parent = nullptr);
     ~NamtorKcm() override;
@@ -69,6 +90,19 @@ public:
     QString error() const;
     quint32 apiVersion() const;
 
+    // Enrollment state properties
+    quint32 currentUid() const;
+    QString currentSession() const;
+    bool enrollmentActive() const;
+    quint32 framesCaptured() const;
+    QString qualityLabel() const;
+    quint32 coveragePercent() const;
+
+    // Review state properties
+    QString reviewProfileId() const;
+    bool reviewNeedsReenroll() const;
+    QString reviewQuality() const;
+
     // --- Q_INVOKABLE methods (frozen D-Bus contract, Task 8) ---
     Q_INVOKABLE void listProfiles();
     Q_INVOKABLE void startEnrollment(quint32 uid, const QString &name);
@@ -85,6 +119,13 @@ public:
     // --- Cancel all in-flight calls (stale-response sequencing) ---
     Q_INVOKABLE void cancelAllPending();
 
+    // --- Validation helpers for QML ---
+    Q_INVOKABLE bool isNameValid(const QString &name) const;
+    Q_INVOKABLE bool isNameDuplicate(const QString &name, const QString &excludeId) const;
+
+    // --- Profile lookup by id (removes QML index coupling) ---
+    Q_INVOKABLE QString profileNameById(const QString &id) const;
+
 signals:
     // --- Frozen signal set (Task 8: 4 signals) ---
     void enrollmentProgress(const QString &session, quint32 framesCaptured,
@@ -95,16 +136,34 @@ signals:
     void loadingChanged();
     void errorChanged();
 
+    // --- Enrollment lifecycle (Task 23) ---
+    void enrollmentStarted(const QString &session);
+    void currentSessionChanged();
+    void enrollmentActiveChanged();
+
+    // --- Review outcome (Task 23) ---
+    void reviewReady(const QString &profileId, bool needsReenroll, const QString &quality);
+
 private:
     void setLoading(bool loading);
     void setError(const QString &error);
+    void setCurrentSession(const QString &session);
+    void setEnrollmentActive(bool active);
     void handleListProfilesReply(QDBusPendingCallWatcher *watcher, quint64 gen);
     void handleGetStatusReply(QDBusPendingCallWatcher *watcher, quint64 gen);
     void handleStartEnrollmentReply(QDBusPendingCallWatcher *watcher, quint64 gen);
     void handleCommitProfileReply(QDBusPendingCallWatcher *watcher, quint64 gen);
     void handleReviewProfileReply(QDBusPendingCallWatcher *watcher, quint64 gen);
     void handleVoidReply(QDBusPendingCallWatcher *watcher, quint64 gen);
+    void connectDBusSignals();
 
+private slots:
+    void onEnrollmentProgressDBus(const QDBusMessage &msg);
+    void onEnrollmentCompletedDBus(const QDBusMessage &msg);
+    void onProfileChangedDBus(const QDBusMessage &msg);
+    void onStatusChangedDBus(const QDBusMessage &msg);
+
+private:
     bool m_abiOk;
     QString m_abiError;
     NamtorProfileModel *m_profileModel;
@@ -116,6 +175,19 @@ private:
     quint32 m_apiVersion;
     bool m_loading;
     QString m_error;
+
+    // Enrollment state
+    quint32 m_currentUid;
+    QString m_currentSession;
+    bool m_enrollmentActive;
+    quint32 m_framesCaptured;
+    QString m_qualityLabel;
+    quint32 m_coveragePercent;
+
+    // Review state
+    QString m_reviewProfileId;
+    bool m_reviewNeedsReenroll;
+    QString m_reviewQuality;
 
     quint64 m_generation;
     QVector<QDBusPendingCallWatcher *> m_pendingWatchers;

@@ -8,6 +8,12 @@
 // if the user cancels or restarts, the generation is bumped and late replies
 // from the old generation are silently dropped (stale-response sequencing).
 //
+// D-Bus signal forwarding: the four frozen Manager signals are connected in
+// the constructor via QDBusConnection::connect(). EnrollmentProgress updates
+// the cached progress properties (framesCaptured, qualityLabel,
+// coveragePercent) and re-emits as a Qt signal. ProfileChanged triggers an
+// automatic listProfiles() refresh so external mutations are reflected.
+//
 // No biometric data is handled here. The QObject carries only profile metadata,
 // coarse quality buckets, and aggregated status — all from the frozen Task 8
 // contract.
@@ -19,6 +25,9 @@
 #include <QtDBus/QDBusPendingReply>
 #include <QtDBus/QDBusArgument>
 #include <QDBusMetaType>
+#include <QDBusConnection>
+
+#include <unistd.h>
 
 // --- D-Bus wire structs (frozen Task 8 contract) ---
 
@@ -150,6 +159,11 @@ NamtorKcm::NamtorKcm(QObject *parent)
     , m_emitterArmed(false)
     , m_apiVersion(0)
     , m_loading(false)
+    , m_currentUid(static_cast<quint32>(getuid()))
+    , m_enrollmentActive(false)
+    , m_framesCaptured(0)
+    , m_coveragePercent(0)
+    , m_reviewNeedsReenroll(false)
     , m_generation(0)
 {
     registerWireTypes();
@@ -171,11 +185,35 @@ NamtorKcm::NamtorKcm(QObject *parent)
         QStringLiteral("org.namtor.Manager"),
         QDBusConnection::sessionBus(),
         this);
+
+    connectDBusSignals();
 }
 
 NamtorKcm::~NamtorKcm()
 {
     cancelAllPending();
+}
+
+// --- D-Bus signal forwarding ---
+
+void NamtorKcm::connectDBusSignals()
+{
+    auto bus = QDBusConnection::sessionBus();
+    const QString service = QString::fromUtf8(namtor_kde_manager_bus_name());
+    const QString path = QString::fromUtf8(namtor_kde_manager_object_path());
+    const QString iface = QStringLiteral("org.namtor.Manager");
+
+    // Connect to each frozen Manager signal. Slots take QDBusMessage so the
+    // wire structs (WireEnrollmentProgress, WireStatusReport) don't need to
+    // be visible in the header — we parse the message arguments here.
+    bus.connect(service, path, iface, QStringLiteral("EnrollmentProgress"),
+        this, SLOT(onEnrollmentProgressDBus(QDBusMessage)));
+    bus.connect(service, path, iface, QStringLiteral("EnrollmentCompleted"),
+        this, SLOT(onEnrollmentCompletedDBus(QDBusMessage)));
+    bus.connect(service, path, iface, QStringLiteral("ProfileChanged"),
+        this, SLOT(onProfileChangedDBus(QDBusMessage)));
+    bus.connect(service, path, iface, QStringLiteral("StatusChanged"),
+        this, SLOT(onStatusChangedDBus(QDBusMessage)));
 }
 
 // --- ABI properties ---
@@ -203,6 +241,28 @@ bool NamtorKcm::loading() const { return m_loading; }
 QString NamtorKcm::error() const { return m_error; }
 quint32 NamtorKcm::apiVersion() const { return m_apiVersion; }
 
+// --- Enrollment state properties ---
+
+quint32 NamtorKcm::currentUid() const { return m_currentUid; }
+
+QString NamtorKcm::currentSession() const { return m_currentSession; }
+
+bool NamtorKcm::enrollmentActive() const { return m_enrollmentActive; }
+
+quint32 NamtorKcm::framesCaptured() const { return m_framesCaptured; }
+
+QString NamtorKcm::qualityLabel() const { return m_qualityLabel; }
+
+quint32 NamtorKcm::coveragePercent() const { return m_coveragePercent; }
+
+// --- Review state properties ---
+
+QString NamtorKcm::reviewProfileId() const { return m_reviewProfileId; }
+
+bool NamtorKcm::reviewNeedsReenroll() const { return m_reviewNeedsReenroll; }
+
+QString NamtorKcm::reviewQuality() const { return m_reviewQuality; }
+
 // --- State helpers ---
 
 void NamtorKcm::setLoading(bool loading)
@@ -219,6 +279,57 @@ void NamtorKcm::setError(const QString &error)
         return;
     m_error = error;
     emit errorChanged();
+}
+
+void NamtorKcm::setCurrentSession(const QString &session)
+{
+    if (m_currentSession == session)
+        return;
+    m_currentSession = session;
+    emit currentSessionChanged();
+}
+
+void NamtorKcm::setEnrollmentActive(bool active)
+{
+    if (m_enrollmentActive == active)
+        return;
+    m_enrollmentActive = active;
+    emit enrollmentActiveChanged();
+}
+
+// --- Validation helpers ---
+
+bool NamtorKcm::isNameValid(const QString &name) const
+{
+    const auto trimmed = name.trimmed();
+    if (trimmed.isEmpty())
+        return false;
+    if (trimmed.length() > 64)
+        return false;
+    return true;
+}
+
+bool NamtorKcm::isNameDuplicate(const QString &name, const QString &excludeId) const
+{
+    const auto trimmed = name.trimmed();
+    const auto &profiles = m_profileModel->profiles();
+    for (const auto &p : profiles) {
+        if (p.id == excludeId)
+            continue;
+        if (p.name.compare(trimmed, Qt::CaseInsensitive) == 0)
+            return true;
+    }
+    return false;
+}
+
+QString NamtorKcm::profileNameById(const QString &id) const
+{
+    const auto &profiles = m_profileModel->profiles();
+    for (const auto &p : profiles) {
+        if (p.id == id)
+            return p.name;
+    }
+    return {};
 }
 
 // --- Q_INVOKABLE methods (frozen D-Bus contract) ---
@@ -276,6 +387,11 @@ void NamtorKcm::cancelEnrollment(const QString &session)
     }
     // Cancel bumps generation so any in-flight start/commit reply is stale.
     ++m_generation;
+    setEnrollmentActive(false);
+    setCurrentSession({});
+    m_framesCaptured = 0;
+    m_coveragePercent = 0;
+    m_qualityLabel.clear();
     QList<QVariant> args;
     args << session;
     auto *call = new QDBusPendingCallWatcher(m_iface->asyncCallWithArgumentList(
@@ -321,6 +437,11 @@ void NamtorKcm::reviewProfile(quint32 uid, const QString &id)
 
 void NamtorKcm::renameProfile(quint32 uid, const QString &id, const QString &name)
 {
+    if (!m_abiOk || !m_iface || !m_iface->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
     QList<QVariant> args;
     args << uid << id << name;
     const quint64 gen = ++m_generation;
@@ -333,6 +454,11 @@ void NamtorKcm::renameProfile(quint32 uid, const QString &id, const QString &nam
 
 void NamtorKcm::enableProfile(quint32 uid, const QString &id, bool enabled)
 {
+    if (!m_abiOk || !m_iface || !m_iface->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
     QList<QVariant> args;
     args << uid << id << enabled;
     const quint64 gen = ++m_generation;
@@ -345,6 +471,11 @@ void NamtorKcm::enableProfile(quint32 uid, const QString &id, bool enabled)
 
 void NamtorKcm::deleteProfile(quint32 uid, const QString &id)
 {
+    if (!m_abiOk || !m_iface || !m_iface->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
     QList<QVariant> args;
     args << uid << id;
     const quint64 gen = ++m_generation;
@@ -357,6 +488,11 @@ void NamtorKcm::deleteProfile(quint32 uid, const QString &id)
 
 void NamtorKcm::mergeProfiles(quint32 uid, const QString &src, const QString &dst)
 {
+    if (!m_abiOk || !m_iface || !m_iface->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
     QList<QVariant> args;
     args << uid << src << dst;
     const quint64 gen = ++m_generation;
@@ -369,6 +505,11 @@ void NamtorKcm::mergeProfiles(quint32 uid, const QString &src, const QString &ds
 
 void NamtorKcm::replaceProfile(quint32 uid, const QString &id, const QString &name)
 {
+    if (!m_abiOk || !m_iface || !m_iface->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
     QList<QVariant> args;
     args << uid << id << name;
     const quint64 gen = ++m_generation;
@@ -384,12 +525,83 @@ void NamtorKcm::cancelAllPending()
     ++m_generation;
     for (auto *w : std::as_const(m_pendingWatchers)) {
         w->disconnect(this);
-        // QDBusPendingCallWatcher has no kill() — the reply will still arrive
-        // but is silently dropped via the generation check in each handler.
         w->deleteLater();
     }
     m_pendingWatchers.clear();
     setLoading(false);
+}
+
+// --- D-Bus signal handlers ---
+
+void NamtorKcm::onEnrollmentProgressDBus(const QDBusMessage &msg)
+{
+    const auto args = msg.arguments();
+    if (args.size() < 2)
+        return;
+    const QString session = args.at(0).toString();
+    const auto arg = args.at(1).value<QDBusArgument>();
+    WireEnrollmentProgress p;
+    arg >> p;
+
+    m_framesCaptured = p.frames_captured;
+    m_qualityLabel = p.quality_label;
+    m_coveragePercent = p.coverage_percent;
+
+    if (!m_currentSession.isEmpty() && session == m_currentSession)
+        setEnrollmentActive(true);
+
+    emit enrollmentProgress(session, p.frames_captured, p.quality_label,
+                            p.coverage_percent);
+}
+
+void NamtorKcm::onEnrollmentCompletedDBus(const QDBusMessage &msg)
+{
+    const auto args = msg.arguments();
+    if (args.size() < 2)
+        return;
+    const QString session = args.at(0).toString();
+    const QString profile = args.at(1).toString();
+
+    if (!m_currentSession.isEmpty() && session == m_currentSession) {
+        setEnrollmentActive(false);
+        setCurrentSession({});
+    }
+    emit enrollmentCompleted(session, profile);
+}
+
+void NamtorKcm::onProfileChangedDBus(const QDBusMessage &msg)
+{
+    const auto args = msg.arguments();
+    if (args.size() < 2)
+        return;
+    const quint32 uid = args.at(0).toUInt();
+    const QString id = args.at(1).toString();
+
+    emit profileChanged(uid, id);
+    listProfiles();
+}
+
+void NamtorKcm::onStatusChangedDBus(const QDBusMessage &msg)
+{
+    const auto args = msg.arguments();
+    if (args.isEmpty())
+        return;
+    const auto arg = args.at(0).value<QDBusArgument>();
+    WireStatusReport s;
+    arg >> s;
+
+    m_daemonReachable = true;
+    m_cameraPresent = true;
+    m_emitterArmed = s.emitter_armed;
+    m_apiVersion = s.api_version;
+
+    QVector<NamtorProfileEntry> entries;
+    for (const auto &p : s.profiles) {
+        entries.append({p.id, p.name, p.enabled, p.created, p.lastUsed});
+    }
+    m_profileModel->setProfiles(entries);
+
+    emit statusChanged();
 }
 
 // --- Reply handlers (stale-response sequencing via generation check) ---
@@ -403,7 +615,7 @@ static void removeWatcher(QVector<QDBusPendingCallWatcher *> &list, QDBusPending
 void NamtorKcm::handleListProfilesReply(QDBusPendingCallWatcher *watcher, quint64 gen)
 {
     removeWatcher(m_pendingWatchers, watcher);
-    if (gen != m_generation) // stale response from a cancelled call
+    if (gen != m_generation)
         return;
 
     QDBusPendingReply<QVector<WireProfileInfo>> reply = *watcher;
@@ -442,7 +654,7 @@ void NamtorKcm::handleGetStatusReply(QDBusPendingCallWatcher *watcher, quint64 g
     setError({});
     const auto &s = reply.value();
     m_daemonReachable = true;
-    m_cameraPresent = true; // daemon reports camera-present in status
+    m_cameraPresent = true;
     m_emitterArmed = s.emitter_armed;
     m_apiVersion = s.api_version;
     QVector<NamtorProfileEntry> entries;
@@ -463,13 +675,15 @@ void NamtorKcm::handleStartEnrollmentReply(QDBusPendingCallWatcher *watcher, qui
     QDBusPendingReply<QString> reply = *watcher;
     if (reply.isError()) {
         setError(reply.error().message());
+        setEnrollmentActive(false);
         setLoading(false);
         return;
     }
     setError({});
-    // The session id is returned; QML picks it up via a signal or property.
-    // For now, emit profileChanged as a generic "something happened" signal.
-    emit profileChanged(0, reply.value());
+    const QString session = reply.value();
+    setCurrentSession(session);
+    setEnrollmentActive(true);
+    emit enrollmentStarted(session);
     setLoading(false);
 }
 
@@ -486,8 +700,13 @@ void NamtorKcm::handleCommitProfileReply(QDBusPendingCallWatcher *watcher, quint
         return;
     }
     setError({});
-    emit enrollmentCompleted({}, reply.value());
-    emit profileChanged(0, reply.value());
+    const QString profile = reply.value();
+    setEnrollmentActive(false);
+    setCurrentSession({});
+    emit enrollmentCompleted({}, profile);
+    emit profileChanged(0, profile);
+    // Refresh the list so the new profile appears.
+    listProfiles();
     setLoading(false);
 }
 
@@ -504,9 +723,11 @@ void NamtorKcm::handleReviewProfileReply(QDBusPendingCallWatcher *watcher, quint
         return;
     }
     setError({});
-    // Review outcome is available via a signal; no biometric data.
     const auto &r = reply.value();
-    emit profileChanged(0, r.profile_id);
+    m_reviewProfileId = r.profile_id;
+    m_reviewNeedsReenroll = r.needs_reenroll;
+    m_reviewQuality = r.quality;
+    emit reviewReady(r.profile_id, r.needs_reenroll, r.quality);
     setLoading(false);
 }
 
@@ -519,6 +740,7 @@ void NamtorKcm::handleVoidReply(QDBusPendingCallWatcher *watcher, quint64 gen)
     QDBusPendingReply<> reply = *watcher;
     if (reply.isError()) {
         setError(reply.error().message());
+        setLoading(false);
         return;
     }
     setError({});
