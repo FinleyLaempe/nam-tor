@@ -110,6 +110,15 @@ owner = "root"
 group = "root"
 symlink = false
 
+# GNOME management UI binary (GTK4 + libadwaita enrollment wizard).
+[[files]]
+dest = "/usr/bin/namtor-enroll-wizard"
+src = "target/release/namtor-enroll-wizard"
+mode = "0755"
+owner = "root"
+group = "root"
+symlink = false
+
 # PAM module (cdylib). The build produces `libpam_namtor.so`; it is installed
 # under its canonical PAM path without the `lib` prefix.
 [[files]]
@@ -187,6 +196,51 @@ group = "root"
 [[files]]
 dest = "/usr/share/polkit-1/actions/org.namtor.policy"
 src = "packaging/polkit-1/actions/org.namtor.policy"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+# ---------------------------------------------------------------------------
+# GNOME desktop integration (applications, metainfo, icons)
+# ---------------------------------------------------------------------------
+[[dirs]]
+path = "/usr/share/applications"
+mode = "0755"
+owner = "root"
+group = "root"
+
+[[dirs]]
+path = "/usr/share/metainfo"
+mode = "0755"
+owner = "root"
+group = "root"
+
+[[dirs]]
+path = "/usr/share/icons/hicolor/scalable/apps"
+mode = "0755"
+owner = "root"
+group = "root"
+
+[[files]]
+dest = "/usr/share/applications/org.namtor.Wizard.desktop"
+src = "packaging/applications/org.namtor.Wizard.desktop"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/share/metainfo/org.namtor.Wizard.metainfo.xml"
+src = "packaging/metainfo/org.namtor.Wizard.metainfo.xml"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg"
+src = "packaging/icons/hicolor/scalable/apps/org.namtor.Wizard.svg"
 mode = "0644"
 owner = "root"
 group = "root"

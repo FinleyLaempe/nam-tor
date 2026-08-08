@@ -43,6 +43,8 @@ Requires:       onnxruntime
 Requires:       pam
 Requires:       systemd
 Requires:       %{_lib}gcc%{?_isa}
+Requires:       gtk4%{?_isa}
+Requires:       libadwaita%{?_isa}
 
 # The package provides a PAM module; conflict with any other package that
 # ships pam_namtor.so.
@@ -79,7 +81,8 @@ cargo build --release --frozen \
     -p namtor-worker \
     -p namtor-cli \
     -p namtor-camera-emitter-off \
-    -p namtor-pam
+    -p namtor-pam \
+    -p namtor-gnome
 
 %check
 cargo test --workspace -- --skip concurrent_connections_serialise --test-threads=1
@@ -105,6 +108,7 @@ install -Dm644 packaging/README.md %{buildroot}%{_defaultdocdir}/%{name}/README.
 /usr/lib/namtor/namtor-worker-spawn
 /usr/lib/namtor/namtor-camera-emitter-off
 /usr/bin/namtor-cli
+/usr/bin/namtor-enroll-wizard
 /usr/lib/security/pam_namtor.so
 /usr/lib/systemd/system/namtor-daemon.service
 /usr/lib/systemd/system/namtor-daemon.socket
@@ -115,6 +119,9 @@ install -Dm644 packaging/README.md %{buildroot}%{_defaultdocdir}/%{name}/README.
 %{_datadir}/namtor/pam-install.sh
 %{_datadir}/namtor/pam-uninstall.sh
 %{_datadir}/namtor/pam-preflight.sh
+%{_datadir}/applications/org.namtor.Wizard.desktop
+%{_datadir}/metainfo/org.namtor.Wizard.metainfo.xml
+%{_datadir}/icons/hicolor/scalable/apps/org.namtor.Wizard.svg
 
 %pre
 # Register the system user + runtime dirs before the unit files are

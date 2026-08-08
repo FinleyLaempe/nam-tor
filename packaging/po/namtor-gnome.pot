@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Translation template for namtor-gnome.
+#
+# This is a placeholder .pot file. Once xgettext is run against the
+# POTFILES.in sources, this file will contain the extracted msgids.
+# For now, the structure exists so distro packagers can run
+# `msginit -l <locale>` to seed per-locale .po files.
+#
+# Project-ID-Version: namtor-gnome 0.1.0
+# MIME-Version: 1.0
+# Content-Type: text/plain; charset=UTF-8
+# Content-Transfer-Encoding: 8bit

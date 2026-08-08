@@ -309,9 +309,9 @@ fn render_unreachable(window: &adw::ApplicationWindow, err: &namtor_gnome::Manag
     let steps = Label::builder()
         .label(
             "Recovery:\n\
-             • Start the daemon: systemctl --user start namtor-daemon\n\
-             • Install the namtor D-Bus service file\n\
-             • Check journalctl --user -u namtor-daemon",
+             • Start the daemon: sudo systemctl start namtor-daemon\n\
+             • Verify the D-Bus service file is installed\n\
+             • Check journalctl -u namtor-daemon",
         )
         .halign(Align::Start)
         .wrap(true)

@@ -35,7 +35,8 @@ override_dh_auto_build:
 	    -p namtor-worker \
 	    -p namtor-cli \
 	    -p namtor-camera-emitter-off \
-	    -p namtor-pam
+	    -p namtor-pam \
+	    -p namtor-gnome
 
 # ---------------------------------------------------------------------------
 # override_dh_auto_test: workspace tests, skipping the known-flaky

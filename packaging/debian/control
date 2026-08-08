@@ -24,6 +24,8 @@ Depends:
     onnxruntime,
     libpam0g,
     systemd,
+    libgtk-4-1,
+    libadwaita-1-0,
 Multi-Arch: same
 Description: IR face authentication for Linux — daemon, PAM module, CLI
  Nam-tor replaces Howdy, targeting Windows Hello parity on speed and

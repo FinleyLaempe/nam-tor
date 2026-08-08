@@ -34,6 +34,8 @@ depends=(
     'pam'
     'systemd'
     'gcc-libs'
+    'gtk4'
+    'libadwaita'
 )
 makedepends=(
     'cargo'
@@ -78,7 +80,8 @@ build() {
         -p namtor-worker \
         -p namtor-cli \
         -p namtor-camera-emitter-off \
-        -p namtor-pam
+        -p namtor-pam \
+        -p namtor-gnome
 }
 
 # ---------------------------------------------------------------------------
