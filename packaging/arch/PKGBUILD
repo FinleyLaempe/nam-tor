@@ -41,6 +41,11 @@ makedepends=(
     'cargo'
     'rust'
     'python>=3.11'
+    'cmake'
+    'qt6-base'
+    'kirigami'
+    'kcoreaddons'
+    'extra-cmake-modules'
 )
 checkdepends=('cargo')
 optdepends=()
@@ -73,15 +78,36 @@ prepare() {
 # ---------------------------------------------------------------------------
 build() {
     cd "$srcdir/nam-tor-$pkgver"
+    # ring 0.17.x C/asm code fails to link when GCC LTO (-flto=auto, set by
+    # makepkg.conf OPTIONS+=lto) produces LLVM bitcode that rust-lld cannot
+    # ingest. Strip -flto* from CFLAGS/LDFLAGS so ring's build.rs emits
+    # regular object files. Rust LTO (lto=true in Cargo.toml [profile.release])
+    # is unaffected — it is a separate, linker-internal pass.
+    export CFLAGS="${CFLAGS// -flto=auto/}"
+    export CFLAGS="${CFLAGS//-flto=auto/}"
+    export LDFLAGS="${LDFLAGS// -flto=auto/}"
+    export LDFLAGS="${LDFLAGS//-flto=auto/}"
     # Build every artifact the install manifest references. -p pins avoid
     # pulling unrelated workspace members (e.g. namtor-eval, namtor-probe).
     cargo build --release --frozen \
         -p namtor-daemon \
         -p namtor-worker \
         -p namtor-cli \
-        -p namtor-camera-emitter-off \
+        -p namtor-camera \
         -p namtor-pam \
-        -p namtor-gnome
+        -p namtor-gnome \
+        -p namtor-kde
+
+    # KDE KCM QML module (CMake build — installs libnamtorqml.so + main.qml +
+    # metadata.json into the Qt6 QML import dir). The Rust cdylib
+    # (libnamtor_kde.so) is built by cargo above and linked by CMake.
+    local _rust_so="$srcdir/nam-tor-$pkgver/target/release/libnamtor_kde.so"
+    cmake -S "$srcdir/nam-tor-$pkgver/crates/namtor-kde" \
+        -B build-kde \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DNAMTOR_KDE_RUST_SO="$_rust_so"
+    cmake --build build-kde --parallel
 }
 
 # ---------------------------------------------------------------------------
@@ -99,6 +125,14 @@ check() {
 package() {
     cd "$srcdir/nam-tor-$pkgver"
 
+    # KDE KCM: install the CMake-built QML module + metadata.json into
+    # $pkgdir. stage.sh will overwrite the overlapping desktop/metainfo/icon
+    # files with identical content from the manifest (same source files).
+    DESTDIR="$pkgdir" cmake --install build-kde
+
+    # Deterministic staging from packaging/install-manifest.toml — installs
+    # all static files (binaries, PAM, systemd, D-Bus, polkit, GNOME/KDE
+    # desktop entries, metainfo, icons, manifests, PAM scripts, README).
     local destdir="$pkgdir"
     ./packaging/stage.sh "$destdir" "$srcdir/nam-tor-$pkgver"
 }

@@ -10,6 +10,11 @@ Build-Depends:
     python3 (>= 3.11),
     dh-cargo,
     libpam0g-dev,
+    cmake,
+    qt6-base-dev,
+    libkf6kirigami-dev,
+    libkf6coreaddons-dev,
+    extra-cmake-modules,
 Standards-Version: 4.7.0
 Homepage: https://github.com/namtor/nam-tor
 Rules-Requires-Root: binary-targets

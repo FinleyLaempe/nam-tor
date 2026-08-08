@@ -34,9 +34,20 @@ override_dh_auto_build:
 	    -p namtor-daemon \
 	    -p namtor-worker \
 	    -p namtor-cli \
-	    -p namtor-camera-emitter-off \
+	    -p namtor-camera \
 	    -p namtor-pam \
-	    -p namtor-gnome
+	    -p namtor-gnome \
+	    -p namtor-kde
+
+	# KDE KCM QML module (CMake build — installs libnamtorqml.so + main.qml
+	# + metadata.json into the Qt6 QML import dir). The Rust cdylib
+	# (libnamtor_kde.so) is built by cargo above and linked by CMake.
+	cmake -S crates/namtor-kde \
+	    -B build-kde \
+	    -DCMAKE_BUILD_TYPE=Release \
+	    -DCMAKE_INSTALL_PREFIX=/usr \
+	    -DNAMTOR_KDE_RUST_SO=$$(pwd)/target/release/libnamtor_kde.so
+	cmake --build build-kde --parallel
 
 # ---------------------------------------------------------------------------
 # override_dh_auto_test: workspace tests, skipping the known-flaky
@@ -50,6 +61,14 @@ override_dh_auto_test:
 # packaging/install-manifest.toml into debian/namtor.
 # ---------------------------------------------------------------------------
 override_dh_auto_install:
+	# KDE KCM: install the CMake-built QML module + metadata.json into
+	# debian/namtor. stage.sh will overwrite the overlapping
+	# desktop/metainfo/icon files with identical content from the manifest.
+	DESTDIR=debian/namtor cmake --install build-kde
+
+	# Deterministic staging from packaging/install-manifest.toml — installs
+	# all static files (binaries, PAM, systemd, D-Bus, polkit, GNOME/KDE
+	# desktop entries, metainfo, icons, manifests, PAM scripts, README).
 	./packaging/stage.sh debian/namtor .
 
 # ---------------------------------------------------------------------------

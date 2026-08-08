@@ -37,6 +37,11 @@ BuildRequires:  rust-toolchain
 BuildRequires:  cargo
 BuildRequires:  python3 >= 3.11
 BuildRequires:  systemd-rpm-macros
+BuildRequires:  cmake
+BuildRequires:  qt6-qtbase-devel
+BuildRequires:  kf6-kirigami-devel
+BuildRequires:  kf6-kcoreaddons-devel
+BuildRequires:  extra-cmake-modules
 
 # Runtime requirements.
 Requires:       onnxruntime
@@ -74,21 +79,45 @@ Models are fetched at runtime after licence acceptance.
 test -f Cargo.lock || { echo "Cargo.lock missing from tarball" >&2; exit 1; }
 
 %build
+# ring 0.17.x C/asm code fails to link when GCC LTO (-flto=auto, set by
+# Fedora's default RPM LTO flags) produces LLVM bitcode that rust-lld cannot
+# ingest. Disable LTO for the C compilation; Rust LTO (lto=true in
+# Cargo.toml [profile.release]) is unaffected.
+%global _lto_cflags %{nil}
 # Build every artifact the install manifest references. -p pins avoid
 # pulling unrelated workspace members (e.g. namtor-eval, namtor-probe).
 cargo build --release --frozen \
     -p namtor-daemon \
     -p namtor-worker \
     -p namtor-cli \
-    -p namtor-camera-emitter-off \
+    -p namtor-camera \
     -p namtor-pam \
-    -p namtor-gnome
+    -p namtor-gnome \
+    -p namtor-kde
+
+# KDE KCM QML module (CMake build — installs libnamtorqml.so + main.qml +
+# metadata.json into the Qt6 QML import dir). The Rust cdylib
+# (libnamtor_kde.so) is built by cargo above and linked by CMake.
+%global rust_so %{_builddir}/nam-tor-%{version}/target/release/libnamtor_kde.so
+cmake -S %{_builddir}/nam-tor-%{version}/crates/namtor-kde \
+    -B %{_builddir}/build-kde \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=%{_prefix} \
+    -DNAMTOR_KDE_RUST_SO=%{rust_so}
+cmake --build %{_builddir}/build-kde --parallel
 
 %check
 cargo test --workspace -- --skip concurrent_connections_serialise --test-threads=1
 
 %install
-# Deterministic staging from packaging/install-manifest.toml.
+# KDE KCM: install the CMake-built QML module + metadata.json into
+# %{buildroot}. stage.sh will overwrite the overlapping desktop/metainfo/icon
+# files with identical content from the manifest (same source files).
+DESTDIR=%{buildroot} cmake --install %{_builddir}/build-kde
+
+# Deterministic staging from packaging/install-manifest.toml — installs
+# all static files (binaries, PAM, systemd, D-Bus, polkit, GNOME/KDE
+# desktop entries, metainfo, icons, manifests, PAM scripts, README).
 ./packaging/stage.sh "%{buildroot}" "%{_builddir}/nam-tor-%{version}"
 
 %files
@@ -118,6 +147,10 @@ cargo test --workspace -- --skip concurrent_connections_serialise --test-threads
 %{_datadir}/applications/org.namtor.kcm.desktop
 %{_datadir}/metainfo/org.namtor.kcm.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/org.namtor.kcm.svg
+# KDE KCM QML module + KPlugin metadata (CMake-installed)
+%{_libdir}/qt6/qml/org/namtor/libnamtorqml.so
+%{_datadir}/qt6/qml/org/namtor/main.qml
+%{_datadir}/kpackage/kcms/kcm_namtor/metadata.json
 
 %pre
 # Register the system user + runtime dirs before the unit files are

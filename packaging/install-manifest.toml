@@ -119,11 +119,12 @@ owner = "root"
 group = "root"
 symlink = false
 
-# PAM module (cdylib). The build produces `libpam_namtor.so`; it is installed
-# under its canonical PAM path without the `lib` prefix.
+# PAM module (cdylib). The crate `namtor-pam` produces `libnamtor_pam.so`;
+# it is installed under its canonical PAM path `pam_namtor.so` (no `lib`
+# prefix, matching the PAM module naming convention).
 [[files]]
 dest = "/usr/lib/security/pam_namtor.so"
-src = "target/release/libpam_namtor.so"
+src = "target/release/libnamtor_pam.so"
 mode = "0755"
 owner = "root"
 group = "root"
