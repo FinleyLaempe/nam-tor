@@ -1,0 +1,19 @@
+{
+  "component": "ReviewViewComponent",
+  "layout": "Vertical Box with summary labels and action buttons (Cancel, Retry, Finish)",
+  "data_bindings": {
+    "coverage_percent": "Label",
+    "quality_label": "Label",
+    "template_count": "Label"
+  },
+  "actions": {
+    "Finish": "CommitProfile",
+    "Retry": "Resume Enrollment",
+    "Cancel": "CancelEnrollment"
+  },
+  "constraints": [
+    "No biometric images",
+    "No raw scores",
+    "No thresholds"
+  ]
+}
