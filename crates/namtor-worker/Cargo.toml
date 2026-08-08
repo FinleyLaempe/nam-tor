@@ -7,6 +7,7 @@ license = "GPL-3.0-only"
 [dependencies]
 landlock = "0.4"
 libseccomp = "0.4"
+namtor-capture = { path = "../namtor-capture" }
 namtor-proto = { path = "../namtor-proto" }
 nix = { version = "0.29", features = ["fs", "mman", "process", "socket", "user"] }
 serde = { workspace = true }
