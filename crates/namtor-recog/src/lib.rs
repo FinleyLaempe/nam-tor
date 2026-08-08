@@ -9,8 +9,13 @@ pub mod align;
 pub mod detect;
 pub mod embed;
 pub mod pipeline;
+pub mod znorm;
 
 pub use align::align_face;
 pub use detect::{Detection, FaceBox, FaceDetector, Landmarks};
 pub use embed::{Embedding, FaceEmbedder};
 pub use pipeline::{PipelineResult, RecognitionPipeline};
+pub use znorm::{
+    normalize_score, normalize_score_scalar, t_norm, CohortSource, DirCohort, FileCohort,
+    Provenance, SyntheticCohort, ZNormCalibration, ZNormCalibrator, ZNormError,
+};

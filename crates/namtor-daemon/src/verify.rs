@@ -20,7 +20,7 @@ use namtor_capture::frame::{EmitterState, Frame};
 use namtor_capture::source::CaptureSource;
 use namtor_pad::{mean_u8, run_analytic_pad, strobe_difference, PadConfig};
 use namtor_proto::pam::Verdict;
-use namtor_recog::RecognitionPipeline;
+use namtor_recog::{normalize_score_scalar, RecognitionPipeline};
 use namtor_store::{StoreError, TemplateStore};
 use namtor_worker::WorkerError;
 
@@ -260,16 +260,9 @@ impl VerifyEngine {
             }
         }
 
-        // 5. Apply z-norm if available.
-        let normalized = if let (Some(m), Some(s)) = (znorm_mean, znorm_std) {
-            if *s > 1e-6 {
-                (best_score - m) / s
-            } else {
-                best_score
-            }
-        } else {
-            best_score
-        };
+        // 5. Apply z-norm (spec §6.6 Tier 3). Absent params (no lawful
+        //    cohort calibrated) → passthrough → global default threshold.
+        let normalized = normalize_score_scalar(best_score, *znorm_mean, *znorm_std);
 
         // 6. Threshold.
         if normalized >= self.match_threshold {
@@ -359,23 +352,14 @@ mod tests {
 
     #[test]
     fn znorm_application_logic() {
-        let best_score = 0.50f32;
-        let m = 0.3f32;
-        let s = 0.1f32;
-        let normalized = (best_score - m) / s;
+        // The scalar helper must match the canonical z-norm formula.
+        let normalized = normalize_score_scalar(0.50, Some(0.3), Some(0.1));
         assert!((normalized - 2.0).abs() < 1e-5);
     }
 
     #[test]
     fn znorm_with_zero_std_is_passthrough() {
-        let best_score = 0.50f32;
-        let s = 0.0f32;
-        let normalized = if s > 1e-6 {
-            (best_score - 0.3) / s
-        } else {
-            best_score
-        };
-        assert_eq!(normalized, best_score);
+        assert_eq!(normalize_score_scalar(0.50, Some(0.3), Some(0.0)), 0.50);
     }
 
     #[test]

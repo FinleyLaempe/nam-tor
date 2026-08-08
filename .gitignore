@@ -16,4 +16,8 @@ var/
 ml/eval/build/
 ml/models/
 
+# z-norm background cohort (spec §6.6 Tier 3). Never committed —
+# biometric-derived embeddings, licence-gated. Loaded by DirCohort.
+var/lib/namtor/cohort/
+
 crates/namtor-kde/build-kde/

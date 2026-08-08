@@ -10,6 +10,7 @@ namtor-capture = { path = "../namtor-capture" }
 namtor-worker = { path = "../namtor-worker", features = ["onnx"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 thiserror = { workspace = true }
 
 [dev-dependencies]
