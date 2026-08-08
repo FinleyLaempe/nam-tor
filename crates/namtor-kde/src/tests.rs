@@ -302,3 +302,29 @@ fn enrollment_signals_round_trip() {
         assert!(got_complete, "did not receive EnrollmentComplete");
     });
 }
+
+/// Internal drift check: the C ABI strings must match the bridge constants.
+/// The integration test in `tests/abi_smoke.rs` checks the C ABI against the
+/// canonical frozen values; this unit test catches a rename on the Rust side
+/// that the C literals did not pick up. No biometric data involved.
+#[test]
+fn abi_strings_match_bridge_constants() {
+    use std::ffi::CStr;
+    assert_eq!(
+        crate::abi::namtor_kde_abi_version(),
+        crate::abi::NAMTOR_KDE_ABI_VERSION
+    );
+    let bus = unsafe {
+        // SAFETY: points to the process-lifetime c"org.namtor.Manager" static.
+        CStr::from_ptr(crate::abi::namtor_kde_manager_bus_name())
+    };
+    assert_eq!(bus.to_bytes(), crate::bridge::MANAGER_BUS_NAME.as_bytes());
+    let path = unsafe {
+        // SAFETY: points to the process-lifetime c"/org/namtor/Manager" static.
+        CStr::from_ptr(crate::abi::namtor_kde_manager_object_path())
+    };
+    assert_eq!(
+        path.to_bytes(),
+        crate::bridge::MANAGER_OBJECT_PATH.as_bytes()
+    );
+}

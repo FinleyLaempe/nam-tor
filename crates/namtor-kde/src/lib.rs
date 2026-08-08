@@ -15,6 +15,7 @@
 //! UI so the two front-ends cannot drift; both drive the same D-Bus types and
 //! the same happy / error / cancel / auth-loss / offline scenarios.
 
+pub mod abi;
 mod bridge;
 pub mod contract;
 mod proxy;

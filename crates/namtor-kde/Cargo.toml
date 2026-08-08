@@ -6,6 +6,12 @@ edition.workspace = true
 license.workspace = true
 description = "KDE System Settings KCM bridge for Nam-tor face profile management"
 
+# `cdylib` produces libnamtor_kde.so for the C++ KCModule shim to link/dlopen
+# (Task 21 build scaffolding); `rlib` keeps the crate usable as a normal Rust
+# dependency by the contract suite and the GNOME UI tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 serde = { workspace = true }
 tracing = "0.1"
