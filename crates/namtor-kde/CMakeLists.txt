@@ -60,9 +60,12 @@ find_package(KF6KCMUtils 6.0 QUIET)
 find_package(ECM 6.0 QUIET NO_MODULE)
 
 set(BUILD_KCM_PLUGIN OFF)
+if(ECM_FOUND)
+    set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${ECM_MODULE_PATH})
+    include(KDEInstallDirs)
+endif()
 if(KF6KCMUtils_FOUND AND ECM_FOUND AND KF6CoreAddons_FOUND)
     set(BUILD_KCM_PLUGIN ON)
-    set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${ECM_MODULE_PATH})
 elseif(NOT KF6KCMUtils_FOUND OR NOT ECM_FOUND)
     message(STATUS
         "KCM plugin build disabled (KF6KCMUtils_FOUND=${KF6KCMUtils_FOUND} "
