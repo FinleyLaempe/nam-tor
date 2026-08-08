@@ -127,15 +127,15 @@ fn drop_and_exec(args: &SpawnArgs) -> Result<(), String> {
     nix::unistd::setuid(nobody_uid).map_err(|e| format!("setuid({nobody_uid}): {e}"))?;
 
     let worker_c = CString::new(args.worker.as_str()).map_err(|e| format!("worker path: {e}"))?;
-    let read_fd_c = CString::new(args.read_fd.to_string()).unwrap();
-    let write_fd_c = CString::new(args.write_fd.to_string()).unwrap();
-    let frame_memfd_c = CString::new(args.frame_memfd.to_string()).unwrap();
-    let frame_len_c = CString::new(args.frame_len.to_string()).unwrap();
-    let apply_c = CString::new("--apply-sandbox").unwrap();
-    let read_fd_flag = CString::new("--read-fd").unwrap();
-    let write_fd_flag = CString::new("--write-fd").unwrap();
-    let frame_memfd_flag = CString::new("--frame-memfd").unwrap();
-    let frame_len_flag = CString::new("--frame-len").unwrap();
+    let read_fd_c = CString::new(args.read_fd.to_string()).map_err(|e| format!("read_fd: {e}"))?;
+    let write_fd_c = CString::new(args.write_fd.to_string()).map_err(|e| format!("write_fd: {e}"))?;
+    let frame_memfd_c = CString::new(args.frame_memfd.to_string()).map_err(|e| format!("frame_memfd: {e}"))?;
+    let frame_len_c = CString::new(args.frame_len.to_string()).map_err(|e| format!("frame_len: {e}"))?;
+    let apply_c = CString::new("--apply-sandbox").map_err(|e| format!("--apply-sandbox: {e}"))?;
+    let read_fd_flag = CString::new("--read-fd").map_err(|e| format!("--read-fd: {e}"))?;
+    let write_fd_flag = CString::new("--write-fd").map_err(|e| format!("--write-fd: {e}"))?;
+    let frame_memfd_flag = CString::new("--frame-memfd").map_err(|e| format!("--frame-memfd: {e}"))?;
+    let frame_len_flag = CString::new("--frame-len").map_err(|e| format!("--frame-len: {e}"))?;
 
     let mut argv_c: Vec<CString> = vec![
         worker_c.clone(),

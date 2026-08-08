@@ -15,6 +15,11 @@
 
 use crate::GateResult;
 
+/// Score mapping: `raw = 1.0 - score` (deviation from monotonic falloff).
+/// Pass if `raw <= max_deviation`, i.e. `score >= 1.0 - max_deviation`.
+/// The calibration bridge inverts this as `max_deviation = 1.0 - score_threshold`.
+pub const SCORE_INVERSION: f32 = 1.0;
+
 /// Crop `D` to the face bounding box, returning `(values, cw, ch)`.
 fn crop_bbox(
     d: &[f32],

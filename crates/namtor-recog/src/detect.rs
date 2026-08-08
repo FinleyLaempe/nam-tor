@@ -83,7 +83,7 @@ impl FaceDetector {
             self.score_threshold,
             self.nms_threshold,
         );
-        Ok(detections)
+        Ok(detections?)
     }
 }
 
@@ -121,7 +121,7 @@ fn postprocess_multi(
     orig_h: u32,
     score_thr: f32,
     nms_thr: f32,
-) -> Vec<Detection> {
+) -> Result<Vec<Detection>, WorkerError> {
     let strides = [8usize, 16, 32];
     let mut candidates: Vec<Detection> = Vec::new();
 
@@ -145,9 +145,9 @@ fn postprocess_multi(
             continue;
         }
 
-        let cls = cls.unwrap();
-        let obj = obj.unwrap();
-        let bbox = bbox.unwrap();
+        let cls = cls.ok_or_else(|| WorkerError::Infer("Missing cls output".into()))?;
+        let obj = obj.ok_or_else(|| WorkerError::Infer("Missing obj output".into()))?;
+        let bbox = bbox.ok_or_else(|| WorkerError::Infer("Missing bbox output".into()))?;
 
         for i in 0..count {
             let cls_val = cls[i];
@@ -225,7 +225,7 @@ fn postprocess_multi(
     }
 
     nms(&mut candidates, nms_thr);
-    candidates
+    Ok(candidates)
 }
 
 fn nms(dets: &mut Vec<Detection>, threshold: f32) {

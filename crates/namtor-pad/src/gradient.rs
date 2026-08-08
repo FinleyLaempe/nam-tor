@@ -13,6 +13,11 @@
 
 use crate::GateResult;
 
+/// Score normalisation: `score = (raw / SCORE_FULL_SCALE).clamp(0, 1)`.
+/// A low-frequency ratio of `SCORE_FULL_SCALE` (0.5) maps to score 1.0.
+/// Exposed so the calibration bridge can invert the mapping.
+pub const SCORE_FULL_SCALE: f32 = 0.5;
+
 /// Crop `D` to the face bounding box. If no box is given, use the full frame.
 fn crop_bbox(
     d: &[f32],
@@ -130,8 +135,8 @@ pub fn gradient_consistency(
     }
     let raw = low_frequency_ratio(&crop, cw, ch);
     // Normalise: a real face typically has ratio >= 0.3, a flat print < 0.1.
-    // Score maps [0, 0.5] → [0, 1].
-    let score = (raw / 0.5).clamp(0.0, 1.0);
+    // Score maps [0, SCORE_FULL_SCALE] → [0, 1].
+    let score = (raw / SCORE_FULL_SCALE).clamp(0.0, 1.0);
     let pass = raw >= min_score;
     if pass {
         GateResult::pass(score, raw)

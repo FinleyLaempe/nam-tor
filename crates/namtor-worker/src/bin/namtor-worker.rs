@@ -102,6 +102,19 @@ fn main() -> ExitCode {
     }
 }
 
+/// Create a `CString` from a `&'static str` literal known to be NUL-free.
+///
+/// `CString::new` only fails on interior NUL bytes; the string literals passed
+/// here are compile-time constants without NULs, so this is infallible. Used in
+/// self-test functions that return `TestResult` (not `Result`) and therefore
+/// cannot propagate the error via `?`.
+fn cstr(s: &'static str) -> CString {
+    CString::new(s).unwrap_or_else(|e| {
+        eprintln!("internal: NUL in static literal {s:?}: {e}");
+        std::process::exit(2);
+    })
+}
+
 /// Apply seccomp then attempt `kind`; print the errno (or "ok") and exit.
 /// Exit code 0 = action succeeded, 1 = action denied (EPERM), 2 = usage.
 fn seccomp_self_test(kind: &str) -> ExitCode {
@@ -136,12 +149,11 @@ enum TestResult {
 }
 
 fn test_open() -> TestResult {
-    use std::ffi::CString;
     use std::os::raw::c_int;
     extern "C" {
         fn open(path: *const std::os::raw::c_char, flags: c_int) -> c_int;
     }
-    let path = CString::new("/etc/passwd").unwrap();
+    let path = cstr("/etc/passwd");
     // SAFETY: open is a libc syscall; path is a valid NUL-terminated C string.
     // O_RDONLY = 0 on Linux.
     let fd = unsafe { open(path.as_ptr(), 0) };
@@ -225,7 +237,7 @@ fn test_mkdir() -> TestResult {
     extern "C" {
         fn mkdir(path: *const std::os::raw::c_char, mode: u32) -> std::os::raw::c_int;
     }
-    let path = CString::new("/tmp/namtor-landlock-test").unwrap();
+    let path = cstr("/tmp/namtor-landlock-test");
     // SAFETY: mkdir is a libc syscall; path is a valid NUL-terminated C string.
     let ret = unsafe { mkdir(path.as_ptr(), 0o755) };
     if ret < 0 {
@@ -317,7 +329,6 @@ fn test_connect() -> TestResult {
 }
 
 fn test_exec() -> TestResult {
-    use std::ffi::CString;
     extern "C" {
         fn execve(
             path: *const std::os::raw::c_char,
@@ -325,7 +336,7 @@ fn test_exec() -> TestResult {
             envp: *const *const std::os::raw::c_char,
         ) -> std::os::raw::c_int;
     }
-    let path = CString::new("/bin/true").unwrap();
+    let path = cstr("/bin/true");
     let null_ptr: *const std::os::raw::c_char = std::ptr::null();
     // SAFETY: execve only returns on error. If it succeeds, the process is
     // replaced — but the sandbox should deny it before that happens.

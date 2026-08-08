@@ -10,6 +10,11 @@
 
 use crate::GateResult;
 
+/// Score normalisation: `score = (|raw| / SCORE_FULL_SCALE).clamp(0, 1)`.
+/// A ratio of `SCORE_FULL_SCALE` (0.25) maps to score 1.0. Exposed so the
+/// calibration bridge can invert the mapping without a magic number.
+pub const SCORE_FULL_SCALE: f32 = 0.25;
+
 /// Compute the differential-energy gate.
 ///
 /// `d` is the strobe differential (`On − Off`) as `f32` values.
@@ -21,8 +26,8 @@ pub fn differential_energy(d: &[f32], on_mean: f32, min_ratio: f32) -> GateResul
     }
     let mean_d: f32 = d.iter().copied().sum::<f32>() / d.len() as f32;
     let raw = mean_d / on_mean;
-    // Normalise score into [0, 1]: 0 at ratio 0, 1 at ratio >= 0.25.
-    let score = (raw.abs() / 0.25).clamp(0.0, 1.0);
+    // Normalise score into [0, 1]: 0 at ratio 0, 1 at ratio >= SCORE_FULL_SCALE.
+    let score = (raw.abs() / SCORE_FULL_SCALE).clamp(0.0, 1.0);
     let pass = raw.abs() >= min_ratio;
     if pass {
         GateResult::pass(score, raw)

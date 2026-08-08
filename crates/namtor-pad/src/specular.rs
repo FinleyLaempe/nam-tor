@@ -15,6 +15,13 @@
 
 use crate::GateResult;
 
+/// Score normalisation: `score = ((raw - SCORE_OFFSET) / SCORE_SCALE).clamp(0, 1)`.
+/// A compactness of `SCORE_OFFSET` (1.0, uniform) maps to score 0; a
+/// compactness of `SCORE_OFFSET + SCORE_SCALE` (6.0, tight peak) maps to 1.0.
+/// Exposed so the calibration bridge can invert the mapping.
+pub const SCORE_OFFSET: f32 = 1.0;
+pub const SCORE_SCALE: f32 = 5.0;
+
 /// Crop `D` to the face bounding box. Returns `(cropped_values, cw, ch)`.
 fn crop_bbox(d: &[f32], w: u32, h: u32, bbox: Option<(u32, u32, u32, u32)>) -> Vec<f32> {
     match bbox {
@@ -80,9 +87,9 @@ pub fn specular_highlight(
         return GateResult::fail(0.0, 0.0);
     }
     let raw = peak / p90;
-    // Normalise: compactness of 1.0 = perfectly uniform (no hotspot), 5.0+ =
-    // tight peak. Score maps [1, 6] → [0, 1].
-    let score = ((raw - 1.0) / 5.0).clamp(0.0, 1.0);
+    // Normalise: compactness of SCORE_OFFSET = perfectly uniform (no hotspot),
+    // SCORE_OFFSET + SCORE_SCALE+ = tight peak. Score maps [1, 6] → [0, 1].
+    let score = ((raw - SCORE_OFFSET) / SCORE_SCALE).clamp(0.0, 1.0);
     let pass = raw >= min_compactness;
     if pass {
         GateResult::pass(score, raw)
