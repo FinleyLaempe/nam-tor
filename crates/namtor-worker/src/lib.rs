@@ -19,9 +19,9 @@ pub mod backend_eval;
 pub mod dispatch;
 pub mod infer;
 #[cfg(feature = "onnx")]
-pub mod int8_eval;
-#[cfg(feature = "onnx")]
 pub mod infer_onnx;
+#[cfg(feature = "onnx")]
+pub mod int8_eval;
 pub mod learned_pad;
 pub mod pipe;
 pub mod sandbox;

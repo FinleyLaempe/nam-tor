@@ -357,10 +357,7 @@ fn check_storage(cfg: &DiagnosticConfig) -> DiagnosticCheck {
             code: "E003",
             check: "storage",
             detail: "enrollment directory missing".into(),
-            remediation: format!(
-                "create {} with mode 0700 owned by namtor",
-                cfg.templates_dir.display()
-            ),
+            remediation: "create the enrollment directory with mode 0700 owned by namtor".into(),
         };
     }
     if !cfg.key_path.exists() {

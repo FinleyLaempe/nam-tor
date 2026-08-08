@@ -1,0 +1,102 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "buildDefinition": {
+      "buildType": "https://namtor.dev/buildtypes/cargo-release-v1",
+      "externalParameters": {
+        "profile": "release",
+        "target": "workspace"
+      },
+      "internalParameters": {
+        "cargo": "cargo 1.96.1 (356927216 2026-06-26)",
+        "codegen-units": 1,
+        "lto": true,
+        "panic": "abort",
+        "rustc": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+        "strip": true
+      },
+      "resolvedDependencies": [
+        {
+          "digest": {
+            "gitCommit": "abff0a87d417b5dbc63341518ba537c2982c769b"
+          },
+          "uri": "git+local"
+        },
+        {
+          "digest": {
+            "sha256": "55faf434e1d871bed498e4039afff3cb732422c659fd587b6ccf3905dc30a742"
+          },
+          "uri": "file://Cargo.lock"
+        }
+      ]
+    },
+    "runDetails": {
+      "builder": {
+        "id": "host://ROGArchLaptop"
+      },
+      "byproducts": [
+        {
+          "digest": {
+            "sha256": "4478bb511be79fb3114d2242c9636ea3167ab22d71777f62030d5436eee2b27e"
+          },
+          "name": "namtor.cyclonedx.json"
+        },
+        {
+          "digest": {
+            "sha256": "5561c55b7545f8f2d7d80ea52d7fdbefa8b474fe6aee0133ec41a9a2aa016447"
+          },
+          "name": "namtor.spdx.json"
+        }
+      ],
+      "metadata": {
+        "invocationId": "abff0a87d417b5dbc63341518ba537c2982c769b",
+        "startedOn": "2026-08-08T11:53:16.355757+00:00"
+      }
+    }
+  },
+  "predicateType": "https://slsa.dev/provenance/v1",
+  "subject": [
+    {
+      "digest": {
+        "sha256": "105f9742ba472871adc27427e8ffa7ef106f29b43d7acd1fd2f8bcc470fad488"
+      },
+      "name": "namtor-daemon"
+    },
+    {
+      "digest": {
+        "sha256": "9876729bb42dff0fcb306cbe0cb6635ce6eb154f193e26f69ea56d5094804d0b"
+      },
+      "name": "namtor-worker"
+    },
+    {
+      "digest": {
+        "sha256": "b3ee8c222893723b27274eef0340954430572bdb31635fe49d8016745b9ca67a"
+      },
+      "name": "namtor-worker-spawn"
+    },
+    {
+      "digest": {
+        "sha256": "909a6d590d19be9dff78599c997adc5bb51ccc7ebd01c985395d75f501e37293"
+      },
+      "name": "namtor-camera-emitter-off"
+    },
+    {
+      "digest": {
+        "sha256": "638d4f71315002cf31bafef17de4373a93967a13ab7fe20553147b893aae9ed6"
+      },
+      "name": "namtor-cli"
+    },
+    {
+      "digest": {
+        "sha256": "eeb4c01779e168d5f42ba05c4aba591b6d85038cdee2b62e8a7a5f1a451fb57e"
+      },
+      "name": "namtor-enroll-wizard"
+    },
+    {
+      "digest": {
+        "sha256": "94af09fd7ebd94360190bde162b6b611112a47ace7377e4b2fd16ec7fa9300d2"
+      },
+      "name": "libnamtor_pam.so"
+    }
+  ]
+}

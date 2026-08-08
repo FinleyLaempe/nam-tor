@@ -1,0 +1,49 @@
+{
+  "reproducible": true,
+  "build_a_dir": "/tmp/namtor-repro-eFnzZy/build-a",
+  "build_b_dir": "/tmp/namtor-repro-eFnzZy/build-b",
+  "artifacts": [
+    {
+      "name": "namtor-daemon",
+      "sha256_a": "105f9742ba472871adc27427e8ffa7ef106f29b43d7acd1fd2f8bcc470fad488",
+      "sha256_b": "105f9742ba472871adc27427e8ffa7ef106f29b43d7acd1fd2f8bcc470fad488",
+      "match": true
+    },
+    {
+      "name": "namtor-worker",
+      "sha256_a": "9876729bb42dff0fcb306cbe0cb6635ce6eb154f193e26f69ea56d5094804d0b",
+      "sha256_b": "9876729bb42dff0fcb306cbe0cb6635ce6eb154f193e26f69ea56d5094804d0b",
+      "match": true
+    },
+    {
+      "name": "namtor-worker-spawn",
+      "sha256_a": "b3ee8c222893723b27274eef0340954430572bdb31635fe49d8016745b9ca67a",
+      "sha256_b": "b3ee8c222893723b27274eef0340954430572bdb31635fe49d8016745b9ca67a",
+      "match": true
+    },
+    {
+      "name": "namtor-camera-emitter-off",
+      "sha256_a": "909a6d590d19be9dff78599c997adc5bb51ccc7ebd01c985395d75f501e37293",
+      "sha256_b": "909a6d590d19be9dff78599c997adc5bb51ccc7ebd01c985395d75f501e37293",
+      "match": true
+    },
+    {
+      "name": "namtor-cli",
+      "sha256_a": "638d4f71315002cf31bafef17de4373a93967a13ab7fe20553147b893aae9ed6",
+      "sha256_b": "638d4f71315002cf31bafef17de4373a93967a13ab7fe20553147b893aae9ed6",
+      "match": true
+    },
+    {
+      "name": "namtor-enroll-wizard",
+      "sha256_a": "eeb4c01779e168d5f42ba05c4aba591b6d85038cdee2b62e8a7a5f1a451fb57e",
+      "sha256_b": "eeb4c01779e168d5f42ba05c4aba591b6d85038cdee2b62e8a7a5f1a451fb57e",
+      "match": true
+    },
+    {
+      "name": "libnamtor_pam.so",
+      "sha256_a": "94af09fd7ebd94360190bde162b6b611112a47ace7377e4b2fd16ec7fa9300d2",
+      "sha256_b": "94af09fd7ebd94360190bde162b6b611112a47ace7377e4b2fd16ec7fa9300d2",
+      "match": true
+    }
+  ]
+}
