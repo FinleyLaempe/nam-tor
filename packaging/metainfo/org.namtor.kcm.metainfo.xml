@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!--
+  AppStream metainfo for the Nam-tor KDE KCM (Plasma 6 System Settings module).
+  Installed to /usr/share/metainfo/org.namtor.kcm.metainfo.xml.
+
+  KDE Discover and Plasma's System Settings search consume this file. The
+  <keywords> section feeds the system-wide search so the KCM is discoverable
+  by "face", "authentication", "biometric", etc.
+
+  No biometric data, no raw model identifiers, no threshold values appear
+  in this file — only user-facing descriptive metadata.
+-->
+<component type="desktop-application">
+  <id>org.namtor.kcm</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>Nam-tor Face Authentication</name>
+  <summary>Enroll and manage infrared face authentication profiles</summary>
+  <developer id="namtor.project">
+    <name>Nam-tor Project</name>
+  </developer>
+  <description>
+    <p>
+      Nam-tor provides infrared face authentication for Linux, targeting
+      Windows Hello parity on speed and accuracy. This is the KDE Plasma 6
+      System Settings module: enroll new face profiles, review enrollment
+      quality, enable or disable profiles, and merge or replace existing
+      ones — all from inside System Settings or via kcmshell6.
+    </p>
+    <p>
+      All biometric data stays in the privileged daemon process. The KCM
+      communicates exclusively over the D-Bus system bus and never touches
+      templates, embeddings, or raw frames directly.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.namtor.kcm.desktop</launchable>
+  <url type="homepage">https://github.com/namtor/nam-tor</url>
+  <url type="bugtracker">https://github.com/namtor/nam-tor/issues</url>
+  <provides>
+    <binary>kcmshell6</binary>
+  </provides>
+  <keywords>
+    <keyword>face</keyword>
+    <keyword>authentication</keyword>
+    <keyword>biometric</keyword>
+    <keyword>infrared</keyword>
+    <keyword>login</keyword>
+    <keyword>security</keyword>
+    <keyword>namtor</keyword>
+  </keywords>
+  <categories>
+    <category>Settings</category>
+    <category>Security</category>
+  </categories>
+  <recommends>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </recommends>
+  <content_rating type="oars-1.1">
+    <content_attribute id="violence-cartoon">none</content_attribute>
+    <content_attribute id="violence-fantasy">none</content_attribute>
+    <content_attribute id="violence-realistic">none</content_attribute>
+    <content_attribute id="violence-bloodshed">none</content_attribute>
+    <content_attribute id="violence-sexual">none</content_attribute>
+    <content_attribute id="violence-desecration">none</content_attribute>
+    <content_attribute id="violence-slavery">none</content_attribute>
+    <content_attribute id="violence-worship">none</content_attribute>
+    <content_attribute id="sex-nudity">none</content_attribute>
+    <content_attribute id="sex-themes">none</content_attribute>
+    <content_attribute id="sex-prostitution">none</content_attribute>
+    <content_attribute id="sex-adultery">none</content_attribute>
+    <content_attribute id="sex-appearance">none</content_attribute>
+    <content_attribute id="language-profanity">none</content_attribute>
+    <content_attribute id="language-humor">none</content_attribute>
+    <content_attribute id="language-discrimination">none</content_attribute>
+    <content_attribute id="social-chat">none</content_attribute>
+    <content_attribute id="social-info">none</content_attribute>
+    <content_attribute id="social-contacts">none</content_attribute>
+    <content_attribute id="money-purchasing">none</content_attribute>
+    <content_attribute id="money-gambling">none</content_attribute>
+  </content_rating>
+  <releases>
+    <release version="0.1.0" date="2026-08-08">
+      <description>
+        <p>Initial release of the Nam-tor KDE Plasma 6 KCM.</p>
+        <ul>
+          <li>Profile list with enable/disable state and last-used timestamps</li>
+          <li>Enrollment wizard with live coverage progress and quality feedback</li>
+          <li>Profile rename, replace (re-enroll), and delete actions</li>
+          <li>Full keyboard navigation and screen-reader accessibility</li>
+          <li>Recovery guidance when the daemon is unreachable</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>

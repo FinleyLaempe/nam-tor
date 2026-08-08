@@ -49,6 +49,7 @@ KCM.SimpleKCM {
             text: i18n("Face Authentication")
             level: 1
             Accessible.role: Accessible.Header
+            Accessible.name: text
         }
 
         QQC2.Label {
@@ -69,6 +70,7 @@ KCM.SimpleKCM {
             text: i18n("Profiles")
             level: 2
             Accessible.role: Accessible.Header
+            Accessible.name: text
         }
 
         // Profile list as Kirigami cards. Each card is keyboard-focusable;
@@ -102,6 +104,8 @@ KCM.SimpleKCM {
                         Kirigami.Title {
                             text: profileRepeater.itemAt(index).modelData.name
                             elide: Text.ElideRight
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: text
                         }
                         QQC2.Label {
                             text: profileRepeater.itemAt(index).modelData.enabled
@@ -110,6 +114,8 @@ KCM.SimpleKCM {
                             color: profileRepeater.itemAt(index).modelData.enabled
                                    ? Kirigami.Theme.positiveTextColor
                                    : Kirigami.Theme.disabledTextColor
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: text
                         }
                         QQC2.Label {
                             // Coverage/quality are shown only during enrollment (see wizard);
@@ -119,12 +125,15 @@ KCM.SimpleKCM {
                                   : i18n("Never used")
                             font: Kirigami.Theme.smallFont
                             color: Kirigami.Theme.disabledTextColor
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: text
                         }
                     }
 
                     QQC2.ToolButton {
                         text: i18n("Rename")
                         icon.name: "edit-rename"
+                        Accessible.role: Accessible.Button
                         Accessible.name: i18n("Rename profile %1").arg(profileRepeater.itemAt(index).modelData.name)
                         onClicked: renameDialog.openFor(profileRepeater.itemAt(index).modelData.id,
                                                         profileRepeater.itemAt(index).modelData.name)
@@ -132,6 +141,7 @@ KCM.SimpleKCM {
                     QQC2.ToolButton {
                         text: i18n("Replace")
                         icon.name: "view-refresh"
+                        Accessible.role: Accessible.Button
                         Accessible.name: i18n("Re-enroll profile %1").arg(profileRepeater.itemAt(index).modelData.name)
                         onClicked: replaceDialog.openFor(profileRepeater.itemAt(index).modelData.id,
                                                          profileRepeater.itemAt(index).modelData.name)
@@ -139,6 +149,7 @@ KCM.SimpleKCM {
                     QQC2.ToolButton {
                         text: i18n("Delete")
                         icon.name: "edit-delete"
+                        Accessible.role: Accessible.Button
                         Accessible.name: i18n("Delete profile %1").arg(profileRepeater.itemAt(index).modelData.name)
                         // Polkit admin auth is requested by the daemon; we just call it.
                         onClicked: deleteDialog.openFor(profileRepeater.itemAt(index).modelData.id,
@@ -152,6 +163,7 @@ KCM.SimpleKCM {
             text: i18n("Add Profile")
             icon.name: "list-add"
             enabled: root.daemonReachable
+            Accessible.role: Accessible.Button
             Accessible.name: i18n("Enroll a new face profile")
             Accessible.description: i18n("Starts the enrollment wizard. You will be asked to look at the camera from several angles.")
             onClicked: enrollmentWizard.open()
@@ -216,6 +228,7 @@ KCM.SimpleKCM {
                 QQC2.Button {
                     text: i18n("Finish")
                     enabled: bridge.lastProgress && bridge.lastProgress.coveragePercent >= 60
+                    Accessible.role: Accessible.Button
                     Accessible.name: i18n("Finish enrollment")
                     onClicked: {
                         bridge.finishEnrollment(enrollmentWizard.sessionId)
@@ -225,6 +238,7 @@ KCM.SimpleKCM {
                 }
                 QQC2.Button {
                     text: i18n("Cancel")
+                    Accessible.role: Accessible.Button
                     Accessible.name: i18n("Cancel enrollment and discard captures")
                     onClicked: {
                         bridge.cancelEnrollment(enrollmentWizard.sessionId)
@@ -252,6 +266,7 @@ KCM.SimpleKCM {
             QQC2.TextField {
                 id: renameField
                 placeholderText: i18n("Profile name")
+                Accessible.role: Accessible.EditableText
                 Accessible.name: i18n("New profile name")
                 onAccepted: renameConfirm.clicked()
             }
@@ -259,6 +274,8 @@ KCM.SimpleKCM {
                 id: renameConfirm
                 text: i18n("Rename")
                 enabled: renameField.text.length > 0
+                Accessible.role: Accessible.Button
+                Accessible.name: text
                 onClicked: {
                     bridge.renameProfile(renameDialog.profileId, renameField.text)
                     renameDialog.close()
@@ -282,11 +299,19 @@ KCM.SimpleKCM {
 
         ColumnLayout {
             spacing: Kirigami.Units.largeSpacing
-            QQC2.Label { id: replaceMessage; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            QQC2.Label {
+                id: replaceMessage
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                Accessible.role: Accessible.StaticText
+                Accessible.name: text
+            }
             RowLayout {
                 QQC2.Button {
                     text: i18n("Replace")
                     icon.name: "view-refresh"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
                     onClicked: {
                         // Re-enroll under a fresh name; the daemon discards old templates.
                         bridge.replaceProfile(replaceDialog.profileId, "")
@@ -296,6 +321,8 @@ KCM.SimpleKCM {
                 }
                 QQC2.Button {
                     text: i18n("Cancel")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
                     onClicked: replaceDialog.close()
                 }
             }
@@ -316,12 +343,20 @@ KCM.SimpleKCM {
 
         ColumnLayout {
             spacing: Kirigami.Units.largeSpacing
-            QQC2.Label { id: deleteMessage; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            QQC2.Label {
+                id: deleteMessage
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                Accessible.role: Accessible.StaticText
+                Accessible.name: text
+            }
             RowLayout {
                 QQC2.Button {
                     text: i18n("Delete")
                     icon.name: "edit-delete"
                     Kirigami.Theme.colorSet: Kirigami.Theme.View
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
                     onClicked: {
                         bridge.deleteProfile(deleteDialog.profileId)
                         deleteDialog.close()
@@ -330,6 +365,8 @@ KCM.SimpleKCM {
                 }
                 QQC2.Button {
                     text: i18n("Cancel")
+                    Accessible.role: Accessible.Button
+                    Accessible.name: text
                     onClicked: deleteDialog.close()
                 }
             }

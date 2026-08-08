@@ -131,7 +131,9 @@ endif()
 
 # QML module: install to the Qt6 QML import dir so `import org.namtor 1.0`
 # resolves from any Qt6 QML engine (System Settings, kcmshell6, standalone).
-if(KF6CoreAddons_FOUND)
+# KDE_INSTALL_* vars are defined by ECM's KDEInstallDirs; without ECM we
+# fall back to CMAKE_INSTALL_* (GNUInstallDirs defaults).
+if(ECM_FOUND)
     install(TARGETS namtorqml
         LIBRARY DESTINATION "${KDE_INSTALL_QMLDIR}/org/namtor"
         ARCHIVE DESTINATION "${KDE_INSTALL_QMLDIR}/org/namtor")
@@ -139,13 +141,26 @@ if(KF6CoreAddons_FOUND)
         DESTINATION "${KDE_INSTALL_QMLDIR}/org/namtor")
     install(FILES metadata.json
         DESTINATION "${KDE_INSTALL_DATADIR}/kpackage/kcms/kcm_namtor")
+    install(FILES "${CMAKE_SOURCE_DIR}/../../packaging/applications/org.namtor.kcm.desktop"
+        DESTINATION "${KDE_INSTALL_APPDIR}")
+    install(FILES "${CMAKE_SOURCE_DIR}/../../packaging/metainfo/org.namtor.kcm.metainfo.xml"
+        DESTINATION "${KDE_INSTALL_METAINFODIR}")
+    install(FILES "${CMAKE_SOURCE_DIR}/../../packaging/icons/hicolor/scalable/apps/org.namtor.kcm.svg"
+        DESTINATION "${KDE_INSTALL_ICONDIR}/hicolor/scalable/apps")
 else()
     install(TARGETS namtorqml
-        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/qt6/qml/org/namtor")
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/qt6/qml/org/namtor"
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}/qt6/qml/org/namtor")
     install(FILES qml/main.qml
         DESTINATION "${CMAKE_INSTALL_DATADIR}/qt6/qml/org/namtor")
     install(FILES metadata.json
         DESTINATION "${CMAKE_INSTALL_DATADIR}/kpackage/kcms/kcm_namtor")
+    install(FILES "${CMAKE_SOURCE_DIR}/../../packaging/applications/org.namtor.kcm.desktop"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
+    install(FILES "${CMAKE_SOURCE_DIR}/../../packaging/metainfo/org.namtor.kcm.metainfo.xml"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/metainfo")
+    install(FILES "${CMAKE_SOURCE_DIR}/../../packaging/icons/hicolor/scalable/apps/org.namtor.kcm.svg"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps")
 endif()
 
 # --- ABI smoke test (CTest) --------------------------------------------------

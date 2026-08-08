@@ -247,6 +247,38 @@ group = "root"
 symlink = false
 
 # ---------------------------------------------------------------------------
+# KDE Plasma 6 desktop integration (KCM desktop entry, metainfo, icon)
+# ---------------------------------------------------------------------------
+# The KCM QML module (libnamtorqml.so) and metadata.json are installed by
+# the CMake build's install() rules, not by this manifest — CMake handles
+# the Qt6 QML import dir and the kpackage/kcms directory. These entries
+# cover the static desktop-integration files that CMake does not install.
+
+[[files]]
+dest = "/usr/share/applications/org.namtor.kcm.desktop"
+src = "packaging/applications/org.namtor.kcm.desktop"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/share/metainfo/org.namtor.kcm.metainfo.xml"
+src = "packaging/metainfo/org.namtor.kcm.metainfo.xml"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+[[files]]
+dest = "/usr/share/icons/hicolor/scalable/apps/org.namtor.kcm.svg"
+src = "packaging/icons/hicolor/scalable/apps/org.namtor.kcm.svg"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+
+# ---------------------------------------------------------------------------
 # Manifests themselves (installed for the daemon to consult at startup)
 # ---------------------------------------------------------------------------
 [[files]]
