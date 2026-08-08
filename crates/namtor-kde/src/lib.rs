@@ -23,7 +23,7 @@ mod types;
 
 pub use bridge::{EnrollmentController, EnrollmentState, KcmBridge, ProfileList};
 pub use types::{
-    EnrollOutcome, EnrollmentProgress, FinishResult, KcmError, ProfileInfo, StatusInfo,
+    EnrollOutcome, EnrollmentProgress, KcmError, ProfileInfo, ReviewOutcome, StatusReport,
 };
 
 #[cfg(test)]

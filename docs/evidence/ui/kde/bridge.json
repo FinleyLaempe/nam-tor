@@ -1,0 +1,137 @@
+{
+  "task": "22",
+  "title": "KDE async bridge and profile model",
+  "date": "2026-08-08",
+  "scope": "Implement the asynchronous D-Bus bridge and QAbstractListModel profile model for the Nam-tor KDE KCM, reconciled to the frozen Task 8 contract.",
+  "files_modified": [
+    "crates/namtor-kde/src/types.rs",
+    "crates/namtor-kde/src/proxy.rs",
+    "crates/namtor-kde/src/bridge.rs",
+    "crates/namtor-kde/src/fake.rs",
+    "crates/namtor-kde/src/contract.rs",
+    "crates/namtor-kde/src/tests.rs",
+    "crates/namtor-kde/src/lib.rs",
+    "crates/namtor-kde/src/cpp/namtor_kcm.h",
+    "crates/namtor-kde/src/cpp/namtor_kcm.cpp",
+    "crates/namtor-kde/CMakeLists.txt"
+  ],
+  "files_created": [
+    "crates/namtor-kde/src/cpp/profile_model.h",
+    "crates/namtor-kde/src/cpp/profile_model.cpp",
+    "docs/evidence/ui/kde/bridge.json"
+  ],
+  "frozen_contract": {
+    "source": "docs/evidence/dbus-contract.xml",
+    "methods": [
+      "ListProfiles",
+      "StartEnrollment",
+      "CancelEnrollment",
+      "CommitProfile",
+      "ReviewProfile",
+      "RenameProfile",
+      "EnableProfile",
+      "DeleteProfile",
+      "MergeProfiles",
+      "ReplaceProfile",
+      "GetStatus"
+    ],
+    "signals": [
+      "EnrollmentProgress",
+      "EnrollmentCompleted",
+      "ProfileChanged",
+      "StatusChanged"
+    ],
+    "property": "ApiVersion"
+  },
+  "qobject_properties": [
+    "profileList (QAbstractListModel)",
+    "daemonReachable (bool)",
+    "cameraPresent (bool)",
+    "emitterArmed (bool)",
+    "loading (bool)",
+    "error (QString)",
+    "apiVersion (quint32)",
+    "abiOk (bool)",
+    "abiError (QString)",
+    "managerBusName (QString)",
+    "managerObjectPath (QString)"
+  ],
+  "q_invokable_methods": [
+    "listProfiles()",
+    "startEnrollment(uid, name)",
+    "cancelEnrollment(session)",
+    "commitProfile(session)",
+    "reviewProfile(uid, id)",
+    "renameProfile(uid, id, name)",
+    "enableProfile(uid, id, enabled)",
+    "deleteProfile(uid, id)",
+    "mergeProfiles(uid, src, dst)",
+    "replaceProfile(uid, id, name)",
+    "getStatus()",
+    "cancelAllPending()"
+  ],
+  "qt_signals": [
+    "enrollmentProgress(session, framesCaptured, qualityLabel, coveragePercent)",
+    "enrollmentCompleted(session, profile)",
+    "profileChanged(uid, id)",
+    "statusChanged()",
+    "loadingChanged()",
+    "errorChanged()"
+  ],
+  "async_design": {
+    "mechanism": "QDBusInterface::asyncCall() + QDBusPendingCallWatcher",
+    "gui_thread_blocking": false,
+    "cancellation": "Generation counter bumped on cancel/restart; late replies dropped via gen != m_generation check",
+    "stale_response_sequencing": "Each in-flight call captures the generation at issue time; the handler compares against the current generation and returns early on mismatch"
+  },
+  "rust_bridge": {
+    "proxy": "zbus::proxy matching frozen contract (11 methods, 4 signals, 1 property)",
+    "types": "ProfileInfo (ssbtt), EnrollmentProgress (susu), ReviewOutcome (sbs), StatusReport (ua(ssbtt)b)",
+    "enrollment_controller": "Signal-driven (no poll); set_progress filters by session_id for stale-response sequencing; commit replaces finish; cancel is idempotent"
+  },
+  "privacy_scan": {
+    "verdict": "PASS",
+    "forbidden_tokens": ["embedding", "vector", "frame", "score", "threshold", "template", "biometric"],
+    "assertion": "No KCM-facing type or struct field carries biometric data; quality labels are non-numeric buckets; coverage_percent is integer 0-100",
+    "test": "privacy_scan_no_biometric_data"
+  },
+  "verification": {
+    "cargo_build": "PASS",
+    "cargo_test": "PASS (18 unit + 3 integration = 21 tests)",
+    "cargo_clippy": "PASS (clean, -D warnings)",
+    "cargo_fmt": "PASS (clean, --check)",
+    "cmake_build": "PASS (libnamtorqml.so + namtor-abi-smoke)",
+    "ctest": "PASS (1/1 namtor-abi-smoke)"
+  },
+  "test_coverage": {
+    "rust_tests": [
+      "happy_path",
+      "error_daemon_unavailable",
+      "cancel_keeps_state_safe",
+      "auth_loss_preserves_profiles",
+      "merge_and_replace",
+      "review_returns_coarse_quality",
+      "get_status_returns_report",
+      "shared_contract_suite",
+      "privacy_scan_no_biometric_data",
+      "non_null_bridge_against_fake_bus",
+      "delayed_response_does_not_hang",
+      "daemon_restart_old_bridge_errors_new_bridge_works",
+      "stale_progress_signal_ignored",
+      "error_handling_surfaces_kcm_error",
+      "offline_denied_cancel_keeps_state_safe",
+      "enrollment_signals_round_trip",
+      "profile_and_status_changed_signals_round_trip",
+      "abi_strings_match_bridge_constants"
+    ],
+    "integration_tests": [
+      "abi_version_matches_constant",
+      "abi_bus_name_is_canonical",
+      "abi_object_path_is_canonical"
+    ]
+  },
+  "withheld": {
+    "kcmshell6_runtime_load": "kcmshell6 / plasma-systemsettings not installed; runtime QML loading in a real Plasma session is the next HIL step",
+    "qml_ui_tests": "QML-level tests (non-null bridge, delays, restart, stale progress, errors) are covered by Rust tests against the p2p fake bus; QML-level test harness requires a running Qt QML engine"
+  }
+}

@@ -6,6 +6,9 @@
 //! [`FakeState`] held in a `Mutex`; tests flip `daemon_unavailable` /
 //! `auth_denied` to exercise the error and auth-loss paths without touching
 //! real polkit.
+//!
+//! Implements the frozen Task 8 contract: 11 methods, 4 signals, 1 property.
+//! No biometric data crosses this surface.
 
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
@@ -14,7 +17,10 @@ use zbus::interface;
 use zbus::zvariant::Type;
 
 use crate::contract::ScenarioHook;
-use crate::types::{EnrollmentProgress, FinishResult, ProfileInfo, StatusInfo};
+use crate::types::{EnrollmentProgress, ProfileInfo, ReviewOutcome, StatusReport};
+
+/// Frozen API version (matches `namtor-daemon::manager::contract::API_VERSION`).
+const FAKE_API_VERSION: u32 = 1;
 
 /// Mutable state behind the fake interface. Tests mutate it through
 /// [`FakeHandle`] (which implements [`ScenarioHook`]).
@@ -61,7 +67,8 @@ impl FakeManager {
         Ok(self.state.lock().unwrap().profiles.clone())
     }
 
-    fn create_profile(&self, name: &str) -> zbus::fdo::Result<String> {
+    /// `StartEnrollment(uid, name) -> session`. Allocates a fresh session id.
+    fn start_enrollment(&self, _uid: u32, name: &str) -> zbus::fdo::Result<String> {
         if let Some(e) = self.denied() {
             return Err(e);
         }
@@ -70,77 +77,45 @@ impl FakeManager {
         Ok(format!("sess-{name}-{}", s.next_session))
     }
 
-    fn start_enrollment(&self, _session_id: &str) -> zbus::fdo::Result<()> {
+    fn cancel_enrollment(&self, _session: &str) -> zbus::fdo::Result<()> {
         if let Some(e) = self.denied() {
             return Err(e);
         }
         Ok(())
     }
 
-    fn get_progress(&self, session_id: &str) -> zbus::fdo::Result<EnrollmentProgress> {
+    /// `CommitProfile(session) -> profile_id`. Commits a new profile.
+    fn commit_profile(&self, _session: &str) -> zbus::fdo::Result<String> {
         if let Some(e) = self.denied() {
             return Err(e);
         }
-        Ok(EnrollmentProgress {
-            session_id: session_id.to_string(),
-            frames_captured: 12,
-            quality_label: "good".to_string(),
-            coverage_percent: 80,
-        })
-    }
-
-    fn finish_enrollment(&self, _session_id: &str) -> zbus::fdo::Result<FinishResult> {
-        if let Some(e) = self.denied() {
-            return Err(e);
-        }
-        // Commit a profile for the happy path: model the new profile as
-        // enabled, last_used unknown.
         let mut s = self.state.lock().unwrap();
         let id = format!("p{}", s.profiles.len() + 1);
         s.profiles.push(ProfileInfo {
-            id,
+            id: id.clone(),
             name: "Alice".to_string(),
             enabled: true,
             created: 1,
-            last_used: None,
+            last_used: 0,
         });
-        Ok(FinishResult {
-            success: true,
-            message: "enrolled".to_string(),
+        Ok(id)
+    }
+
+    /// `ReviewProfile(uid, id) -> (sbs)`. Coarse quality review.
+    fn review_profile(&self, _uid: u32, id: &str) -> zbus::fdo::Result<ReviewOutcome> {
+        if let Some(e) = self.denied() {
+            return Err(e);
+        }
+        let s = self.state.lock().unwrap();
+        let needs_reenroll = s.profiles.iter().any(|p| p.id == id && !p.enabled);
+        Ok(ReviewOutcome {
+            profile_id: id.to_string(),
+            needs_reenroll,
+            quality: "high".to_string(),
         })
     }
 
-    fn cancel_enrollment(&self, _session_id: &str) -> zbus::fdo::Result<()> {
-        if let Some(e) = self.denied() {
-            return Err(e);
-        }
-        Ok(())
-    }
-
-    fn merge_profiles(&self, src: &str, _dst: &str) -> zbus::fdo::Result<()> {
-        if let Some(e) = self.denied() {
-            return Err(e);
-        }
-        let mut s = self.state.lock().unwrap();
-        s.profiles.retain(|p| p.id != src);
-        // dst stays; name unchanged on merge.
-        Ok(())
-    }
-
-    fn replace_profile(&self, id: &str, name: &str) -> zbus::fdo::Result<()> {
-        if let Some(e) = self.denied() {
-            return Err(e);
-        }
-        let mut s = self.state.lock().unwrap();
-        for p in s.profiles.iter_mut() {
-            if p.id == id {
-                p.name = name.to_string();
-            }
-        }
-        Ok(())
-    }
-
-    fn rename_profile(&self, id: &str, new_name: &str) -> zbus::fdo::Result<()> {
+    fn rename_profile(&self, _uid: u32, id: &str, new_name: &str) -> zbus::fdo::Result<()> {
         if let Some(e) = self.denied() {
             return Err(e);
         }
@@ -153,7 +128,7 @@ impl FakeManager {
         Ok(())
     }
 
-    fn enable_profile(&self, id: &str, enabled: bool) -> zbus::fdo::Result<()> {
+    fn enable_profile(&self, _uid: u32, id: &str, enabled: bool) -> zbus::fdo::Result<()> {
         if let Some(e) = self.denied() {
             return Err(e);
         }
@@ -166,7 +141,7 @@ impl FakeManager {
         Ok(())
     }
 
-    fn delete_profile(&self, id: &str) -> zbus::fdo::Result<()> {
+    fn delete_profile(&self, _uid: u32, id: &str) -> zbus::fdo::Result<()> {
         if let Some(e) = self.denied() {
             return Err(e);
         }
@@ -175,32 +150,76 @@ impl FakeManager {
         Ok(())
     }
 
-    fn status(&self) -> zbus::fdo::Result<StatusInfo> {
+    fn merge_profiles(&self, _uid: u32, src: &str, _dst: &str) -> zbus::fdo::Result<()> {
+        if let Some(e) = self.denied() {
+            return Err(e);
+        }
+        let mut s = self.state.lock().unwrap();
+        s.profiles.retain(|p| p.id != src);
+        Ok(())
+    }
+
+    fn replace_profile(&self, _uid: u32, id: &str, name: &str) -> zbus::fdo::Result<()> {
+        if let Some(e) = self.denied() {
+            return Err(e);
+        }
+        let mut s = self.state.lock().unwrap();
+        for p in s.profiles.iter_mut() {
+            if p.id == id {
+                p.name = name.to_string();
+            }
+        }
+        Ok(())
+    }
+
+    /// `GetStatus() -> (ua(ssbtt)b)`. Aggregated status snapshot.
+    fn get_status(&self) -> zbus::fdo::Result<StatusReport> {
         if let Some(e) = self.denied() {
             return Err(e);
         }
         let s = self.state.lock().unwrap();
-        Ok(StatusInfo {
-            daemon_reachable: true,
-            camera_present: true,
-            enrolled_profiles: s.profiles.len() as u32,
+        Ok(StatusReport {
+            api_version: FAKE_API_VERSION,
+            profiles: s.profiles.clone(),
+            emitter_armed: false,
         })
+    }
+
+    /// `ApiVersion` property (read).
+    #[zbus(property)]
+    fn api_version(&self) -> zbus::fdo::Result<u32> {
+        Ok(FAKE_API_VERSION)
     }
 
     #[zbus(signal)]
     async fn enrollment_progress(
         &self,
         _emitter: zbus::object_server::SignalEmitter<'_>,
-        session_id: String,
+        session: String,
         progress: EnrollmentProgress,
     ) -> zbus::Result<()>;
 
     #[zbus(signal)]
-    async fn enrollment_complete(
+    async fn enrollment_completed(
         &self,
         _emitter: zbus::object_server::SignalEmitter<'_>,
-        session_id: String,
-        result: FinishResult,
+        session: String,
+        profile: String,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn profile_changed(
+        &self,
+        _emitter: zbus::object_server::SignalEmitter<'_>,
+        uid: u32,
+        id: String,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn status_changed(
+        &self,
+        _emitter: zbus::object_server::SignalEmitter<'_>,
+        status: StatusReport,
     ) -> zbus::Result<()>;
 }
 
@@ -283,12 +302,12 @@ fn _assert_no_biometric_types() {
     fn require_send<T: Send>() {}
     require_send::<ProfileInfo>();
     require_send::<EnrollmentProgress>();
-    require_send::<FinishResult>();
-    require_send::<StatusInfo>();
+    require_send::<ReviewOutcome>();
+    require_send::<StatusReport>();
     // Type must be present for the privacy scan's `Type`-derive check.
     fn require_type<T: Type>() {}
     require_type::<ProfileInfo>();
     require_type::<EnrollmentProgress>();
-    require_type::<FinishResult>();
-    require_type::<StatusInfo>();
+    require_type::<ReviewOutcome>();
+    require_type::<StatusReport>();
 }

@@ -39,7 +39,7 @@ endif()
 
 # --- Qt6 (pinned to KF6 baseline) --------------------------------------------
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Qml)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Qml DBus)
 
 # --- KF6 frameworks (individual configs; KF6 ships no meta-package) ----------
 
@@ -107,6 +107,7 @@ qt_add_qml_module(namtorqml
     VERSION 1.0
     SOURCES
         src/cpp/namtor_kcm.cpp
+        src/cpp/profile_model.cpp
     QML_FILES
         qml/main.qml
     NO_PLUGIN
@@ -119,6 +120,7 @@ target_link_libraries(namtorqml
         Qt6::Core
         Qt6::Gui
         Qt6::Qml
+        Qt6::DBus
 )
 
 if(EXISTS "${NAMTOR_KDE_RUST_SO}")

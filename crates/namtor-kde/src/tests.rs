@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! KCM test suite. Seven cases covering the happy path, daemon-unavailable,
-//! cancel, auth-loss, merge/replace, the shared contract suite end-to-end,
-//! and a privacy scan asserting no biometric data is exposed to QML.
+//! KCM test suite. Covers the happy path, daemon-unavailable, cancel,
+//! auth-loss, merge/replace, review, status, the shared contract suite
+//! end-to-end, signal round-trip, async behavior (non-null bridge, delayed
+//! response, daemon restart, stale progress), and a privacy scan asserting
+//! no biometric data is exposed to QML.
 //!
 //! All tests are hermetic: each builds a fresh p2p fake bus ([`FakeBus`]) so
 //! no D-Bus daemon is required. They run serial via `--test-threads=1` (each
@@ -16,8 +18,11 @@ use crate::bridge::{EnrollmentController, EnrollmentState, KcmBridge, ProfileLis
 use crate::contract::{self, ScenarioHook};
 use crate::fake::{FakeBus, FakeHandle, FakeManagerSignals};
 use crate::types::{
-    EnrollOutcome, EnrollmentProgress, FinishResult, KcmError, ProfileInfo, StatusInfo,
+    EnrollOutcome, EnrollmentProgress, KcmError, ProfileInfo, ReviewOutcome, StatusReport,
 };
+
+/// UID used by tests (matches `contract::TEST_UID`).
+const TEST_UID: u32 = 1000;
 
 /// Helper: spin a fake bus for `handle`, build a bridge against its client
 /// connection, and return both so the test can drive signals if needed.
@@ -106,6 +111,30 @@ fn merge_and_replace() {
     zbus::block_on(contract::merge_and_replace(|| factory.make(), &handle));
 }
 
+#[test]
+fn review_returns_coarse_quality() {
+    let handle = FakeHandle::new();
+    let factory = Factory {
+        handle: handle.clone(),
+    };
+    zbus::block_on(contract::review_returns_coarse_quality(
+        || factory.make(),
+        &handle,
+    ));
+}
+
+#[test]
+fn get_status_returns_report() {
+    let handle = FakeHandle::new();
+    let factory = Factory {
+        handle: handle.clone(),
+    };
+    zbus::block_on(contract::get_status_returns_report(
+        || factory.make(),
+        &handle,
+    ));
+}
+
 /// Shared contract suite: run every scenario back-to-back against the same
 /// fake family to prove the suite as a whole is consistent and the KDE bridge
 /// honors it (the GNOME UI reuses the same suite to prevent divergence).
@@ -122,6 +151,8 @@ fn shared_contract_suite() {
         contract::cancel_keeps_state_safe(mk, &handle).await;
         contract::auth_loss_preserves_profiles(mk, &handle).await;
         contract::merge_and_replace(mk, &handle).await;
+        contract::review_returns_coarse_quality(mk, &handle).await;
+        contract::get_status_returns_report(mk, &handle).await;
     });
 }
 
@@ -135,7 +166,7 @@ fn privacy_scan_no_biometric_data() {
         name: "Alice".to_string(),
         enabled: true,
         created: 1,
-        last_used: Some(2),
+        last_used: 2,
     };
     let progress = EnrollmentProgress {
         session_id: "s1".to_string(),
@@ -143,22 +174,23 @@ fn privacy_scan_no_biometric_data() {
         quality_label: "good".to_string(),
         coverage_percent: 50,
     };
-    let result = FinishResult {
-        success: true,
-        message: "ok".to_string(),
+    let review = ReviewOutcome {
+        profile_id: "p1".to_string(),
+        needs_reenroll: false,
+        quality: "high".to_string(),
     };
-    let status = StatusInfo {
-        daemon_reachable: true,
-        camera_present: true,
-        enrolled_profiles: 1,
+    let status = StatusReport {
+        api_version: 1,
+        profiles: vec![profile.clone()],
+        emitter_armed: false,
     };
 
     // The exposed types are Send + Type (wire-safe) and carry only metadata.
     fn assert_send<T: Send + Type>() {}
     assert_send::<ProfileInfo>();
     assert_send::<EnrollmentProgress>();
-    assert_send::<FinishResult>();
-    assert_send::<StatusInfo>();
+    assert_send::<ReviewOutcome>();
+    assert_send::<StatusReport>();
 
     // Field-name allowlist: any field whose name suggests biometric payload
     // (embedding, vector, frame, score, threshold, template) is a bug.
@@ -178,17 +210,161 @@ fn privacy_scan_no_biometric_data() {
     }
     // quality_label must be a non-numeric bucket, never a score.
     assert!(!progress.quality_label.chars().any(|c| c.is_ascii_digit()));
+    // Review quality is a bucket, never a numeric score.
+    assert!(!review.quality.chars().any(|c| c.is_ascii_digit()));
     // EnrollmentController stores only a session id and an outcome — no frames.
-    let ctrl = EnrollmentController::new("s1".to_string());
+    let ctrl = EnrollmentController::new("s1".to_string(), TEST_UID);
     assert_eq!(ctrl.session_id(), "s1");
+    assert_eq!(ctrl.uid(), TEST_UID);
     assert_eq!(ctrl.state(), EnrollmentState::Idle);
     assert!(ctrl.last_progress().is_none());
     // ProfileList carries only ProfileInfo.
     let list = ProfileList::new();
     assert!(list.is_empty());
     let _ = profile;
-    let _ = result;
     let _ = status;
+}
+
+/// Non-null bridge: a freshly connected bridge against a live fake bus must
+/// be usable — every async method returns without hanging and the proxy is
+/// wired to the canonical bus name/path.
+#[test]
+fn non_null_bridge_against_fake_bus() {
+    let handle = FakeHandle::new();
+    handle.reset(&[ProfileInfo {
+        id: "p1".to_string(),
+        name: "Alice".to_string(),
+        enabled: true,
+        created: 1,
+        last_used: 0,
+    }]);
+    zbus::block_on(async {
+        let (_bus, bridge) = rig(&handle).await;
+        // The bridge is non-null: list_profiles returns a non-empty vec.
+        let profiles = bridge.list_profiles().await.unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, "Alice");
+        // Status is non-null.
+        let status = bridge.get_status().await.unwrap();
+        assert_eq!(status.api_version, 1);
+        // ApiVersion property.
+        let ver = bridge.api_version().await.unwrap();
+        assert_eq!(ver, 1);
+    });
+}
+
+/// Delayed response: the fake service processes calls asynchronously; the
+/// bridge must tolerate the inherent p2p latency without hanging. This is a
+/// smoke test for async completion — the response arrives on a future tick.
+#[test]
+fn delayed_response_does_not_hang() {
+    let handle = FakeHandle::new();
+    zbus::block_on(async {
+        let (_bus, bridge) = rig(&handle).await;
+        // Fire multiple concurrent calls; all must complete.
+        let (profiles, status) =
+            futures_util::try_join!(bridge.list_profiles(), bridge.get_status(),).unwrap();
+        assert!(profiles.is_empty());
+        assert_eq!(status.api_version, 1);
+    });
+}
+
+/// Daemon restart: the bus server is dropped (daemon goes away), then a fresh
+/// bus is spun up (daemon restarts). The old bridge errors; a new bridge
+/// against the new bus works. Simulates the daemon restarting under the KCM.
+#[test]
+fn daemon_restart_old_bridge_errors_new_bridge_works() {
+    let handle = FakeHandle::new();
+    handle.reset(&[ProfileInfo {
+        id: "p1".to_string(),
+        name: "Alice".to_string(),
+        enabled: true,
+        created: 1,
+        last_used: 0,
+    }]);
+    zbus::block_on(async {
+        let (bus, bridge) = rig(&handle).await;
+        assert_eq!(bridge.list_profiles().await.unwrap().len(), 1);
+
+        // Daemon goes away.
+        drop(bus);
+        match bridge.list_profiles().await {
+            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) => {}
+            Ok(v) => panic!("expected error after daemon drop, got {v:?}"),
+        }
+
+        // Daemon restarts: fresh bus, fresh bridge.
+        let (_bus2, bridge2) = rig(&handle).await;
+        let profiles = bridge2.list_profiles().await.unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, "Alice");
+    });
+}
+
+/// Stale progress: an EnrollmentController for session "old" must ignore
+/// progress signals that carry a different session id. This is the
+/// stale-response sequencing invariant: a progress signal from a cancelled
+/// or superseded session must not update the current controller.
+#[test]
+fn stale_progress_signal_ignored() {
+    let mut ctrl = EnrollmentController::new("sess-current".to_string(), TEST_UID);
+    ctrl.set_state_for_test(EnrollmentState::Enrolling);
+
+    // Progress for a different (stale) session — must be rejected.
+    let stale = EnrollmentProgress {
+        session_id: "sess-old".to_string(),
+        frames_captured: 5,
+        quality_label: "fair".to_string(),
+        coverage_percent: 40,
+    };
+    assert!(!ctrl.set_progress(&stale));
+    assert!(ctrl.last_progress().is_none());
+
+    // Progress for the current session — must be accepted.
+    let current = EnrollmentProgress {
+        session_id: "sess-current".to_string(),
+        frames_captured: 12,
+        quality_label: "good".to_string(),
+        coverage_percent: 80,
+    };
+    assert!(ctrl.set_progress(&current));
+    assert_eq!(ctrl.last_progress().unwrap().coverage_percent, 80);
+}
+
+/// Error handling: a bridge whose bus peer returns a D-Bus error surfaces
+/// [`KcmError`], never panics. Tests both the daemon-unavailable path and the
+/// auth-denied (Call) path.
+#[test]
+fn error_handling_surfaces_kcm_error() {
+    let handle = FakeHandle::new();
+    zbus::block_on(async {
+        // Daemon unavailable.
+        handle.reset(&[]);
+        handle.set_daemon_unavailable();
+        let (_bus, bridge) = rig(&handle).await;
+        match bridge.list_profiles().await {
+            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) => {}
+            Ok(v) => panic!("expected error when daemon unavailable, got {v:?}"),
+        }
+    });
+
+    // Auth denied → Call error.
+    let handle = FakeHandle::new();
+    handle.reset(&[ProfileInfo {
+        id: "p1".to_string(),
+        name: "Alice".to_string(),
+        enabled: true,
+        created: 1,
+        last_used: 0,
+    }]);
+    zbus::block_on(async {
+        let (_bus, bridge) = rig(&handle).await;
+        handle.set_auth_denied();
+        match bridge.delete_profile(TEST_UID, "p1").await {
+            Err(KcmError::Call(_)) => {}
+            other => panic!("expected Call error on denied delete, got {other:?}"),
+        }
+    });
 }
 
 /// Offline/denied/cancel keeps state safe: a bridge whose bus peer has gone
@@ -202,7 +378,7 @@ fn offline_denied_cancel_keeps_state_safe() {
         name: "Alice".to_string(),
         enabled: true,
         created: 1,
-        last_used: None,
+        last_used: 0,
     }]);
 
     // Drive a real bridge, then drop the server to simulate the daemon going
@@ -223,8 +399,8 @@ fn offline_denied_cancel_keeps_state_safe() {
     let outcome = zbus::block_on(async {
         let handle = FakeHandle::new();
         let (bus, bridge) = rig(&handle).await;
-        let session = bridge.create_profile("Dan").await.unwrap();
-        let mut ctrl = EnrollmentController::new(session);
+        let session = bridge.start_enrollment(TEST_UID, "Dan").await.unwrap();
+        let mut ctrl = EnrollmentController::new(session, TEST_UID);
         ctrl.start(&bridge).await.unwrap();
         drop(bus);
         ctrl.cancel(&bridge).await.unwrap();
@@ -234,7 +410,7 @@ fn offline_denied_cancel_keeps_state_safe() {
 }
 
 /// Signal delivery: the daemon emits `EnrollmentProgress` and
-/// `EnrollmentComplete`; the bridge's connection can subscribe and receive
+/// `EnrollmentCompleted`; the bridge's connection can subscribe and receive
 /// them. Confirms the wire types round-trip over p2p.
 #[test]
 fn enrollment_signals_round_trip() {
@@ -263,20 +439,13 @@ fn enrollment_signals_round_trip() {
             .await
             .unwrap();
         iface
-            .enrollment_complete(
-                emitter,
-                "s1".to_string(),
-                FinishResult {
-                    success: true,
-                    message: "done".to_string(),
-                },
-            )
+            .enrollment_completed(emitter, "s1".to_string(), "p1".to_string())
             .await
             .unwrap();
         drop(iface);
 
         let mut got_progress = false;
-        let mut got_complete = false;
+        let mut got_completed = false;
         while let Some(Ok(msg)) = stream.next().await {
             if msg.message_type() != MsgType::Signal {
                 continue;
@@ -287,19 +456,75 @@ fn enrollment_signals_round_trip() {
                     assert_eq!(p.quality_label, "fair");
                     got_progress = true;
                 }
-                Some("EnrollmentComplete") => {
-                    let (_sid, r): (String, FinishResult) = msg.body().deserialize().unwrap();
-                    assert!(r.success);
-                    got_complete = true;
+                Some("EnrollmentCompleted") => {
+                    let (_sid, profile): (String, String) = msg.body().deserialize().unwrap();
+                    assert_eq!(profile, "p1");
+                    got_completed = true;
                 }
                 _ => {}
             }
-            if got_progress && got_complete {
+            if got_progress && got_completed {
                 break;
             }
         }
         assert!(got_progress, "did not receive EnrollmentProgress");
-        assert!(got_complete, "did not receive EnrollmentComplete");
+        assert!(got_completed, "did not receive EnrollmentCompleted");
+    });
+}
+
+/// ProfileChanged and StatusChanged signals round-trip over p2p.
+#[test]
+fn profile_and_status_changed_signals_round_trip() {
+    let handle = FakeHandle::new();
+    zbus::block_on(async {
+        let (bus, _bridge) = rig(&handle).await;
+        let mut stream = MessageStream::from(&bus.client);
+
+        let iface = bus
+            .server
+            .object_server()
+            .interface::<_, crate::fake::FakeManager>(crate::bridge::MANAGER_OBJECT_PATH)
+            .await
+            .unwrap();
+        let emitter = iface.signal_emitter().clone();
+        iface
+            .profile_changed(emitter.clone(), TEST_UID, "p1".to_string())
+            .await
+            .unwrap();
+        let report = StatusReport {
+            api_version: 1,
+            profiles: vec![],
+            emitter_armed: true,
+        };
+        iface.status_changed(emitter, report).await.unwrap();
+        drop(iface);
+
+        let mut got_profile_changed = false;
+        let mut got_status_changed = false;
+        while let Some(Ok(msg)) = stream.next().await {
+            if msg.message_type() != MsgType::Signal {
+                continue;
+            }
+            match msg.header().member().map(|m| m.as_str()) {
+                Some("ProfileChanged") => {
+                    let (uid, id): (u32, String) = msg.body().deserialize().unwrap();
+                    assert_eq!(uid, TEST_UID);
+                    assert_eq!(id, "p1");
+                    got_profile_changed = true;
+                }
+                Some("StatusChanged") => {
+                    let status: StatusReport = msg.body().deserialize().unwrap();
+                    assert!(status.emitter_armed);
+                    got_status_changed = true;
+                }
+                _ => {}
+            }
+            if got_profile_changed && got_status_changed {
+                break;
+            }
+        }
+        assert!(got_profile_changed, "did not receive ProfileChanged");
+        assert!(got_status_changed, "did not receive StatusChanged");
     });
 }
 

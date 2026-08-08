@@ -1,18 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! D-Bus contract types shared between the KCM bridge and the (test) fake
-//! service. These mirror the `org.namtor.Manager` wire format from Task 25
-//! exactly. They MUST stay free of biometric payload: no embeddings, frames,
-//! raw match scores, or thresholds (spec §9.4, privacy scan enforced in
-//! [`crate::tests`]).
+//! service. These mirror the frozen `org.namtor.Manager` wire format from
+//! Task 8 exactly (`docs/evidence/dbus-contract.xml`). They MUST stay free of
+//! biometric payload: no embeddings, frames, raw match scores, or thresholds
+//! (spec §9.4, privacy scan enforced in [`crate::tests`]).
+//!
+//! ## Frozen wire signatures (Task 8)
+//!
+//! | Type | Wire | Fields |
+//! |---|---|---|
+//! | `ProfileInfo` | `(ssbtt)` | id, name, enabled, created, last_used |
+//! | `EnrollmentProgress` | `(susu)` | session_id, frames_captured, quality_label, coverage_percent |
+//! | `ReviewOutcome` | `(sbs)` | profile_id, needs_reenroll, quality |
+//! | `StatusReport` | `(ua(ssbtt)b)` | api_version, profiles, emitter_armed |
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use zbus::zvariant::Type;
 
-/// One enrolled face profile as exposed to the UI.
+/// One enrolled face profile as exposed to the UI (frozen wire `(ssbtt)`).
 ///
-/// `last_used` is `None` when the profile has never authenticated. It is the
+/// `last_used` is `0` when the profile has never authenticated. It is the
 /// only timestamp surfaced; creation/modification of templates stays daemon
 /// side.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -21,12 +30,12 @@ pub struct ProfileInfo {
     pub name: String,
     pub enabled: bool,
     pub created: u64,
-    pub last_used: Option<u64>,
+    pub last_used: u64,
 }
 
-/// Live enrollment progress reported by the daemon. `quality_label` is a
-/// human-readable bucket ("poor" / "fair" / "good" / "excellent") chosen by the
-/// daemon, never a numeric score.
+/// Live enrollment progress emitted as the `EnrollmentProgress` signal (frozen
+/// wire `(susu)`). `quality_label` is a human-readable bucket
+/// ("low" / "medium" / "high") chosen by the daemon, never a numeric score.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct EnrollmentProgress {
     pub session_id: String,
@@ -35,25 +44,28 @@ pub struct EnrollmentProgress {
     pub coverage_percent: u32,
 }
 
-/// Result of `finish_enrollment`. `message` is a localized-ish status string;
-/// it never carries a score or threshold.
+/// Coarse outcome of `ReviewProfile` (frozen wire `(sbs)`): the reviewed
+/// profile id, whether re-enrollment is recommended, and a quality bucket.
+/// No score, no threshold, no embedding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct FinishResult {
-    pub success: bool,
-    pub message: String,
+pub struct ReviewOutcome {
+    pub profile_id: String,
+    pub needs_reenroll: bool,
+    pub quality: String,
 }
 
-/// Aggregated device/daemon status for the KCM header.
+/// Snapshot returned by `GetStatus` (frozen wire `(ua(ssbtt)b)`): API version,
+/// the caller's profiles, and whether the IR emitter is armed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct StatusInfo {
-    pub daemon_reachable: bool,
-    pub camera_present: bool,
-    pub enrolled_profiles: u32,
+pub struct StatusReport {
+    pub api_version: u32,
+    pub profiles: Vec<ProfileInfo>,
+    pub emitter_armed: bool,
 }
 
 /// Outcome of an enrollment attempt as the KCM surfaces it to QML. Distinct
-/// from [`FinishResult`] (the wire type) so the UI layer can model cancel and
-/// auth-loss without inspecting D-Bus errors.
+/// from the wire types so the UI layer can model cancel and auth-loss without
+/// inspecting D-Bus errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnrollOutcome {
     Success,

@@ -16,3 +16,4 @@ var/
 ml/eval/build/
 ml/models/
 
+crates/namtor-kde/build-kde/
