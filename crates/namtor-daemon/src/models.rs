@@ -128,9 +128,14 @@ impl ModelFetcher {
             std::fs::remove_file(&final_path)?;
         }
 
-        // Download to .tmp, verify, rename.
+        // Download to .tmp, verify, rename. Clean up .tmp on fetch failure so
+        // a truncated download never masquerades as a valid model on the next
+        // start.
         let tmp_path = final_path.with_extension("onnx.tmp");
-        self.http.fetch_to(source_url, &tmp_path)?;
+        if let Err(e) = self.http.fetch_to(source_url, &tmp_path) {
+            std::fs::remove_file(&tmp_path).ok();
+            return Err(e);
+        }
 
         let actual = Self::sha256_of_file(&tmp_path)?;
         if actual != spec.sha256 {
@@ -526,6 +531,48 @@ mod tests {
         // .tmp file should be cleaned up.
         assert!(!root.join("tampered/fp32.onnx.tmp").exists());
         assert!(!root.join("tampered/fp32.onnx").exists());
+    }
+
+    /// `HttpFetch` impl that writes a partial file then fails — simulates a
+    /// network drop mid-download leaving a truncated `.tmp` on disk.
+    struct FailingFetcher {
+        partial: Vec<u8>,
+    }
+
+    impl HttpFetch for FailingFetcher {
+        fn fetch_to(&self, _url: &str, dest: &Path) -> Result<(), DaemonError> {
+            std::fs::write(dest, &self.partial)?;
+            Err(DaemonError::State("simulated network drop".into()))
+        }
+    }
+
+    #[test]
+    fn fetch_failure_cleans_partial_tmp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FailingFetcher {
+                partial: b"partial download body".to_vec(),
+            }),
+        );
+        let spec = ModelSpec {
+            id: "netdrop".into(),
+            quant: Quant::Fp32,
+            sha256: [0xaa; 32],
+        };
+        let err = fetcher.fetch(&spec, "file://local").unwrap_err();
+        assert!(matches!(err, DaemonError::State(_)));
+        // No partial .tmp must survive a failed fetch — a truncated file
+        // masquerading as a valid model is a production-safety violation.
+        assert!(
+            !root.join("netdrop/fp32.onnx.tmp").exists(),
+            ".tmp left behind after fetch failure"
+        );
+        assert!(
+            !root.join("netdrop/fp32.onnx").exists(),
+            ".onnx created despite fetch failure"
+        );
     }
 
     #[test]
