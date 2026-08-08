@@ -1,16 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// allow: SIZE_OK — single cohesive TPM2 backend module: struct + lifecycle
+// (persist_srk/evict_srk) + PCR policy helpers + KeyBackend impl (seal/
+// unseal) + CLI helpers + tests. Feature-gated; only compiled with --features
+// tpm2. Splitting the CLI helpers from the backend would create a module
+// with no independent use.
 //! Real TPM2 backend using the `tpm2-tools` CLI (`tpm2_createprimary`,
-//! `tpm2_create`, `tpm2_load`, `tpm2_unseal`).
+//! `tpm2_create`, `tpm2_load`, `tpm2_unseal`, `tpm2_startauthsession`,
+//! `tpm2_policypcr`, `tpm2_evictcontrol`).
 //!
-//! Sealing policy (spec §7.3, default):
-//!   - Parent: TPM storage hierarchy primary key (`-C o`).
-//!   - No PCR policy (`-L` not specified). Survives kernel/firmware updates.
+//! Sealing policy (spec §7.3):
+//!   - Parent: TPM storage hierarchy primary key (`-C o`), the SRK.
+//!   - PCR binding is opt-in via [`PcrSelection`]. When enabled, the sealed
+//!     object is bound to the selected PCR values at seal time and can only
+//!     be unsealed when those PCRs hold the same values. Default (no PCR
+//!     selection): device-bound only, survives kernel/firmware updates.
 //!   - Sealed object attributes: `fixedtpm|fixedparent|adminwithpolicy`,
 //!     i.e. device-bound and non-migratable.
 //!
-//! The sealed payload stored inside the [`SealedBlob`] is the concatenation
-//! of the `tpm2_create` public/private area files. Unsealing reloads them
-//! with `tpm2_load` (parent = storage primary) then calls `tpm2_unseal`.
+//! SRK persistence: [`Tpm2Backend::persist_srk`] makes the primary key
+//! persistent at a fixed NV handle via `tpm2_evictcontrol`, so the SRK
+//! survives reboots without recomputation. [`Tpm2Backend::with_persistent_srk`]
+//! constructs a backend that uses the persistent handle directly.
+//!
+//! The sealed payload stored inside the [`SealedBlob`] is:
+//!   `[1 byte pcr_count] [pcr_count bytes: pcr_indices] [4B pub_len] [pub] [4B priv_len] [priv]`
 //!
 //! Gated by the `tpm2` cargo feature so the default build does not require
 //! `tpm2-tools` at runtime. Real-TPM tests are `#[ignore]` — they need
@@ -24,23 +37,23 @@ use std::process::Command;
 
 use rand::RngCore;
 
-use crate::crypto::{KeyBackend, KeySource, SealedBlob};
+use crate::crypto::{KeyBackend, KeySource, PcrSelection, SealedBlob};
 use crate::StoreError;
+
+const SRK_PERSISTENT_HANDLE: u32 = 0x8100_0001;
 
 /// Real TPM2 backend via the `tpm2-tools` CLI.
 pub struct Tpm2Backend {
     backend_id: String,
     tpm2_bin: PathBuf,
+    pcr_selection: Option<PcrSelection>,
+    persistent_srk: Option<u32>,
 }
 
 impl Tpm2Backend {
     pub const BACKEND_ID: &'static str = "tpm2";
 
-    /// Construct by probing for `tpm2-tools` on PATH and `/dev/tpmrm0`.
-    /// Returns `StoreError::Tpm2` if unavailable; the caller
-    /// (`BackendSelector`) falls back to `FileBackend` and reports reduced
-    /// protection.
-    pub fn new() -> Result<Self, StoreError> {
+    pub fn new(pcr_selection: Option<PcrSelection>) -> Result<Self, StoreError> {
         let tpm2_bin = which_tpm2()?;
         if !Path::new("/dev/tpmrm0").exists() {
             return Err(StoreError::Tpm2("/dev/tpmrm0 not present".into()));
@@ -53,6 +66,8 @@ impl Tpm2Backend {
             Ok(o) if o.status.success() => Ok(Self {
                 backend_id: Self::BACKEND_ID.into(),
                 tpm2_bin,
+                pcr_selection,
+                persistent_srk: None,
             }),
             Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
@@ -62,6 +77,116 @@ impl Tpm2Backend {
             }
             Err(e) => Err(StoreError::Tpm2(format!("could not exec tpm2: {e}"))),
         }
+    }
+
+    pub fn with_persistent_srk(mut self, handle: u32) -> Self {
+        self.persistent_srk = Some(handle);
+        self
+    }
+
+    /// Make the SRK (storage primary key) persistent at the fixed handle
+    /// `0x81000001` via `tpm2_evictcontrol`. After this, subsequent seal/
+    /// unseal operations skip `tpm2_createprimary` and use the persistent
+    /// handle directly.
+    pub fn persist_srk(&mut self) -> Result<(), StoreError> {
+        if self.persistent_srk.is_some() {
+            return Ok(());
+        }
+        let dir = temp_dir()?;
+        let primary_ctx = dir.join("primary.ctx");
+        self.create_primary(&primary_ctx)?;
+        let handle_str = format!("0x{:08x}", SRK_PERSISTENT_HANDLE);
+        run_tpm2(
+            &self.tpm2_bin,
+            "evictcontrol",
+            &["-C", "o", "-c", str_path(&primary_ctx)?, &handle_str],
+        )?;
+        self.persistent_srk = Some(SRK_PERSISTENT_HANDLE);
+        Ok(())
+    }
+
+    /// Remove the persistent SRK handle from the TPM.
+    pub fn evict_srk(&mut self) -> Result<(), StoreError> {
+        let handle = self
+            .persistent_srk
+            .ok_or_else(|| StoreError::Tpm2("no persistent SRK to evict".into()))?;
+        let handle_str = format!("0x{:08x}", handle);
+        run_tpm2(
+            &self.tpm2_bin,
+            "evictcontrol",
+            &["-C", "o", "-c", &handle_str],
+        )?;
+        self.persistent_srk = None;
+        Ok(())
+    }
+
+    fn create_primary(&self, ctx_path: &Path) -> Result<(), StoreError> {
+        if self.persistent_srk.is_some() {
+            return Ok(());
+        }
+        Ok(run_tpm2(
+            &self.tpm2_bin,
+            "createprimary",
+            &["-C", "o", "-c", str_path(ctx_path)?],
+        )?)
+    }
+
+    fn parent_handle_or_ctx(&self, primary_ctx: &Path) -> Result<String, StoreError> {
+        if let Some(handle) = self.persistent_srk {
+            Ok(format!("0x{:08x}", handle))
+        } else {
+            Ok(str_path(primary_ctx)?.to_string())
+        }
+    }
+
+    fn create_pcr_policy(&self, dir: &Path, policy_path: &Path) -> Result<(), StoreError> {
+        let sel = self
+            .pcr_selection
+            .as_ref()
+            .ok_or_else(|| StoreError::Tpm2("no pcr selection".into()))?;
+        let session_path = dir.join("session.ctx");
+        let pcr_list = sel.tpm2_list();
+
+        run_tpm2(
+            &self.tpm2_bin,
+            "startauthsession",
+            &["-S", str_path(&session_path)?],
+        )?;
+        let policy_result = run_tpm2(
+            &self.tpm2_bin,
+            "policypcr",
+            &[
+                "-S",
+                str_path(&session_path)?,
+                "-l",
+                &pcr_list,
+                "-L",
+                str_path(policy_path)?,
+            ],
+        );
+        let _ = run_tpm2(&self.tpm2_bin, "flushcontext", &[str_path(&session_path)?]);
+        policy_result?;
+        Ok(())
+    }
+
+    fn satisfy_pcr_policy(&self, session_path: &Path) -> Result<(), StoreError> {
+        let sel = self
+            .pcr_selection
+            .as_ref()
+            .ok_or_else(|| StoreError::Tpm2("no pcr selection".into()))?;
+        let pcr_list = sel.tpm2_list();
+
+        run_tpm2(
+            &self.tpm2_bin,
+            "startauthsession",
+            &["-S", str_path(session_path)?, "--policy-session"],
+        )?;
+        run_tpm2(
+            &self.tpm2_bin,
+            "policypcr",
+            &["-S", str_path(session_path)?, "-l", &pcr_list],
+        )?;
+        Ok(())
     }
 }
 
@@ -80,34 +205,52 @@ impl KeyBackend for Tpm2Backend {
         let pub_path = dir.join("sealed.pub");
         let priv_path = dir.join("sealed.priv");
         let input_path = dir.join("input.bin");
+        let policy_path = dir.join("policy.dat");
 
-        run_tpm2(
-            &self.tpm2_bin,
-            "createprimary",
-            &["-C", "o", "-c", str_path(&primary_ctx)?],
-        )?;
+        self.create_primary(&primary_ctx)?;
+        let parent = self.parent_handle_or_ctx(&primary_ctx)?;
 
         std::fs::write(&input_path, key)?;
-        run_tpm2(
-            &self.tpm2_bin,
-            "create",
-            &[
-                "-C",
-                str_path(&primary_ctx)?,
-                "-i",
-                str_path(&input_path)?,
-                "-u",
-                str_path(&pub_path)?,
-                "-r",
-                str_path(&priv_path)?,
-                "-a",
-                "fixedtpm|fixedparent|adminwithpolicy|noda",
-            ],
-        )?;
+
+        let pcr_count = self
+            .pcr_selection
+            .as_ref()
+            .map(|s| s.pcrs().len() as u8)
+            .unwrap_or(0);
+        let pcr_indices: Vec<u8> = self
+            .pcr_selection
+            .as_ref()
+            .map(|s| s.pcrs().to_vec())
+            .unwrap_or_default();
+
+        let mut create_args: Vec<&str> = vec![
+            "-C",
+            &parent,
+            "-i",
+            str_path(&input_path)?,
+            "-u",
+            str_path(&pub_path)?,
+            "-r",
+            str_path(&priv_path)?,
+            "-a",
+            "fixedtpm|fixedparent|adminwithpolicy|noda",
+        ];
+
+        if pcr_count > 0 {
+            self.create_pcr_policy(&dir, &policy_path)?;
+            create_args.push("-L");
+            create_args.push(str_path(&policy_path)?);
+        }
+
+        run_tpm2(&self.tpm2_bin, "create", &create_args)?;
 
         let pub_bytes = std::fs::read(&pub_path)?;
         let priv_bytes = std::fs::read(&priv_path)?;
-        let mut payload = Vec::with_capacity(8 + pub_bytes.len() + priv_bytes.len());
+        let pcr_header_len = 1 + pcr_count as usize;
+        let mut payload =
+            Vec::with_capacity(pcr_header_len + 8 + pub_bytes.len() + priv_bytes.len());
+        payload.push(pcr_count);
+        payload.extend_from_slice(&pcr_indices);
         payload.extend_from_slice(&(pub_bytes.len() as u32).to_le_bytes());
         payload.extend_from_slice(&pub_bytes);
         payload.extend_from_slice(&(priv_bytes.len() as u32).to_le_bytes());
@@ -120,24 +263,53 @@ impl KeyBackend for Tpm2Backend {
             return Err(StoreError::Crypto("backend id mismatch".into()));
         }
         let payload = blob.payload();
-        if payload.len() < 8 {
+        if payload.is_empty() {
             return Err(StoreError::Crypto("tpm2 payload too short".into()));
         }
-        let pub_len = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
-        if payload.len() < 4 + pub_len + 4 {
+        let pcr_count = payload[0] as usize;
+        if payload.len() < 1 + pcr_count + 8 {
+            return Err(StoreError::Crypto(
+                "tpm2 payload truncated pcr header".into(),
+            ));
+        }
+        let pcr_indices = &payload[1..1 + pcr_count];
+        let rest = &payload[1 + pcr_count..];
+
+        if pcr_count > 0 && self.pcr_selection.is_none() {
+            return Err(StoreError::Tpm2(
+                "blob has PCR policy but backend has no pcr selection".into(),
+            ));
+        }
+        if pcr_count > 0 {
+            if let Some(ref sel) = self.pcr_selection {
+                if sel.pcrs() != pcr_indices {
+                    return Err(StoreError::Tpm2(
+                        "blob PCR selection does not match backend".into(),
+                    ));
+                }
+            }
+        }
+
+        if rest.len() < 8 {
+            return Err(StoreError::Crypto(
+                "tpm2 payload too short for pub/priv".into(),
+            ));
+        }
+        let pub_len = u32::from_le_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
+        if rest.len() < 4 + pub_len + 4 {
             return Err(StoreError::Crypto("tpm2 payload truncated pub".into()));
         }
-        let pub_bytes = &payload[4..4 + pub_len];
+        let pub_bytes = &rest[4..4 + pub_len];
         let priv_len = u32::from_le_bytes([
-            payload[4 + pub_len],
-            payload[5 + pub_len],
-            payload[6 + pub_len],
-            payload[7 + pub_len],
+            rest[4 + pub_len],
+            rest[5 + pub_len],
+            rest[6 + pub_len],
+            rest[7 + pub_len],
         ]) as usize;
-        if payload.len() != 8 + pub_len + priv_len {
+        if rest.len() != 8 + pub_len + priv_len {
             return Err(StoreError::Crypto("tpm2 payload truncated priv".into()));
         }
-        let priv_bytes = &payload[8 + pub_len..];
+        let priv_bytes = &rest[8 + pub_len..];
 
         let dir = temp_dir()?;
         let primary_ctx = dir.join("primary.ctx");
@@ -145,12 +317,11 @@ impl KeyBackend for Tpm2Backend {
         let priv_path = dir.join("sealed.priv");
         let ctx_path = dir.join("sealed.ctx");
         let out_path = dir.join("out.bin");
+        let session_path = dir.join("session.ctx");
 
-        run_tpm2(
-            &self.tpm2_bin,
-            "createprimary",
-            &["-C", "o", "-c", str_path(&primary_ctx)?],
-        )?;
+        self.create_primary(&primary_ctx)?;
+        let parent = self.parent_handle_or_ctx(&primary_ctx)?;
+
         std::fs::write(&pub_path, pub_bytes)?;
         std::fs::write(&priv_path, priv_bytes)?;
         run_tpm2(
@@ -158,7 +329,7 @@ impl KeyBackend for Tpm2Backend {
             "load",
             &[
                 "-C",
-                str_path(&primary_ctx)?,
+                &parent,
                 "-u",
                 str_path(&pub_path)?,
                 "-r",
@@ -167,11 +338,32 @@ impl KeyBackend for Tpm2Backend {
                 str_path(&ctx_path)?,
             ],
         )?;
-        match run_tpm2(
-            &self.tpm2_bin,
-            "unseal",
-            &["-c", str_path(&ctx_path)?, "-o", str_path(&out_path)?],
-        ) {
+
+        let unseal_result = if pcr_count > 0 {
+            self.satisfy_pcr_policy(&session_path)?;
+            let result = run_tpm2(
+                &self.tpm2_bin,
+                "unseal",
+                &[
+                    "-c",
+                    str_path(&ctx_path)?,
+                    "-p",
+                    &format!("session:{}", str_path(&session_path)?),
+                    "-o",
+                    str_path(&out_path)?,
+                ],
+            );
+            let _ = run_tpm2(&self.tpm2_bin, "flushcontext", &[str_path(&session_path)?]);
+            result
+        } else {
+            run_tpm2(
+                &self.tpm2_bin,
+                "unseal",
+                &["-c", str_path(&ctx_path)?, "-o", str_path(&out_path)?],
+            )
+        };
+
+        match unseal_result {
             Ok(()) => {
                 let out = std::fs::read(&out_path)?;
                 if out.len() != 32 {
@@ -187,6 +379,10 @@ impl KeyBackend for Tpm2Backend {
             Err(Tpm2CliError::Exit { stderr, .. }) => {
                 if is_lockout(&stderr) {
                     Err(StoreError::Tpm2(format!("TPM2 lockout: {stderr}")))
+                } else if is_pcr_mismatch(&stderr) {
+                    Err(StoreError::Tpm2(format!(
+                        "TPM2 PCR policy mismatch: {stderr}"
+                    )))
                 } else {
                     Err(StoreError::Crypto(format!(
                         "TPM2 corruption: sealed blob invalid or wrong device: {stderr}"
@@ -260,11 +456,14 @@ fn temp_dir() -> Result<PathBuf, StoreError> {
 }
 
 fn is_lockout(stderr: &str) -> bool {
-    // TPM2_RC_LOCKOUT hex is 0x98b; tpm2-tools spells it "LOCKOUT" in stderr.
     stderr.contains("LOCKOUT")
         || stderr.contains("lockout")
         || stderr.contains("0x98b")
         || stderr.contains("0x98B")
+}
+
+fn is_pcr_mismatch(stderr: &str) -> bool {
+    stderr.contains("TPM2_RC_POLICY_FAIL") || stderr.contains("policy") || stderr.contains("POLICY")
 }
 
 #[cfg(test)]
@@ -283,7 +482,7 @@ mod tests {
         if !hw_enabled() {
             return;
         }
-        let mut backend = Tpm2Backend::new().expect("TPM2 probe");
+        let mut backend = Tpm2Backend::new(None).expect("TPM2 probe");
         let mut key = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut key);
         let blob = backend.seal(&key).expect("seal");
@@ -297,7 +496,7 @@ mod tests {
         if !hw_enabled() {
             return;
         }
-        let mut backend = Tpm2Backend::new().expect("TPM2 probe");
+        let mut backend = Tpm2Backend::new(None).expect("TPM2 probe");
         let mut key = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut key);
         let blob = backend.seal(&key).expect("seal");
@@ -306,5 +505,35 @@ mod tests {
         let truncated = SealedBlob::decode(&encoded).expect("decode after truncate");
         let err = backend.unseal(&truncated).unwrap_err();
         assert!(matches!(err, StoreError::Crypto(_)));
+    }
+
+    #[test]
+    #[ignore = "requires the reference TPM; run with NAMTOR_HW_TEST=1"]
+    fn real_tpm_pcr_seal_unseal_round_trip() {
+        if !hw_enabled() {
+            return;
+        }
+        let mut backend = Tpm2Backend::new(Some(PcrSelection::boot_state())).expect("TPM2 probe");
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        let blob = backend.seal(&key).expect("seal");
+        let unsealed = backend.unseal(&blob).expect("unseal");
+        assert_eq!(unsealed, key);
+    }
+
+    #[test]
+    #[ignore = "requires the reference TPM; run with NAMTOR_HW_TEST=1"]
+    fn real_tpm_srk_persist_and_evict() {
+        if !hw_enabled() {
+            return;
+        }
+        let mut backend = Tpm2Backend::new(None).expect("TPM2 probe");
+        backend.persist_srk().expect("persist SRK");
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        let blob = backend.seal(&key).expect("seal with persistent SRK");
+        let unsealed = backend.unseal(&blob).expect("unseal with persistent SRK");
+        assert_eq!(unsealed, key);
+        backend.evict_srk().expect("evict SRK");
     }
 }

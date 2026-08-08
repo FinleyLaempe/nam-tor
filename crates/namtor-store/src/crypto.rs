@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// allow: SIZE_OK — single cohesive key-management module: SealedKey +
+// BackendSelector + KeyBackend trait + SealedBlob + MockTpm + FileBackend +
+// mlock helpers + tests. Splitting would scatter the KeyBackend contract
+// across files with no benefit. Pre-existing since M4; PCR binding extends
+// MockTpm in place.
 //! Key management: TPM2 sealing with root-only file fallback.
 //!
 //! Spec §7.3: "Default: TPM-bound with no PCR policy. This protects against
@@ -14,6 +19,7 @@
 //! - [`Tpm2Backend`] — real TPM2 via tss2 FAPI FFI. Feature-gated `tpm2`.
 //!   Requires libtss2-fapi + `tss` group + `/dev/tpmrm0` at runtime.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use aes_gcm::aead::{Aead, KeyInit};
@@ -36,6 +42,44 @@ const BLOB_MAGIC: &[u8; 6] = b"NMTKEY";
 pub enum KeySource {
     Tpm2,
     File,
+}
+
+/// Which Platform Configuration Registers (PCRs) to bind a sealed key to.
+///
+/// When a key is sealed with a [`PcrSelection`], it can only be unsealed
+/// when the selected PCRs hold the same values they had at seal time. This
+/// binds the key to a specific boot state: a reboot (which extends PCR 0
+/// with a new boot measurement) or a kernel update (which changes PCR 7's
+/// secureboot state) will prevent unsealing.
+///
+/// Spec §7.3 default is **no PCR policy** (survives kernel updates). PCR
+/// binding is opt-in for deployments that want stricter boot-state binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PcrSelection {
+    pcrs: Vec<u8>,
+}
+
+impl PcrSelection {
+    /// PCR 0 (boot measurement) + PCR 7 (secureboot state) — binds the key
+    /// to the current boot state.
+    pub fn boot_state() -> Self {
+        Self { pcrs: vec![0, 7] }
+    }
+
+    pub fn new(pcrs: Vec<u8>) -> Self {
+        Self { pcrs }
+    }
+
+    pub fn pcrs(&self) -> &[u8] {
+        &self.pcrs
+    }
+
+    /// Format the PCR list for `tpm2-tools` `-l` flag, e.g. `sha256:0,7`.
+    #[cfg(feature = "tpm2")]
+    pub fn tpm2_list(&self) -> String {
+        let ids: Vec<String> = self.pcrs.iter().map(|p| p.to_string()).collect();
+        format!("sha256:{}", ids.join(","))
+    }
 }
 
 /// A persisted, sealed symmetric key for AES-256-GCM.
@@ -112,6 +156,7 @@ impl Drop for SealedKey {
 pub struct BackendSelector {
     force_backend: Option<&'static str>,
     mock_seed: Option<[u8; 32]>,
+    pcr_selection: Option<PcrSelection>,
 }
 
 impl BackendSelector {
@@ -119,6 +164,7 @@ impl BackendSelector {
         Self {
             force_backend: None,
             mock_seed: None,
+            pcr_selection: None,
         }
     }
 
@@ -126,6 +172,15 @@ impl BackendSelector {
         Self {
             force_backend: Some(MockTpm::BACKEND_ID),
             mock_seed: Some(seed),
+            pcr_selection: None,
+        }
+    }
+
+    pub fn mock_with_pcrs(seed: [u8; 32], pcrs: PcrSelection) -> Self {
+        Self {
+            force_backend: Some(MockTpm::BACKEND_ID),
+            mock_seed: Some(seed),
+            pcr_selection: Some(pcrs),
         }
     }
 
@@ -133,7 +188,13 @@ impl BackendSelector {
         Self {
             force_backend: Some(FileBackend::BACKEND_ID),
             mock_seed: None,
+            pcr_selection: None,
         }
+    }
+
+    pub fn with_pcrs(mut self, pcrs: PcrSelection) -> Self {
+        self.pcr_selection = Some(pcrs);
+        self
     }
 
     fn select_for_new(&mut self) -> Result<Box<dyn KeyBackend>, StoreError> {
@@ -157,11 +218,11 @@ impl BackendSelector {
                 let seed = self.mock_seed.ok_or_else(|| {
                     StoreError::Tpm2("mock seed not configured for this selector".into())
                 })?;
-                Ok(Box::new(MockTpm::new(seed)))
+                Ok(Box::new(MockTpm::new(seed, self.pcr_selection.clone())))
             }
             FileBackend::BACKEND_ID => Ok(Box::new(FileBackend::new())),
             #[cfg(feature = "tpm2")]
-            Tpm2Backend::BACKEND_ID => Ok(Box::new(Tpm2Backend::new()?)),
+            Tpm2Backend::BACKEND_ID => Ok(Box::new(Tpm2Backend::new(self.pcr_selection.clone())?)),
             _ => Err(StoreError::Crypto(format!("unknown backend id: {id}"))),
         }
     }
@@ -262,15 +323,23 @@ impl SealedBlob {
 
 pub struct MockTpm {
     seed: [u8; 32],
+    pcr_selection: Option<PcrSelection>,
+    pcrs: BTreeMap<u8, [u8; 32]>,
     attempts: std::cell::Cell<u32>,
 }
 
 impl MockTpm {
     pub const BACKEND_ID: &'static str = "mock-tpm";
 
-    pub fn new(seed: [u8; 32]) -> Self {
+    pub fn new(seed: [u8; 32], pcr_selection: Option<PcrSelection>) -> Self {
+        let pcrs = match &pcr_selection {
+            Some(sel) => sel.pcrs().iter().map(|&idx| (idx, [0u8; 32])).collect(),
+            None => BTreeMap::new(),
+        };
         Self {
             seed,
+            pcr_selection,
+            pcrs,
             attempts: std::cell::Cell::new(0),
         }
     }
@@ -282,10 +351,65 @@ impl MockTpm {
     }
 
     pub fn fresh() -> Self {
-        Self::new(Self::random_seed())
+        Self::new(Self::random_seed(), None)
+    }
+
+    /// Set a simulated PCR value. Used by tests to simulate boot measurements
+    /// or PCR extension events.
+    pub fn set_pcr(&mut self, idx: u8, value: [u8; 32]) {
+        self.pcrs.insert(idx, value);
+    }
+
+    pub fn pcr_value(&self, idx: u8) -> Option<&[u8; 32]> {
+        self.pcrs.get(&idx)
+    }
+
+    /// Simulate a reboot: PCR 0 (boot measurement) is replaced with a new
+    /// random value, mimicking a fresh boot measurement. Any key sealed
+    /// with [`PcrSelection::boot_state`] before the reboot will fail to
+    /// unseal afterwards.
+    pub fn reboot(&mut self) {
+        let mut new_pcr0 = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut new_pcr0);
+        self.pcrs.insert(0, new_pcr0);
+    }
+
+    /// Compute a SHA-256 policy digest over the selected PCR values.
+    /// This mirrors how TPM2 `TPM2_PolicyPCR` computes its policy hash.
+    fn pcr_policy_digest(&self) -> Result<[u8; 32], StoreError> {
+        let sel = self
+            .pcr_selection
+            .as_ref()
+            .ok_or_else(|| StoreError::Crypto("no pcr selection on this backend".into()))?;
+        let mut hasher = Sha256::new();
+        for &idx in sel.pcrs() {
+            let val = self.pcrs.get(&idx).copied().unwrap_or([0u8; 32]);
+            hasher.update([idx]);
+            hasher.update(val);
+        }
+        let result = hasher.finalize();
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&result);
+        Ok(digest)
     }
 
     fn wrap(&self, key: &[u8; 32]) -> Result<Vec<u8>, StoreError> {
+        let pcr_count = self
+            .pcr_selection
+            .as_ref()
+            .map(|s| s.pcrs().len() as u8)
+            .unwrap_or(0);
+        let pcr_indices: Vec<u8> = self
+            .pcr_selection
+            .as_ref()
+            .map(|s| s.pcrs().to_vec())
+            .unwrap_or_default();
+        let pcr_digest = if pcr_count > 0 {
+            self.pcr_policy_digest()?
+        } else {
+            [0u8; 32]
+        };
+
         let cipher =
             Aes256Gcm::new_from_slice(&self.seed).map_err(|e| StoreError::Crypto(e.to_string()))?;
         let mut nonce_bytes = [0u8; 12];
@@ -299,7 +423,13 @@ impl MockTpm {
         hmac.update(&nonce_bytes);
         hmac.update(&ct);
         let tag = hmac.finalize().into_bytes();
-        let mut out = Vec::with_capacity(12 + ct.len() + tag.len());
+
+        let mut out = Vec::with_capacity(1 + pcr_count as usize + 32 + 12 + ct.len() + tag.len());
+        out.push(pcr_count);
+        out.extend_from_slice(&pcr_indices);
+        if pcr_count > 0 {
+            out.extend_from_slice(&pcr_digest);
+        }
         out.extend_from_slice(&nonce_bytes);
         out.extend_from_slice(&ct);
         out.extend_from_slice(&tag);
@@ -307,14 +437,31 @@ impl MockTpm {
     }
 
     fn unwrap(&self, payload: &[u8]) -> Result<[u8; 32], StoreError> {
-        if payload.len() != 12 + 48 + 32 {
+        if payload.is_empty() {
+            return Err(StoreError::Crypto("mock-tpm payload too short".into()));
+        }
+        let pcr_count = payload[0] as usize;
+        let pcr_header_len = 1 + pcr_count + if pcr_count > 0 { 32 } else { 0 };
+        if payload.len() < pcr_header_len + 12 + 48 + 32 {
             return Err(StoreError::Crypto(
                 "mock-tpm payload size mismatch (corruption)".into(),
             ));
         }
-        let nonce_bytes = &payload[..12];
-        let ct = &payload[12..60];
-        let tag = &payload[60..92];
+
+        if pcr_count > 0 {
+            let stored_digest = &payload[1 + pcr_count..1 + pcr_count + 32];
+            let current_digest = self.pcr_policy_digest()?;
+            if stored_digest != current_digest {
+                return Err(StoreError::Tpm2(
+                    "PCR policy mismatch: boot state changed since seal".into(),
+                ));
+            }
+        }
+
+        let ct_start = pcr_header_len;
+        let nonce_bytes = &payload[ct_start..ct_start + 12];
+        let ct = &payload[ct_start + 12..ct_start + 12 + 48];
+        let tag = &payload[ct_start + 60..ct_start + 92];
 
         let mut hmac = <HmacSha256 as Mac>::new_from_slice(&self.seed)
             .map_err(|e| StoreError::Crypto(e.to_string()))?;
@@ -516,7 +663,7 @@ mod tests {
     #[test]
     fn mock_seal_unseal_round_trip() {
         let seed = [7u8; 32];
-        let mut tpm = MockTpm::new(seed);
+        let mut tpm = MockTpm::new(seed, None);
         let key = round_trip_key();
         let blob = tpm.seal(&key).unwrap();
         assert_eq!(blob.backend_id(), MockTpm::BACKEND_ID);
@@ -529,10 +676,10 @@ mod tests {
         let seed = [9u8; 32];
         let key = round_trip_key();
         let blob = {
-            let mut tpm = MockTpm::new(seed);
+            let mut tpm = MockTpm::new(seed, None);
             tpm.seal(&key).unwrap()
         };
-        let tpm2 = MockTpm::new(seed);
+        let tpm2 = MockTpm::new(seed, None);
         let recovered = tpm2.unseal(&blob).unwrap();
         assert_eq!(recovered, key);
     }
@@ -543,15 +690,15 @@ mod tests {
         let new_seed = [2u8; 32];
         let key = round_trip_key();
         let old_blob = {
-            let mut old = MockTpm::new(old_seed);
+            let mut old = MockTpm::new(old_seed, None);
             old.seal(&key).unwrap()
         };
         let new_blob = {
-            let mut new = MockTpm::new(new_seed);
+            let mut new = MockTpm::new(new_seed, None);
             new.seal(&key).unwrap()
         };
         assert_ne!(old_blob.payload(), new_blob.payload());
-        let new = MockTpm::new(new_seed);
+        let new = MockTpm::new(new_seed, None);
         assert_eq!(new.unseal(&new_blob).unwrap(), key);
         let err = new.unseal(&old_blob).unwrap_err();
         assert!(matches!(err, StoreError::Crypto(_)));
@@ -562,10 +709,10 @@ mod tests {
         let (seed_a, seed_b) = two_seeds();
         let key = round_trip_key();
         let blob = {
-            let mut a = MockTpm::new(seed_a);
+            let mut a = MockTpm::new(seed_a, None);
             a.seal(&key).unwrap()
         };
-        let b = MockTpm::new(seed_b);
+        let b = MockTpm::new(seed_b, None);
         let err = b.unseal(&blob).unwrap_err();
         assert!(
             matches!(err, StoreError::Crypto(_)),
@@ -576,7 +723,7 @@ mod tests {
     #[test]
     fn mock_corruption_detected() {
         let seed = [4u8; 32];
-        let mut tpm = MockTpm::new(seed);
+        let mut tpm = MockTpm::new(seed, None);
         let key = round_trip_key();
         let blob = tpm.seal(&key).unwrap();
         let mut tampered = blob.encode();
@@ -593,7 +740,7 @@ mod tests {
     #[test]
     fn mock_lockout_after_max_attempts() {
         let seed = [5u8; 32];
-        let mut tpm = MockTpm::new(seed);
+        let mut tpm = MockTpm::new(seed, None);
         let key = round_trip_key();
         let blob = tpm.seal(&key).unwrap();
         for _ in 0..MAX_UNSEAL_ATTEMPTS {
@@ -604,6 +751,110 @@ mod tests {
             matches!(err, StoreError::Tpm2(ref m) if m.contains("lockout")),
             "expected lockout error, got {err:?}"
         );
+    }
+
+    // --- PCR binding tests ---
+
+    #[test]
+    fn mock_pcr_seal_unseal_round_trip() {
+        let seed = [11u8; 32];
+        let mut tpm = MockTpm::new(seed, Some(PcrSelection::boot_state()));
+        let key = round_trip_key();
+        let blob = tpm.seal(&key).unwrap();
+        let recovered = tpm.unseal(&blob).unwrap();
+        assert_eq!(recovered, key);
+    }
+
+    #[test]
+    fn mock_pcr_mismatch_fails_after_reboot() {
+        let seed = [12u8; 32];
+        let mut tpm = MockTpm::new(seed, Some(PcrSelection::boot_state()));
+        let key = round_trip_key();
+        let blob = tpm.seal(&key).unwrap();
+        tpm.reboot();
+        let err = tpm.unseal(&blob).unwrap_err();
+        assert!(
+            matches!(err, StoreError::Tpm2(ref m) if m.contains("PCR policy mismatch")),
+            "expected PCR mismatch error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn mock_pcr_mismatch_fails_after_pcr_change() {
+        let seed = [13u8; 32];
+        let mut tpm = MockTpm::new(seed, Some(PcrSelection::boot_state()));
+        let key = round_trip_key();
+        let blob = tpm.seal(&key).unwrap();
+        tpm.set_pcr(7, [0xff; 32]);
+        let err = tpm.unseal(&blob).unwrap_err();
+        assert!(
+            matches!(err, StoreError::Tpm2(ref m) if m.contains("PCR policy mismatch")),
+            "expected PCR mismatch error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn mock_no_pcr_binding_survives_reboot() {
+        let seed = [14u8; 32];
+        let mut tpm = MockTpm::new(seed, None);
+        let key = round_trip_key();
+        let blob = tpm.seal(&key).unwrap();
+        tpm.reboot();
+        let recovered = tpm.unseal(&blob).unwrap();
+        assert_eq!(recovered, key);
+    }
+
+    #[test]
+    fn mock_pcr_persistent_across_restart_same_state() {
+        let seed = [15u8; 32];
+        let pcrs = PcrSelection::boot_state();
+        let key = round_trip_key();
+        let blob = {
+            let mut tpm = MockTpm::new(seed, Some(pcrs.clone()));
+            let mut pcr0 = [0u8; 32];
+            pcr0[0] = 0xAB;
+            tpm.set_pcr(0, pcr0);
+            tpm.seal(&key).unwrap()
+        };
+        let mut tpm2 = MockTpm::new(seed, Some(pcrs));
+        let mut pcr0 = [0u8; 32];
+        pcr0[0] = 0xAB;
+        tpm2.set_pcr(0, pcr0);
+        let recovered = tpm2.unseal(&blob).unwrap();
+        assert_eq!(recovered, key);
+    }
+
+    #[test]
+    fn mock_pcr_persistent_fails_different_state() {
+        let seed = [16u8; 32];
+        let pcrs = PcrSelection::boot_state();
+        let key = round_trip_key();
+        let blob = {
+            let mut tpm = MockTpm::new(seed, Some(pcrs.clone()));
+            let mut pcr0 = [0u8; 32];
+            pcr0[0] = 0xAB;
+            tpm.set_pcr(0, pcr0);
+            tpm.seal(&key).unwrap()
+        };
+        let tpm2 = MockTpm::new(seed, Some(pcrs));
+        let err = tpm2.unseal(&blob).unwrap_err();
+        assert!(
+            matches!(err, StoreError::Tpm2(ref m) if m.contains("PCR policy mismatch")),
+            "expected PCR mismatch, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn mock_pcr_sealed_key_via_selector() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let seed = [42u8; 32];
+        let mut selector = BackendSelector::mock_with_pcrs(seed, PcrSelection::boot_state());
+        let k1 = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        assert_eq!(k1.source(), KeySource::Tpm2);
+        let k2 = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        assert_eq!(k1.key(), k2.key());
+        assert_eq!(k2.source(), KeySource::Tpm2);
     }
 
     #[test]
