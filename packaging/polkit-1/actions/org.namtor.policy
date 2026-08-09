@@ -56,4 +56,16 @@
     </defaults>
   </action>
 
+  <!-- Toggle pam_namtor.so in a PAM service file. System-level change —
+       requires admin auth, retained for the session. -->
+  <action id="org.namtor.configure-pam">
+    <description>Toggle PAM face authentication for a login service</description>
+    <message>Authentication is required to enable or disable face authentication for a PAM login service.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
 </policyconfig>
