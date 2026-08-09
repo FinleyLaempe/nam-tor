@@ -70,3 +70,55 @@ jobs:
         run: cargo build --bin namtor-synth
       - run: pip install -e 'ml/eval[dev]'   # quoted: brackets are glob chars
       - run: python -m pytest ml/eval/tests -v
+
+  # Task 28 — packaging gate matrix. Every packaging test suite is a CI gate
+  # that blocks on nonzero exit. Together they cover: licence/hash/notice
+  # drift, split ownership, production model validation call path, system-bus
+  # client parity, PAM-default-off, no unexpected setuid, package builds
+  # (structural), uninstall closure, docs claims, and SBOM/signatures.
+  # `test_model_archive.sh` exits 77 when the bundled ONNX models are absent
+  # (hardware-gated; CI has no reference camera) — 77 is a skip, not a failure.
+  packaging-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install gpg (release-signature gate)
+        run: sudo apt-get update && sudo apt-get install -y gnupg
+
+      - name: Gate — Arch split package structure
+        run: bash packaging/tests/test_arch_split.sh
+      - name: Gate — Fedora split package structure
+        run: bash packaging/tests/test_fedora_split.sh
+      - name: Gate — Debian split package structure
+        run: bash packaging/tests/test_debian_split.sh
+      - name: Gate — PAM default-off at install
+        run: bash packaging/tests/test_install_default_off.sh
+      - name: Gate — lifecycle helper phases
+        run: bash packaging/tests/test_lifecycle.sh
+      - name: "Gate — model archive reproducibility + tamper (hw-gated: 77 = skip)"
+        run: |
+          bash packaging/tests/test_model_archive.sh
+          rc=$?
+          # 77 = models absent (hardware-gated). Treat as skip, not failure.
+          [ "$rc" = "77" ] && exit 0
+          exit "$rc"
+      - name: Gate — uninstall closure (manifest-complete)
+        run: bash packaging/tests/test_uninstall_closure.sh
+      - name: Gate — supply chain (SBOM + provenance + model cards)
+        run: bash packaging/tests/test_supply_chain.sh
+      - name: Gate — release signatures (sign + verify + tamper)
+        run: bash packaging/tests/test_release_signatures.sh
+      - name: Gate — doc audit (stale strings + experimental warning)
+        run: bash packaging/tests/test_doc_audit.sh
+      - name: Gate — support bundle (privacy-safe diagnostics)
+        run: bash packaging/tests/test_support_bundle.sh
+
+      # Meta-gate: runs every suite above + a mutation matrix that injects a
+      # known defect per gate category, verifies the right gate catches it,
+      # and reverts from a verified backup. Emits 28-ci-baseline.json +
+      # 28-ci-mutations.json evidence. Blocks if any mutation is NOT caught.
+      - name: Meta-gate — CI gate coverage + mutation matrix
+        run: bash packaging/tests/test_ci_gates.sh

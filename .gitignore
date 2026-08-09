@@ -21,3 +21,16 @@ ml/models/
 var/lib/namtor/cohort/
 
 crates/namtor-kde/build-kde/
+
+# Deterministic model source archives + signatures (task 4). Built by
+# packaging/build-model-archive.sh from the deployed model store; never
+# committed — weights are not in git. The sha256 sidecar and detached
+# signatures (.asc / .minisig) are also build outputs.
+/namtor-models-*.tar.gz
+/namtor-models-*.tar.gz.sha256
+/namtor-models-*.tar.gz.asc
+/namtor-models-*.tar.gz.minisig
+# Source release tarballs (rebuilt by the release workflow).
+/namtor-*.tar.gz
+/namtor-*.tar.gz.asc
+/namtor-*.tar.gz.minisig

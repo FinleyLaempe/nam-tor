@@ -27,7 +27,7 @@ M0 (eval harness), M1 (hardware spike), M2 (detection + capture), **M3 (daemon +
 **R4 INT8 vs FP32 eval** scaffolding remains ready but deferred (Path B — INT8 on architectural grounds per §5.3).
 
 **What needs the human to go live:**
-1. Install systemd units (root): `namtor` user, `namtor-auth` group, setuid `namtor-worker-spawn`.
+1. Install systemd units (root): `namtor` user, `namtor-auth` group.
 2. Enroll a face: `namtor-cli enroll <username>` (requires camera at `/dev/video2`).
 3. Add `pam_namtor.so` to PAM stack (e.g. `/etc/pam.d/gdm-password`).
 4. Start daemon: `namtor-daemon` or `systemctl start namtor-daemon`.
@@ -84,7 +84,7 @@ ASUS ROG Flow X16 GV601VI, Arch Linux, kernel 7.1.x, systemd 261, GNOME/Wayland 
 
 ## What M3 needs from the human (ask, don't fake)
 
-1. **Root** — install systemd units, create `namtor` user + `namtor-auth` group, setuid `namtor-worker-spawn`. Provide commands when ready.
+1. **Root** — install systemd units, create `namtor` user + `namtor-auth` group. Provide commands when ready.
 2. **Python onnxruntime binding** — `onnxruntime-cpu` 1.28.0 pacman package installed BUT `python3 -c "import onnxruntime"` fails (likely Python 3.14 incompat). Blocks R4 (INT8 vs FP32) + Task 16. Needs a compatible Python venv or binding fix.
 3. **Model selection + licence acceptance** — which stock models (YuNet/MobileFaceNet/AdaFace/MiniFASNet-class) + accepting upstream licences (Task 15 records it; `NAMTOR_ACCEPT_LICENCE=1`).
 4. **R5 cohort dataset** — which licence-verified dataset forms the background cohort for score normalisation. Decision recorded in `docs/m3-r4-report.md`.
@@ -104,7 +104,7 @@ Everything else in M3 is CI-testable with mocks (no camera, no root, no weights)
 
 ## Decisions already made (don't relitigate)
 
-PAM integration (not direct SDDM/GDM). Rust core + Python ML tooling only. Four processes, three trust levels (inference in `nobody` worker under seccomp+landlock). TPM2-sealed templates, device-bound, non-exportable. Strobe-differential liveness, analytic gates first. Dual-camera RGB+IR fusion with enrollment-fitted extrinsics. CPU-only auth path. GPL-3.0 core / Apache-2.0 hardware DB.
+PAM integration (not direct SDDM/GDM). Rust core + Python ML tooling only. Four processes, three trust levels (inference in `namtor` worker under seccomp+landlock — sandbox is the privilege boundary, not a UID drop). TPM2-sealed templates, device-bound, non-exportable. Strobe-differential liveness, analytic gates first. Dual-camera RGB+IR fusion with enrollment-fitted extrinsics. CPU-only auth path. GPL-3.0 core / Apache-2.0 hardware DB.
 
 ## What NOT to do
 

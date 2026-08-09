@@ -1567,6 +1567,7 @@ dependencies = [
  "namtor-hwdb",
  "namtor-layout",
  "namtor-pad",
+ "namtor-pam-config",
  "namtor-proto",
  "namtor-recog",
  "namtor-store",
@@ -1664,6 +1665,17 @@ dependencies = [
  "namtor-proto",
  "nix",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "namtor-pam-config"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
  "tempfile",
 ]
 

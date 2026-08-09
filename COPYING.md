@@ -38,19 +38,34 @@ Apache-2.0 was chosen over MIT for its explicit patent grant, which matters for 
 
 ## Missing licence texts
 
-**Pre-flight item.** The canonical licence texts are not yet in this repository, because they were unavailable on the machine where the project was scaffolded. Before the first public release, add:
+The canonical licence texts are installed in [`packaging/licences/`](packaging/licences/):
 
 ```
-LICENSE-APACHE-2.0     https://www.apache.org/licenses/LICENSE-2.0.txt
-LICENSE-GPL-3.0        https://www.gnu.org/licenses/gpl-3.0.txt
+packaging/licences/MIT.txt         — MIT License (SPDX template)
+packaging/licences/APACHE-2.0.txt  — Apache License 2.0
+packaging/licences/GPL-3.0.txt     — GNU General Public License v3.0
+packaging/licences/yunet_2023mar.LICENSE   — YuNet model-specific MIT licence
+packaging/licences/sface_2021dec.LICENSE   — SFace model-specific Apache-2.0 licence
+packaging/licences/minifasnet_pad.NOTICE   — MiniFASNet PAD provenance notice
 ```
 
-`scripts/check-env.sh` reports their absence. Do not paste them from memory — fetch the canonical texts.
+Their SHA-256 hashes are recorded in [`packaging/model-manifest.toml`](packaging/model-manifest.toml) and verified at package build time. Do not edit these files — they are the canonical bytes the manifest hashes are computed from.
 
 ## Third-party components
 
 **No model weights and no datasets are committed to this repository, ever.**
 
-Model weights are fetched at first run, and the user accepts the upstream licence at that point — the same pattern ffmpeg uses for codecs and Howdy uses for dlib's models. Training data is never redistributed; `ml/` ships reproducible recipes, and anyone who accepts a dataset's terms runs them to obtain their own weights.
+Model weights are acquired out-of-band (bundled in distro packages or fetched by the operator) and validated against [`packaging/model-manifest.toml`](packaging/model-manifest.toml) at every daemon startup. The manifest records each model's upstream revision, weight SHA-256, licence URL, licence SHA-256, redistribution policy, and training provenance. Redistributable models (MIT, Apache-2.0, self-trained) admit without an acceptance record. Restricted models require an on-disk `licence.accepted` record written by the CLI or an explicit operator acceptance flow; the daemon checks the record but never writes it. Training data is never redistributed; `ml/` ships reproducible recipes, and anyone who accepts a dataset's terms runs them to obtain their own weights.
+
+### Deployed models
+
+| Model | Purpose | Upstream | Licence | Redistribution |
+|---|---|---|---|---|
+| YuNet 2023mar | Face detection (5-pt landmarks) | OpenCV Zoo | MIT | Redistributable |
+| SFace 2021dec | Face embedding (128-d) | OpenCV Zoo | Apache-2.0 | Redistributable |
+| MiniFASNet PAD | Strobe-differential liveness | Self-trained (physics-based synthetic data) | Apache-2.0 (code ref: Silent-Face) | Redistributable |
+
+All three models are permissively licensed and redistributable. The MiniFASNet PAD weights are self-trained on physics-based synthetic strobe-differential data — no licence-restricted dataset was used to derive them (see `packaging/licences/minifasnet_pad.NOTICE`).
 
 See [`ml/DATASETS.md`](ml/DATASETS.md) for the licensing status of every dataset the project touches. Verify a dataset's terms before use; several prohibit commercial use and at least one has been withdrawn by its publisher.
+

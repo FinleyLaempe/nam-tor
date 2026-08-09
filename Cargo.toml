@@ -12,6 +12,7 @@ members = [
     "crates/namtor-kde",
     "crates/namtor-layout",
     "crates/namtor-pad",
+    "crates/namtor-pam-config",
     "crates/namtor-pam",
     "crates/namtor-probe",
     "crates/namtor-proto",
