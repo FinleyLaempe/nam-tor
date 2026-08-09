@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Model fetcher: download stock ONNX weights, verify sha256, manage on-disk
 //! layout. No weights are committed — the fetcher pulls them at first run
-//! under the upstream licence (Task 15 records acceptance).
+//! under the upstream licence. Admission is typed: redistributable models
+//! (MIT, Apache-2.0, self-trained) admit without an acceptance record;
+//! restricted models require an explicit `licence.accepted` record.
 //!
 //! On-disk layout:
 //! ```text
@@ -9,7 +11,7 @@
 //! <root>/<model_id>/fp32.sha256
 //! <root>/<model_id>/int8.onnx
 //! <root>/<model_id>/int8.sha256
-//! <root>/<model_id>/licence.accepted
+//! <root>/<model_id>/licence.accepted   (restricted models only)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -18,13 +20,26 @@ use namtor_proto::worker::{ModelSpec, Quant};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::licence::ensure_licence_accepted;
+use crate::licence::ensure_model_admitted;
 use crate::DaemonError;
 
 /// HTTP download seam. Production uses `ReqwestFetcher`; tests use
 /// `FileCopyFetcher` to avoid a real HTTP server.
 pub trait HttpFetch {
     fn fetch_to(&self, url: &str, dest: &Path) -> Result<(), DaemonError>;
+}
+
+/// No-op fetcher for validation-only paths. Always errors — use when the
+/// fetcher is only needed for `validate_against_manifest` (which never
+/// downloads).
+pub struct NoFetch;
+
+impl HttpFetch for NoFetch {
+    fn fetch_to(&self, _url: &str, _dest: &Path) -> Result<(), DaemonError> {
+        Err(DaemonError::State(
+            "NoFetch: network fetch not available".into(),
+        ))
+    }
 }
 
 /// `reqwest`-backed HTTP downloader. Feature-gated so CI builds that don't
@@ -40,6 +55,13 @@ impl ReqwestFetcher {
         Self {
             client: reqwest::blocking::Client::new(),
         }
+    }
+}
+
+#[cfg(feature = "network")]
+impl Default for ReqwestFetcher {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -82,12 +104,16 @@ impl ModelFetcher {
         self.root.join(id)
     }
 
+    /// Flat model file path: `<root>/<id>.onnx` (FP32) or
+    /// `<root>/<id>_int8.onnx` (INT8). The manifest's `source_url` declares
+    /// flat paths (e.g. `file:///var/lib/namtor/models/yunet_2023mar.onnx`),
+    /// and the deployed files are flat. Per-model metadata (licence records,
+    /// sha256 sidecars) lives in the `<root>/<id>/` subdirectory.
     fn quant_file(&self, id: &str, quant: Quant) -> PathBuf {
-        let name = match quant {
-            Quant::Fp32 => "fp32.onnx",
-            Quant::Int8 => "int8.onnx",
-        };
-        self.model_dir(id).join(name)
+        match quant {
+            Quant::Fp32 => self.root.join(format!("{id}.onnx")),
+            Quant::Int8 => self.root.join(format!("{id}_int8.onnx")),
+        }
     }
 
     fn sha256_file(&self, id: &str, quant: Quant) -> PathBuf {
@@ -209,7 +235,7 @@ impl ModelFetcher {
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -244,6 +270,16 @@ pub enum TargetArch {
     Both,
 }
 
+impl TargetArch {
+    pub fn matches_current(&self) -> bool {
+        match self {
+            TargetArch::Both => true,
+            TargetArch::X86_64 => std::env::consts::ARCH == "x86_64",
+            TargetArch::Aarch64 => std::env::consts::ARCH == "aarch64",
+        }
+    }
+}
+
 /// One I/O tensor of a model's interface contract. Lets a consumer verify a
 /// model matches the expected interface without loading it (model-substitution
 /// detection, INT8/FP32 dispatch — task 19).
@@ -261,6 +297,32 @@ pub struct TensorIo {
 pub struct TensorContract {
     pub input: TensorIo,
     pub output: TensorIo,
+}
+
+impl TensorContract {
+    pub fn validate(&self) -> Result<(), DaemonError> {
+        if self.input.shape.is_empty() {
+            return Err(DaemonError::State(
+                "tensor contract input shape is empty".into(),
+            ));
+        }
+        if self.output.shape.is_empty() {
+            return Err(DaemonError::State(
+                "tensor contract output shape is empty".into(),
+            ));
+        }
+        validate_dtype(&self.input.dtype)?;
+        validate_dtype(&self.output.dtype)?;
+        Ok(())
+    }
+}
+
+fn validate_dtype(dtype: &str) -> Result<(), DaemonError> {
+    match dtype {
+        "f16" | "f32" | "f64" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
+        | "bool" => Ok(()),
+        _ => Err(DaemonError::State(format!("unknown tensor dtype: {dtype}"))),
+    }
 }
 
 /// A quantisation variant of a model: the file actually deployed on disk.
@@ -357,19 +419,27 @@ fn hex_nibble(b: u8) -> Result<u8, DaemonError> {
     }
 }
 
+fn is_zero_hash_hex(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c == '0')
+}
+
 impl ModelFetcher {
     /// Validate a deployed model against the manifest before the worker loads
-    /// it. Three gates, all fail-closed:
+    /// it. Five gates, all fail-closed:
     ///
-    /// 1. **Tampered** — the on-disk file's sha256 must equal the manifest
-    ///    variant's sha256.
-    /// 2. **Unaccepted** — the upstream licence must be accepted (on-disk
-    ///    `licence.accepted` record whose sha256 matches the manifest).
-    /// 3. **Restricted** — `redistribution_policy = "restricted"` models
-    ///    require `gate.allow_restricted = true`.
+    /// 1. **Zero hash** — the manifest variant's sha256 must not be all-zeros.
+    /// 2. **Tampered** — the on-disk file's sha256 must equal the manifest
+    ///    variant's sha256 (and the `ModelSpec.sha256` must match the manifest).
+    /// 3. **Tensor contract** — the manifest's declared tensor contract must
+    ///    be structurally valid (non-empty shapes, known dtype).
+    /// 4. **Architecture** — the manifest's `target_arch` must match the
+    ///    current CPU architecture.
+    /// 5. **Admission + Restricted** — typed by `redistribution_policy`:
+    ///    redistributable models admit without a record; restricted models
+    ///    require an on-disk `licence.accepted` record AND `gate.allow_restricted`.
     ///
     /// If all gates pass, returns the validated on-disk path. A valid offline
-    /// cache (every model present + accepted) proceeds with no network access.
+    /// cache (every model present + admitted) proceeds with no network access.
     pub fn validate_against_manifest(
         &self,
         gate: &ManifestGate,
@@ -386,7 +456,36 @@ impl ModelFetcher {
             ))
         })?;
 
+        if is_zero_hash_hex(&variant.sha256) {
+            return Err(DaemonError::State(format!(
+                "zero hash in manifest for model {} ({:?}) — real hash required",
+                spec.id, spec.quant
+            )));
+        }
+
         let expected = parse_hex32(&variant.sha256)?;
+
+        if spec.sha256 != expected {
+            return Err(DaemonError::State(format!(
+                "spec hash mismatch for model {} ({:?}): spec has {}, manifest has {}",
+                spec.id,
+                spec.quant,
+                hex(&spec.sha256),
+                variant.sha256
+            )));
+        }
+
+        entry.tensor_contract.validate()?;
+
+        if !entry.target_arch.matches_current() {
+            return Err(DaemonError::State(format!(
+                "arch mismatch for model {}: manifest requires {:?}, host is {}",
+                spec.id,
+                entry.target_arch,
+                std::env::consts::ARCH
+            )));
+        }
+
         let path = self.quant_file(&spec.id, spec.quant);
         if !path.exists() {
             return Err(DaemonError::State(format!(
@@ -406,9 +505,10 @@ impl ModelFetcher {
         }
 
         let licence_sha = parse_hex32(&entry.licence_sha256)?;
-        ensure_licence_accepted(
+        ensure_model_admitted(
             &self.root,
             spec,
+            entry.redistribution_policy,
             &entry.licence_url,
             licence_sha,
             gate.accepted_by,
@@ -425,6 +525,33 @@ impl ModelFetcher {
 
         Ok(path)
     }
+}
+
+/// Build `ModelSpec` entries from the manifest for a set of required model
+/// IDs, resolving the FP32 variant's real sha256 from the manifest. Returns
+/// specs in the same order as `required_ids`. Errors if any required model is
+/// missing from the manifest or has no FP32 variant.
+pub fn resolve_required_specs(
+    manifest: &ModelManifest,
+    required_ids: &[&str],
+) -> Result<Vec<ModelSpec>, DaemonError> {
+    required_ids
+        .iter()
+        .map(|id| {
+            let entry = manifest
+                .find(id)
+                .ok_or_else(|| DaemonError::State(format!("model {id} not present in manifest")))?;
+            let variant = entry.variant(Quant::Fp32).ok_or_else(|| {
+                DaemonError::State(format!("no Fp32 variant for model {id} in manifest"))
+            })?;
+            let sha256 = parse_hex32(&variant.sha256)?;
+            Ok(ModelSpec {
+                id: id.to_string(),
+                quant: Quant::Fp32,
+                sha256,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -477,7 +604,7 @@ mod tests {
         };
         let path = fetcher.fetch(&spec, "file://local").unwrap();
         assert!(path.exists());
-        assert_eq!(path, root.join("test-model/fp32.onnx"));
+        assert_eq!(path, root.join("test-model.onnx"));
         assert!(root.join("test-model/fp32.sha256").exists());
     }
 
@@ -528,9 +655,8 @@ mod tests {
         };
         let err = fetcher.fetch(&spec, "file://local").unwrap_err();
         assert!(matches!(err, DaemonError::State(_)));
-        // .tmp file should be cleaned up.
-        assert!(!root.join("tampered/fp32.onnx.tmp").exists());
-        assert!(!root.join("tampered/fp32.onnx").exists());
+        assert!(!root.join("tampered.onnx.tmp").exists());
+        assert!(!root.join("tampered.onnx").exists());
     }
 
     /// `HttpFetch` impl that writes a partial file then fails — simulates a
@@ -566,11 +692,11 @@ mod tests {
         // No partial .tmp must survive a failed fetch — a truncated file
         // masquerading as a valid model is a production-safety violation.
         assert!(
-            !root.join("netdrop/fp32.onnx.tmp").exists(),
+            !root.join("netdrop.onnx.tmp").exists(),
             ".tmp left behind after fetch failure"
         );
         assert!(
-            !root.join("netdrop/fp32.onnx").exists(),
+            !root.join("netdrop.onnx").exists(),
             ".onnx created despite fetch failure"
         );
     }
@@ -586,9 +712,8 @@ mod tests {
         let fetcher = ModelFetcher::new(&root, Box::new(FileCopyFetcher { source: blob }));
 
         // Pre-place a stale file with wrong content.
-        let dir = root.join("m");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("fp32.onnx"), b"stale wrong content").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("m.onnx"), b"stale wrong content").unwrap();
 
         let spec = ModelSpec {
             id: "m".into(),
@@ -604,9 +729,8 @@ mod tests {
     fn ensure_int8_returns_existing() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("models");
-        let dir = root.join("m");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("int8.onnx"), b"int8 weights").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("m_int8.onnx"), b"int8 weights").unwrap();
 
         let fetcher = ModelFetcher::new(
             &root,
@@ -620,16 +744,15 @@ mod tests {
             sha256: [0; 32],
         };
         let path = fetcher.ensure_int8(&spec).unwrap();
-        assert_eq!(path, dir.join("int8.onnx"));
+        assert_eq!(path, root.join("m_int8.onnx"));
     }
 
     #[test]
     fn ensure_int8_errors_without_python() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("models");
-        let dir = root.join("m");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("fp32.onnx"), b"fp32 weights").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("m.onnx"), b"fp32 weights").unwrap();
 
         std::env::set_var("NAMTOR_PYTHON", "/nonexistent/python3");
         let fetcher = ModelFetcher::new(
@@ -652,7 +775,7 @@ mod tests {
     fn ensure_int8_errors_without_fp32_source() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("models");
-        std::fs::create_dir_all(root.join("m")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
 
         let fetcher = ModelFetcher::new(
             &root,
@@ -673,15 +796,14 @@ mod tests {
 
     use crate::licence::LicenceRecord;
 
-    /// Write a model file at the fetcher's on-disk layout path.
+    /// Write a model file at the fetcher's flat on-disk layout path.
     fn write_model_file(root: &Path, id: &str, quant: Quant, data: &[u8]) {
-        let dir = root.join(id);
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(root).unwrap();
         let name = match quant {
-            Quant::Fp32 => "fp32.onnx",
-            Quant::Int8 => "int8.onnx",
+            Quant::Fp32 => format!("{id}.onnx"),
+            Quant::Int8 => format!("{id}_int8.onnx"),
         };
-        std::fs::write(dir.join(name), data).unwrap();
+        std::fs::write(root.join(name), data).unwrap();
     }
 
     /// Pre-place a valid licence.accepted record (no env var needed).
@@ -735,7 +857,7 @@ mod tests {
     }
 
     const LICENCE_SHA_HEX: &str =
-        "91f6f2043c607e9db392ca6b4fafd56825a2d5ca741cb3a56d8f817d8d9a9753";
+        "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30";
 
     fn licence_sha_bytes() -> [u8; 32] {
         parse_hex32(LICENCE_SHA_HEX).unwrap()
@@ -749,12 +871,7 @@ mod tests {
         let sha = sha256_bytes(weights);
         let sha_hex = hex(&sha);
         write_model_file(&root, "m", Quant::Fp32, weights);
-        write_licence_record(
-            &root,
-            "m",
-            "https://example.com/licence.txt",
-            licence_sha_bytes(),
-        );
+        // Redistributable model — no licence.accepted record needed.
 
         let fetcher = ModelFetcher::new(
             &root,
@@ -780,7 +897,44 @@ mod tests {
         };
         let path = fetcher.validate_against_manifest(&gate, &spec).unwrap();
         assert!(path.exists());
-        assert_eq!(path, root.join("m/fp32.onnx"));
+        assert_eq!(path, root.join("m.onnx"));
+    }
+
+    #[test]
+    fn manifest_validate_redistributable_no_record_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"redistributable weights no record";
+        let sha = sha256_bytes(weights);
+        let sha_hex = hex(&sha);
+        write_model_file(&root, "m", Quant::Fp32, weights);
+        std::env::remove_var("NAMTOR_ACCEPT_LICENCE");
+        // No licence.accepted record, env var unset — redistributable admits.
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        let manifest = manifest_with(
+            "m",
+            &sha_hex,
+            RedistributionPolicy::Redistributable,
+            LICENCE_SHA_HEX,
+        );
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: sha,
+        };
+        let path = fetcher.validate_against_manifest(&gate, &spec).unwrap();
+        assert!(path.exists());
     }
 
     #[test]
@@ -789,12 +943,6 @@ mod tests {
         let root = tmp.path().join("models");
         let weights = b"actual on-disk weights";
         write_model_file(&root, "m", Quant::Fp32, weights);
-        write_licence_record(
-            &root,
-            "m",
-            "https://example.com/licence.txt",
-            licence_sha_bytes(),
-        );
 
         let fetcher = ModelFetcher::new(
             &root,
@@ -827,14 +975,14 @@ mod tests {
     }
 
     #[test]
-    fn manifest_validate_blocks_unaccepted_licence() {
+    fn manifest_validate_blocks_unaccepted_restricted_licence() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("models");
-        let weights = b"weights whose sha matches the manifest";
+        let weights = b"restricted weights no record";
         let sha = sha256_bytes(weights);
         let sha_hex = hex(&sha);
         write_model_file(&root, "m", Quant::Fp32, weights);
-        // No licence.accepted record placed.
+        // Restricted model, no licence.accepted record, env var unset.
         std::env::remove_var("NAMTOR_ACCEPT_LICENCE");
 
         let fetcher = ModelFetcher::new(
@@ -846,13 +994,13 @@ mod tests {
         let manifest = manifest_with(
             "m",
             &sha_hex,
-            RedistributionPolicy::Redistributable,
+            RedistributionPolicy::Restricted,
             LICENCE_SHA_HEX,
         );
         let gate = ManifestGate {
             manifest: &manifest,
             accepted_by: "test",
-            allow_restricted: false,
+            allow_restricted: true,
         };
         let spec = ModelSpec {
             id: "m".into(),
@@ -862,6 +1010,45 @@ mod tests {
         let err = fetcher.validate_against_manifest(&gate, &spec).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("licence not accepted"), "msg = {msg}");
+    }
+
+    #[test]
+    fn manifest_validate_restricted_mismatched_record_denied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"restricted weights mismatched record";
+        let sha = sha256_bytes(weights);
+        let sha_hex = hex(&sha);
+        write_model_file(&root, "m", Quant::Fp32, weights);
+        // Pre-place a record with a licence sha256 that does NOT match the
+        // manifest's licence_sha256.
+        write_licence_record(&root, "m", "https://example.com/licence.txt", [0xee; 32]);
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        let manifest = manifest_with(
+            "m",
+            &sha_hex,
+            RedistributionPolicy::Restricted,
+            LICENCE_SHA_HEX,
+        );
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: true,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: sha,
+        };
+        let err = fetcher.validate_against_manifest(&gate, &spec).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("sha256 mismatch"), "msg = {msg}");
     }
 
     #[test]
@@ -985,12 +1172,6 @@ mod tests {
         let sha = sha256_bytes(weights);
         let sha_hex = hex(&sha);
         write_model_file(&root, "m", Quant::Fp32, weights);
-        write_licence_record(
-            &root,
-            "m",
-            "https://example.com/licence.txt",
-            licence_sha_bytes(),
-        );
 
         let fetcher = ModelFetcher::new(
             &root,
@@ -1042,6 +1223,687 @@ mod tests {
             );
             assert!(!entry.licence_sha256.is_empty());
             assert!(!entry.variants.is_empty());
+        }
+    }
+
+    #[test]
+    fn manifest_licences_match_upstream_not_bsd3() {
+        let path = Path::new("packaging/model-manifest.toml");
+        if !path.exists() {
+            eprintln!("skipping — manifest not found at repo root (run from repo root)");
+            return;
+        }
+        let manifest = ModelManifest::parse(path).unwrap();
+
+        let yunet = manifest.find("yunet_2023mar").unwrap();
+        assert!(
+            !yunet.licence_url.contains("BSD-3"),
+            "YuNet licence_url must not reference BSD-3: {}",
+            yunet.licence_url
+        );
+        assert_eq!(
+            yunet.licence_sha256,
+            "c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958",
+            "YuNet licence_sha256 must match the MIT licence text hash"
+        );
+
+        let sface = manifest.find("sface_2021dec").unwrap();
+        assert!(
+            !sface.licence_url.contains("BSD-3"),
+            "SFace licence_url must not reference BSD-3: {}",
+            sface.licence_url
+        );
+        assert_eq!(
+            sface.licence_sha256,
+            "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+            "SFace licence_sha256 must match the Apache-2.0 licence text hash"
+        );
+
+        let pad = manifest.find("minifasnet_pad").unwrap();
+        assert_eq!(
+            pad.licence_sha256, "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+            "MiniFASNet PAD licence_sha256 must match the Apache-2.0 licence text hash"
+        );
+
+        for entry in &manifest.models {
+            assert_eq!(
+                entry.redistribution_policy,
+                RedistributionPolicy::Redistributable,
+                "model {} must be redistributable",
+                entry.id
+            );
+        }
+    }
+
+    fn manifest_with_arch(
+        id: &str,
+        sha_hex: &str,
+        policy: RedistributionPolicy,
+        licence_sha_hex: &str,
+        arch: TargetArch,
+    ) -> ModelManifest {
+        ModelManifest {
+            manifest_version: 1,
+            models: vec![ModelEntry {
+                id: id.into(),
+                licence_url: "https://example.com/licence.txt".into(),
+                licence_sha256: licence_sha_hex.into(),
+                redistribution_policy: policy,
+                target_arch: arch,
+                tensor_contract: TensorContract {
+                    input: TensorIo {
+                        shape: vec![1, 112, 112, 3],
+                        dtype: "f32".into(),
+                        normalisation: Some("none".into()),
+                    },
+                    output: TensorIo {
+                        shape: vec![1, 128],
+                        dtype: "f32".into(),
+                        normalisation: None,
+                    },
+                },
+                variants: vec![ModelVariant {
+                    quant: Quant::Fp32,
+                    source_url: "file://local".into(),
+                    sha256: sha_hex.into(),
+                }],
+            }],
+        }
+    }
+
+    fn manifest_with_bad_tensor(
+        id: &str,
+        sha_hex: &str,
+        licence_sha_hex: &str,
+        contract: TensorContract,
+    ) -> ModelManifest {
+        ModelManifest {
+            manifest_version: 1,
+            models: vec![ModelEntry {
+                id: id.into(),
+                licence_url: "https://example.com/licence.txt".into(),
+                licence_sha256: licence_sha_hex.into(),
+                redistribution_policy: RedistributionPolicy::Redistributable,
+                target_arch: TargetArch::Both,
+                tensor_contract: contract,
+                variants: vec![ModelVariant {
+                    quant: Quant::Fp32,
+                    source_url: "file://local".into(),
+                    sha256: sha_hex.into(),
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn tensor_contract_validate_rejects_empty_input_shape() {
+        let contract = TensorContract {
+            input: TensorIo {
+                shape: vec![],
+                dtype: "f32".into(),
+                normalisation: None,
+            },
+            output: TensorIo {
+                shape: vec![1, 128],
+                dtype: "f32".into(),
+                normalisation: None,
+            },
+        };
+        let err = contract.validate().unwrap_err();
+        assert!(err.to_string().contains("input shape is empty"));
+    }
+
+    #[test]
+    fn tensor_contract_validate_rejects_empty_output_shape() {
+        let contract = TensorContract {
+            input: TensorIo {
+                shape: vec![1, 112],
+                dtype: "f32".into(),
+                normalisation: None,
+            },
+            output: TensorIo {
+                shape: vec![],
+                dtype: "f32".into(),
+                normalisation: None,
+            },
+        };
+        let err = contract.validate().unwrap_err();
+        assert!(err.to_string().contains("output shape is empty"));
+    }
+
+    #[test]
+    fn tensor_contract_validate_rejects_unknown_dtype() {
+        let contract = TensorContract {
+            input: TensorIo {
+                shape: vec![1, 112],
+                dtype: "bogus".into(),
+                normalisation: None,
+            },
+            output: TensorIo {
+                shape: vec![1, 128],
+                dtype: "f32".into(),
+                normalisation: None,
+            },
+        };
+        let err = contract.validate().unwrap_err();
+        assert!(err.to_string().contains("unknown tensor dtype"));
+    }
+
+    #[test]
+    fn tensor_contract_validate_accepts_valid() {
+        let contract = TensorContract {
+            input: TensorIo {
+                shape: vec![1, 112, 112, 3],
+                dtype: "f32".into(),
+                normalisation: Some("none".into()),
+            },
+            output: TensorIo {
+                shape: vec![1, 128],
+                dtype: "f32".into(),
+                normalisation: None,
+            },
+        };
+        assert!(contract.validate().is_ok());
+    }
+
+    #[test]
+    fn target_arch_both_always_matches() {
+        assert!(TargetArch::Both.matches_current());
+    }
+
+    #[test]
+    fn target_arch_current_matches_self() {
+        let current = match std::env::consts::ARCH {
+            "x86_64" => TargetArch::X86_64,
+            "aarch64" => TargetArch::Aarch64,
+            _ => TargetArch::Both,
+        };
+        assert!(current.matches_current());
+    }
+
+    #[test]
+    fn target_arch_rejects_mismatch() {
+        let mismatched = match std::env::consts::ARCH {
+            "x86_64" => TargetArch::Aarch64,
+            _ => TargetArch::X86_64,
+        };
+        assert!(!mismatched.matches_current());
+    }
+
+    #[test]
+    fn manifest_validate_blocks_zero_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"weights for zero hash test";
+        write_model_file(&root, "m", Quant::Fp32, weights);
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        let zero_hex = "0".repeat(64);
+        let manifest = manifest_with(
+            "m",
+            &zero_hex,
+            RedistributionPolicy::Redistributable,
+            LICENCE_SHA_HEX,
+        );
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: [0; 32],
+        };
+        let err = fetcher.validate_against_manifest(&gate, &spec).unwrap_err();
+        assert!(err.to_string().contains("zero hash"), "msg = {err}");
+    }
+
+    #[test]
+    fn manifest_validate_blocks_spec_hash_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"weights for spec mismatch test";
+        let sha = sha256_bytes(weights);
+        let sha_hex = hex(&sha);
+        write_model_file(&root, "m", Quant::Fp32, weights);
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        let manifest = manifest_with(
+            "m",
+            &sha_hex,
+            RedistributionPolicy::Redistributable,
+            LICENCE_SHA_HEX,
+        );
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: [0xff; 32],
+        };
+        let err = fetcher.validate_against_manifest(&gate, &spec).unwrap_err();
+        assert!(
+            err.to_string().contains("spec hash mismatch"),
+            "msg = {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_validate_blocks_arch_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"weights for arch mismatch test";
+        let sha = sha256_bytes(weights);
+        let sha_hex = hex(&sha);
+        write_model_file(&root, "m", Quant::Fp32, weights);
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        let wrong_arch = match std::env::consts::ARCH {
+            "x86_64" => TargetArch::Aarch64,
+            _ => TargetArch::X86_64,
+        };
+        let manifest = manifest_with_arch(
+            "m",
+            &sha_hex,
+            RedistributionPolicy::Redistributable,
+            LICENCE_SHA_HEX,
+            wrong_arch,
+        );
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: sha,
+        };
+        let err = fetcher.validate_against_manifest(&gate, &spec).unwrap_err();
+        assert!(err.to_string().contains("arch mismatch"), "msg = {err}");
+    }
+
+    #[test]
+    fn manifest_validate_blocks_invalid_tensor_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let weights = b"weights for bad tensor test";
+        let sha = sha256_bytes(weights);
+        let sha_hex = hex(&sha);
+        write_model_file(&root, "m", Quant::Fp32, weights);
+
+        let fetcher = ModelFetcher::new(
+            &root,
+            Box::new(FileCopyFetcher {
+                source: tmp.path().join("nonexistent"),
+            }),
+        );
+        let bad_contract = TensorContract {
+            input: TensorIo {
+                shape: vec![],
+                dtype: "f32".into(),
+                normalisation: None,
+            },
+            output: TensorIo {
+                shape: vec![1, 128],
+                dtype: "f32".into(),
+                normalisation: None,
+            },
+        };
+        let manifest = manifest_with_bad_tensor("m", &sha_hex, LICENCE_SHA_HEX, bad_contract);
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let spec = ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: sha,
+        };
+        let err = fetcher.validate_against_manifest(&gate, &spec).unwrap_err();
+        assert!(
+            err.to_string().contains("input shape is empty"),
+            "msg = {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_required_specs_builds_from_manifest() {
+        let path = Path::new("packaging/model-manifest.toml");
+        if !path.exists() {
+            eprintln!("skipping — manifest not found at repo root");
+            return;
+        }
+        let manifest = ModelManifest::parse(path).unwrap();
+        let specs = resolve_required_specs(
+            &manifest,
+            &["yunet_2023mar", "sface_2021dec", "minifasnet_pad"],
+        )
+        .unwrap();
+        assert_eq!(specs.len(), 3);
+        for spec in &specs {
+            assert_ne!(spec.sha256, [0u8; 32], "zero hash for {}", spec.id);
+            assert_eq!(spec.quant, Quant::Fp32);
+        }
+    }
+
+    #[test]
+    fn resolve_required_specs_errors_on_missing_model() {
+        let manifest = ModelManifest {
+            manifest_version: 1,
+            models: vec![],
+        };
+        let err = resolve_required_specs(&manifest, &["ghost"]).unwrap_err();
+        assert!(err.to_string().contains("not present in manifest"));
+    }
+
+    #[test]
+    fn no_fetch_errors_on_fetch_call() {
+        let fetcher = ModelFetcher::new(Path::new("/tmp"), Box::new(NoFetch));
+        let spec = ModelSpec {
+            id: "x".into(),
+            quant: Quant::Fp32,
+            sha256: [0xaa; 32],
+        };
+        let err = fetcher.fetch(&spec, "file://local").unwrap_err();
+        assert!(err.to_string().contains("NoFetch"));
+    }
+
+    #[test]
+    fn is_zero_hash_hex_detects_all_zeros() {
+        assert!(is_zero_hash_hex(&"0".repeat(64)));
+        assert!(!is_zero_hash_hex(&"1".repeat(64)));
+        assert!(!is_zero_hash_hex("ab"));
+    }
+
+    fn manifest_with_three(sha_yunet: &str, sha_sface: &str, sha_pad: &str) -> ModelManifest {
+        let contract = TensorContract {
+            input: TensorIo {
+                shape: vec![1, 112, 112, 3],
+                dtype: "f32".into(),
+                normalisation: Some("none".into()),
+            },
+            output: TensorIo {
+                shape: vec![1, 128],
+                dtype: "f32".into(),
+                normalisation: None,
+            },
+        };
+        ModelManifest {
+            manifest_version: 1,
+            models: vec![
+                ModelEntry {
+                    id: "yunet_2023mar".into(),
+                    licence_url: "https://example.com/licence.txt".into(),
+                    licence_sha256: LICENCE_SHA_HEX.into(),
+                    redistribution_policy: RedistributionPolicy::Redistributable,
+                    target_arch: TargetArch::Both,
+                    tensor_contract: contract.clone(),
+                    variants: vec![ModelVariant {
+                        quant: Quant::Fp32,
+                        source_url: "file://local".into(),
+                        sha256: sha_yunet.into(),
+                    }],
+                },
+                ModelEntry {
+                    id: "sface_2021dec".into(),
+                    licence_url: "https://example.com/licence.txt".into(),
+                    licence_sha256: LICENCE_SHA_HEX.into(),
+                    redistribution_policy: RedistributionPolicy::Redistributable,
+                    target_arch: TargetArch::Both,
+                    tensor_contract: contract.clone(),
+                    variants: vec![ModelVariant {
+                        quant: Quant::Fp32,
+                        source_url: "file://local".into(),
+                        sha256: sha_sface.into(),
+                    }],
+                },
+                ModelEntry {
+                    id: "minifasnet_pad".into(),
+                    licence_url: "https://example.com/licence.txt".into(),
+                    licence_sha256: LICENCE_SHA_HEX.into(),
+                    redistribution_policy: RedistributionPolicy::Redistributable,
+                    target_arch: TargetArch::Both,
+                    tensor_contract: contract,
+                    variants: vec![ModelVariant {
+                        quant: Quant::Fp32,
+                        source_url: "file://local".into(),
+                        sha256: sha_pad.into(),
+                    }],
+                },
+            ],
+        }
+    }
+
+    fn validate_all_three(
+        root: &Path,
+        manifest: &ModelManifest,
+    ) -> Result<Vec<PathBuf>, DaemonError> {
+        let fetcher = ModelFetcher::new(root, Box::new(NoFetch));
+        let gate = ManifestGate {
+            manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let specs = resolve_required_specs(
+            manifest,
+            &["yunet_2023mar", "sface_2021dec", "minifasnet_pad"],
+        )?;
+        let mut paths = Vec::new();
+        for spec in &specs {
+            paths.push(fetcher.validate_against_manifest(&gate, spec)?);
+        }
+        Ok(paths)
+    }
+
+    #[test]
+    fn startup_validation_all_three_models_pass() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let w1 = b"yunet weights";
+        let w2 = b"sface weights";
+        let w3 = b"pad weights";
+        let s1 = sha256_bytes(w1);
+        let s2 = sha256_bytes(w2);
+        let s3 = sha256_bytes(w3);
+        write_model_file(&root, "yunet_2023mar", Quant::Fp32, w1);
+        write_model_file(&root, "sface_2021dec", Quant::Fp32, w2);
+        write_model_file(&root, "minifasnet_pad", Quant::Fp32, w3);
+        let manifest = manifest_with_three(&hex(&s1), &hex(&s2), &hex(&s3));
+        let paths = validate_all_three(&root, &manifest).unwrap();
+        assert_eq!(paths.len(), 3);
+        for p in &paths {
+            assert!(p.exists());
+        }
+    }
+
+    #[test]
+    fn startup_validation_tamper_yunet_denies_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let w1 = b"yunet weights tampered";
+        let w2 = b"sface weights";
+        let w3 = b"pad weights";
+        let s1_real = sha256_bytes(b"yunet weights original");
+        let s2 = sha256_bytes(w2);
+        let s3 = sha256_bytes(w3);
+        write_model_file(&root, "yunet_2023mar", Quant::Fp32, w1);
+        write_model_file(&root, "sface_2021dec", Quant::Fp32, w2);
+        write_model_file(&root, "minifasnet_pad", Quant::Fp32, w3);
+        let manifest = manifest_with_three(&hex(&s1_real), &hex(&s2), &hex(&s3));
+        let err = validate_all_three(&root, &manifest).unwrap_err();
+        assert!(err.to_string().contains("tampered"), "msg = {err}");
+    }
+
+    #[test]
+    fn startup_validation_tamper_sface_denies_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let w1 = b"yunet weights";
+        let w2 = b"sface weights tampered";
+        let w3 = b"pad weights";
+        let s1 = sha256_bytes(w1);
+        let s2_real = sha256_bytes(b"sface weights original");
+        let s3 = sha256_bytes(w3);
+        write_model_file(&root, "yunet_2023mar", Quant::Fp32, w1);
+        write_model_file(&root, "sface_2021dec", Quant::Fp32, w2);
+        write_model_file(&root, "minifasnet_pad", Quant::Fp32, w3);
+        let manifest = manifest_with_three(&hex(&s1), &hex(&s2_real), &hex(&s3));
+        let err = validate_all_three(&root, &manifest).unwrap_err();
+        assert!(err.to_string().contains("tampered"), "msg = {err}");
+    }
+
+    #[test]
+    fn startup_validation_tamper_pad_denies_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let w1 = b"yunet weights";
+        let w2 = b"sface weights";
+        let w3 = b"pad weights tampered";
+        let s1 = sha256_bytes(w1);
+        let s2 = sha256_bytes(w2);
+        let s3_real = sha256_bytes(b"pad weights original");
+        write_model_file(&root, "yunet_2023mar", Quant::Fp32, w1);
+        write_model_file(&root, "sface_2021dec", Quant::Fp32, w2);
+        write_model_file(&root, "minifasnet_pad", Quant::Fp32, w3);
+        let manifest = manifest_with_three(&hex(&s1), &hex(&s2), &hex(&s3_real));
+        let err = validate_all_three(&root, &manifest).unwrap_err();
+        assert!(err.to_string().contains("tampered"), "msg = {err}");
+    }
+
+    #[test]
+    fn startup_validation_missing_model_denies_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let w1 = b"yunet weights";
+        let w2 = b"sface weights";
+        let s1 = sha256_bytes(w1);
+        let s2 = sha256_bytes(w2);
+        let s3 = sha256_bytes(b"pad weights");
+        write_model_file(&root, "yunet_2023mar", Quant::Fp32, w1);
+        write_model_file(&root, "sface_2021dec", Quant::Fp32, w2);
+        // minifasnet_pad NOT written
+        let manifest = manifest_with_three(&hex(&s1), &hex(&s2), &hex(&s3));
+        let err = validate_all_three(&root, &manifest).unwrap_err();
+        assert!(
+            err.to_string().contains("model file missing"),
+            "msg = {err}"
+        );
+    }
+
+    #[test]
+    fn startup_validation_zero_hash_in_manifest_denies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let w1 = b"yunet weights";
+        let w2 = b"sface weights";
+        let w3 = b"pad weights";
+        let s2 = sha256_bytes(w2);
+        let s3 = sha256_bytes(w3);
+        write_model_file(&root, "yunet_2023mar", Quant::Fp32, w1);
+        write_model_file(&root, "sface_2021dec", Quant::Fp32, w2);
+        write_model_file(&root, "minifasnet_pad", Quant::Fp32, w3);
+        let zero = "0".repeat(64);
+        let manifest = manifest_with_three(&zero, &hex(&s2), &hex(&s3));
+        let err = validate_all_three(&root, &manifest).unwrap_err();
+        assert!(err.to_string().contains("zero hash"), "msg = {err}");
+    }
+
+    #[test]
+    fn startup_validation_logs_contain_no_biometric_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        let w1 = b"yunet weights";
+        let w2 = b"sface weights";
+        let w3 = b"pad weights";
+        let s1 = sha256_bytes(w1);
+        let s2 = sha256_bytes(w2);
+        let s3 = sha256_bytes(w3);
+        write_model_file(&root, "yunet_2023mar", Quant::Fp32, w1);
+        write_model_file(&root, "sface_2021dec", Quant::Fp32, w2);
+        write_model_file(&root, "minifasnet_pad", Quant::Fp32, w3);
+        let manifest = manifest_with_three(&hex(&s1), &hex(&s2), &hex(&s3));
+
+        let fetcher = ModelFetcher::new(&root, Box::new(NoFetch));
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        let specs = resolve_required_specs(
+            &manifest,
+            &["yunet_2023mar", "sface_2021dec", "minifasnet_pad"],
+        )
+        .unwrap();
+
+        for spec in &specs {
+            let path = fetcher.validate_against_manifest(&gate, spec).unwrap();
+            let log_msg = format!(
+                "model_id={} sha256={} path={}",
+                spec.id,
+                hex(&spec.sha256),
+                path.display()
+            );
+            let lower = log_msg.to_lowercase();
+            for marker in &["frame", "embedding", "template", "pixel", "score", "vec="] {
+                assert!(
+                    !lower.contains(marker),
+                    "biometric marker '{marker}' in startup log: {log_msg}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn startup_validation_packaging_manifest_all_three_valid() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let manifest_path = repo_root.join("packaging/model-manifest.toml");
+        let models_dir = repo_root.join("var/lib/namtor/models");
+        if !manifest_path.exists() || !models_dir.exists() {
+            eprintln!("skipping — manifest or models not found");
+            return;
+        }
+        let manifest = ModelManifest::parse(&manifest_path).unwrap();
+        let specs = resolve_required_specs(
+            &manifest,
+            &["yunet_2023mar", "sface_2021dec", "minifasnet_pad"],
+        )
+        .unwrap();
+        assert_eq!(specs.len(), 3);
+        for spec in &specs {
+            assert_ne!(spec.sha256, [0u8; 32], "zero hash for {}", spec.id);
+        }
+        let fetcher = ModelFetcher::new(&models_dir, Box::new(NoFetch));
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: "test",
+            allow_restricted: false,
+        };
+        for spec in &specs {
+            let path = fetcher
+                .validate_against_manifest(&gate, spec)
+                .unwrap_or_else(|e| panic!("validation failed for {}: {e}", spec.id));
+            assert!(path.exists(), "validated path missing: {}", path.display());
         }
     }
 

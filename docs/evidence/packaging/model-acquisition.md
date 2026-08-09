@@ -17,8 +17,8 @@ acquisition production-safe.
 
 | Model id | Purpose | Upstream | Licence | Size | SHA-256 (fp32) |
 |---|---|---|---|---|---|
-| `yunet_2023mar` | Face detection (5-pt landmarks, NMS) | OpenCV Zoo | BSD-3-Clause | 232 KB | `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4` |
-| `sface_2021dec` | Face embedding (128-d, L2-normalised) | OpenCV Zoo | BSD-3-Clause | 37 MB | `0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79` |
+| `yunet_2023mar` | Face detection (5-pt landmarks, NMS) | OpenCV Zoo | MIT | 232 KB | `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4` |
+| `sface_2021dec` | Face embedding (128-d, L2-normalised) | OpenCV Zoo | Apache-2.0 | 37 MB | `0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79` |
 | `minifasnet_pad` | Strobe-differential liveness (PAD) | Self-trained on physics-based synthetic differentials | Apache-2.0 (code ref: Silent-Face) | 49 KB | `3f86c8e4bb1138098ed2f8dc1682c6e1e1d6c5fffcf65dd6955c0cd60579a155` |
 
 Source of truth: [`packaging/model-manifest.toml`](../../../packaging/model-manifest.toml).
@@ -143,9 +143,9 @@ $ cargo test -p namtor-daemon --lib -- --test-threads=1
 
 - **Live network fetch** against the real OpenCV Zoo URLs (GitHub) was not
   performed in this session — it requires operator decision to accept the
-  upstream BSD-3 licences (`NAMTOR_ACCEPT_LICENCE=1`) and network egress. The
-  fetch path is exercised by `FileCopyFetcher` (local file) and `FailingFetcher`
-  (error path) in unit tests.
+  upstream MIT/Apache-2.0 licences (`NAMTOR_ACCEPT_LICENCE=1`) and network
+  egress. The fetch path is exercised by `FileCopyFetcher` (local file) and
+  `FailingFetcher` (error path) in unit tests.
 - **Signature verification** of `model-manifest.toml` itself (GPG/cosign) is
   task 6 — this task defines the manifest format and daemon-side sha256 +
   licence + redistribution validation. The fields required for signing are
