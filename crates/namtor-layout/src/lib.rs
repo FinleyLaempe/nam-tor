@@ -35,5 +35,7 @@
 mod install_layout;
 
 pub use install_layout::{
-    InstallRoot, LayoutPaths, ManifestDests, PAM_DEFAULT_SOCKET, REFERENCE_CONSTANTS,
+    GeneratedState, InstallRoot, LayoutPaths, ManifestDests, Package, Retention, SplitManifest,
+    SplitManifestDir, SplitManifestFile, StatePolicy, ValidationError, PAM_DEFAULT_SOCKET,
+    REFERENCE_CONSTANTS,
 };

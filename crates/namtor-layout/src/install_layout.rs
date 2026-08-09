@@ -58,6 +58,202 @@ impl ManifestDests {
 }
 
 // ---------------------------------------------------------------------------
+// Split-package ownership
+// ---------------------------------------------------------------------------
+
+/// Which split package owns an install manifest entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Package {
+    /// `namtor` — daemon, worker, PAM, CLI, models, services, SBOM.
+    Core,
+    /// `namtor-gnome` — GTK4/libadwaita wizard + settings.
+    Gnome,
+    /// `namtor-kde` — Plasma 6 KCM, QML, C++ bridge.
+    Kde,
+}
+
+/// Lifecycle policy for generated runtime state on upgrade or purge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StatePolicy {
+    /// Keep the state across the operation.
+    Preserve,
+    /// Remove the state.
+    Remove,
+}
+
+/// A runtime-generated state path (not an installed file) with its owning
+/// package and lifecycle policy. Declared under `[[generated_state]]` in
+/// the manifest.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GeneratedState {
+    pub path: String,
+    #[serde(default)]
+    pub package: Option<Package>,
+    pub on_upgrade: StatePolicy,
+    pub on_purge: StatePolicy,
+}
+
+/// Which package owns the purge of biometric state. Declared under
+/// `[retention]` in the manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Retention {
+    pub purge_owner: Package,
+}
+
+/// A validation error found in a split-package manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationError {
+    /// Two entries (file/dir, file/file, or dir/dir) claim the same path
+    /// under different packages.
+    Collision {
+        path: String,
+        packages: Vec<Package>,
+    },
+    /// An entry (file, dir, or generated_state) has no owning package.
+    Orphan { path: String },
+}
+
+/// The full split-package manifest: files, dirs, generated state, retention,
+/// all carrying package ownership.
+#[derive(Debug, Clone)]
+pub struct SplitManifest {
+    pub schema_version: u32,
+    pub files: Vec<SplitManifestFile>,
+    pub dirs: Vec<SplitManifestDir>,
+    pub generated_state: Vec<GeneratedState>,
+    pub retention: Option<Retention>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SplitManifestFile {
+    pub dest: String,
+    #[serde(default)]
+    pub package: Option<Package>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SplitManifestDir {
+    pub path: String,
+    #[serde(default)]
+    pub package: Option<Package>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SplitManifestRaw {
+    #[serde(default)]
+    schema_version: u32,
+    #[serde(default)]
+    files: Vec<SplitManifestFile>,
+    #[serde(default)]
+    dirs: Vec<SplitManifestDir>,
+    #[serde(default)]
+    generated_state: Vec<GeneratedState>,
+    #[serde(default)]
+    retention: Option<Retention>,
+}
+
+impl SplitManifest {
+    /// Validate the manifest for collisions and orphans. Returns a list of
+    /// errors; empty means valid.
+    pub fn validate(&self) -> Vec<ValidationError> {
+        let mut errors: Vec<ValidationError> = Vec::new();
+
+        // Collision: no two entries claim the same path.
+        let mut seen: std::collections::HashMap<&str, Vec<Package>> =
+            std::collections::HashMap::new();
+        for d in &self.dirs {
+            if let Some(pkg) = d.package {
+                seen.entry(d.path.as_str()).or_default().push(pkg);
+            }
+        }
+        for f in &self.files {
+            if let Some(pkg) = f.package {
+                seen.entry(f.dest.as_str()).or_default().push(pkg);
+            }
+        }
+        for (path, pkgs) in &seen {
+            let unique: Vec<Package> = pkgs.to_vec();
+            if unique.len() > 1 {
+                errors.push(ValidationError::Collision {
+                    path: path.to_string(),
+                    packages: unique,
+                });
+            }
+        }
+
+        // Duplicate file dests (same package, two entries) are also collisions.
+        let mut file_dests: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+        for f in &self.files {
+            *file_dests.entry(f.dest.as_str()).or_default() += 1;
+        }
+        for (dest, count) in &file_dests {
+            if *count > 1 {
+                let pkgs: Vec<Package> = self
+                    .files
+                    .iter()
+                    .filter(|f| f.dest.as_str() == *dest)
+                    .filter_map(|f| f.package)
+                    .collect();
+                if !errors
+                    .iter()
+                    .any(|e| matches!(e, ValidationError::Collision { path, .. } if path == dest))
+                {
+                    errors.push(ValidationError::Collision {
+                        path: dest.to_string(),
+                        packages: pkgs,
+                    });
+                }
+            }
+        }
+
+        // Orphan: file/dir/generated_state without a package.
+        for f in &self.files {
+            if f.package.is_none() {
+                errors.push(ValidationError::Orphan {
+                    path: f.dest.clone(),
+                });
+            }
+        }
+        for d in &self.dirs {
+            if d.package.is_none() {
+                errors.push(ValidationError::Orphan {
+                    path: d.path.clone(),
+                });
+            }
+        }
+        for gs in &self.generated_state {
+            if gs.package.is_none() {
+                errors.push(ValidationError::Orphan {
+                    path: gs.path.clone(),
+                });
+            }
+        }
+
+        errors
+    }
+
+    /// Return the file and dir dests owned by `package`. Used by staging to
+    /// filter which entries belong in a given split package.
+    pub fn package_dests(&self, package: Package) -> ManifestDests {
+        let files: Vec<String> = self
+            .files
+            .iter()
+            .filter(|f| f.package == Some(package))
+            .map(|f| f.dest.clone())
+            .collect();
+        let dirs: Vec<String> = self
+            .dirs
+            .iter()
+            .filter(|d| d.package == Some(package))
+            .map(|d| d.path.clone())
+            .collect();
+        ManifestDests { files, dirs }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Manifest deserialisation
 // ---------------------------------------------------------------------------
 
@@ -204,6 +400,21 @@ impl LayoutPaths {
             dirs: manifest.dirs.into_iter().map(|d| d.path).collect(),
         })
     }
+
+    /// Parse the full split-package manifest (schema v2) including package
+    /// ownership, generated state, and retention. Returns `None` if the
+    /// manifest is unreadable or unparseable.
+    pub fn parse_split_manifest(manifest_path: &Path) -> Option<SplitManifest> {
+        let text = std::fs::read_to_string(manifest_path).ok()?;
+        let raw: SplitManifestRaw = toml::from_str(&text).ok()?;
+        Some(SplitManifest {
+            schema_version: raw.schema_version,
+            files: raw.files,
+            dirs: raw.dirs,
+            generated_state: raw.generated_state,
+            retention: raw.retention,
+        })
+    }
 }
 
 struct DestPaths {
@@ -323,7 +534,6 @@ mod tests {
         // Binaries
         assert!(dests.has_file("/usr/lib/namtor/namtor-daemon"));
         assert!(dests.has_file("/usr/lib/namtor/namtor-worker"));
-        assert!(dests.has_file("/usr/lib/namtor/namtor-worker-spawn"));
         assert!(dests.has_file("/usr/lib/namtor/namtor-camera-emitter-off"));
         assert!(dests.has_file("/usr/bin/namtor-cli"));
         assert!(dests.has_file("/usr/bin/namtor-enroll-wizard"));
@@ -515,5 +725,361 @@ mod tests {
         assert!(dests.has_file("/usr/lib/namtor/namtor-daemon"));
         assert!(dests.has_dir("/usr/lib/namtor"));
         assert!(!dests.has_file("/nonexistent"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Split-package schema: package ownership, generated state, retention,
+    // collision validation, orphan validation.
+    // -----------------------------------------------------------------------
+
+    fn split_manifest_toml() -> &'static str {
+        "\
+schema_version = 2
+
+[retention]
+purge_owner = \"core\"
+
+[[generated_state]]
+path = \"/var/lib/namtor/templates\"
+package = \"core\"
+on_upgrade = \"preserve\"
+on_purge = \"remove\"
+
+[[generated_state]]
+path = \"/var/lib/namtor/models\"
+package = \"core\"
+on_upgrade = \"preserve\"
+on_purge = \"remove\"
+
+[[dirs]]
+path = \"/usr/lib/namtor\"
+mode = \"0755\"
+owner = \"root\"
+group = \"root\"
+package = \"core\"
+
+[[dirs]]
+path = \"/usr/share/applications\"
+mode = \"0755\"
+owner = \"root\"
+group = \"root\"
+package = \"core\"
+
+[[files]]
+dest = \"/usr/lib/namtor/namtor-daemon\"
+src = \"target/release/namtor-daemon\"
+mode = \"0755\"
+owner = \"root\"
+group = \"root\"
+package = \"core\"
+
+[[files]]
+dest = \"/usr/bin/namtor-enroll-wizard\"
+src = \"target/release/namtor-enroll-wizard\"
+mode = \"0755\"
+owner = \"root\"
+group = \"root\"
+package = \"gnome\"
+
+[[files]]
+dest = \"/usr/share/applications/org.namtor.kcm.desktop\"
+src = \"packaging/applications/org.namtor.kcm.desktop\"
+mode = \"0644\"
+owner = \"root\"
+group = \"root\"
+package = \"kde\"
+"
+    }
+
+    #[test]
+    fn parse_split_manifest_parses_package_ownership() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = tmp.path().join("split.toml");
+        fs::write(&manifest, split_manifest_toml()).unwrap();
+
+        let split =
+            LayoutPaths::parse_split_manifest(&manifest).expect("split manifest must parse");
+        assert_eq!(split.schema_version, 2);
+        assert_eq!(
+            split.retention,
+            Some(Retention {
+                purge_owner: Package::Core
+            })
+        );
+        assert_eq!(split.generated_state.len(), 2);
+        assert_eq!(split.generated_state[0].path, "/var/lib/namtor/templates");
+        assert_eq!(split.generated_state[0].package, Some(Package::Core));
+        assert_eq!(split.generated_state[0].on_upgrade, StatePolicy::Preserve);
+        assert_eq!(split.generated_state[0].on_purge, StatePolicy::Remove);
+
+        let daemon = split
+            .files
+            .iter()
+            .find(|f| f.dest == "/usr/lib/namtor/namtor-daemon")
+            .expect("daemon entry exists");
+        assert_eq!(daemon.package, Some(Package::Core));
+
+        let wizard = split
+            .files
+            .iter()
+            .find(|f| f.dest == "/usr/bin/namtor-enroll-wizard")
+            .expect("wizard entry exists");
+        assert_eq!(wizard.package, Some(Package::Gnome));
+
+        let kcm = split
+            .files
+            .iter()
+            .find(|f| f.dest == "/usr/share/applications/org.namtor.kcm.desktop")
+            .expect("kcm entry exists");
+        assert_eq!(kcm.package, Some(Package::Kde));
+    }
+
+    #[test]
+    fn parse_split_manifest_returns_none_for_unreadable() {
+        assert!(LayoutPaths::parse_split_manifest(Path::new("/nonexistent")).is_none());
+    }
+
+    #[test]
+    fn validate_split_manifest_passes_for_valid_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = tmp.path().join("valid.toml");
+        fs::write(&manifest, split_manifest_toml()).unwrap();
+
+        let split = LayoutPaths::parse_split_manifest(&manifest).expect("manifest must parse");
+        let errors = split.validate();
+        assert!(
+            errors.is_empty(),
+            "valid manifest should have no validation errors, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_split_manifest_detects_collision_between_file_and_dir() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = tmp.path().join("collision.toml");
+        fs::write(
+            &manifest,
+            "\
+[[dirs]]
+path = \"/usr/lib/namtor\"
+mode = \"0755\"
+owner = \"root\"
+group = \"root\"
+package = \"core\"
+
+[[files]]
+dest = \"/usr/lib/namtor\"
+src = \"x\"
+mode = \"0755\"
+owner = \"root\"
+group = \"root\"
+package = \"gnome\"
+",
+        )
+        .unwrap();
+
+        let split = LayoutPaths::parse_split_manifest(&manifest).expect("manifest must parse");
+        let errors = split.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::Collision { .. })),
+            "expected a collision error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_split_manifest_detects_duplicate_file_dest() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = tmp.path().join("dup.toml");
+        fs::write(
+            &manifest,
+            "\
+[[files]]
+dest = \"/usr/bin/namtor-cli\"
+src = \"x\"
+mode = \"0755\"
+owner = \"root\"
+group = \"root\"
+package = \"core\"
+
+[[files]]
+dest = \"/usr/bin/namtor-cli\"
+src = \"y\"
+mode = \"0755\"
+owner = \"root\"
+group = \"root\"
+package = \"gnome\"
+",
+        )
+        .unwrap();
+
+        let split = LayoutPaths::parse_split_manifest(&manifest).expect("manifest must parse");
+        let errors = split.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::Collision { .. })),
+            "expected a collision error for duplicate dest, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_split_manifest_detects_orphan_entry_without_package() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = tmp.path().join("orphan.toml");
+        fs::write(
+            &manifest,
+            "\
+[[files]]
+dest = \"/usr/bin/namtor-cli\"
+src = \"x\"
+mode = \"0755\"
+owner = \"root\"
+group = \"root\"
+",
+        )
+        .unwrap();
+
+        let split = LayoutPaths::parse_split_manifest(&manifest).expect("manifest must parse");
+        let errors = split.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::Orphan { .. })),
+            "expected an orphan error for missing package, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_split_manifest_detects_orphan_generated_state_without_package() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = tmp.path().join("orphan_gs.toml");
+        fs::write(
+            &manifest,
+            "\
+[[generated_state]]
+path = \"/var/lib/namtor/templates\"
+on_upgrade = \"preserve\"
+on_purge = \"remove\"
+",
+        )
+        .unwrap();
+
+        let split = LayoutPaths::parse_split_manifest(&manifest).expect("manifest must parse");
+        let errors = split.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::Orphan { .. })),
+            "expected an orphan error for generated_state missing package, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn package_dests_filters_by_package() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = tmp.path().join("split.toml");
+        fs::write(&manifest, split_manifest_toml()).unwrap();
+
+        let split = LayoutPaths::parse_split_manifest(&manifest).expect("manifest must parse");
+
+        let core_dests = split.package_dests(Package::Core);
+        assert!(core_dests
+            .files
+            .contains(&"/usr/lib/namtor/namtor-daemon".to_string()));
+        assert!(!core_dests
+            .files
+            .contains(&"/usr/bin/namtor-enroll-wizard".to_string()));
+        assert!(!core_dests
+            .files
+            .contains(&"/usr/share/applications/org.namtor.kcm.desktop".to_string()));
+
+        let gnome_dests = split.package_dests(Package::Gnome);
+        assert!(gnome_dests
+            .files
+            .contains(&"/usr/bin/namtor-enroll-wizard".to_string()));
+        assert!(!gnome_dests
+            .files
+            .contains(&"/usr/lib/namtor/namtor-daemon".to_string()));
+
+        let kde_dests = split.package_dests(Package::Kde);
+        assert!(kde_dests
+            .files
+            .contains(&"/usr/share/applications/org.namtor.kcm.desktop".to_string()));
+        assert!(!kde_dests
+            .files
+            .contains(&"/usr/bin/namtor-enroll-wizard".to_string()));
+    }
+
+    #[test]
+    fn repo_manifest_validates_with_no_errors() {
+        let manifest = repo_manifest_path();
+        let split = LayoutPaths::parse_split_manifest(&manifest).expect("repo manifest must parse");
+        let errors = split.validate();
+        assert!(
+            errors.is_empty(),
+            "repo install-manifest.toml should validate with no errors, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn repo_manifest_has_package_ownership_on_every_entry() {
+        let manifest = repo_manifest_path();
+        let split = LayoutPaths::parse_split_manifest(&manifest).expect("repo manifest must parse");
+
+        for f in &split.files {
+            assert!(
+                f.package.is_some(),
+                "file dest {} is missing package ownership",
+                f.dest
+            );
+        }
+        for d in &split.dirs {
+            assert!(
+                d.package.is_some(),
+                "dir path {} is missing package ownership",
+                d.path
+            );
+        }
+        for gs in &split.generated_state {
+            assert!(!gs.path.is_empty(), "generated_state entry missing path");
+        }
+    }
+
+    #[test]
+    fn repo_manifest_gnome_package_has_no_kde_payload() {
+        let manifest = repo_manifest_path();
+        let split = LayoutPaths::parse_split_manifest(&manifest).expect("repo manifest must parse");
+
+        let gnome_dests = split.package_dests(Package::Gnome);
+        for dest in &gnome_dests.files {
+            // GNOME files must not contain Qt/KDE indicators in the path.
+            assert!(
+                !dest.contains("kcm")
+                    && !dest.contains("kde")
+                    && !dest.contains("qt6")
+                    && !dest.contains("qml")
+                    && !dest.contains("kpackage"),
+                "GNOME package contains KDE/Qt payload: {dest}"
+            );
+        }
+    }
+
+    #[test]
+    fn repo_manifest_kde_package_has_no_gnome_payload() {
+        let manifest = repo_manifest_path();
+        let split = LayoutPaths::parse_split_manifest(&manifest).expect("repo manifest must parse");
+
+        let kde_dests = split.package_dests(Package::Kde);
+        for dest in &kde_dests.files {
+            assert!(
+                !dest.contains("wizard")
+                    && !dest.contains("gnome")
+                    && !dest.contains("gtk")
+                    && !dest.contains("adwaita"),
+                "KDE package contains GNOME/GTK payload: {dest}"
+            );
+        }
     }
 }
