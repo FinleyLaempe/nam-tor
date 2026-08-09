@@ -1,0 +1,19 @@
+=== Failure path: unexpected untracked file in packaging/arch/ is NOT ignored ===
+Creating: packaging/arch/PKGBUILD.unexpected
+
+Command: git status --short packaging/arch/PKGBUILD.unexpected
+Expected: file shows as untracked (?? packaging/arch/PKGBUILD.unexpected), proving .gitignore does not over-broadly hide new files.
+
+?? packaging/arch/PKGBUILD.unexpected
+Exit code: 0
+
+Command: git check-ignore packaging/arch/PKGBUILD.unexpected
+Expected: no output, non-zero exit (file is NOT ignored).
+
+check-ignore exit code: 1 (non-zero = not ignored, as expected)
+
+=== Cleanup ===
+Removed packaging/arch/PKGBUILD.unexpected
+
+Command: git status --short packaging/arch/PKGBUILD.unexpected (post-cleanup)
+Exit code: 0 (no output = file gone, as expected)

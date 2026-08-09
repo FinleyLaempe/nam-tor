@@ -68,6 +68,16 @@ The project publishes error rates. Two rules govern them:
 
 If a measurement misses an acceptance gate, report the number and scope the claim. Do not soften the gate.
 
+## Staging changes
+
+**Never use `git add .` or `git add -A`.** Stage files only with explicit paths:
+
+```bash
+git add path/to/file1 path/to/file2
+```
+
+The worktree contains generated build output that is gitignored and must never be committed. In particular, Arch package build output under `packaging/arch/` — the `src/` and `pkg/` working directories, `*.pkg.tar.zst` package archives, and `*.tar.gz` source archives — is produced by `makepkg` and ignored by `.gitignore`. Tracked packaging sources (`PKGBUILD`, install manifests, scripts) remain visible and are committed normally. Explicit-path staging prevents accidentally sweeping in build artifacts, local environment files, or other untracked content that should not land in a commit.
+
 ## Security reports
 
 Report suspected vulnerabilities privately rather than opening a public issue.
