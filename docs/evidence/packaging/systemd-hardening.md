@@ -74,34 +74,25 @@ The daemon's `run()` function checks `LISTEN_FDS` and adopts fd 3 if
 present; otherwise it binds `/run/namtor/auth.sock` directly (dev/test
 path).
 
-## Setuid helper: `namtor-worker-spawn`
+## Worker trust model: seccomp + landlock (no setuid)
 
-`namtor-worker-spawn` is the **only** setuid binary in the system
-(installed mode `4755`, owned by `root:root`). It drops to `nobody` and
-execs `namtor-worker`, which self-applies seccomp + landlock.
-
-### Architectural note: NoNewPrivileges vs setuid
-
-The service unit carries `NoNewPrivileges=true`, which prevents any
-child process from gaining privileges via setuid binaries. This means
-the daemon **cannot** exec `namtor-worker-spawn` to spawn the worker —
-the setuid bit would be ignored.
-
-Current behaviour: the daemon spawns `namtor-worker` directly via
+The worker is spawned directly by the daemon as a child process via
 `std::process::Command`. The worker runs as the `namtor` user (same as
-the daemon) and self-applies seccomp + landlock sandbox. This is the
-correct production path under `NoNewPrivileges=true`.
+the daemon) and self-applies seccomp + landlock sandbox. The sandbox is
+the privilege boundary, not a UID drop.
 
-The setuid helper exists for environments where `NoNewPrivileges` is not
-set (e.g. manual testing, or a future systemd unit split that runs the
-worker in a separate unit without `NoNewPrivileges`). It is installed
-and mode-set, but not invoked from the hardened unit.
+`NoNewPrivileges=true` in the service unit blocks any child from gaining
+privileges via setuid binaries or file capabilities. There is no setuid
+binary in the package — the former `namtor-worker-spawn` helper has been
+removed because it was unused (the daemon spawns the worker directly)
+and incompatible with `NoNewPrivileges=true`.
 
-**Trade-off:** `NoNewPrivileges=true` is the stronger hardening — it
-makes the entire privilege escalation surface (setuid, file capabilities)
-unavailable to the daemon and all its children. The privilege separation
-between daemon and worker is preserved by the seccomp + landlock sandbox
-the worker applies to itself, not by UID separation.
+The privilege separation between daemon and worker is preserved by the
+seccomp + landlock sandbox the worker applies to itself: landlock denies
+all filesystem access (no allow rules), seccomp denies `open`/`openat`,
+`socket`/`connect`/`bind`, `execve`/`execveat`, `fork`/`clone`. The
+worker cannot read templates, keys, or model files after the sandbox is
+applied, despite sharing the daemon's UID.
 
 ## Security directives
 
@@ -231,7 +222,7 @@ Full output (✓ = passes, ✗ = residual exposure with score):
 ✓ CapabilityBoundingSet=~CAP_SYSLOG
 ✓ ProtectHome=
 ✗ PrivateNetwork=                               0.5  (D-Bus system bus uses Unix socket)
-✗ PrivateUsers=                                 0.2  (setuid helper compatibility)
+✗ PrivateUsers=                                 0.2  (resolves system users/groups via /etc/group)
 ✓ KeyringMode=
 ✓ Delegate=
 ✗ IPAddressDeny=                                (now ✓ — added after initial run)
@@ -289,7 +280,7 @@ Full output (✓ = passes, ✗ = residual exposure with score):
 | `RestrictAddressFamilies=~AF_UNIX` | 0.1 | The daemon **requires** `AF_UNIX` for the PAM socket and the worker socketpair. This is the minimum address family set. |
 | `DeviceAllow=` | 0.2 | No device ACL. Camera device paths vary per hardware (`/dev/video2` on the reference laptop; could be different elsewhere). A `DeviceAllow=` list would need per-hardware customization. |
 | `PrivateNetwork=` | 0.5 | The D-Bus manager service (`org.namtor.Manager`) connects to the system bus. While the system bus uses a Unix socket, `PrivateNetwork=true` creates a separate network namespace that may affect abstract socket addressing. D-Bus is management convenience; PAM is the critical path — but breaking D-Bus degrades the management UI. Risk not justified. |
-| `PrivateUsers=` | 0.2 | A private user namespace would prevent the daemon from resolving system users/groups (e.g. `resolve_namtor_auth_gid` reads `/etc/group`). Also prevents the setuid helper from working if `NoNewPrivileges` is ever relaxed. |
+| `PrivateUsers=` | 0.2 | A private user namespace would prevent the daemon from resolving system users/groups (e.g. `resolve_namtor_auth_gid` reads `/etc/group`). |
 | `IPAddressDeny=` | — | **Added.** Now passes. |
 
 ### Socket unit (`namtor-daemon.socket`)
