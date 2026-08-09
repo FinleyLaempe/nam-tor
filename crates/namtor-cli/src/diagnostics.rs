@@ -17,6 +17,11 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::install_layout::{InstallRoot, LayoutPaths};
+use crate::package_diagnostics::{
+    self, count_enabled_pam_services, detect_installed_packages, detect_migration_artifacts,
+    detect_model_state, detect_protection_state, detect_service_state, InstalledPackages,
+    MigrationArtifact, ProtectionInfo, ServiceState,
+};
 use namtor_camera::inventory::CameraInventory;
 
 /// Operator-coded diagnostic check result. Codes are stable operator
@@ -139,6 +144,12 @@ pub struct DiagnosticReport {
     pub package: DiagnosticCheck,
     pub api: DiagnosticCheck,
     pub auth_outcome: AuthOutcome,
+    pub packages: InstalledPackages,
+    pub migration: Vec<MigrationArtifact>,
+    pub pam_count: usize,
+    pub protection_info: ProtectionInfo,
+    pub model_state: package_diagnostics::ModelState,
+    pub service_state: ServiceState,
 }
 
 impl DiagnosticReport {
@@ -165,6 +176,10 @@ impl DiagnosticReport {
     pub fn has_warning(&self) -> bool {
         !self.has_error() && self.checks().iter().any(|c| c.is_warning())
     }
+
+    pub fn has_migration(&self) -> bool {
+        !self.migration.is_empty()
+    }
 }
 
 impl std::fmt::Display for DiagnosticReport {
@@ -173,7 +188,18 @@ impl std::fmt::Display for DiagnosticReport {
         for c in self.checks() {
             writeln!(f, "{c}")?;
         }
-        write!(f, "auth: {}", self.auth_outcome)?;
+        writeln!(f, "auth: {}", self.auth_outcome)?;
+        writeln!(f, "packages: {}", self.packages)?;
+        writeln!(f, "model state: {}", self.model_state)?;
+        writeln!(f, "service: {}", self.service_state)?;
+        writeln!(f, "protection: {}", self.protection_info)?;
+        writeln!(f, "pam enabled: {}", self.pam_count)?;
+        if self.has_migration() {
+            writeln!(f, "migration:")?;
+            for a in &self.migration {
+                writeln!(f, "  {a}")?;
+            }
+        }
         Ok(())
     }
 }
@@ -193,6 +219,7 @@ pub struct DiagnosticConfig {
     pub cli_bin: PathBuf,
     pub quirks_dirs: Vec<PathBuf>,
     pub auth_outcome: AuthOutcome,
+    pub root: PathBuf,
 }
 
 impl DiagnosticConfig {
@@ -212,6 +239,15 @@ impl DiagnosticConfig {
 
     /// Build a config from a resolved layout plus an explicit device.
     pub fn from_layout(layout: &LayoutPaths, device_path: PathBuf, vid_pid: String) -> Self {
+        let root = match layout.daemon_socket.as_path() {
+            p if p.starts_with("/run/namtor/") => PathBuf::from("/"),
+            p => p
+                .ancestors()
+                .nth(2)
+                .filter(|a| !a.as_os_str().is_empty())
+                .map(|a| a.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("/")),
+        };
         Self {
             device_path,
             vid_pid,
@@ -223,6 +259,7 @@ impl DiagnosticConfig {
             cli_bin: layout.cli_bin.clone(),
             quirks_dirs: layout.quirks_dirs.clone(),
             auth_outcome: AuthOutcome::Unavailable,
+            root,
         }
     }
 }
@@ -259,6 +296,15 @@ pub fn run_doctor(cfg: &DiagnosticConfig) -> DiagnosticReport {
     let model = check_model(cfg);
     let package = check_package(cfg);
     let api = check_api(cfg);
+
+    let root = cfg.root.clone();
+    let packages = detect_installed_packages(&root);
+    let migration = detect_migration_artifacts(&root);
+    let pam_count = count_enabled_pam_services(&root.join("etc/pam.d"));
+    let protection_info = detect_protection_state(&cfg.key_path);
+    let model_state = detect_model_state(&cfg.models_dir);
+    let service_state = detect_service_state(&cfg.daemon_socket);
+
     DiagnosticReport {
         device,
         emitter,
@@ -268,6 +314,12 @@ pub fn run_doctor(cfg: &DiagnosticConfig) -> DiagnosticReport {
         package,
         api,
         auth_outcome: cfg.auth_outcome,
+        packages,
+        migration,
+        pam_count,
+        protection_info,
+        model_state,
+        service_state,
     }
 }
 
@@ -275,18 +327,14 @@ fn check_device(cfg: &DiagnosticConfig) -> DiagnosticCheck {
     if cfg.device_path.exists() {
         DiagnosticCheck::Ok {
             check: "device",
-            detail: format!("present ({})", cfg.device_path.display()),
+            detail: "present".into(),
         }
     } else {
         DiagnosticCheck::Error {
             code: "E001",
             check: "device",
-            detail: format!("not found at {}", cfg.device_path.display()),
-            remediation: format!(
-                "connect an IR camera at {} (vid:pid {} expected)",
-                cfg.device_path.display(),
-                cfg.vid_pid
-            ),
+            detail: "not found".into(),
+            remediation: "connect an IR camera".into(),
         }
     }
 }
@@ -364,8 +412,8 @@ fn check_storage(cfg: &DiagnosticConfig) -> DiagnosticCheck {
         return DiagnosticCheck::Warning {
             code: "W003",
             check: "storage",
-            detail: "wrapping key file missing".into(),
-            remediation: format!("generate a key at {}", cfg.key_path.display()),
+            detail: "sealing material missing".into(),
+            remediation: "generate sealing material via the daemon".into(),
         };
     }
     let count = match fs::read_dir(&cfg.templates_dir) {
@@ -409,7 +457,7 @@ fn check_model(cfg: &DiagnosticConfig) -> DiagnosticCheck {
             code: "E004",
             check: "model",
             detail: format!("missing: {}", missing.join(", ")),
-            remediation: format!("download models into {}", cfg.models_dir.display()),
+            remediation: "install the namtor package to restore bundled models".into(),
         }
     }
 }
@@ -448,10 +496,7 @@ fn check_api(cfg: &DiagnosticConfig) -> DiagnosticCheck {
             code: "E005",
             check: "api",
             detail: "daemon socket not found".into(),
-            remediation: format!(
-                "start namtor-daemon (socket: {})",
-                cfg.daemon_socket.display()
-            ),
+            remediation: "start namtor-daemon".into(),
         }
     }
 }
@@ -534,7 +579,7 @@ impl Default for PrivacyScanner {
     }
 }
 
-const FORBIDDEN_TERMS: [&str; 7] = [
+const FORBIDDEN_TERMS: [&str; 11] = [
     "embedding",
     "template",
     "pixel",
@@ -542,6 +587,10 @@ const FORBIDDEN_TERMS: [&str; 7] = [
     "crop",
     "threshold",
     "nonce",
+    "score",
+    "biometric",
+    "gate",
+    "raw",
 ];
 
 fn snippet(content: &str, idx: usize, len: usize) -> String {
@@ -702,21 +751,21 @@ fn write_scanned(path: &Path, content: &str, scanner: &PrivacyScanner) -> Result
     Ok(())
 }
 
-/// Redacted config summary: paths and presence flags only, never the
-/// words "template" or biometric identifiers.
+/// Redacted config summary: presence flags only, never paths, never the
+/// words "template", "key", "path", or biometric identifiers.
 fn redact_config(cfg: &DiagnosticConfig) -> String {
     let mut s = String::new();
     s.push_str("=== Nam-tor Config (redacted) ===\n");
     s.push_str(&format!("device: {}\n", present(&cfg.device_path)));
     s.push_str(&format!("vid:pid: {}\n", cfg.vid_pid));
-    s.push_str(&format!("storage dir: {}\n", present(&cfg.templates_dir)));
-    s.push_str(&format!("wrapping key: {}\n", present(&cfg.key_path)));
-    s.push_str(&format!("models dir: {}\n", present(&cfg.models_dir)));
-    s.push_str(&format!("daemon socket: {}\n", present(&cfg.daemon_socket)));
-    s.push_str(&format!("cli bin: {}\n", present(&cfg.cli_bin)));
+    s.push_str(&format!("storage: {}\n", present(&cfg.templates_dir)));
+    s.push_str(&format!("sealing: {}\n", present(&cfg.key_path)));
+    s.push_str(&format!("models: {}\n", present(&cfg.models_dir)));
+    s.push_str(&format!("daemon: {}\n", present(&cfg.daemon_socket)));
+    s.push_str(&format!("cli: {}\n", present(&cfg.cli_bin)));
     s.push_str(&format!("daemon bin: {}\n", present(&cfg.daemon_bin)));
     s.push_str(&format!("quirks: {} searched\n", cfg.quirks_dirs.len()));
-    s.push_str(&format!("auth outcome: {}\n", cfg.auth_outcome));
+    s.push_str(&format!("auth: {}\n", cfg.auth_outcome));
     s
 }
 
@@ -730,9 +779,9 @@ fn present(p: &Path) -> String {
 
 fn bundle_readme() -> String {
     "=== Nam-tor Support Bundle ===\n\
-     This bundle was scanned by the privacy filter before write.\n\
-     It contains only operator-coded diagnostics and redacted config.\n\
-     No biometric data, raw scores, or secret material is included.\n"
+     This bundle was filtered before write.\n\
+     It contains only operator-coded diagnostics and redacted configuration.\n\
+     No personal features, match results, or secret material is included.\n"
         .into()
 }
 
@@ -817,11 +866,7 @@ fn sha256_colon(path: &Path) -> String {
     let mut hasher = Sha256::new();
     hasher.update(&data);
     let digest = hasher.finalize();
-    digest
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(":")
+    crate::package_diagnostics::redact_sha256_colon(&digest)
 }
 
 /// Format model info for the bundle. SHA-256 uses colon-separated byte
@@ -838,7 +883,7 @@ fn format_model_info(infos: &[ModelInfo]) -> String {
 }
 
 /// Terms that disqualify a log line from the bundle.
-const LOG_FILTER_TERMS: [&str; 9] = [
+const LOG_FILTER_TERMS: [&str; 13] = [
     "embedding",
     "template",
     "pixel",
@@ -848,6 +893,10 @@ const LOG_FILTER_TERMS: [&str; 9] = [
     "nonce",
     "score",
     "biometric",
+    "gate",
+    "raw",
+    "key",
+    "path",
 ];
 
 /// Remove any log line whose lowercase form contains a forbidden term.
@@ -968,21 +1017,32 @@ mod tests {
     fn privacy_scanner_rejects_raw_score() {
         let s = scanner();
         let err = s.scan("match score=0.8723 accepted").unwrap_err();
-        assert!(matches!(err, PrivacyError::RawScore { .. }));
+        assert!(
+            matches!(
+                err,
+                PrivacyError::ForbiddenTerm { term: "score", .. } | PrivacyError::RawScore { .. }
+            ),
+            "score must be caught: {err}"
+        );
     }
 
     #[test]
     fn privacy_scanner_accepts_clean_diagnostic_output() {
         let s = scanner();
         let clean = "=== Nam-tor Diagnostic Report ===\n\
-                     [OK] device: present (/dev/video2)\n\
+                     [OK] device: present\n\
                      [OK] emitter: msxu (firmware-strobed)\n\
                      [OK] protection: full\n\
                      [OK] storage: 2 enrollments\n\
                      [OK] model: all inference models present\n\
                      [OK] package: cli and daemon binaries present\n\
                      [OK] api: daemon socket present\n\
-                     auth: unavailable";
+                     auth: unavailable\n\
+                     packages: namtor\n\
+                     model state: all present\n\
+                     service: active\n\
+                     protection: tpm: present, sealing: tpm2\n\
+                     pam enabled: 0";
         s.scan(clean).expect("clean report must pass scanner");
     }
 
@@ -1054,6 +1114,7 @@ mod tests {
             cli_bin,
             quirks_dirs: vec![quirks],
             auth_outcome: AuthOutcome::Unavailable,
+            root: tmp.to_path_buf(),
         }
     }
 
@@ -1231,7 +1292,9 @@ mod tests {
                      match score=0.87\n\
                      threshold exceeded\n\
                      template loaded\n\
-                     ready for auth";
+                     ready for auth\n\
+                     key material written\n\
+                     path resolved";
         let filtered = filter_log_lines(input);
         assert!(filtered.contains("daemon started"));
         assert!(filtered.contains("socket bound"));
@@ -1240,6 +1303,8 @@ mod tests {
         assert!(!filtered.contains("score="), "score line removed");
         assert!(!filtered.contains("threshold"), "threshold line removed");
         assert!(!filtered.contains("template"), "template line removed");
+        assert!(!filtered.contains("key material"), "key line removed");
+        assert!(!filtered.contains("path resolved"), "path line removed");
     }
 
     #[test]
@@ -1264,8 +1329,9 @@ mod tests {
         assert_eq!(infos[0].size_bytes, 9);
         assert_eq!(infos[1].size_bytes, 7);
         assert!(
-            infos[0].sha256.contains(':'),
-            "sha256 must be colon-separated"
+            infos[0].sha256.ends_with("..."),
+            "sha256 must be redacted with ellipsis: {}",
+            infos[0].sha256
         );
     }
 
@@ -1285,7 +1351,7 @@ mod tests {
         let text = format_model_info(&infos);
         scanner()
             .scan(&text)
-            .expect("model info with colon-separated sha256 must pass scanner");
+            .expect("model info with redacted sha256 must pass scanner");
     }
 
     #[test]
@@ -1327,6 +1393,7 @@ mod tests {
         let models = fs::read_to_string(bundle.join("models.txt")).unwrap();
         assert!(models.contains("yunet_2023mar.onnx"));
         assert!(models.contains("sha256="));
+        assert!(models.contains("..."), "sha256 must be redacted: {models}");
         let version = fs::read_to_string(bundle.join("version.txt")).unwrap();
         assert!(version.contains("cli version: 0.1.0"));
         assert!(version.contains("daemon version: 0.1.0"));
@@ -1495,8 +1562,8 @@ mod tests {
         let report = run_doctor(&cfg);
         assert!(report.device.is_ok());
         assert!(
-            format!("{}", report.device).contains("video7"),
-            "renumbered device path reported"
+            format!("{}", report.device).contains("present"),
+            "device present reported: {report}"
         );
     }
 
@@ -1524,5 +1591,207 @@ mod tests {
         );
         assert_eq!(cfg.cli_bin, tmp.path().join("usr/bin/namtor-cli"));
         assert_eq!(cfg.models_dir, tmp.path().join("var/lib/namtor/models"));
+    }
+
+    #[test]
+    fn doctor_report_includes_package_state() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = full_ok_config(tmp.path());
+        let report = run_doctor(&cfg);
+        let text = format!("{report}");
+        assert!(
+            text.contains("packages:"),
+            "report must include packages: {text}"
+        );
+    }
+
+    #[test]
+    fn doctor_report_includes_model_state() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = full_ok_config(tmp.path());
+        let report = run_doctor(&cfg);
+        let text = format!("{report}");
+        assert!(
+            text.contains("model state:"),
+            "report must include model state: {text}"
+        );
+        assert!(text.contains("all present"), "models present: {text}");
+    }
+
+    #[test]
+    fn doctor_report_includes_service_state() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = full_ok_config(tmp.path());
+        let report = run_doctor(&cfg);
+        let text = format!("{report}");
+        assert!(
+            text.contains("service:"),
+            "report must include service state: {text}"
+        );
+    }
+
+    #[test]
+    fn doctor_report_includes_protection_info() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = full_ok_config(tmp.path());
+        let report = run_doctor(&cfg);
+        let text = format!("{report}");
+        assert!(
+            text.contains("protection:"),
+            "report must include protection info: {text}"
+        );
+        assert!(
+            text.contains("sealing:"),
+            "protection must include sealing: {text}"
+        );
+    }
+
+    #[test]
+    fn doctor_report_includes_pam_count() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = full_ok_config(tmp.path());
+        let report = run_doctor(&cfg);
+        let text = format!("{report}");
+        assert!(
+            text.contains("pam enabled:"),
+            "report must include pam count: {text}"
+        );
+    }
+
+    #[test]
+    fn doctor_report_detects_migration_artifacts() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = full_ok_config(tmp.path());
+        cfg.root = tmp.path().to_path_buf();
+        fs::create_dir_all(tmp.path().join("usr/lib/namtor")).unwrap();
+        fs::write(tmp.path().join("usr/lib/namtor/namtor-worker-spawn"), b"x").unwrap();
+        let report = run_doctor(&cfg);
+        assert!(report.has_migration(), "should detect legacy setuid");
+        let text = format!("{report}");
+        assert!(
+            text.contains("migration:"),
+            "report must show migration: {text}"
+        );
+        assert!(
+            text.contains("legacy-setuid"),
+            "migration must name artifact: {text}"
+        );
+    }
+
+    #[test]
+    fn doctor_report_no_migration_when_clean() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = full_ok_config(tmp.path());
+        let report = run_doctor(&cfg);
+        assert!(!report.has_migration());
+        let text = format!("{report}");
+        assert!(
+            !text.contains("migration:"),
+            "clean install should not show migration: {text}"
+        );
+    }
+
+    #[test]
+    fn doctor_report_pam_count_counts_enabled_services() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = full_ok_config(tmp.path());
+        cfg.root = tmp.path().to_path_buf();
+        let pamd = tmp.path().join("etc/pam.d");
+        fs::create_dir_all(&pamd).unwrap();
+        fs::write(pamd.join("gdm-password"), "auth sufficient pam_namtor.so\n").unwrap();
+        fs::write(pamd.join("sddm"), "auth sufficient pam_namtor.so\n").unwrap();
+        fs::write(pamd.join("sudo"), "auth required pam_unix.so\n").unwrap();
+        let report = run_doctor(&cfg);
+        assert_eq!(report.pam_count, 2);
+        let text = format!("{report}");
+        assert!(
+            text.contains("pam enabled: 2"),
+            "pam count must appear: {text}"
+        );
+    }
+
+    #[test]
+    fn doctor_report_detects_split_packages() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = full_ok_config(tmp.path());
+        cfg.root = tmp.path().to_path_buf();
+        fs::create_dir_all(tmp.path().join("usr/lib/namtor")).unwrap();
+        fs::create_dir_all(tmp.path().join("usr/share/namtor")).unwrap();
+        fs::create_dir_all(tmp.path().join("usr/bin")).unwrap();
+        fs::create_dir_all(tmp.path().join("usr/share/applications")).unwrap();
+        fs::write(tmp.path().join("usr/lib/namtor/namtor-daemon"), b"x").unwrap();
+        fs::write(
+            tmp.path().join("usr/share/namtor/install-manifest.toml"),
+            b"x",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("usr/bin/namtor-enroll-wizard"), b"x").unwrap();
+        fs::write(
+            tmp.path()
+                .join("usr/share/applications/org.namtor.Wizard.desktop"),
+            b"x",
+        )
+        .unwrap();
+        fs::write(
+            tmp.path()
+                .join("usr/share/applications/org.namtor.kcm.desktop"),
+            b"x",
+        )
+        .unwrap();
+        let report = run_doctor(&cfg);
+        assert!(report.packages.core, "core package detected");
+        assert!(report.packages.gnome, "gnome package detected");
+        assert!(report.packages.kde, "kde package detected");
+        assert!(!report.packages.manual, "not manual install");
+        let text = format!("{report}");
+        assert!(text.contains("namtor, namtor-gnome, namtor-kde"));
+    }
+
+    #[test]
+    fn full_report_passes_privacy_scanner() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = full_ok_config(tmp.path());
+        let report = run_doctor(&cfg);
+        let text = format!("{report}");
+        scanner()
+            .scan(&text)
+            .expect("full report must pass privacy scanner: {text}");
+    }
+
+    #[test]
+    fn full_bundle_passes_privacy_scanner() {
+        let tmp = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        let cfg = full_ok_config(tmp.path());
+        let report = run_doctor(&cfg);
+        let bundle = create_bundle(&report, &cfg, &BundleInfo::empty(), out.path())
+            .expect("bundle creation");
+        let s = scanner();
+        for entry in fs::read_dir(&bundle).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_file() {
+                let content = fs::read_to_string(entry.path()).unwrap();
+                s.scan(&content).unwrap_or_else(|e| {
+                    panic!(
+                        "privacy scan failed for {}: {e}\n{content}",
+                        entry.path().display()
+                    )
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn report_with_migration_artifacts_passes_privacy_scanner() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = full_ok_config(tmp.path());
+        cfg.root = tmp.path().to_path_buf();
+        fs::create_dir_all(tmp.path().join("usr/lib/namtor")).unwrap();
+        fs::write(tmp.path().join("usr/lib/namtor/namtor-worker-spawn"), b"x").unwrap();
+        let report = run_doctor(&cfg);
+        let text = format!("{report}");
+        scanner()
+            .scan(&text)
+            .expect("report with migration must pass privacy scanner: {text}");
     }
 }

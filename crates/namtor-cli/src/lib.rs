@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod enroll;
 pub mod enroll_session;
 pub mod list;
+pub mod package_diagnostics;
 pub mod status;
 pub mod verify;
 
