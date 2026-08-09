@@ -13,6 +13,13 @@
 //! | `EnrollmentProgress` | `(susu)` | session_id, frames_captured, quality_label, coverage_percent |
 //! | `ReviewOutcome` | `(sbs)` | profile_id, needs_reenroll, quality |
 //! | `StatusReport` | `(ua(ssbtt)b)` | api_version, profiles, emitter_armed |
+//!
+//! ## v3 wire signatures (enrollment redesign)
+//!
+//! | Type | Wire | Fields |
+//! |---|---|---|
+//! | `EnrollmentProgressV3` | `(ssuuuuuys)` | session, phase, quality_percent, diversity_percent, frames_seen, frames_accepted, frames_rejected, quality_bucket, guidance |
+//! | `EnrollmentReviewV3` | `(sbuuus)` | session, ready_to_save, quality_percent, diversity_percent, frames_accepted, guidance |
 
 use std::fmt;
 
@@ -61,6 +68,39 @@ pub struct StatusReport {
     pub api_version: u32,
     pub profiles: Vec<ProfileInfo>,
     pub emitter_armed: bool,
+}
+
+/// v3 enrollment progress emitted as the `EnrollmentProgress` signal on
+/// `org.namtor.Manager3` (frozen wire `(ssuuuuuys)`). `quality_percent` is
+/// capture suitability, NOT authentication accuracy. `quality_bucket` is a
+/// coarse byte label (0=low, 1=medium, 2=high). `guidance` is a closed enum
+/// mapped client-side.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct EnrollmentProgressV3 {
+    pub session: String,
+    pub phase: String,
+    pub quality_percent: u32,
+    pub diversity_percent: u32,
+    pub frames_seen: u32,
+    pub frames_accepted: u32,
+    pub frames_rejected: u32,
+    pub quality_bucket: u8,
+    pub guidance: String,
+}
+
+/// v3 review snapshot returned by `ReviewEnrollment` on `org.namtor.Manager3`
+/// (frozen wire `(sbuuus)`). Session-scoped summary of a stopped enrollment,
+/// distinct from v1's profile-scoped `ReviewOutcome`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct EnrollmentReviewV3 {
+    pub session: String,
+    pub ready_to_save: bool,
+    pub quality_percent: u32,
+    pub diversity_percent: u32,
+    pub frames_accepted: u32,
+    pub guidance: String,
 }
 
 /// Outcome of an enrollment attempt as the KCM surfaces it to QML. Distinct

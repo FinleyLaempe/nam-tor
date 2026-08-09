@@ -1,0 +1,158 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <!--
+    v1 interface — preserved byte-for-byte from docs/evidence/dbus-contract.xml.
+    The v1 contract is FROZEN: see manager::contract::INTROSPECTION_XML and the
+    contract_xml_matches_evidence_file test. This copy exists inside the v3
+    document so a v3 client sees all three interfaces on the same object path.
+  -->
+  <interface name="org.namtor.Manager">
+    <method name="ListProfiles">
+      <arg name="profiles" type="a(ssbtt)" direction="out"/>
+    </method>
+    <method name="StartEnrollment">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="name" type="s" direction="in"/>
+      <arg name="session" type="s" direction="out"/>
+    </method>
+    <method name="CancelEnrollment">
+      <arg name="session" type="s" direction="in"/>
+    </method>
+    <method name="CommitProfile">
+      <arg name="session" type="s" direction="in"/>
+      <arg name="profile" type="s" direction="out"/>
+    </method>
+    <method name="ReviewProfile">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="id" type="s" direction="in"/>
+      <arg name="review" type="(sbs)" direction="out"/>
+    </method>
+    <method name="RenameProfile">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="id" type="s" direction="in"/>
+      <arg name="name" type="s" direction="in"/>
+    </method>
+    <method name="EnableProfile">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="id" type="s" direction="in"/>
+      <arg name="enabled" type="b" direction="in"/>
+    </method>
+    <method name="DeleteProfile">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="id" type="s" direction="in"/>
+    </method>
+    <method name="MergeProfiles">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="src" type="s" direction="in"/>
+      <arg name="dst" type="s" direction="in"/>
+    </method>
+    <method name="ReplaceProfile">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="id" type="s" direction="in"/>
+      <arg name="name" type="s" direction="in"/>
+    </method>
+    <method name="GetStatus">
+      <arg name="status" type="(ua(ssbtt)b)" direction="out"/>
+    </method>
+    <signal name="EnrollmentProgress">
+      <arg name="session" type="s"/>
+      <arg name="progress" type="(susu)"/>
+    </signal>
+    <signal name="EnrollmentCompleted">
+      <arg name="session" type="s"/>
+      <arg name="profile" type="s"/>
+    </signal>
+    <signal name="ProfileChanged">
+      <arg name="uid" type="u"/>
+      <arg name="id" type="s"/>
+    </signal>
+    <signal name="StatusChanged">
+      <arg name="status" type="(ua(ssbtt)b)"/>
+    </signal>
+    <property name="ApiVersion" type="u" access="read"/>
+  </interface>
+  <!--
+    v2 interface — adds PAM service management and protection status.
+    A v2 client negotiates API_VERSION_V2 (2) via negotiate_version_v2 and
+    speaks org.namtor.Manager2. A v1 client continues to use
+    org.namtor.Manager (above) unchanged.
+
+    Privacy invariant: the v2 surface carries no sensitive material — only
+    service ids, display names, booleans, compatibility labels, sealing-kind
+    labels, and human-readable warnings. The privacy scan test asserts this.
+  -->
+  <interface name="org.namtor.Manager2">
+    <method name="ListPamServices">
+      <arg name="services" type="a(ssbss)" direction="out"/>
+    </method>
+    <method name="SetPamServiceEnabled">
+      <arg name="service_id" type="s" direction="in"/>
+      <arg name="enabled" type="b" direction="in"/>
+      <arg name="success" type="b" direction="out"/>
+    </method>
+    <method name="GetProtectionStatus">
+      <arg name="status" type="(sbs)" direction="out"/>
+    </method>
+    <signal name="PamServicesChanged">
+      <arg name="services" type="a(ssbss)"/>
+    </signal>
+    <signal name="ProtectionStatusChanged">
+      <arg name="status" type="(sbs)"/>
+    </signal>
+    <property name="ApiVersion" type="u" access="read"/>
+  </interface>
+  <!--
+    v3 interface — redesigned enrollment with stop/resume/review and richer
+    progress. A v3 client negotiates API_VERSION_V3 (3) via negotiate_version_v3
+    and speaks org.namtor.Manager3. v1 and v2 clients continue to use their
+    own interfaces (above) unchanged.
+
+    The v3 progress signal carries (ssuuuuuys): session, phase, quality_percent,
+    diversity_percent, seen, accepted, rejected, quality_bucket (byte), guidance.
+    The v3 ReviewEnrollment method returns (sbuuus): session, ready_to_save,
+    quality_percent, diversity_percent, accepted, guidance.
+
+    Privacy invariant: the v3 surface carries no sensitive material — only
+    session ids, phase labels, coarse percentages, counters, a quality bucket,
+    and guidance text. The privacy scan test asserts no forbidden tokens.
+  -->
+  <interface name="org.namtor.Manager3">
+    <method name="StartEnrollment">
+      <arg name="uid" type="u" direction="in"/>
+      <arg name="name" type="s" direction="in"/>
+      <arg name="session" type="s" direction="out"/>
+    </method>
+    <method name="CancelEnrollment">
+      <arg name="session" type="s" direction="in"/>
+    </method>
+    <method name="CommitProfile">
+      <arg name="session" type="s" direction="in"/>
+      <arg name="profile" type="s" direction="out"/>
+    </method>
+    <method name="StopEnrollment">
+      <arg name="session" type="s" direction="in"/>
+    </method>
+    <method name="ResumeEnrollment">
+      <arg name="session" type="s" direction="in"/>
+    </method>
+    <method name="ReviewEnrollment">
+      <arg name="session" type="s" direction="in"/>
+      <arg name="review" type="(sbuuus)" direction="out"/>
+    </method>
+    <signal name="EnrollmentProgress">
+      <arg name="progress" type="(ssuuuuuys)"/>
+    </signal>
+    <signal name="EnrollmentCompleted">
+      <arg name="session" type="s"/>
+      <arg name="profile" type="s"/>
+    </signal>
+    <signal name="ProfileChanged">
+      <arg name="uid" type="u"/>
+      <arg name="id" type="s"/>
+    </signal>
+    <signal name="StatusChanged">
+      <arg name="status" type="(ua(ssbtt)b)"/>
+    </signal>
+    <property name="ApiVersion" type="u" access="read"/>
+  </interface>
+</node>

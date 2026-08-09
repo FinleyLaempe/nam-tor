@@ -287,13 +287,128 @@ pub fn negotiate_version_v2(client_version: u32) -> Result<u32, IncompatibleVers
     }
 }
 
+// ---------------------------------------------------------------------------
+// v3 interface — org.namtor.Manager3
+// ---------------------------------------------------------------------------
+
+/// v3 interface version. Surfaced read-only as the `ApiVersion` property on
+/// `org.namtor.Manager3` and used by [`negotiate_version_v3`].
+pub const API_VERSION_V3: u32 = 3;
+
+/// v3 D-Bus introspection XML. Contains the v1 interface (preserved
+/// byte-for-byte), the v2 interface (preserved byte-for-byte), and the new
+/// `org.namtor.Manager3` interface. Kept byte-identical to
+/// `docs/evidence/dbus-contract-v3.xml` by the
+/// `contract_v3_xml_matches_evidence_file` test.
+//
+// keep-inline-with: docs/evidence/dbus-contract-v3.xml
+pub const INTROSPECTION_XML_V3: &str =
+    include_str!("../../../../docs/evidence/dbus-contract-v3.xml");
+
+/// v3 D-Bus interface name.
+pub const INTERFACE_V3: &str = "org.namtor.Manager3";
+
+/// Method names on the v3 interface. The v3 enrollment surface preserves
+/// `StartEnrollment`, `CancelEnrollment`, and `CommitProfile` from v1 (same
+/// semantics, routed through the new worker internally) and adds
+/// `StopEnrollment`, `ResumeEnrollment`, and `ReviewEnrollment`.
+pub mod method_v3 {
+    pub const START_ENROLLMENT: &str = "StartEnrollment";
+    pub const CANCEL_ENROLLMENT: &str = "CancelEnrollment";
+    pub const COMMIT_PROFILE: &str = "CommitProfile";
+    pub const STOP_ENROLLMENT: &str = "StopEnrollment";
+    pub const RESUME_ENROLLMENT: &str = "ResumeEnrollment";
+    pub const REVIEW_ENROLLMENT: &str = "ReviewEnrollment";
+
+    /// All v3 method names, in declaration order.
+    pub const ALL: &[&str] = &[
+        START_ENROLLMENT,
+        CANCEL_ENROLLMENT,
+        COMMIT_PROFILE,
+        STOP_ENROLLMENT,
+        RESUME_ENROLLMENT,
+        REVIEW_ENROLLMENT,
+    ];
+}
+
+/// Signal names on the v3 interface. `EnrollmentProgress` now carries the
+/// expanded `(ssuuuuuys)` progress struct instead of v1's `(susu)`.
+/// `EnrollmentCompleted`, `ProfileChanged`, and `StatusChanged` are preserved
+/// from v1.
+pub mod signal_v3 {
+    pub const ENROLLMENT_PROGRESS: &str = "EnrollmentProgress";
+    pub const ENROLLMENT_COMPLETED: &str = "EnrollmentCompleted";
+    pub const PROFILE_CHANGED: &str = "ProfileChanged";
+    pub const STATUS_CHANGED: &str = "StatusChanged";
+
+    /// All v3 signal names, in declaration order.
+    pub const ALL: &[&str] = &[
+        ENROLLMENT_PROGRESS,
+        ENROLLMENT_COMPLETED,
+        PROFILE_CHANGED,
+        STATUS_CHANGED,
+    ];
+}
+
+/// Property names on the v3 interface.
+pub mod property_v3 {
+    pub const API_VERSION: &str = "ApiVersion";
+}
+
+/// v3 enrollment progress emitted as the `EnrollmentProgress` signal (frozen
+/// wire `(ssuuuuuys)`). `quality_percent` is capture suitability, NOT
+/// authentication accuracy. `quality_bucket` is a coarse byte label
+/// (0=low, 1=medium, 2=high). `guidance` is a closed enum mapped client-side.
+/// No biometric material crosses this surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct EnrollmentProgressV3 {
+    /// Enrollment session id.
+    pub session: String,
+    /// Current lifecycle phase (e.g. "capturing", "stopped").
+    pub phase: String,
+    /// Capture suitability percentage (0-100), NOT authentication accuracy.
+    pub quality_percent: u32,
+    /// Pose/angle diversity percentage (0-100).
+    pub diversity_percent: u32,
+    /// Total captures observed by the daemon.
+    pub frames_seen: u32,
+    /// Captures accepted into the reservoir.
+    pub frames_accepted: u32,
+    /// Captures rejected by quality filtering.
+    pub frames_rejected: u32,
+    /// Coarse quality bucket: 0=low, 1=medium, 2=high.
+    pub quality_bucket: u8,
+    /// Human-readable guidance enum value mapped client-side.
+    pub guidance: String,
+}
+
+/// v3 review snapshot returned by `ReviewEnrollment` (frozen wire `(sbuuus)`).
+/// Session-scoped summary of a stopped enrollment, distinct from v1's
+/// profile-scoped `ReviewProfile`. No biometric material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct EnrollmentReviewV3 {
+    /// Enrollment session id.
+    pub session: String,
+    /// Whether the reservoir is ready to commit.
+    pub ready_to_save: bool,
+    /// Capture suitability percentage (0-100), NOT authentication accuracy.
+    pub quality_percent: u32,
+    /// Pose/angle diversity percentage (0-100).
+    pub diversity_percent: u32,
+    /// Captures accepted into the reservoir.
+    pub frames_accepted: u32,
+    /// Human-readable guidance enum value mapped client-side.
+    pub guidance: String,
+}
+
 /// Version negotiation failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-// allow: SIZE_OK — single cohesive frozen-contract module (v1 + v2 constants,
-// name modules, typed structs, version helpers, and their validation tests).
-// The tests reference private helpers (`extract_names`, `squash`,
-// `extract_interface_block`); moving them to an integration test would force
-// those helpers public, polluting the contract API for test purposes.
+// allow: SIZE_OK — single cohesive frozen-contract module (v1 + v2 + v3
+// constants, name modules, typed structs, version helpers, and their
+// validation tests). The tests reference private helpers (`extract_names`,
+// `squash`, `extract_interface_block`); moving them to an integration test
+// would force those helpers public, polluting the contract API for test
+// purposes.
 #[error("incompatible manager api version: client requested {requested}, supported is {supported}")]
 pub struct IncompatibleVersion {
     pub requested: u32,
@@ -319,6 +434,26 @@ pub fn negotiate_version(client_version: u32) -> Result<u32, IncompatibleVersion
         Err(IncompatibleVersion {
             requested: client_version,
             supported: API_VERSION,
+        })
+    }
+}
+
+/// Negotiate the v3 interface version against a client's requested version.
+///
+/// The v3 interface (`org.namtor.Manager3`) is a new enrollment surface, not
+/// backward-compatible with v1 or v2. A client requesting exactly
+/// [`API_VERSION_V3`] gets v3; any other version (including 1 and 2) fails
+/// safely with [`IncompatibleVersion`] so the client never silently gets a
+/// different contract than the one it asked for. Clients wanting v1 or v2
+/// negotiate through [`negotiate_version`] or [`negotiate_version_v2`]
+/// respectively and speak those interfaces directly.
+pub fn negotiate_version_v3(client_version: u32) -> Result<u32, IncompatibleVersion> {
+    if client_version == API_VERSION_V3 {
+        Ok(API_VERSION_V3)
+    } else {
+        Err(IncompatibleVersion {
+            requested: client_version,
+            supported: API_VERSION_V3,
         })
     }
 }
@@ -895,6 +1030,263 @@ mod tests {
             signals.len(),
             signal_v2::ALL.len(),
             "v2 signal count drifted from frozen set"
+        );
+    }
+
+    // =======================================================================
+    // v3 contract tests
+    // =======================================================================
+
+    /// The v3 frozen constant must be byte-identical to the v3 evidence file.
+    #[test]
+    fn contract_v3_xml_matches_evidence_file() {
+        let file = include_str!("../../../../docs/evidence/dbus-contract-v3.xml");
+        assert_eq!(
+            file, INTROSPECTION_XML_V3,
+            "docs/evidence/dbus-contract-v3.xml and INTROSPECTION_XML_V3 drifted"
+        );
+    }
+
+    /// The v3 XML must declare exactly three interfaces: v1, v2, and v3.
+    #[test]
+    fn contract_v3_has_three_interfaces() {
+        assert!(
+            INTROSPECTION_XML_V3.contains("-//freedesktop//DTD D-BUS Object Introspection 1.0//EN")
+        );
+        let v1_count = INTROSPECTION_XML_V3
+            .matches("<interface name=\"org.namtor.Manager\">")
+            .count();
+        assert_eq!(v1_count, 1, "exactly one v1 org.namtor.Manager interface");
+        let v2_count = INTROSPECTION_XML_V3
+            .matches("<interface name=\"org.namtor.Manager2\">")
+            .count();
+        assert_eq!(v2_count, 1, "exactly one v2 org.namtor.Manager2 interface");
+        let v3_count = INTROSPECTION_XML_V3
+            .matches("<interface name=\"org.namtor.Manager3\">")
+            .count();
+        assert_eq!(v3_count, 1, "exactly one v3 org.namtor.Manager3 interface");
+        let total = INTROSPECTION_XML_V3
+            .matches("<interface name=\"org.namtor.")
+            .count();
+        assert_eq!(total, 3, "exactly three org.namtor.* interfaces in v3 XML");
+    }
+
+    /// The v1 and v2 interface blocks must be preserved byte-for-byte inside
+    /// the v3 XML. Mutation test: any change to the v1 or v2 interface in the
+    /// v3 file causes this test to fail.
+    #[test]
+    fn v1_v2_interfaces_preserved_in_v3_xml() {
+        let v1_block = extract_interface_block(INTROSPECTION_XML, INTERFACE);
+        assert!(
+            INTROSPECTION_XML_V3.contains(&v1_block),
+            "v1 interface block not preserved byte-for-byte in v3 XML"
+        );
+        let v2_block = extract_interface_block(INTROSPECTION_XML_V2, INTERFACE_V2);
+        assert!(
+            INTROSPECTION_XML_V3.contains(&v2_block),
+            "v2 interface block not preserved byte-for-byte in v3 XML"
+        );
+    }
+
+    /// The v3 XML must define exactly the required v3 method set — no more,
+    /// no less — when scoped to the Manager3 interface.
+    #[test]
+    fn contract_v3_defines_exactly_the_required_methods() {
+        let v3_block = extract_interface_block(INTROSPECTION_XML_V3, INTERFACE_V3);
+        let mut methods = extract_names(&v3_block, "method");
+        methods.sort();
+        let mut expected: Vec<&str> = method_v3::ALL.to_vec();
+        expected.sort();
+        assert_eq!(methods, expected, "v3 method set differs from frozen v3");
+    }
+
+    /// The v3 XML must define exactly the required v3 signal set.
+    #[test]
+    fn contract_v3_defines_exactly_the_required_signals() {
+        let v3_block = extract_interface_block(INTROSPECTION_XML_V3, INTERFACE_V3);
+        let mut signals = extract_names(&v3_block, "signal");
+        signals.sort();
+        let mut expected: Vec<&str> = signal_v3::ALL.to_vec();
+        expected.sort();
+        assert_eq!(signals, expected, "v3 signal set differs from frozen v3");
+    }
+
+    /// The v3 interface must expose a read-only `ApiVersion` property.
+    #[test]
+    fn contract_v3_exposes_api_version_property() {
+        let v3_block = extract_interface_block(INTROSPECTION_XML_V3, INTERFACE_V3);
+        let props = extract_names(&v3_block, "property");
+        assert!(
+            props.iter().any(|p| p == property_v3::API_VERSION),
+            "missing ApiVersion property on v3 interface"
+        );
+        assert!(
+            v3_block.contains(r#"<property name="ApiVersion" type="u" access="read"/>"#),
+            "v3 ApiVersion must be a read-only u32"
+        );
+    }
+
+    /// v3 method signatures must be stable. Mutation test: changing any v3
+    /// method's argument signature causes this test to fail.
+    #[test]
+    fn v3_method_signatures_are_stable() {
+        let s = squash(INTROSPECTION_XML_V3);
+        assert!(s.contains(
+            r#"<method name="StartEnrollment"> <arg name="uid" type="u" direction="in"/> <arg name="name" type="s" direction="in"/> <arg name="session" type="s" direction="out"/>"#
+        ));
+        assert!(s.contains(
+            r#"<method name="CancelEnrollment"> <arg name="session" type="s" direction="in"/>"#
+        ));
+        assert!(s.contains(
+            r#"<method name="CommitProfile"> <arg name="session" type="s" direction="in"/> <arg name="profile" type="s" direction="out"/>"#
+        ));
+        assert!(s.contains(
+            r#"<method name="StopEnrollment"> <arg name="session" type="s" direction="in"/>"#
+        ));
+        assert!(s.contains(
+            r#"<method name="ResumeEnrollment"> <arg name="session" type="s" direction="in"/>"#
+        ));
+        assert!(s.contains(
+            r#"<method name="ReviewEnrollment"> <arg name="session" type="s" direction="in"/> <arg name="review" type="(sbuuus)" direction="out"/>"#
+        ));
+    }
+
+    /// The v3 EnrollmentProgress signal must carry the exact (ssuuuuuys)
+    /// progress struct. Mutation test: changing the struct signature causes
+    /// this test to fail.
+    #[test]
+    fn v3_progress_signal_signature() {
+        let s = squash(INTROSPECTION_XML_V3);
+        assert!(s.contains(
+            r#"<signal name="EnrollmentProgress"> <arg name="progress" type="(ssuuuuuys)"/>"#
+        ));
+    }
+
+    /// The v3 ReviewEnrollment return must carry the exact (sbuuus) struct.
+    #[test]
+    fn v3_review_return_signature() {
+        let s = squash(INTROSPECTION_XML_V3);
+        assert!(s.contains(r#"type="(sbuuus)" direction="out""#));
+    }
+
+    /// Privacy: no biometric-bearing token may appear in the v3 XML either.
+    #[test]
+    fn privacy_scan_rejects_biometric_tokens_v3() {
+        let lower = INTROSPECTION_XML_V3.to_lowercase();
+        for token in FORBIDDEN_TOKENS {
+            assert!(
+                !lower.contains(token),
+                "v3 contract XML contains forbidden token `{token}`"
+            );
+        }
+    }
+
+    /// v3 API version must be frozen at 3.
+    #[test]
+    fn v3_api_version_is_frozen() {
+        assert_eq!(API_VERSION_V3, 3);
+    }
+
+    /// A v3 client requesting v3 negotiates successfully.
+    #[test]
+    fn negotiate_v3_supported_version_succeeds() {
+        assert_eq!(
+            negotiate_version_v3(API_VERSION_V3).unwrap(),
+            API_VERSION_V3
+        );
+    }
+
+    /// A client requesting any version other than 3 (1, 2, 4, 0) is rejected
+    /// safely by the v3 negotiator — v3 is a new interface, not backward-
+    /// compatible with v1 or v2.
+    #[test]
+    fn negotiate_v3_wrong_version_fails_safely() {
+        for wrong in [0u32, 1, 2, 4] {
+            let err = negotiate_version_v3(wrong).unwrap_err();
+            assert_eq!(err.requested, wrong);
+            assert_eq!(err.supported, API_VERSION_V3);
+        }
+    }
+
+    /// v1 and v2 negotiation functions must remain unchanged by the addition
+    /// of v3. Regression guard: v3 must not alter existing negotiators.
+    #[test]
+    fn v1_v2_negotiation_unchanged_by_v3() {
+        assert_eq!(negotiate_version(API_VERSION).unwrap(), API_VERSION);
+        assert!(negotiate_version(API_VERSION + 1).is_err());
+        assert_eq!(
+            negotiate_version_v2(API_VERSION_V2).unwrap(),
+            API_VERSION_V2
+        );
+        assert_eq!(negotiate_version_v2(API_VERSION).unwrap(), API_VERSION);
+        assert!(negotiate_version_v2(API_VERSION_V2 + 1).is_err());
+    }
+
+    /// The D-Bus Type signatures for v3 wire structs must match the
+    /// introspection XML. Mutation test: changing a struct field type causes
+    /// the signature assertion to fail.
+    #[test]
+    fn v3_types_have_correct_dbus_signatures() {
+        assert_eq!(EnrollmentProgressV3::SIGNATURE, "(ssuuuuuys)");
+        assert_eq!(EnrollmentReviewV3::SIGNATURE, "(sbuuus)");
+    }
+
+    /// v3 wire structs must round-trip through JSON serialization. The D-Bus
+    /// wire format is positional (struct fields have no on-wire names); the
+    /// XML privacy scan is the authoritative wire-surface check.
+    #[test]
+    fn v3_types_round_trip_and_no_biometric_leak() {
+        let progress = EnrollmentProgressV3 {
+            session: "sess-1".into(),
+            phase: "capturing".into(),
+            quality_percent: 75,
+            diversity_percent: 60,
+            frames_seen: 100,
+            frames_accepted: 75,
+            frames_rejected: 25,
+            quality_bucket: 2,
+            guidance: "center your face".into(),
+        };
+        let json = serde_json::to_string(&progress).unwrap();
+        let back: EnrollmentProgressV3 = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, progress);
+
+        let review = EnrollmentReviewV3 {
+            session: "sess-1".into(),
+            ready_to_save: true,
+            quality_percent: 80,
+            diversity_percent: 65,
+            frames_accepted: 75,
+            guidance: "ready to commit".into(),
+        };
+        let json = serde_json::to_string(&review).unwrap();
+        let back: EnrollmentReviewV3 = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, review);
+    }
+
+    /// Mutation test: changing the v3 method set causes the exact-set test to
+    /// fail.
+    #[test]
+    fn v3_method_set_mutation_guard() {
+        let v3_block = extract_interface_block(INTROSPECTION_XML_V3, INTERFACE_V3);
+        let methods = extract_names(&v3_block, "method");
+        assert_eq!(
+            methods.len(),
+            method_v3::ALL.len(),
+            "v3 method count drifted from frozen set"
+        );
+    }
+
+    /// Mutation test: changing the v3 signal set causes the exact-set test to
+    /// fail.
+    #[test]
+    fn v3_signal_set_mutation_guard() {
+        let v3_block = extract_interface_block(INTROSPECTION_XML_V3, INTERFACE_V3);
+        let signals = extract_names(&v3_block, "signal");
+        assert_eq!(
+            signals.len(),
+            signal_v3::ALL.len(),
+            "v3 signal count drifted from frozen set"
         );
     }
 }

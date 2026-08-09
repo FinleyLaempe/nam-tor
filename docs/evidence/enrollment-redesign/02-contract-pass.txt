@@ -1,0 +1,94 @@
+=== Manager3 Contract Evidence: Pass Transcript ===
+Date: 2026-08-09T23:50:54Z
+Task: Plan task 2 — Freeze the Manager3 enrollment wire contract
+
+=== 1. cargo test -p namtor-daemon --lib manager::contract ===
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/namtor_daemon-b42e75f879526032)
+
+running 55 tests
+test manager::contract::tests::contract_has_one_manager_interface ... ok
+test manager::contract::tests::contract_exposes_api_version_property ... ok
+test manager::contract::tests::contract_v2_exposes_api_version_property ... ok
+test manager::contract::tests::contract_v2_defines_exactly_the_required_methods ... ok
+test manager::contract::tests::contract_v2_defines_exactly_the_required_signals ... ok
+test manager::contract::tests::contract_v3_defines_exactly_the_required_methods ... ok
+test manager::contract::tests::contract_v3_xml_matches_evidence_file ... ok
+test manager::contract::tests::contract_v3_defines_exactly_the_required_signals ... ok
+test manager::contract::tests::extract_names_helper_works ... ok
+test manager::contract::tests::negotiate_higher_version_fails_safely ... ok
+test manager::contract::tests::negotiate_lower_version_fails_safely ... ok
+test manager::contract::tests::negotiate_supported_version_succeeds ... ok
+test manager::contract::tests::contract_defines_exactly_the_required_methods ... ok
+test manager::contract::tests::error_names_are_namespaced ... ok
+test manager::contract::tests::method_signatures_are_stable ... ok
+test manager::contract::tests::merge_replace_review_semantics_present ... ok
+test manager::contract::tests::contract_xml_matches_evidence_file ... ok
+test manager::contract::tests::contract_defines_exactly_the_required_signals ... ok
+test manager::contract::tests::negotiate_v2_higher_version_fails_safely ... ok
+test manager::contract::tests::negotiate_v2_lower_version_fails_safely ... ok
+test manager::contract::tests::negotiate_v3_wrong_version_fails_safely ... ok
+test manager::contract::tests::negotiate_v2_supported_version_succeeds ... ok
+test manager::contract::tests::contract_v2_has_both_interfaces ... ok
+test manager::contract::tests::contract_v3_has_three_interfaces ... ok
+test manager::contract::tests::pam_service_compatibility_exhaustive_variants ... ok
+test manager::contract::tests::pam_service_info_round_trips ... ok
+test manager::contract::tests::privacy_scan_rejects_biometric_tokens ... ok
+test manager::contract::tests::protection_key_kind_exhaustive_variants ... ok
+test manager::contract::tests::protection_status_round_trips ... ok
+test manager::contract::tests::contract_v2_xml_matches_evidence_file ... ok
+test manager::contract::tests::contract_v3_exposes_api_version_property ... ok
+test manager::contract::tests::privacy_scan_rejects_biometric_tokens_v2 ... ok
+test manager::contract::tests::negotiate_v3_supported_version_succeeds ... ok
+test manager::contract::tests::v1_interface_preserved_in_v2_xml ... ok
+test manager::contract::tests::v1_v2_negotiation_unchanged_by_v3 ... ok
+test manager::contract::tests::v2_api_version_is_frozen ... ok
+test manager::contract::tests::signal_signatures_are_stable ... ok
+test manager::contract::tests::negotiate_v2_v1_backward_compat ... ok
+test manager::contract::tests::privacy_scan_rejects_biometric_tokens_v3 ... ok
+test manager::contract::tests::v2_error_names_are_namespaced ... ok
+test manager::contract::tests::v1_v2_interfaces_preserved_in_v3_xml ... ok
+test manager::contract::tests::v2_method_set_mutation_guard ... ok
+test manager::contract::tests::v2_signal_set_mutation_guard ... ok
+test manager::contract::tests::v2_types_have_correct_dbus_signatures ... ok
+test manager::contract::tests::v2_signal_signatures_are_stable ... ok
+test manager::contract::tests::v2_types_no_biometric_leak ... ok
+test manager::contract::tests::v3_api_version_is_frozen ... ok
+test manager::contract::tests::v2_method_signatures_are_stable ... ok
+test manager::contract::tests::v3_method_set_mutation_guard ... ok
+test manager::contract::tests::v3_signal_set_mutation_guard ... ok
+test manager::contract::tests::v3_types_have_correct_dbus_signatures ... ok
+test manager::contract::tests::v3_types_round_trip_and_no_biometric_leak ... ok
+test manager::contract::tests::v3_progress_signal_signature ... ok
+test manager::contract::tests::v3_method_signatures_are_stable ... ok
+test manager::contract::tests::v3_review_return_signature ... ok
+
+test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 344 filtered out; finished in 0.00s
+
+
+=== 2. gdbus-codegen validation ===
+
+Command: gdbus-codegen --interface-prefix org.namtor. --generate-c-code /tmp/namtor-manager3 docs/evidence/dbus-contract-v3.xml
+Exit code: 0
+
+Generated files:
+-rw-r--r-- 1 finley finley 297492 Aug 10 01:50 /tmp/namtor-manager3.c
+-rw-r--r-- 1 finley finley  30704 Aug 10 01:50 /tmp/namtor-manager3.h
+
+=== 3. v1/v2 preservation verification ===
+
+v1 interface block preserved byte-for-byte in v3 XML: True
+v2 interface block preserved byte-for-byte in v3 XML: True
+Forbidden tokens in v3 XML: NONE
+Interface count in v3 XML: 3
+
+=== 4. KDE types compilation ===
+
+test tests::happy_path ... ok
+test tests::shared_contract_suite ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+=== END ===

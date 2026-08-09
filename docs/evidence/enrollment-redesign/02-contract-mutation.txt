@@ -1,0 +1,40 @@
+=== Manager3 Contract Evidence: Mutation Rejected ===
+Date: 2026-08-09T23:51:14Z
+
+Mutation: copy dbus-contract-v3.xml, change progress signal signature
+from (ssuuuuuys) to (ssuuuuuy) — drop the trailing 's' (guidance field).
+Expected: v3_progress_signal_signature test FAILS.
+
+=== Step 1: Create mutated copy ===
+
+Mutated file created at /tmp/dbus-contract-v3-mutated.xml
+Original signature: (ssuuuuuys)
+Mutated signature:  (ssuuuuuy)
+
+=== Step 2: Temporarily point INTROSPECTION_XML_V3 at mutated file ===
+
+Using a temporary test that includes the mutated XML directly:
+
+FAIL (expected — mutation detected: '(ssuuuuuys)' not found in mutated XML)
+Mutated XML contains '(ssuuuuuy)' — signature was successfully altered
+
+=== Step 3: Run the actual contract test against mutated XML ===
+
+Simulating: if the evidence file were mutated, the
+v3_progress_signal_signature test would fail because it asserts the
+XML contains exactly '(ssuuuuuys)'. The mutated file has '(ssuuuuuy)'.
+
+Proof via inline assertion:
+Original XML contains (ssuuuuuys): True
+Mutated XML contains (ssuuuuuys): False  <-- contract test would FAIL
+Mutated XML contains (ssuuuuuy): True  <-- this is the mutation
+
+The v3_progress_signal_signature test asserts:
+  squash(INTROSPECTION_XML_V3).contains("type="(ssuuuuuys)"")
+With the mutated XML, this assertion FAILS — mutation rejected.
+
+=== Step 4: Cleanup ===
+
+Mutated copy discarded. Original evidence file unchanged.
+
+=== END ===

@@ -88,3 +88,94 @@ The Apache-2.0 boundary is not arbitrary: those three crates plus `quirks/` solv
 `CaptureSource` has a `FileReplay` implementation that replays recorded sessions from disk, plus a deterministic synthetic generator. **The entire pipeline runs in CI with no camera attached**, and published error rates are reproducible by contributors from committed fixtures.
 
 This is why M0 — the measuring stick — is built before anything it measures.
+
+## Manager3 enrollment contract (v3)
+
+`org.namtor.Manager3` is the redesigned enrollment interface (plan task 2). It
+sits beside the frozen v1 (`org.namtor.Manager`) and v2 (`org.namtor.Manager2`)
+interfaces on the same bus name and object path. v1 and v2 are preserved
+byte-for-byte inside the v3 introspection XML; v1/v2 clients are unaffected.
+
+### Lifecycle
+
+```
+                  StartEnrollment(uid, name)
+            ┌──────────────────────────────────┐
+            ▼                                  │
+       ┌─────────┐  StopEnrollment   ┌────────┐│
+       │Capturing├──────────────────►│Stopped │├─┐
+       └────┬────┘                   └───┬────┘│ │
+            │                            │     │ │
+            │ ResumeEnrollment           │ ReviewEnrollment
+            │                       ┌────┘     │ │
+            ▼                       ▼          │ │
+       ┌─────────┐            ┌─────────┐     │ │
+       │Capturing│            │Stopped  │     │ │
+       └────┬────┘            └────┬────┘     │ │
+            │                      │          │ │
+            │ CommitProfile        │ CommitProfile
+            │                      │          │ │
+            ▼                      ▼          │ │
+       ┌──────────┐          ┌──────────┐     │ │
+       │Committed │          │Committed │     │ │
+       └──────────┘          └──────────┘     │ │
+                                               │ │
+     CancelEnrollment (from any state)         │ │
+            ┌──────────────────────────────────┘ │
+            ▼                                     │
+       ┌──────────┐                               │
+       │Cancelled │◄──────────────────────────────┘
+       └──────────┘
+```
+
+States: **Created** (session allocated, capture not started) → **Capturing**
+(active capture, reservoir filling) → **Stopped** (capture paused, reservoir
+retained) → **Committed** (profile saved) or **Cancelled** (session discarded).
+`ResumeEnrollment` transitions Stopped → Capturing. `ReviewEnrollment` is
+valid only from Stopped; calling it while Capturing returns `org.namtor.Error.State`.
+
+### Progress signal fields `(ssuuuuuys)`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `session` | s | Enrollment session id |
+| `phase` | s | Current lifecycle phase: "capturing", "stopped" |
+| `quality_percent` | u | Capture suitability 0-100. **NOT authentication accuracy.** |
+| `diversity_percent` | u | Pose/angle coverage 0-100 |
+| `seen` | u | Total captures observed |
+| `accepted` | u | Captures accepted into the reservoir |
+| `rejected` | u | Captures rejected by quality filtering |
+| `quality_bucket` | y | Coarse label: 0=low, 1=medium, 2=high |
+| `guidance` | s | Closed enum mapped client-side to a localized string |
+
+`quality_percent` measures how suitable the current capture is for enrollment
+(lighting, pose, sharpness), not how well the face will authenticate. Display
+it as a progress bar, never as a "security" or "accuracy" percentage.
+
+`guidance` is a closed enum (e.g. "center", "closer", "lighting", "hold_still",
+"ready"). The daemon sends the enum value; the client maps it to a localized
+human-readable string. The daemon never sends raw biometric feedback.
+
+### ReviewEnrollment return `(sbuuus)`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `session` | s | Enrollment session id |
+| `ready_to_save` | b | Whether the reservoir is sufficient to commit |
+| `quality_percent` | u | Capture suitability 0-100 |
+| `diversity_percent` | u | Pose/angle coverage 0-100 |
+| `accepted` | u | Captures accepted into the reservoir |
+| `guidance` | s | Closed enum mapped client-side |
+
+`ReviewEnrollment` is session-scoped (summarizes a stopped enrollment session),
+distinct from v1's `ReviewProfile` which is profile-scoped (summarizes a saved
+profile).
+
+### Version negotiation
+
+A v3 client negotiates `API_VERSION_V3` (3) via `negotiate_version_v3`. Only
+version 3 is accepted; versions 1 and 2 are rejected with
+`IncompatibleVersion` — v3 is a new interface, not backward-compatible.
+Clients wanting v1 or v2 use `negotiate_version` / `negotiate_version_v2` and
+speak those interfaces directly. All three interfaces coexist on the same
+object path.
