@@ -1,0 +1,40 @@
+{
+  "task": "23",
+  "title": "Make generic staging and uninstall manifest-complete",
+  "gate": "uninstall-closure",
+  "status": "PASS",
+  "timestamp": "2026-08-09T04:00:00Z",
+  "summary": "packaging/uninstall.sh was rewritten from a 66-line hardcoded-path script to a manifest-driven, DESTDIR-aware, idempotent uninstaller. It reads packaging/install-manifest.toml via python3 tomllib (same as stage.sh), reverses every declared path (files → generated_state → rmdir for dirs), purges /var/lib/namtor + /run/namtor, removes the namtor user and namtor-auth group (if existing), and disables PAM services before deleting the PAM module via namtor-pam-edit disable-all → lifecycle.sh pre-remove → grep+warn fallback. Forward staging (stage.sh --package all) + reverse uninstall = zero Nam-tor-owned file paths remain, zero Nam-tor-specific dirs remain, shared dirs with stock files correctly survive rmdir, dry-run touches nothing, interrupted uninstall resumes idempotently. 28 manifest-declared files removed, 4 generated-state paths purged, 13 dirs rmdir'd.",
+  "assertions": {
+    "total": 17,
+    "passed": 17,
+    "failed": 0,
+    "exit_code": 0
+  },
+  "test_command": "bash packaging/tests/test_uninstall_closure.sh",
+  "manifest_paths": {
+    "files_removed": 28,
+    "genstate_purged": 4,
+    "dirs_rmdir": 13
+  },
+  "safety_invariants": {
+    "pam_disabled_before_module_delete": "PASS — the PAM module existed when namtor-pam-edit disable-all ran (verified via test stub that records module existence at call time)",
+    "stock_files_untouched": "PASS — /usr/bin/ls, /etc/pam.d/system-auth, /usr/share/applications/other-app.desktop, /usr/share/metainfo/other.metainfo.xml, /usr/lib/systemd/system/other.service all survive uninstall",
+    "shared_dirs_preserved": "PASS — /usr/share/applications, /usr/share/metainfo, /usr/lib/systemd/system survive (non-empty due to stock files; rmdir --ignore-fail-on-non-empty)",
+    "dry_run_safe": "PASS — 39 files before = 39 files after dry-run; pam_namtor.so still present",
+    "idempotent_resume": "PASS — partial removal (half files deleted manually) + full uninstall = zero leftovers; re-run exits 0",
+    "no_hardcoded_paths": "PASS — no `rm -f /usr/lib/namtor/namtor-daemon` or similar hardcoded paths in uninstall.sh; all paths derived from manifest via tomllib"
+  },
+  "files_created": [
+    "packaging/tests/test_uninstall_closure.sh"
+  ],
+  "files_modified": [
+    "packaging/uninstall.sh"
+  ],
+  "files_not_touched": [
+    "packaging/stage.sh — only verified, no changes needed (--package support intact)",
+    "packaging/install-manifest.toml — not modified; uninstall.sh is a consumer",
+    "packaging/lifecycle.sh — not modified; used as PAM-disabling fallback",
+    "distro packaging (arch/ fedora/ debian/) — out of scope; distro-specific hooks use their own maintainer scripts"
+  ]
+}

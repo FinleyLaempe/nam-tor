@@ -1,0 +1,83 @@
+{
+  "task": "12-lifecycle-pass",
+  "description": "PAM registry lifecycle commands (snapshot, validate, migrate, disable-all, purge) — pass scenarios: upgrade preserves data/config, disable-all removes every block, purge leaves no Nam-tor state",
+  "date": "2026-08-08",
+  "crate": "namtor-pam-config",
+  "modules": {
+    "registry.rs": "snapshot_to/restore_from/clear/purge_file/purge_snapshot — snapshot/restore registry, purge registry file + snapshot dir",
+    "editor.rs": "snapshot/validate/migrate/disable_all_services/purge — lifecycle coordination (snapshot PAM+registry, validate consistency, migrate with rollback, disable-all, purge all PAM state)",
+    "bin/namtor-pam-edit.rs": "snapshot|validate|migrate|disable-all|purge subcommands wired to lifecycle functions",
+    "lib.rs": "re-export ValidationStatus, ValidationReport, ValidationInconsistency, MigrationReport, snapshot, validate, migrate, disable_all_services, purge, purge_file, purge_snapshot, snapshot_dir"
+  },
+  "lifecycle_commands": {
+    "snapshot": "save registry + PAM files to {registry_root}/pam-snapshot/ for rollback",
+    "validate": "check registry matches PAM state (missing_block, orphaned_block)",
+    "migrate": "snapshot → re-enable all registry services → restore on failure",
+    "disable-all": "disable every registry service, clear registry",
+    "purge": "disable-all + remove backups + remove registry + remove snapshot + clean stale temps"
+  },
+  "tests": {
+    "total": 19,
+    "all_pass": true,
+    "categories": {
+      "snapshot": [
+        "snapshot_saves_registry_and_pam_files",
+        "snapshot_of_empty_registry_creates_empty_snapshot"
+      ],
+      "validate": [
+        "validate_passes_when_consistent",
+        "validate_detects_missing_block",
+        "validate_detects_orphaned_block",
+        "validate_passes_on_empty_registry"
+      ],
+      "migrate": [
+        "migrate_preserves_enabled_services",
+        "migrate_updates_block_format",
+        "migrate_on_empty_registry_is_noop",
+        "failed_migration_restores_previous_state"
+      ],
+      "disable_all": [
+        "disable_all_removes_every_block",
+        "disable_all_is_idempotent_on_empty_registry",
+        "disable_all_preserves_stock_lines"
+      ],
+      "purge": [
+        "purge_removes_all_pam_state",
+        "purge_is_idempotent_on_clean_state",
+        "purge_removes_backup_files"
+      ],
+      "lifecycle_matrix": [
+        "lifecycle_matrix_upgrade_preserves_data_and_config",
+        "lifecycle_matrix_failed_migration_rollback",
+        "lifecycle_matrix_removal_purges_all"
+      ]
+    }
+  },
+  "registry_unit_tests": {
+    "total": 7,
+    "names": [
+      "clear_empties_services",
+      "snapshot_and_restore_roundtrip",
+      "restore_from_missing_dir_returns_empty",
+      "purge_file_removes_registry",
+      "purge_file_idempotent_when_absent",
+      "purge_snapshot_removes_dir",
+      "purge_snapshot_idempotent_when_absent"
+    ]
+  },
+  "packaging_hooks": {
+    "arch": "post_upgrade → migrate; pre_remove → disable-all; post_remove → purge + rm -rf /var/lib/namtor",
+    "fedora": "%preun → disable-all; %postun → purge + rm -rf; %posttrans → migrate",
+    "debian_prerm": "remove → disable-all; upgrade → snapshot",
+    "debian_postrm": "purge → purge + rm -rf; upgrade → migrate"
+  },
+  "e2e_verification": {
+    "fake_root_lifecycle": "enable → snapshot → validate → migrate → disable-all → purge: PASS (no namtor, no backups, no registry)",
+    "failed_migration_rollback": "corrupt backup → migrate fails → gdm-password block preserved → registry intact"
+  },
+  "verification": {
+    "cargo_test": "19 lifecycle + 7 registry + 37 editor = 63 tests pass (0 failed)",
+    "cargo_clippy": "clean (-D warnings)",
+    "cargo_build": "clean (release binary)"
+  }
+}

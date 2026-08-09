@@ -1,0 +1,54 @@
+{
+  "task": "8. Implement TPM2-first keys with explicit secure fallback status",
+  "date": "2026-08-08",
+  "gate": "protection-failures",
+  "method": "cargo test -p namtor-store --lib (downgrade refusal + PCR mismatch tests) + cargo test -p namtor-daemon --lib manager:: (error mapping)",
+  "failure_modes": [
+    {
+      "mode": "downgrade_refusal_tpm2_blob_unopenable",
+      "description": "Existing storage sealed by a TPM2-type backend (mock-tpm) cannot be opened by a file-only selector. Must return StoreError::DowngradeRefused, not silently fall back to software.",
+      "test": "downgrade_refused_when_tpm2_blob_cannot_be_opened",
+      "expected_error": "StoreError::DowngradeRefused",
+      "passed": true
+    },
+    {
+      "mode": "downgrade_refusal_real_tpm2_backend_id",
+      "description": "Blob with real 'tpm2' backend_id (wire format from Tpm2Backend) loaded without tpm2 feature or device. Must return DowngradeRefused, not Crypto('unknown backend').",
+      "test": "downgrade_refused_for_real_tpm2_backend_id_without_tpm",
+      "expected_error": "StoreError::DowngradeRefused",
+      "passed": true
+    },
+    {
+      "mode": "file_blob_no_downgrade_error",
+      "description": "File-backend blob reloads with any selector without triggering DowngradeRefused (file backend is always available).",
+      "test": "file_blob_reloads_without_downgrade_error",
+      "expected_error": "none (Ok)",
+      "passed": true
+    },
+    {
+      "mode": "pcr_mismatch_after_reboot",
+      "description": "Key sealed with PCR boot_state binding fails to unseal after a simulated reboot changes PCR 0. Returns Tpm2 error with 'PCR policy mismatch'.",
+      "test": "pcr_mismatch_denied_after_reboot",
+      "expected_error": "StoreError::Tpm2 containing 'PCR policy mismatch'",
+      "passed": true
+    },
+    {
+      "mode": "pcr_mismatch_after_pcr_change",
+      "description": "Key sealed with PCR boot_state binding fails to unseal after PCR 7 is changed. Returns Tpm2 error with 'PCR policy mismatch'.",
+      "test": "mock_pcr_mismatch_fails_after_pcr_change",
+      "expected_error": "StoreError::Tpm2 containing 'PCR policy mismatch'",
+      "passed": true
+    },
+    {
+      "mode": "map_store_error_downgrade_refused",
+      "description": "StoreError::DowngradeRefused maps to ApiError::State with 'downgrade refused' prefix for the D-Bus surface.",
+      "test": "map_store_error_downgrade_refused",
+      "expected_error": "ApiError::State containing 'downgrade refused'",
+      "passed": true
+    }
+  ],
+  "downgrade_refusal_logic": "In SealedKey::load_or_create_with, when an existing blob's backend_id is a TPM2-type (tpm2 or mock-tpm) and selector.open(backend_id) fails, return StoreError::DowngradeRefused with the backend id and original error. File-backend blobs always open (no refusal).",
+  "tpm2_type_detection": "is_tpm2_type_backend(backend_id) returns true for 'tpm2' (TPM2_BACKEND_ID) and 'mock-tpm' (MockTpm::BACKEND_ID); false for 'file' (FileBackend::BACKEND_ID).",
+  "never_silently_downgrades": true,
+  "result": "PASS"
+}

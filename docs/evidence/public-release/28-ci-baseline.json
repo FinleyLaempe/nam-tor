@@ -1,0 +1,81 @@
+{
+  "task": "28",
+  "title": "CI gates for public package completeness and policy drift",
+  "gate": "ci-packaging-baseline",
+  "status": "PASS",
+  "summary": "Baseline run of all 11 packaging test suites: 11 passed, 0 skipped (hardware-gated), 0 failed. Each suite is a CI gate that blocks on nonzero exit (77 = hardware-gated skip, not a failure). Suites cover: split-package structure (Arch/Fedora/Debian), PAM default-off at install, lifecycle helper phases, model archive reproducibility/tamper/manifest hygiene, uninstall closure, supply chain (SBOM + provenance + model cards), release signatures, doc audit (stale strings + experimental warning), support bundle (privacy-safe diagnostics + legacy setuid detection).",
+  "suites": [
+    {
+      "suite": "test_arch_split.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_fedora_split.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_debian_split.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_install_default_off.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_lifecycle.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_model_archive.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_uninstall_closure.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_supply_chain.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_release_signatures.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_doc_audit.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_support_bundle.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    }
+  ],
+  "totals": {
+    "pass": 11,
+    "skip": 0,
+    "fail": 0
+  },
+  "gate_categories": [
+    "licence/hash/notice drift",
+    "split ownership",
+    "production model validation call path",
+    "system-bus client parity",
+    "PAM-default-off",
+    "no unexpected setuid",
+    "package builds (structural)",
+    "uninstall closure",
+    "docs claims",
+    "SBOM/signatures"
+  ]
+}

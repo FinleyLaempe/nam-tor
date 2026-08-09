@@ -1,0 +1,84 @@
+{
+  "task": "18",
+  "title": "Worker denial evidence — sandbox prevents template/key/model access",
+  "summary": "Escape tests prove the sandboxed worker cannot open template, key, or model files, cannot open sockets, cannot connect, cannot exec, and cannot fork — even though it shares the daemon's UID (namtor) which has read access to /var/lib/namtor.",
+  "test_suite": "crates/namtor-worker/tests/escape.rs",
+  "test_binary": "namtor-worker --apply-sandbox --self-test <kind>",
+  "mechanism": "seccomp denies open/openat with EPERM before the kernel resolves the path, so the test works even when the paths do not exist on the CI host",
+  "denials": [
+    {
+      "test": "denied_open_file",
+      "kind": "open_file",
+      "path_attempted": "/etc/passwd",
+      "expected": "EPERM or EACCES",
+      "result": "PASS — denied by seccomp (open/openat) + landlock (all FS denied)"
+    },
+    {
+      "test": "denied_open_templates",
+      "kind": "open_templates",
+      "path_attempted": "/var/lib/namtor/templates/0.bin",
+      "expected": "EPERM or EACCES",
+      "result": "PASS — denied by seccomp before kernel checks path existence"
+    },
+    {
+      "test": "denied_open_keys",
+      "kind": "open_keys",
+      "path_attempted": "/var/lib/namtor/templates.key/key.bin",
+      "expected": "EPERM or EACCES",
+      "result": "PASS — denied by seccomp before kernel checks path existence"
+    },
+    {
+      "test": "denied_open_models",
+      "kind": "open_models",
+      "path_attempted": "/var/lib/namtor/models/yunet_2023mar/model.onnx",
+      "expected": "EPERM or EACCES",
+      "result": "PASS — denied by seccomp before kernel checks path existence"
+    },
+    {
+      "test": "denied_open_socket",
+      "kind": "open_socket",
+      "path_attempted": "socket(AF_UNIX, SOCK_STREAM, 0)",
+      "expected": "EPERM",
+      "result": "PASS — denied by seccomp (socket)"
+    },
+    {
+      "test": "denied_connect",
+      "kind": "connect",
+      "path_attempted": "connect(AF_UNIX abstract)",
+      "expected": "EPERM",
+      "result": "PASS — denied by seccomp (connect)"
+    },
+    {
+      "test": "denied_exec",
+      "kind": "exec",
+      "path_attempted": "execve(/bin/true)",
+      "expected": "EPERM",
+      "result": "PASS — denied by seccomp (execve)"
+    },
+    {
+      "test": "denied_fork",
+      "kind": "fork",
+      "path_attempted": "fork()",
+      "expected": "EPERM",
+      "result": "PASS — denied by seccomp (fork/clone)"
+    }
+  ],
+  "positive_control": [
+    {
+      "test": "allowed_write_to_inherited_fd",
+      "kind": "write_inherited",
+      "action": "write to stdout (fd 1, inherited)",
+      "expected": "ok",
+      "result": "PASS — write to inherited fd is allowed (the worker must communicate with the daemon)"
+    }
+  ],
+  "package_setuid_scan": {
+    "install_manifest_modes": "no entry with mode 4755 (setuid) — verified by grepping install-manifest.toml",
+    "binary_build_targets": "namtor-worker-spawn no longer in Cargo.toml [[bin]] targets",
+    "uninstall_script": "namtor-worker-spawn line removed from packaging/uninstall.sh",
+    "arch_install": "chmod u+s block removed from packaging/arch/namtor.install",
+    "fedora_spec": "namtor-worker-spawn removed from %files list",
+    "debian": "no setuid references in control, changelog, or rules",
+    "conclusion": "no unexpected setuid files in the package"
+  }
+}

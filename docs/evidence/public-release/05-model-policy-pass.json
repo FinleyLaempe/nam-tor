@@ -1,0 +1,87 @@
+{
+  "evidence": "05-model-policy-pass",
+  "date": "2026-08-08",
+  "description": "Typed model admission policy — PASS cases (redistributable auto-admit, restricted with valid record)",
+  "test_command": "cargo test -p namtor-daemon --lib -- licence:: models::",
+  "result": "PASS",
+  "test_cases": [
+    {
+      "name": "licence::tests::redistributable_admits_without_record",
+      "verdict": "pass",
+      "policy": "Redistributable",
+      "record": "absent",
+      "env_var": "not used",
+      "expected": "Ok — admits without record",
+      "notes": "Redistributable models (MIT, Apache-2.0, self-trained) admit on hash/provenance alone"
+    },
+    {
+      "name": "licence::tests::restricted_admits_with_matching_record",
+      "verdict": "pass",
+      "policy": "Restricted",
+      "record": "present, sha256 matches",
+      "env_var": "not used",
+      "expected": "Ok — admits with valid record",
+      "notes": "Restricted models require explicit acceptance record with matching licence_sha256"
+    },
+    {
+      "name": "licence::tests::restricted_atomic_write_with_explicit_accept",
+      "verdict": "pass",
+      "policy": "Restricted",
+      "record": "written atomically via write_acceptance_record",
+      "env_var": "not used",
+      "expected": "Ok — record written, .tmp cleaned up, final file parses",
+      "notes": "Atomic write (temp + rename) ensures truncated records never masquerade as valid"
+    },
+    {
+      "name": "licence::tests::restricted_write_then_admit_roundtrip",
+      "verdict": "pass",
+      "policy": "Restricted",
+      "record": "absent then written",
+      "env_var": "not used",
+      "expected": "Err then Ok",
+      "notes": "Full round-trip: denied without record, admitted after write_acceptance_record"
+    },
+    {
+      "name": "licence::tests::restricted_existing_record_is_idempotent",
+      "verdict": "pass",
+      "policy": "Restricted",
+      "record": "present, sha256 matches",
+      "env_var": "not used",
+      "expected": "Ok on repeated calls",
+      "notes": "Idempotent check — no writes, no env var, no side effects"
+    },
+    {
+      "name": "models::tests::manifest_validate_ok_offline_cache",
+      "verdict": "pass",
+      "policy": "Redistributable",
+      "record": "absent",
+      "env_var": "not used",
+      "expected": "Ok — validates against manifest without licence record",
+      "notes": "Redistributable model with matching sha256, no licence.accepted needed"
+    },
+    {
+      "name": "models::tests::manifest_validate_redistributable_no_record_succeeds",
+      "verdict": "pass",
+      "policy": "Redistributable",
+      "record": "absent",
+      "env_var": "not used",
+      "expected": "Ok — admits without record",
+      "notes": "Explicit test: no record, no env var, redistributable admits"
+    },
+    {
+      "name": "models::tests::manifest_validate_allows_restricted_with_authorisation",
+      "verdict": "pass",
+      "policy": "Restricted",
+      "record": "present, sha256 matches",
+      "allow_restricted": true,
+      "env_var": "not used",
+      "expected": "Ok — restricted model with record + authorisation",
+      "notes": "Restricted model passes both admission gate (record) and authorisation gate (allow_restricted)"
+    }
+  ],
+  "total": 8,
+  "passed": 8,
+  "failed": 0,
+  "env_var_removed": true,
+  "fake_acceptance_records": "pre-written licence.accepted files from PKGBUILD/install scripts are no longer required for redistributable models — they become dead artifacts. Removal from packaging scripts is Task 4's follow-up."
+}

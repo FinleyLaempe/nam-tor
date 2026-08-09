@@ -1,0 +1,93 @@
+{
+  "task": "06-startup-tamper",
+  "description": "Tamper tests: each model/contract tamper scenario denies worker spawn pre-validation",
+  "date": "2026-08-08",
+  "tamper_scenarios": [
+    {
+      "scenario": "tamper_yunet_model_file",
+      "description": "On-disk yunet_2023mar.onnx has different content than the manifest declares",
+      "expected": "validation fails with 'tampered model yunet_2023mar: sha256 mismatch'",
+      "test": "models::tests::startup_validation_tamper_yunet_denies_all",
+      "status": "pass"
+    },
+    {
+      "scenario": "tamper_sface_model_file",
+      "description": "On-disk sface_2021dec.onnx has different content than the manifest declares",
+      "expected": "validation fails with 'tampered model sface_2021dec: sha256 mismatch'",
+      "test": "models::tests::startup_validation_tamper_sface_denies_all",
+      "status": "pass"
+    },
+    {
+      "scenario": "tamper_pad_model_file",
+      "description": "On-disk minifasnet_pad.onnx has different content than the manifest declares",
+      "expected": "validation fails with 'tampered model minifasnet_pad: sha256 mismatch'",
+      "test": "models::tests::startup_validation_tamper_pad_denies_all",
+      "status": "pass"
+    },
+    {
+      "scenario": "missing_model_file",
+      "description": "minifasnet_pad.onnx is not present on disk",
+      "expected": "validation fails with 'model file missing'",
+      "test": "models::tests::startup_validation_missing_model_denies_all",
+      "status": "pass"
+    },
+    {
+      "scenario": "zero_hash_in_manifest",
+      "description": "Manifest declares all-zeros sha256 for yunet_2023mar variant",
+      "expected": "validation fails with 'zero hash in manifest for model yunet_2023mar'",
+      "test": "models::tests::startup_validation_zero_hash_in_manifest_denies",
+      "status": "pass"
+    },
+    {
+      "scenario": "spec_hash_mismatch",
+      "description": "ModelSpec.sha256 does not match the manifest variant's sha256",
+      "expected": "validation fails with 'spec hash mismatch for model'",
+      "test": "models::tests::manifest_validate_blocks_spec_hash_mismatch",
+      "status": "pass"
+    },
+    {
+      "scenario": "arch_mismatch",
+      "description": "Manifest declares target_arch that does not match the current CPU",
+      "expected": "validation fails with 'arch mismatch for model'",
+      "test": "models::tests::manifest_validate_blocks_arch_mismatch",
+      "status": "pass"
+    },
+    {
+      "scenario": "invalid_tensor_contract_empty_input",
+      "description": "Manifest tensor contract has empty input shape",
+      "expected": "validation fails with 'tensor contract input shape is empty'",
+      "test": "models::tests::manifest_validate_blocks_invalid_tensor_contract",
+      "status": "pass"
+    },
+    {
+      "scenario": "invalid_tensor_contract_unknown_dtype",
+      "description": "Manifest tensor contract declares an unknown dtype",
+      "expected": "validation fails with 'unknown tensor dtype'",
+      "test": "models::tests::tensor_contract_validate_rejects_unknown_dtype",
+      "status": "pass"
+    },
+    {
+      "scenario": "restricted_without_authorisation",
+      "description": "Restricted model without gate.allow_restricted=true",
+      "expected": "validation fails with 'restricted model requires explicit authorisation'",
+      "test": "models::tests::manifest_validate_blocks_restricted_without_authorisation",
+      "status": "pass"
+    },
+    {
+      "scenario": "seccomp_denies_open",
+      "description": "After seccomp sandbox is applied, open() syscall returns EPERM — ONNX Runtime cannot load model files",
+      "expected": "open returns errno 1 (EPERM)",
+      "test": "seccomp_escape::seccomp_denies_open",
+      "status": "pass"
+    },
+    {
+      "scenario": "seccomp_denies_socket",
+      "description": "After seccomp sandbox is applied, socket() syscall returns EPERM — worker cannot make network connections",
+      "expected": "socket returns errno 1 (EPERM)",
+      "test": "seccomp_escape::seccomp_denies_socket",
+      "status": "pass"
+    }
+  ],
+  "fail_closed_principle": "Every tamper scenario causes validate_against_manifest to return Err, which causes the daemon's run() to return Err, which causes main() to exit with ExitCode::FAILURE. No worker is spawned on any validation failure path.",
+  "overall_status": "pass"
+}

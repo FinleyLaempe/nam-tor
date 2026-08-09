@@ -1,0 +1,26 @@
+{
+  "task": "12-lifecycle-rollback",
+  "description": "PAM registry lifecycle — failed migration rollback: corrupted backup triggers rollback, previous state restored",
+  "date": "2026-08-08",
+  "crate": "namtor-pam-config",
+  "scenario": "Two services enabled (gdm-password, sudo). sudo's backup is corrupted. migrate → enable_service(sudo) fails with BackupChecksumMismatch → restore_snapshot restores PAM files + registry from snapshot.",
+  "test": "failed_migration_restores_previous_state",
+  "steps": [
+    "enable gdm-password + sudo (both get blocks, backups, registry entries)",
+    "corrupt sudo.namtor.bak (overwrite with 'tampered')",
+    "migrate → snapshot taken, enable(gdm-password) succeeds, enable(sudo) fails at verify_backup (checksum mismatch)",
+    "restore_snapshot: PAM files restored from snapshot, registry restored from snapshot"
+  ],
+  "assertions": {
+    "migrate_returns_error": true,
+    "gdm-password_has_block": true,
+    "registry_tracks_gdm-password": true,
+    "registry_tracks_sudo": true
+  },
+  "rollback_mechanism": "snapshot() saves registry.json + pam.d/<service> for each enabled service. On migrate failure, restore_snapshot() atomically writes each PAM file from the snapshot and saves the restored registry.",
+  "e2e_verified": true,
+  "verification": {
+    "cargo_test": "failed_migration_restores_previous_state + lifecycle_matrix_failed_migration_rollback PASS",
+    "e2e": "fake-root binary test: migrate FAILED (rolled back), gdm-password block present, registry intact"
+  }
+}

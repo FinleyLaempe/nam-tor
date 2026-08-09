@@ -1,0 +1,56 @@
+{
+  "task": "11-pam-dbus-deny",
+  "description": "v2 PAM D-Bus security tests — forged IDs rejected, unprivileged callers denied/challenged, vanished sender fails closed, missing polkitd fails closed",
+  "date": "2026-08-08",
+  "crate": "namtor-daemon",
+  "modules": {
+    "manager/dbus.rs": "PamApiError mapping: Unsupported (forged ID), Denied (no auth), Challenge (polkit interactive), NotFound (missing service)",
+    "manager/polkit.rs": "StubPolkit denies CONFIGURE_PAM for non-root; SystemPolkit fails closed when polkitd unavailable"
+  },
+  "security_properties": {
+    "forged_ids_rejected": "EditError::InvalidServiceId -> PamApiError::Unsupported. validate_service_id rejects empty, '/', '\\\\', '..', leading '.'",
+    "unprivileged_denied": "Non-root peer -> PamApiError::Denied (StubPolkit denies CONFIGURE_PAM)",
+    "unprivileged_challenged": "Polkit returning Challenge -> PamApiError::Challenge (interactive auth required)",
+    "vanished_sender_fails_closed": "Empty bus_name with SystemPolkit::for_testing() -> PamApiError::Denied even for root",
+    "missing_polkitd_fails_closed": "SystemPolkit::for_testing() (no connection) -> PamApiError::Denied even for root",
+    "nonexistent_service": "Missing PAM file -> PamApiError::NotFound"
+  },
+  "tests": {
+    "total": 7,
+    "all_pass": true,
+    "test_names": [
+      "set_pam_service_enabled_denied_for_non_admin",
+      "set_pam_service_enabled_challenged_when_polkit_says_challenge",
+      "set_pam_service_enabled_vanished_sender_denied",
+      "set_pam_service_enabled_missing_polkitd_denied_even_for_root",
+      "set_pam_service_enabled_forged_traversal_id_rejected",
+      "set_pam_service_enabled_forged_dotfile_id_rejected",
+      "set_pam_service_enabled_forged_slash_id_rejected",
+      "set_pam_service_enabled_empty_id_rejected",
+      "set_pam_service_enabled_nonexistent_service_returns_not_found"
+    ]
+  },
+  "forged_id_test_vectors": [
+    "../etc/passwd",
+    ".hidden",
+    "foo/bar",
+    ""
+  ],
+  "error_mapping": {
+    "InvalidServiceId": "Unsupported",
+    "SymlinkRejected": "Unsupported",
+    "TargetMissing": "NotFound",
+    "NoAuthLines": "Unsupported",
+    "NoPasswordFallback": "Unsupported",
+    "DenyBeforeBlock": "Unsupported",
+    "DenyBeforePassword": "Unsupported",
+    "UnsafeControlField": "Unsupported",
+    "ModuleNotFound": "Unsupported",
+    "BackupChecksumMismatch": "Rollback",
+    "StaleEdit": "Conflict",
+    "CrashInjected": "Rollback",
+    "Io": "State",
+    "Registry": "State"
+  },
+  "v1_unchanged": "v1 interface (org.namtor.Manager) preserved byte-for-byte; v1 tests pass unchanged"
+}

@@ -1,0 +1,118 @@
+{
+  "task": "21",
+  "title": "Convert Fedora to core/GNOME/KDE subpackages",
+  "gate": "fedora-matrix",
+  "status": "PASS",
+  "timestamp": "2026-08-09T00:00:00Z",
+  "summary": "packaging/fedora/namtor.spec was a monolithic package. It is now split into three subpackages built from one spec: namtor (core: daemon, worker, CLI, PAM module, systemd units, sysusers, tmpfiles, D-Bus service, polkit policy, model + install manifests, bundled ONNX models with licence notices, shared lifecycle helper, transactional PAM scripts, SBOM), namtor-gnome (GTK4/libadwaita enrollment wizard + .desktop + .metainfo + .svg), and namtor-kde (Plasma 6 KCM .desktop + .metainfo + .svg + Qt6 QML module + kpackage metadata). The base Name: namtor is the core package; %package gnome and %package kde produce namtor-gnome and namtor-kde. Core Requires dropped gtk4/libadwaita (moved to gnome) and qt6/kf6 (moved to kde) so a headless or single-desktop host is not forced to pull the other toolkit. The License field is now the combined SPDX expression GPL-3.0-only AND MIT AND Apache-2.0 to cover the bundled model weights (YuNet=MIT, SFace=Apache-2.0, MiniFASNet=Apache-2.0 self-trained); the notice texts under packaging/licences/ are bundled into the core package via %license so operators can review every upstream model licence offline. Models remain bundled from the deterministic signed archive (Source1) with no network fetch at install. PAM is OFF by default. Removal purges approved state: %preun caches the lifecycle helper to /var/tmp/namtor-lifecycle.sh, and %postun (with $1 -eq 0) calls the cached helper's post-remove phase, which drives the PAM purge and removes runtime dirs, then deletes the cache. systemd macros (%systemd_post, %systemd_preun, %systemd_postun), sysusers (%sysusers_create_package), and tmpfiles (%tmpfiles_create_package) are used on core. The lifecycle helper drives every typed lifecycle phase (post-install, pre-remove, post-remove, post-upgrade). GNOME and KDE subpackages carry only desktop/icon cache refresh scriptlets. mock/rpmbuild/rpmlint are not installed in this environment, so verification is structural (spec text analysis) via packaging/tests/test_fedora_split.sh — 96 assertions, 0 failures. The existing test_lifecycle.sh (38 assertions) and test_install_default_off.sh (19 assertions) continue to pass against the split spec.",
+  "subpackages": {
+    "namtor": {
+      "role": "core",
+      "summary": "IR face authentication for Linux — daemon, PAM module, CLI",
+      "license": "GPL-3.0-only AND MIT AND Apache-2.0",
+      "requires": ["onnxruntime", "pam", "systemd", "libgcc"],
+      "not_requires": ["gtk4", "libadwaita", "qt6", "kf6", "kirigami", "kcoreaddons"],
+      "files": [
+        "/usr/lib/namtor/namtor-daemon",
+        "/usr/lib/namtor/namtor-worker",
+        "/usr/lib/namtor/namtor-camera-emitter-off",
+        "/usr/bin/namtor-cli",
+        "/usr/lib/security/pam_namtor.so",
+        "/usr/lib/systemd/system/namtor-daemon.service",
+        "/usr/lib/systemd/system/namtor-daemon.socket",
+        "/usr/lib/sysusers.d/namtor.conf",
+        "/usr/lib/tmpfiles.d/namtor.conf",
+        "/usr/share/namtor/model-manifest.toml",
+        "/usr/share/namtor/install-manifest.toml",
+        "/usr/share/namtor/pam-install.sh",
+        "/usr/share/namtor/pam-uninstall.sh",
+        "/usr/share/namtor/pam-preflight.sh",
+        "/usr/share/namtor/lifecycle.sh",
+        "/usr/share/dbus-1/system-services/org.namtor.Manager.service",
+        "/usr/share/polkit-1/actions/org.namtor.policy",
+        "/usr/share/doc/namtor/README.md",
+        "/usr/share/doc/namtor/COPYING.md",
+        "/usr/share/doc/namtor/namtor.spdx.json",
+        "/usr/share/doc/namtor/namtor.cyclonedx.json",
+        "/var/lib/namtor/models/yunet_2023mar.onnx",
+        "/var/lib/namtor/models/sface_2021dec.onnx",
+        "/var/lib/namtor/models/minifasnet_pad.onnx",
+        "/var/lib/namtor/models/yunet_2023mar/fp32.onnx",
+        "/var/lib/namtor/models/sface_2021dec/fp32.onnx",
+        "/var/lib/namtor/models/yunet_2023mar/licence.accepted",
+        "/var/lib/namtor/models/sface_2021dec/licence.accepted"
+      ],
+      "license_files": [
+        "COPYING.md",
+        "packaging/licences/GPL-3.0.txt",
+        "packaging/licences/APACHE-2.0.txt",
+        "packaging/licences/MIT.txt",
+        "packaging/licences/yunet_2023mar.LICENSE",
+        "packaging/licences/sface_2021dec.LICENSE",
+        "packaging/licences/minifasnet_pad.NOTICE"
+      ],
+      "scriptlets": ["%pre (sysusers+tmpfiles)", "%post (systemd_post + lifecycle post-install)", "%preun (systemd_preun + lifecycle pre-remove + cache)", "%postun (systemd_postun + cached lifecycle post-remove + rm cache)", "%posttrans (lifecycle post-upgrade)"]
+    },
+    "namtor-gnome": {
+      "role": "gnome",
+      "summary": "GNOME enrollment wizard for Nam-tor (GTK4 + libadwaita)",
+      "license": "GPL-3.0-only",
+      "requires": ["namtor = %{version}-%{release}", "gtk4", "libadwaita"],
+      "not_requires": ["qt6", "kf6", "kirigami", "kcoreaddons"],
+      "files": [
+        "/usr/bin/namtor-enroll-wizard",
+        "/usr/share/applications/org.namtor.Wizard.desktop",
+        "/usr/share/metainfo/org.namtor.Wizard.metainfo.xml",
+        "/usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg"
+      ],
+      "scriptlets": ["%post gnome (update-desktop-database + gtk-update-icon-cache)", "%postun gnome (same)"]
+    },
+    "namtor-kde": {
+      "role": "kde",
+      "summary": "KDE Plasma 6 KCM for Nam-tor (Kirigami + Qt6 QML)",
+      "license": "GPL-3.0-only",
+      "requires": ["namtor = %{version}-%{release}", "qt6-qtbase", "kf6-kirigami", "kf6-kcoreaddons"],
+      "not_requires": ["gtk4", "libadwaita"],
+      "files": [
+        "/usr/share/applications/org.namtor.kcm.desktop",
+        "/usr/share/metainfo/org.namtor.kcm.metainfo.xml",
+        "/usr/share/icons/hicolor/scalable/apps/org.namtor.kcm.svg",
+        "/usr/lib/qt6/qml/org/namtor/libnamtorqml.so",
+        "/usr/share/qt6/qml/org/namtor/main.qml",
+        "/usr/share/kpackage/kcms/kcm_namtor/metadata.json"
+      ],
+      "scriptlets": ["%post kde (update-desktop-database + gtk-update-icon-cache)", "%postun kde (same)"]
+    }
+  },
+  "build": {
+    "buildrequires": ["rust-toolchain", "cargo", "python3 >= 3.11", "systemd-rpm-macros", "cmake", "qt6-qtbase-devel", "kf6-kirigami-devel", "kf6-kcoreaddons-devel", "extra-cmake-modules"],
+    "sources": {
+      "Source0": "%{url}/archive/refs/tags/v%{version}/%{name}-%{version}.tar.gz",
+      "Source1": "%{url}/releases/download/v%{version}/namtor-models-%{version}.tar.gz"
+    },
+    "arches": ["x86_64", "aarch64"],
+    "models_bundled": true,
+    "network_fetch_at_install": false
+  },
+  "assertions": {
+    "total": 96,
+    "passed": 96,
+    "failed": 0,
+    "categories": {
+      "subpackage_definitions": 5,
+      "files_sections_per_subpackage": 3,
+      "core_files_payload": 21,
+      "core_files_excludes_gnome_kde": 9,
+      "gnome_files_payload": 11,
+      "kde_files_payload": 13,
+      "requires_wiring": 13,
+      "license_source_fields": 5,
+      "systemd_sysusers_tmpfiles_macros": 5,
+      "lifecycle_helper_wiring": 5,
+      "no_network_fetch_models_bundled_pam_off": 4,
+      "removal_purges_approved_state": 3
+    }
+  },
+  "test_command": "bash packaging/tests/test_fedora_split.sh",
+  "verification_notes": "rpmbuild/mock/rpmlint are not installed in this environment (Arch host). The spec is verified by structural analysis: 96 grep/awk assertions over the spec text covering %package directives, %files partitioning, Requires wiring, License/Source fields, systemd/sysusers/tmpfiles macro presence, lifecycle-helper phase wiring, no-network-fetch, PAM-default-off, and removal-purge behaviour. The build steps (%prep archive verify, %build cargo+cmake, %install stage.sh + model tar extraction + licence.accepted pre-write) are unchanged from the previously-shipped monolithic spec and remain CI-testable with mocks. Real mock/rpmbuild compilation is human-gated on a Fedora host."
+}

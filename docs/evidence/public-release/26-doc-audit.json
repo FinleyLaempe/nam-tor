@@ -1,0 +1,172 @@
+{
+  "task": "26",
+  "title": "Reconcile public documentation and honest claims",
+  "gate": "doc-audit",
+  "status": "PASS",
+  "timestamp": "2026-08-09T12:00:00Z",
+  "summary": "Public-facing documentation has been reconciled with the actual implementation state. README.md now carries an experimental preview warning, documents the three split packages (namtor, namtor-gnome, namtor-kde) for Arch/Fedora/Debian, describes the Settings-only setup flow, per-service PAM opt-in, TPM fallback warning, bundled permissive models, notices/source availability, and the WITHHELD gates list. packaging/README.md carries the experimental preview warning, documents the split package names, and replaces the stale NAMTOR_ACCEPT_LICENCE env var reference with the typed admission policy description. HANDOFF.md carries the experimental preview warning and updated state (M10 implemented, split packages, Settings-only flow). docs/evidence/status-audit.md has the stale NAMTOR_ACCEPT_LICENCE env var reference removed from the owner-gated inputs table. COPYING.md has the stale NAMTOR_ACCEPT_LICENCE reference replaced with the typed admission policy description. The doc audit test verifies 25 checks: 11 stale-string absences, 3 experimental preview warnings present, 3 package-name documentations, 3 distro package manager commands, and 5 link-resolution checks. All pass.",
+  "audited_files": [
+    "README.md",
+    "packaging/README.md",
+    "HANDOFF.md",
+    "COPYING.md",
+    "docs/evidence/status-audit.md"
+  ],
+  "stale_strings_eliminated": [
+    {
+      "string": "NAMTOR_ACCEPT_LICENCE",
+      "reason": "env var removed in Task 5 (typed admission policy driven by RedistributionPolicy)",
+      "files_fixed": [
+        "packaging/README.md (model manifest gate description)",
+        "COPYING.md (third-party components section)",
+        "docs/evidence/status-audit.md (owner-gated inputs table)"
+      ]
+    },
+    {
+      "string": "BSD-3-Clause (in model licence context)",
+      "reason": "YuNet=MIT, SFace=Apache-2.0 (corrected in Task 2; no residual references in audited files)",
+      "files_fixed": []
+    },
+    {
+      "string": "models ensure",
+      "reason": "nonexistent command; models are bundled in the package, not fetched at runtime",
+      "files_fixed": []
+    },
+    {
+      "string": "fetched at first-run / first run fetch",
+      "reason": "models are bundled, not fetched at install time (corrected in Task 4)",
+      "files_fixed": []
+    },
+    {
+      "string": "runs as nobody / worker is nobody",
+      "reason": "worker runs as namtor (same as daemon), not nobody (corrected in Task 18)",
+      "files_fixed": []
+    },
+    {
+      "string": "setuid helper / setuid root / namtor-worker-spawn",
+      "reason": "setuid helper binary removed in Task 18; sandbox is the privilege boundary",
+      "files_fixed": []
+    }
+  ],
+  "experimental_preview_warning": {
+    "required_phrase": "Experimental preview. Do not enable on security-sensitive PAM services.",
+    "present_in": [
+      "README.md (blockquote at top + Security section)",
+      "packaging/README.md (blockquote at top)",
+      "HANDOFF.md (blockquote at top)"
+    ],
+    "package_descriptions": {
+      "arch_pkgdesc": "NOT present — pkgdesc fields do not carry the warning. Distro packaging files are out of scope (MUST NOT modify). Gap noted for a future packaging task.",
+      "fedora_summary": "NOT present — Summary fields do not carry the warning. Same constraint.",
+      "debian_description": "NOT present — Description fields do not carry the warning. Same constraint."
+    }
+  },
+  "package_names_documented": {
+    "core": "namtor (all three distros)",
+    "gnome": "namtor-gnome (all three distros)",
+    "kde": "namtor-kde (all three distros)",
+    "documented_in": [
+      "README.md (Packages section + Setup section)",
+      "packaging/README.md (Split packages section)",
+      "HANDOFF.md (state summary)"
+    ],
+    "distro_install_commands": [
+      "pacman -U (Arch)",
+      "dnf install (Fedora)",
+      "apt install (Debian)"
+    ]
+  },
+  "settings_only_setup": {
+    "documented_in": [
+      "README.md (Setup section: 4 steps — install, open Settings, enroll, choose PAM targets)",
+      "packaging/README.md (Package install section: same flow)"
+    ],
+    "key_claims": [
+      "PAM services are OFF by default at install time",
+      "No PAM config is edited during package installation",
+      "Settings app enables PAM services per-service via D-Bus org.namtor.Manager2",
+      "No CLI or root shell is needed for setup"
+    ]
+  },
+  "per_service_opt_in": {
+    "documented_in": "README.md (Per-service opt-in section)",
+    "classification": "safe / risky / unsupported (sshd is unsupported — PAM_RHOST refused)"
+  },
+  "tpm_warning": {
+    "documented_in": "README.md (TPM warning section)",
+    "claims": [
+      "AES-256-GCM with TPM2 sealing where TPM2 is available",
+      "Software key fallback with visible warning (never silent)",
+      "Cross-hardware TPM2 unseal is untested and withheld"
+    ]
+  },
+  "bundled_models": {
+    "documented_in": "README.md (Bundled models section)",
+    "models": [
+      {"name": "YuNet 2023mar", "purpose": "Face detection", "licence": "MIT"},
+      {"name": "SFace 2021dec", "purpose": "Face embedding", "licence": "Apache-2.0"},
+      {"name": "MiniFASNet PAD", "purpose": "Liveness", "licence": "Apache-2.0 (self-trained)"}
+    ],
+    "bundled_not_fetched": true,
+    "startup_validation": "sha256 + tensor contract + architecture + redistribution policy (fail-closed)"
+  },
+  "withheld_gates_listed": {
+    "documented_in": "README.md (WITHHELD gates section) + docs/evidence/status-audit.md (full ledger)",
+    "gates": [
+      "G1.1-G1.6 (zero-config, auto-probe, failure messaging, MSXU, emitter teardown, S3 first-auth — HIL required)",
+      "G2.1-G2.3 (latency distribution — no production-path measurement)",
+      "G3.1-G3.2 (FAR/FRR — no lawful cohort dataset selected)",
+      "G4.1-G4.3 (APCER/BPCER — analytic PAD uncalibrated, learned PAD synthetic-only)",
+      "G5.3 (full fault-injection matrix on installed path)",
+      "G5.5 (TPM2 cross-hardware unseal — single TPM machine)",
+      "R5 (z-norm cohort — no licence-verified dataset)",
+      "R10 (emitter survives suspend — no real S3 cycle)",
+      "R4 (INT8 vs FP32 — Python onnxruntime incompatible)",
+      "S3 (20x HIL session — no scripted S3 run)"
+    ],
+    "unsigned_packages": true,
+    "restricted_model_policy": "implemented but no restricted model bundled"
+  },
+  "links_resolve": {
+    "checked_files": ["README.md", "packaging/README.md", "HANDOFF.md", "COPYING.md", "docs/evidence/status-audit.md"],
+    "method": "grep -oP markdown links, resolve relative to file dir, check existence",
+    "broken_links": 0
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_doc_audit.sh",
+    "passed": 25,
+    "failed": 0,
+    "exit_code": 0,
+    "checks": {
+      "stale_string_absence": 11,
+      "experimental_preview_present": 3,
+      "package_names_documented": 3,
+      "distro_install_commands": 3,
+      "links_resolve": 5
+    }
+  },
+  "files_created": [
+    "packaging/tests/test_doc_audit.sh"
+  ],
+  "files_modified": [
+    "README.md (experimental preview warning, Packages section, Setup section, Per-service opt-in, TPM warning, Bundled models, Notices, WITHHELD gates, Security update)",
+    "packaging/README.md (experimental preview warning, Split packages section, NAMTOR_ACCEPT_LICENCE removal, typed admission policy description)",
+    "HANDOFF.md (experimental preview warning, M10 implemented, split packages, Settings-only flow)",
+    "COPYING.md (NAMTOR_ACCEPT_LICENCE removal, typed admission policy description)",
+    "docs/evidence/status-audit.md (NAMTOR_ACCEPT_LICENCE removal from owner-gated inputs table)"
+  ],
+  "files_not_modified": [
+    "packaging/arch/PKGBUILD — distro packaging file (MUST NOT)",
+    "packaging/fedora/namtor.spec — distro packaging file (MUST NOT)",
+    "packaging/debian/control — distro packaging file (MUST NOT)",
+    "packaging/install-manifest.toml — MUST NOT modify",
+    "packaging/model-manifest.toml — MUST NOT modify",
+    "Rust source / Cargo.toml — MUST NOT modify"
+  ],
+  "known_gaps": [
+    "Package descriptions (Arch pkgdesc, Fedora Summary, Debian Description) do not carry the experimental preview warning. Distro packaging files are out of scope for this task (MUST NOT modify). A future task that can modify packaging should add the warning to pkgdesc/Summary/Description fields.",
+    "AGENTS.md (line 23) still claims YuNet/SFace are BSD-3. AGENTS.md is agent memory, not user-facing public documentation; it is outside the audit scope and was not listed in the Files modified set.",
+    "Several evidence docs (docs/evidence/g3-biometric-eval.md, docs/evidence/rc-package-matrix.md, docs/evidence/g6-install-matrix.md, docs/evidence/model-acquisition.md, docs/evidence/trust/znorm.md, docs/evidence/r5-cohort.md, docs/evidence/release-candidate.md, docs/evidence/g7-status-reconciliation.md, docs/evidence/g2-latency-reliability.md, docs/evidence/ci-baseline.md) still reference NAMTOR_ACCEPT_LICENCE. These are internal evidence ledgers, not user-facing public docs. They are outside the audit scope.",
+    "docs/evidence/gnome-qa/report.md and docs/evidence/g5-desktop-e2e.md reference 'session bus' for the daemon D-Bus. These are historical QA reports predating the system-bus fix (Task 15). They are evidence artifacts, not user-facing docs."
+  ]
+}

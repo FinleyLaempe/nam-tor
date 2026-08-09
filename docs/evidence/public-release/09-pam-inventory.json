@@ -1,0 +1,54 @@
+{
+  "task": "09-pam-inventory",
+  "crate": "namtor-pam-config",
+  "description": "Typed PAM service inventory and compatibility classifier",
+  "test_count": 36,
+  "test_result": "PASS",
+  "clippy": "clean",
+  "fmt": "clean",
+  "tests": [
+    {"name": "arch_gdm_password_classifies_safe_disabled", "category": "arch", "status": "PASS", "asserts": "id=gdm-password, enabled=false, compatibility=Safe, status=Disabled"},
+    {"name": "arch_gdm_password_has_known_label", "category": "arch", "status": "PASS", "asserts": "label contains GDM and GNOME"},
+    {"name": "arch_sudo_classifies_safe_disabled", "category": "arch", "status": "PASS", "asserts": "enabled=false, compatibility=Safe, status=Disabled"},
+    {"name": "arch_su_classifies_safe_disabled", "category": "arch", "status": "PASS", "asserts": "enabled=false, compatibility=Safe, status=Disabled"},
+    {"name": "arch_polkit_classifies_safe_disabled", "category": "arch", "status": "PASS", "asserts": "enabled=false, compatibility=Safe, status=Disabled"},
+    {"name": "arch_system_auth_has_known_label", "category": "arch", "status": "PASS", "asserts": "label=System Auth (Arch/RHEL shared auth stack)"},
+    {"name": "fedora_sddm_classifies_risky_due_to_deny", "category": "fedora", "status": "PASS", "asserts": "enabled=false, compatibility=Risky, reason mentions pam_deny"},
+    {"name": "fedora_sudo_classifies_risky_due_to_deny", "category": "fedora", "status": "PASS", "asserts": "compatibility=Risky"},
+    {"name": "fedora_su_classifies_risky_due_to_deny", "category": "fedora", "status": "PASS", "asserts": "compatibility=Risky"},
+    {"name": "fedora_password_auth_has_known_label", "category": "fedora", "status": "PASS", "asserts": "label=Password Auth (Fedora/RHEL shared auth stack)"},
+    {"name": "debian_common_auth_classifies_risky_due_to_deny", "category": "debian", "status": "PASS", "asserts": "enabled=false, compatibility=Risky"},
+    {"name": "debian_gdm_password_includes_common_auth_and_classifies_risky", "category": "debian", "status": "PASS", "asserts": "@include common-auth resolved, compatibility=Risky"},
+    {"name": "debian_sudo_includes_common_auth", "category": "debian", "status": "PASS", "asserts": "compatibility=Risky"},
+    {"name": "debian_su_includes_common_auth", "category": "debian", "status": "PASS", "asserts": "compatibility=Risky"},
+    {"name": "debian_polkit_includes_common_auth", "category": "debian", "status": "PASS", "asserts": "compatibility=Risky"},
+    {"name": "debian_common_auth_has_known_label", "category": "debian", "status": "PASS", "asserts": "label=Common Auth (Debian shared auth stack)"},
+    {"name": "service_with_pam_namtor_already_present_is_enabled", "category": "classification", "status": "PASS", "asserts": "enabled=true, compatibility=Safe, status=Enabled, reason contains 'already present'"},
+    {"name": "service_with_no_auth_lines_is_unsupported", "category": "classification", "status": "PASS", "asserts": "compatibility=Unsupported, status=Unsupported, reason contains 'no auth'"},
+    {"name": "service_with_no_password_fallback_is_unsupported", "category": "classification", "status": "PASS", "asserts": "compatibility=Unsupported, reason contains 'no password-fallback'"},
+    {"name": "service_with_substack_is_risky", "category": "classification", "status": "PASS", "asserts": "compatibility=Risky, reason contains 'substack'"},
+    {"name": "sshd_is_unsupported_due_to_rhost", "category": "classification", "status": "PASS", "asserts": "compatibility=Unsupported, reason contains PAM_RHOST"},
+    {"name": "unknown_service_uses_id_as_label", "category": "classification", "status": "PASS", "asserts": "label=id, compatibility=Safe"},
+    {"name": "classification_is_deterministic_across_runs", "category": "classification", "status": "PASS", "asserts": "two runs produce identical PamServiceInfo"},
+    {"name": "full_arch_inventory_classifies_all_services", "category": "inventory", "status": "PASS", "asserts": "5 services scanned, all Safe"},
+    {"name": "full_fedora_inventory_classifies_all_services", "category": "inventory", "status": "PASS", "asserts": "4 services scanned, all Risky"},
+    {"name": "full_debian_inventory_classifies_all_services", "category": "inventory", "status": "PASS", "asserts": "5 services scanned, all Risky"},
+    {"name": "malformed_file_with_only_comments_is_rejected", "category": "inventory", "status": "PASS", "asserts": "ScanError::Malformed"}
+  ],
+  "fixtures": {
+    "arch": ["gdm-password", "sudo", "su", "polkit-1", "system-auth"],
+    "fedora": ["password-auth", "sddm", "sudo", "su"],
+    "debian": ["common-auth", "gdm-password", "sudo", "su", "polkit-1"]
+  },
+  "types": {
+    "PamServiceInfo": "Wire type (ssbss): id, label, enabled, compatibility, reason — matches v2 D-Bus contract",
+    "PamServiceCompatibility": "Enum: Safe, Unsupported, Risky — matches v2 contract",
+    "ServiceStatus": "Combined 4-state: Enabled, Disabled, Unsupported, Risky — derived from enabled + compatibility"
+  },
+  "classification_rules": {
+    "Enabled": "pam_namtor.so already present in auth stack",
+    "Disabled": "not present, password fallback exists (pam_unix/pam_systemd_home/pam_env or include of common-auth/system-auth/password-auth), no pam_deny, no substack",
+    "Unsupported": "no auth lines, or no password fallback, or sshd (PAM_RHOST refused)",
+    "Risky": "has password fallback but also has pam_deny.so or substack directives"
+  }
+}

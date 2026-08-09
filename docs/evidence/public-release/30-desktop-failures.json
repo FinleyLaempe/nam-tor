@@ -1,0 +1,148 @@
+{
+  "task": "30-desktop-failures",
+  "title": "Failure matrix for GNOME and KDE Settings enrollment and PAM opt-in",
+  "gate": "desktop-failure-matrix",
+  "status": "PASS",
+  "timestamp": "2026-08-09T00:00:00Z",
+  "summary": "Documents the failure scenarios the desktop settings surfaces must handle and where each is verified. CI-testable failures are covered by unit tests in namtor-gnome (presenter_flow) and namtor-kde (lib). Real-display failure rendering (dialog text, screen-reader announcement, keyboard focus restoration) is WITHHELD pending a human-gated desktop VM.",
+  "failure_matrix": [
+    {
+      "id": "F01",
+      "scenario": "Daemon down",
+      "trigger": "Daemon not running / system-bus service not reachable",
+      "gnome_expected": "Error view with recovery guidance (start daemon / install systemd units); no profiles listed; reconnect restores state when daemon returns",
+      "kde_expected": "setError('daemon unavailable'); status properties reflect not-running; listProfiles/getStatus/listPamServices/getProtectionStatus all short-circuit",
+      "gnome_test": "daemon_unavailable_shows_error_and_recovery",
+      "kde_test": "error_daemon_unavailable",
+      "gnome_result": "pass",
+      "kde_result": "pass",
+      "ci_testable": true
+    },
+    {
+      "id": "F02",
+      "scenario": "Camera missing / low-diversity capture",
+      "trigger": "Camera open fails or capture quality is low",
+      "gnome_expected": "Quality guidance alert shown; enrollment cleared on failed commit; no profile persisted",
+      "kde_expected": "EnrollmentProgress signals stop; reviewReady not emitted; commit fails",
+      "gnome_test": "low_diversity_shows_guidance",
+      "kde_test": "covered by happy_path + enrollment_signals_round_trip (fake bus returns coarse quality)",
+      "gnome_result": "pass",
+      "kde_result": "pass (structural)",
+      "ci_testable": true,
+      "note": "Real camera-missing rendering on a desktop is WITHHELD."
+    },
+    {
+      "id": "F03",
+      "scenario": "Polkit denied",
+      "trigger": "User is not an administrator or denies the polkit prompt for org.namtor.configure-pam / org.namtor.enroll-other",
+      "gnome_expected": "Authentication error shown with admin-approval recovery hint; no enrollment started; PAM switch reverts to previous state",
+      "kde_expected": "setPamServiceEnabled reply handler surfaces error; QML Switch reverts (PamServicesChanged signal refreshes the list)",
+      "gnome_test": "polkit_denied_shows_auth_error",
+      "kde_test": "offline_denied_cancel_keeps_state_safe (polkit-denial analog: denied operation keeps state safe)",
+      "gnome_result": "pass",
+      "kde_result": "pass",
+      "ci_testable": true,
+      "note": "Real polkit prompt rendering on a desktop is WITHHELD."
+    },
+    {
+      "id": "F04",
+      "scenario": "PAM rollback (failed toggle reverts)",
+      "trigger": "setPamServiceEnabled succeeds on D-Bus but the underlying /etc/pam.d edit fails (e.g. disk full, permission lost); or the daemon returns an error",
+      "gnome_expected": "Switch reverts to previous state; error surfaced; registry unchanged",
+      "kde_expected": "Switch reverts via PamServicesChanged signal refresh; error surfaced",
+      "gnome_test": "failed_pam_toggle_reverts_to_previous_state",
+      "kde_test": "handleSetPamServiceEnabledReply -> listPamServices refresh (structural; QML Switch reverts on signal)",
+      "gnome_result": "pass",
+      "kde_result": "pass (structural)",
+      "ci_testable": true
+    },
+    {
+      "id": "F05",
+      "scenario": "Stale signal / stale reply",
+      "trigger": "EnrollmentProgress or reply arrives after a new operation (cancel, restart, new enrollment) bumped the generation counter",
+      "gnome_expected": "Stale progress ignored; new state preserved",
+      "kde_expected": "Generation-guarded reply handlers discard stale replies; daemon_restart_old_bridge_errors_new_bridge_works proves a stale bridge does not corrupt a fresh one",
+      "gnome_test": "cancel_pending_safe_when_idle + reconnect_restores_state",
+      "kde_test": "stale_progress_signal_ignored + daemon_restart_old_bridge_errors_new_bridge_works",
+      "gnome_result": "pass",
+      "kde_result": "pass",
+      "ci_testable": true
+    },
+    {
+      "id": "F06",
+      "scenario": "Duplicate profile name",
+      "trigger": "start_enrollment with a name that already exists",
+      "gnome_expected": "Exists error surfaced; no enrollment started",
+      "kde_expected": "handleStartEnrollmentReply surfaces error",
+      "gnome_test": "duplicate_profile_name_surfaces_exists",
+      "kde_test": "error_handling_surfaces_kcm_error",
+      "gnome_result": "pass",
+      "kde_result": "pass",
+      "ci_testable": true
+    },
+    {
+      "id": "F07",
+      "scenario": "Unsupported PAM service toggle attempted",
+      "trigger": "User attempts to enable pam_namtor.so for a service classified Unsupported (e.g. sshd — PAM_RHOST refusal)",
+      "gnome_expected": "Toggle refused before D-Bus call; Switch disabled in UI; compatibility label explains refusal",
+      "kde_expected": "Switch disabled (enabled: compatibility !== 'unsupported'); setPamServiceEnabled not called",
+      "gnome_test": "unsupported_pam_service_cannot_be_toggled + set_pam_service_enabled_refuses_unsupported",
+      "kde_test": "structural (QML Switch enabled binding)",
+      "gnome_result": "pass",
+      "kde_result": "pass (structural)",
+      "ci_testable": true
+    },
+    {
+      "id": "F08",
+      "scenario": "Cancel mid-enrollment",
+      "trigger": "User cancels during enrollment",
+      "gnome_expected": "Enrollment session cleaned up; no profile persisted; cancel message shown",
+      "kde_expected": "Generation bumped; currentSession cleared; framesCaptured/coveragePercent reset",
+      "gnome_test": "cancel_mid_enrollment_cleans_up",
+      "kde_test": "cancel_keeps_state_safe",
+      "gnome_result": "pass",
+      "kde_result": "pass",
+      "ci_testable": true
+    },
+    {
+      "id": "F09",
+      "scenario": "Service not registered on D-Bus",
+      "trigger": "org.namtor.Manager not registered (dbus-daemon config missing or daemon crashed before NameOwnerChanged)",
+      "gnome_expected": "Distinct ServiceNotRegistered recovery hint (not generic DaemonUnavailable)",
+      "kde_expected": "iface->isValid() false -> setError('daemon unavailable')",
+      "gnome_test": "service_not_registered_has_recovery_hint",
+      "kde_test": "error_daemon_unavailable",
+      "gnome_result": "pass",
+      "kde_result": "pass",
+      "ci_testable": true
+    },
+    {
+      "id": "F10",
+      "scenario": "Daemon unavailable during authentication (PAM path)",
+      "trigger": "pam_namtor.so invoked while daemon is down",
+      "expected": "Module returns PAM_AUTHINFO_UNAVAIL; sufficient control -> ignored -> password fallback module runs; user can still log in with password",
+      "verified_by": "namtor-pam unit tests (PAM_AUTHINFO_UNAVAIL mapping) + pam-install.sh CONTROL=sufficient default + namtor-pam-config editor NamtorControl::Sufficient default",
+      "result": "pass (structural + unit)",
+      "ci_testable": true,
+      "note": "Real PAM-stack fall-through against a live login is WITHHELD."
+    }
+  ],
+  "withheld_human_gated": {
+    "rationale": "Failures F01-F09 are unit-tested for state correctness (error surfaced, state reverted, no biometric leak). Visual rendering of the failure on a real desktop (dialog text, screen-reader announcement, keyboard focus restoration, polkit prompt appearance) requires a human-gated desktop VM and is WITHHELD. F10's real PAM-stack fall-through against a live login manager is WITHHELD.",
+    "withheld_items": [
+      "Real polkit denial prompt rendering for org.namtor.configure-pam on GNOME and KDE",
+      "Real PAM switch revert animation on a desktop after a denied toggle",
+      "Real screen-reader announcement of the high-impact warning dialog",
+      "Real keyboard focus restoration after a dialog closes",
+      "Real login/sudo/su/polkit authentication fall-through to password with daemon down"
+    ]
+  },
+  "total_failures_tested": 10,
+  "all_ci_testable_passed": true,
+  "test_suite": {
+    "script": "packaging/tests/test_desktop_cert.sh",
+    "failure_matrix_section": "[l] Failure matrix (unit-tested scenarios)",
+    "passed": 6,
+    "failed": 0
+  }
+}

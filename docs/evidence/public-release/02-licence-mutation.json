@@ -1,0 +1,37 @@
+{
+  "task": "02-licence-mutation",
+  "date": "2026-08-08",
+  "description": "Mutation tests: verify that removing a notice file or altering a manifest hash is detected/rejected.",
+  "mutations": [
+    {
+      "name": "remove-yunet-licence-file",
+      "description": "Remove packaging/licences/yunet_2023mar.LICENSE \u2014 inventory must flag as missing",
+      "detected": true,
+      "detail": "File absence detected: True"
+    },
+    {
+      "name": "alter-yunet-manifest-hash",
+      "description": "Replace YuNet licence_sha256 in manifest with wrong hash \u2014 test manifest_licences_match_upstream_not_bsd3 must reject",
+      "detected": true,
+      "detail": "Mutated hash=ffffffffffffffff..., expected=c83b8120c50ccbd4..., mismatch detected: True"
+    },
+    {
+      "name": "revert-yunet-licence-url-to-bsd3",
+      "description": "Revert YuNet licence_url to BSD-3-Clause URL \u2014 test must detect stale BSD-3 reference",
+      "detected": true,
+      "detail": "Reverted URL=https://opensource.org/license/BSD-3-Clause, BSD-3 detected: True"
+    },
+    {
+      "name": "alter-apache-licence-text",
+      "description": "Append byte to packaging/licences/APACHE-2.0.txt \u2014 SHA-256 must differ from manifest value",
+      "detected": true,
+      "detail": "Original hash=cfc7749b96f63bd3..., mutated hash=a476326436885c32..., change detected: True"
+    }
+  ],
+  "summary": {
+    "total": 4,
+    "detected": 4,
+    "missed": 0,
+    "status": "PASS"
+  }
+}

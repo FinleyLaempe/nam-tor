@@ -1,0 +1,51 @@
+{
+  "task": "14-gnome-flow",
+  "description": "Failure scenarios tested for GNOME system-bus flows",
+  "date": "2026-08-08",
+  "failures_tested": [
+    {
+      "name": "daemon_unavailable_shows_error_and_recovery",
+      "scenario": "Daemon down (Mode::DaemonDown) → refresh shows error + recovery hint",
+      "expected": "Error with recovery guidance, no profiles listed",
+      "result": "pass"
+    },
+    {
+      "name": "polkit_denied_shows_auth_error",
+      "scenario": "Polkit denial on start_enrollment → authentication error shown",
+      "expected": "Error with admin-approval recovery hint, no enrollment started",
+      "result": "pass"
+    },
+    {
+      "name": "low_diversity_shows_guidance",
+      "scenario": "Low-diversity capture → quality 'low' → guidance shown; commit fails",
+      "expected": "Guidance alert, enrollment cleared on failed commit, error surfaced",
+      "result": "pass"
+    },
+    {
+      "name": "duplicate_profile_name_surfaces_exists",
+      "scenario": "start_enrollment with existing name → Exists error",
+      "expected": "Error containing 'exists' or 'already', no enrollment started",
+      "result": "pass"
+    },
+    {
+      "name": "cancel_mid_enrollment_cleans_up",
+      "scenario": "Cancel during enrollment → session cleaned up, no profile persisted",
+      "expected": "Enrollment cleared, cancel message, no profile in store",
+      "result": "pass"
+    },
+    {
+      "name": "service_not_registered_has_recovery_hint",
+      "scenario": "ServiceNotRegistered error → distinct recovery hint",
+      "expected": "Recovery hint with 'service' in title",
+      "result": "pass"
+    },
+    {
+      "name": "reconnect_restores_state",
+      "scenario": "Daemon down → error; daemon up → full state restored",
+      "expected": "Profiles, PAM services, protection status all restored after reconnect",
+      "result": "pass"
+    }
+  ],
+  "total_failures_tested": 7,
+  "all_passed": true
+}

@@ -1,0 +1,110 @@
+{
+  "task": "28",
+  "title": "CI gate mutation matrix \u2014 each injected defect is caught",
+  "gate": "ci-packaging-mutations",
+  "status": "PASS",
+  "summary": "Mutation matrix: 13 mutations caught by the right gate, 0 skipped (hardware-gated), 0 not caught. For each gate category a known defect is injected into a controlled target, the catching test is run, the defect is reverted from a verified backup, and the restored file's sha256 is checked against the original. No file is left mutated.",
+  "mutations": [
+    {
+      "id": "M01",
+      "gate": "licence/hash/notice drift (hash)",
+      "catching_test": "test_supply_chain.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M02",
+      "gate": "licence/hash/notice drift (notice)",
+      "catching_test": "test_supply_chain.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M03",
+      "gate": "split ownership",
+      "catching_test": "test_arch_split.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M04",
+      "gate": "production model validation call path",
+      "catching_test": "test_model_archive.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M05",
+      "gate": "system-bus client parity",
+      "catching_test": "test_fedora_split.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M06",
+      "gate": "PAM-default-off",
+      "catching_test": "test_install_default_off.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M07",
+      "gate": "no unexpected setuid",
+      "catching_test": "test_doc_audit.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M08",
+      "gate": "package builds (structural)",
+      "catching_test": "test_arch_split.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M09",
+      "gate": "uninstall closure",
+      "catching_test": "test_uninstall_closure.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M10",
+      "gate": "docs claims",
+      "catching_test": "test_doc_audit.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M11",
+      "gate": "SBOM/signatures",
+      "catching_test": "test_release_signatures.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M12",
+      "gate": "lifecycle phases",
+      "catching_test": "test_lifecycle.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    },
+    {
+      "id": "M13",
+      "gate": "package builds (structural, debian)",
+      "catching_test": "test_debian_split.sh",
+      "exit_code": 1,
+      "result": "CAUGHT"
+    }
+  ],
+  "totals": {
+    "caught": 13,
+    "skip": 0,
+    "not_caught": 0
+  },
+  "safety": {
+    "backup_restore": "every mutation is backed up before injection and restored after; an EXIT trap restores all backups unconditionally",
+    "integrity_check": "post-restore sha256 compared to the original for every mutation",
+    "no_permanent_change": "no test script, Rust source, Cargo.toml, distro packaging recipe, install-manifest.toml, or model-manifest.toml is permanently modified"
+  }
+}

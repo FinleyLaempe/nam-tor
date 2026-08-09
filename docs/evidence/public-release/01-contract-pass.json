@@ -1,0 +1,81 @@
+{
+  "task": "01-contract-pass",
+  "date": "2026-08-08",
+  "status": "PASS",
+  "summary": "v1 contract frozen byte-for-byte; v2 types compile, round-trip, and pass exhaustive enum + mutation tests; ADR assigns every runtime/generated file to one owner.",
+  "tests": {
+    "total": 37,
+    "passed": 37,
+    "failed": 0,
+    "ignored": 0
+  },
+  "v1_tests": [
+    "contract_xml_matches_evidence_file",
+    "contract_has_one_manager_interface",
+    "contract_defines_exactly_the_required_methods",
+    "contract_defines_exactly_the_required_signals",
+    "contract_exposes_api_version_property",
+    "method_signatures_are_stable",
+    "merge_replace_review_semantics_present",
+    "signal_signatures_are_stable",
+    "privacy_scan_rejects_biometric_tokens",
+    "negotiate_supported_version_succeeds",
+    "negotiate_higher_version_fails_safely",
+    "negotiate_lower_version_fails_safely",
+    "error_names_are_namespaced",
+    "extract_names_helper_works"
+  ],
+  "v2_tests": [
+    "contract_v2_xml_matches_evidence_file",
+    "contract_v2_has_both_interfaces",
+    "v1_interface_preserved_in_v2_xml",
+    "contract_v2_defines_exactly_the_required_methods",
+    "contract_v2_defines_exactly_the_required_signals",
+    "contract_v2_exposes_api_version_property",
+    "v2_method_signatures_are_stable",
+    "v2_signal_signatures_are_stable",
+    "privacy_scan_rejects_biometric_tokens_v2",
+    "v2_api_version_is_frozen",
+    "negotiate_v2_supported_version_succeeds",
+    "negotiate_v2_v1_backward_compat",
+    "negotiate_v2_higher_version_fails_safely",
+    "negotiate_v2_lower_version_fails_safely",
+    "v2_error_names_are_namespaced",
+    "pam_service_compatibility_exhaustive_variants",
+    "protection_key_kind_exhaustive_variants",
+    "pam_service_info_round_trips",
+    "protection_status_round_trips",
+    "v2_types_have_correct_dbus_signatures",
+    "v2_types_no_biometric_leak",
+    "v2_method_set_mutation_guard",
+    "v2_signal_set_mutation_guard"
+  ],
+  "v2_types": {
+    "PamServiceInfo": {
+      "signature": "(ssbss)",
+      "fields": ["id:s", "display_name:s", "enabled:b", "compatibility:s", "description:s"]
+    },
+    "ProtectionStatus": {
+      "signature": "(sbs)",
+      "fields": ["sealing:s", "has_tpm:b", "warning:s"]
+    },
+    "PamServiceCompatibility": {
+      "signature": "s",
+      "variants": ["safe", "unsupported", "risky"]
+    },
+    "ProtectionKeyKind": {
+      "signature": "s",
+      "variants": ["tpm2", "software"]
+    }
+  },
+  "v2_interface": {
+    "name": "org.namtor.Manager2",
+    "api_version": 2,
+    "methods": ["ListPamServices", "SetPamServiceEnabled", "GetProtectionStatus"],
+    "signals": ["PamServicesChanged", "ProtectionStatusChanged"],
+    "properties": ["ApiVersion"],
+    "errors": ["org.namtor.Error.Unsupported", "org.namtor.Error.Rollback", "org.namtor.Error.Conflict"]
+  },
+  "clippy": "clean (-D warnings)",
+  "adr": "docs/adr/turnkey-architecture.md"
+}

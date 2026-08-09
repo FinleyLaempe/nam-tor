@@ -1,0 +1,118 @@
+{
+  "task": "22",
+  "title": "Debian split-package — failure-mode matrix",
+  "gate": "debian-failures",
+  "status": "PASS",
+  "timestamp": "2026-08-09T03:00:00Z",
+  "summary": "Every failure mode the split Debian control/rules must defend against was verified. The matrix covers: monolithic control (single Package stanza), desktop dep leaking into core, core dep leaking into desktop, missing .install files, missing stage.sh --package calls, stale 'monolithic' comment, missing multiarch PAM relocation, missing SPDX headers, desktop maintainer scripts calling lifecycle.sh, core postinst doing desktop cache refresh, postrm not distinguishing remove vs purge, prerm not caching lifecycle.sh, and changelog not documenting the split. All are caught by the test suite; none are present in the shipped control/rules/scripts.",
+  "matrix": [
+    {
+      "defect": "control has only one Package: stanza (monolithic)",
+      "expected": "test fails nonzero — must have 3 Package stanzas",
+      "actual": "test_debian_split.sh (a) asserts Package: count == 3; current control has namtor, namtor-gnome, namtor-kde",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "core Depends contains a desktop library (libgtk-4-1/libadwaita-1-0/libqt6/kirigami/kcoreaddons)",
+      "expected": "test fails nonzero — core must be headless-safe",
+      "actual": "test_debian_split.sh (b) checks each desktop lib is absent from core Depends; current core depends only on onnxruntime, libpam0g, systemd",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "gnome Depends contains a Qt/KDE library (libqt6-base6/kirigami/kcoreaddons)",
+      "expected": "test fails nonzero — gnome must not pull Qt/KDE",
+      "actual": "test_debian_split.sh (c) checks libqt6-base6, kirigami, kcoreaddons absent from gnome Depends; current gnome depends only on namtor (= 0.1.0-1), libgtk-4-1, libadwaita-1-0",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "kde Depends contains a GTK/libadwaita library",
+      "expected": "test fails nonzero — kde must not pull GTK",
+      "actual": "test_debian_split.sh (d) checks libgtk-4-1, libadwaita-1-0 absent from kde Depends; current kde depends only on namtor (= 0.1.0-1), libqt6-base6, kirigami, kcoreaddons",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "desktop package depends on namtor without exact version pin",
+      "expected": "test fails nonzero — desktop packages must pin exact core version",
+      "actual": "test_debian_split.sh (c/d) checks for 'namtor (= 0.1.0-1)' literal in Depends; both gnome and kde pin exact version",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "rules does not call stage.sh --package for all three packages",
+      "expected": "test fails nonzero — each package must stage its own manifest entries",
+      "actual": "test_debian_split.sh (e) checks stage.sh --package core, --package gnome, --package kde all appear in rules; all three present",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "rules still says 'monolithic' in comments",
+      "expected": "test fails nonzero — stale comment must be removed",
+      "actual": "test_debian_split.sh (g) checks for 'monolithic' (case-insensitive) in rules; not found — comment now says 'Split into namtor (core), namtor-gnome, namtor-kde'",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "rules does not relocate PAM module to multiarch path",
+      "expected": "test fails nonzero — Debian multiarch policy requires /usr/lib/<triplet>/security/pam_namtor.so",
+      "actual": "test_debian_split.sh (f) checks DEB_HOST_MULTIARCH is defined, security path is used, and mv relocates pam_namtor.so; all present",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "namtor-gnome.install or namtor-kde.install missing or incomplete",
+      "expected": "test fails nonzero — .install lists must enumerate package files",
+      "actual": "test_debian_split.sh (h) checks both files exist and list all expected files (wizard binary, .desktop, .metainfo.xml, .svg for gnome; .desktop, .metainfo.xml, .svg, libnamtorqml.so, main.qml, metadata.json for kde)",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "desktop maintainer scripts missing or calling lifecycle.sh",
+      "expected": "test fails nonzero — desktop scripts should only refresh caches, not touch daemon/PAM lifecycle",
+      "actual": "test_debian_split.sh (i) checks all 4 scripts exist, do update-desktop-database, and do NOT call lifecycle.sh",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "core postinst does desktop cache refresh instead of delegating to lifecycle.sh",
+      "expected": "test fails nonzero — core lifecycle is lifecycle.sh's job, not desktop cache",
+      "actual": "test_debian_split.sh (k) checks namtor.postinst delegates to lifecycle.sh and does NOT call update-desktop-database",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "core postinst edits PAM (calls pam-install.sh or writes /etc/pam.d)",
+      "expected": "test fails nonzero — PAM is default-off at install",
+      "actual": "test_debian_split.sh (k) strips comments and checks for pam-install.sh or /etc/pam.d in postinst body; not found",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "core postrm does not distinguish remove vs purge",
+      "expected": "test fails nonzero — Debian requires remove (keep state) vs purge (full cleanup) distinction",
+      "actual": "test_debian_split.sh (l) checks both 'remove)' and 'purge)' case arms exist; remove path does NOT call post-remove (keeps state), purge path DOES call cached post-remove (full purge)",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "core prerm does not cache lifecycle.sh for postrm",
+      "expected": "test fails nonzero — postrm purge needs the cached helper because dpkg deletes the payload before postrm runs",
+      "actual": "test_debian_split.sh (n) checks NAMTOR_LIFECYCLE_CACHE reference and cp of lifecycle.sh to the cache; present",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "maintainer scripts missing SPDX-License-Identifier headers",
+      "expected": "test fails nonzero — every .rs/.sh must have SPDX header per project rules",
+      "actual": "test_debian_split.sh (m) checks all 7 maintainer scripts (namtor.postinst/prerm/postrm + gnome.postinst/postrm + kde.postinst/postrm) have SPDX headers; all present",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "changelog does not document the split",
+      "expected": "test fails nonzero — changelog must mention split, namtor-gnome, namtor-kde",
+      "actual": "test_debian_split.sh (j) checks 'split', 'namtor-gnome', 'namtor-kde' all appear in changelog; all present",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "Architecture field missing or wrong (not amd64 arm64)",
+      "expected": "test fails nonzero — all three packages must declare amd64 arm64",
+      "actual": "test_debian_split.sh (o) checks Architecture: amd64 arm64 for all three packages; all present",
+      "verdict": "PASS"
+    }
+  ],
+  "test_suite": {
+    "script": "packaging/tests/test_debian_split.sh",
+    "passed": 78,
+    "failed": 0,
+    "exit_code": 0
+  }
+}

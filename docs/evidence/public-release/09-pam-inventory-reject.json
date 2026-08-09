@@ -1,0 +1,28 @@
+{
+  "task": "09-pam-inventory-reject",
+  "crate": "namtor-pam-config",
+  "description": "Rejection cases for PAM service inventory scanner and parser",
+  "test_count": 9,
+  "test_result": "PASS",
+  "tests": [
+    {"name": "scanner_rejects_symlinks", "category": "scanner-reject", "status": "PASS", "asserts": "ScanError::SymlinkRejected when pam.d contains a symlink"},
+    {"name": "scanner_skips_backup_files", "category": "scanner-reject", "status": "PASS", "asserts": "files ending with ~, .bak, .namtor.bak are skipped"},
+    {"name": "scanner_skips_dotfiles", "category": "scanner-reject", "status": "PASS", "asserts": "dotfiles are skipped"},
+    {"name": "scanner_skips_rpm_and_dpkg_save_files", "category": "scanner-reject", "status": "PASS", "asserts": ".rpmsave, .rpmnew, .rpmorig, .dpkg-dist, .dpkg-old, .dpkg-new skipped"},
+    {"name": "scanner_does_not_scan_namtor_backup_files", "category": "scanner-reject", "status": "PASS", "asserts": ".namtor.bak and .namtor.bak.sha256 sidecars skipped"},
+    {"name": "scanner_rejects_nonexistent_directory", "category": "scanner-reject", "status": "PASS", "asserts": "ScanError::NotADirectory for missing path"},
+    {"name": "include_cycle_is_detected", "category": "parser-reject", "status": "PASS", "asserts": "ScanError::IncludeCycle for a↔b @include cycle"},
+    {"name": "directory_traversal_in_include_is_rejected", "category": "parser-reject", "status": "PASS", "asserts": "ScanError::TraversalRejected for @include ../../../etc/passwd"},
+    {"name": "malformed_file_with_only_comments_is_rejected", "category": "parser-reject", "status": "PASS", "asserts": "ScanError::Malformed for comments-only file"}
+  ],
+  "rejection_rules": {
+    "symlinks": "rejected via symlink_metadata check — security: never follow links in pam.d",
+    "backups": "rejected by suffix: ~, .bak, .namtor.bak, .namtor.bak.sha256",
+    "dotfiles": "rejected by leading dot",
+    "rpm_save": "rejected: .rpmsave, .rpmnew, .rpmorig",
+    "dpkg_save": "rejected: .dpkg-dist, .dpkg-old, .dpkg-new",
+    "include_cycle": "detected via visited-set tracking in resolve_includes_inner",
+    "directory_traversal": "rejected if include target contains .. or starts with /",
+    "malformed": "rejected if file contains only comments/empty lines (no PAM entries)"
+  }
+}

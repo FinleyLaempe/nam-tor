@@ -1,0 +1,96 @@
+{
+  "task": "24",
+  "title": "Generate and install SBOM, provenance, model cards, and notices",
+  "gate": "supply-chain-pass",
+  "status": "PASS",
+  "timestamp": "2026-01-01T00:00:00Z",
+  "summary": "The SBOM (SPDX 2.3 + CycloneDX 1.5) now includes all Cargo dependencies, 7 release binaries (namtor-daemon, namtor-worker, namtor-cli, namtor-camera-emitter-off, pam_namtor.so, namtor-enroll-wizard, libnamtorqml.so), and all 3 ONNX models (yunet_2023mar, sface_2021dec, minifasnet_pad) with their sha256, licence SPDX id, licence sha256, upstream URL, and the Nam-tor git commit each was built from. The SLSA v1.0 provenance attestation includes the model archive as a mandatory subject and a modelProvenance predicate section with per-model hashes, licences, upstream URLs, build commits, and the MiniFASNet PAD model card + training recipe references. All outputs are deterministic: fixed epoch 2026-01-01T00:00:00Z, uuid5-based identifiers, sorted keys, no host paths or machine identifiers. Running the generators twice produces byte-identical output. The provenance generator refuses to emit without the model archive (exit 1) unless --allow-no-models is passed. The MiniFASNet PAD model card at ml/reports/learned-pad.md includes explicit Model Card, Training Recipe, Dataset Description, Performance Metrics, and Limitations sections. 34 test assertions pass.",
+  "sbom": {
+    "format": ["CycloneDX 1.5", "SPDX 2.3"],
+    "cargo_packages": 341,
+    "binaries": 7,
+    "models": 3,
+    "deterministic": true,
+    "fixed_epoch": "2026-01-01T00:00:00Z",
+    "uuid_strategy": "uuid5 (namespace 6ba7b810-9dad-11d1-80b4-00c04fd430c8)",
+    "host_paths": "none"
+  },
+  "models": {
+    "yunet_2023mar": {
+      "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+      "licence": "MIT",
+      "licence_sha256": "c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958",
+      "upstream_url": "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+      "manifest_match": true
+    },
+    "sface_2021dec": {
+      "sha256": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+      "licence": "Apache-2.0",
+      "licence_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "upstream_url": "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+      "manifest_match": true
+    },
+    "minifasnet_pad": {
+      "sha256": "3f86c8e4bb1138098ed2f8dc1682c6e1e1d6c5fffcf65dd6955c0cd60579a155",
+      "licence": "Apache-2.0",
+      "licence_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "upstream_url": "self-trained",
+      "model_card": "ml/reports/learned-pad.md",
+      "training_recipe": "ml/recipes/train_pad.py",
+      "notice": "packaging/licences/minifasnet_pad.NOTICE",
+      "manifest_match": true
+    }
+  },
+  "provenance": {
+    "schema": "SLSA v1.0 (in-toto Statement v1)",
+    "subjects": 7,
+    "model_archive_mandatory": true,
+    "allow_no_models_override": true,
+    "model_provenance_entries": 3,
+    "builder_id": "https://namtor.dev/builders/cargo-release-v1",
+    "fixed_epoch": "2026-01-01T00:00:00Z",
+    "host_paths": "none",
+    "deterministic": true
+  },
+  "model_card": {
+    "path": "ml/reports/learned-pad.md",
+    "sections": ["Model Card", "Training Recipe", "Dataset Description", "Performance Metrics", "Limitations"],
+    "architecture": "MiniFASNet (depthwise-separable CNN, GAP, linear classifier)",
+    "params": 80000,
+    "input_shape": [1, 1, 80, 80],
+    "output_shape": [1, 2],
+    "val_accuracy": 1.0,
+    "test_accuracy": 1.0,
+    "synthetic_only": true,
+    "apcer_real": "UNMEASURED"
+  },
+  "determinism": {
+    "method": "run generators twice into separate dirs, diff outputs",
+    "cyclonedx_identical": true,
+    "spdx_identical": true,
+    "provenance_identical": true,
+    "serial_number_stable": true,
+    "no_wall_clock": true,
+    "no_hostname": true,
+    "no_host_paths": true
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_supply_chain.sh",
+    "passed": 34,
+    "failed": 0,
+    "exit_code": 0
+  },
+  "files_modified": [
+    "packaging/generate-sbom.py",
+    "packaging/generate-provenance.py",
+    "docs/evidence/packaging/namtor.cyclonedx.json",
+    "docs/evidence/packaging/namtor.spdx.json",
+    "docs/evidence/packaging/namtor.provenance.json",
+    "ml/reports/learned-pad.md"
+  ],
+  "files_created": [
+    "packaging/tests/test_supply_chain.sh",
+    "docs/evidence/public-release/24-supply-chain-pass.json",
+    "docs/evidence/public-release/24-supply-chain-failure.json"
+  ]
+}

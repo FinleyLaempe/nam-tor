@@ -1,0 +1,148 @@
+{
+  "task": "31",
+  "title": "Certify full package lifecycle: upgrade, rollback, cross-desktop switch, and removal",
+  "gate": "lifecycle-matrix",
+  "status": "PASS",
+  "timestamp": "2026-08-09T06:00:00Z",
+  "summary": "A certification test script (packaging/tests/test_lifecycle_cert.sh) stages split packages via stage.sh --package core|gnome|kde into a DESTDIR fake-root and exercises the full lifecycle: fresh install, upgrade (re-stage over existing), add desktop, cross-desktop switch, rollback (remove desktop packages), full removal (uninstall.sh), and password-login preservation. Byte/hash (sha256) receipts prove runtime state (templates, templates.key, models, backoff.json) is preserved through upgrade and desktop add/remove, then fully purged on removal. Stock files (/usr/bin/ls, /etc/pam.d/system-auth) survive the purge with sha256 receipt match. Zero /etc/pam.d modifications at every stage (PAM default-off). Since clean distros cannot be run in CI, real distro upgrade/rollback on a live VM (pacman -U, dnf upgrade, apt upgrade) is documented as WITHHELD. The structural lifecycle validation is the CI-testable portion and passes 82/82 assertions.",
+  "method": "DESTDIR fake-root staging via stage.sh --package core|gnome|kde, simulating each lifecycle phase. (a) Fresh install: stage core, verify all 21 core manifest files + 13 dirs present, no /etc/pam.d. (b) Upgrade: seed runtime state (fake template, key, backoff, model) with sha256 receipts, re-stage core over existing, verify sha256 receipts match (preservation), manifest re-copied, no stale files in namtor-owned dirs. (c) Add desktop: stage gnome over core, verify 4 gnome files added, core intact, template preserved. (d) Cross-desktop: stage kde over core+gnome, verify 3 kde files added, gnome files coexist (split packages coexist), core intact. (e) Rollback: remove all gnome+kde manifest files, verify core fully present, template preserved. (f) Full removal: run uninstall.sh with DESTDIR, verify zero manifest files remain, namtor-specific dirs purged, generated_state purged, stock files survive (sha256 receipt match). (g) Password login preservation: verify 0 pam_namtor references under /etc/pam.d at every lifecycle stage (fresh, upgrade, gnome add, kde add, removal), lifecycle.sh post-install does not call pam-edit.",
+  "staging": {
+    "script": "packaging/stage.sh --package core|gnome|kde <DESTDIR> <SRCDIR>",
+    "uninstall": "DESTDIR=<root> packaging/uninstall.sh <SRCDIR>",
+    "deterministic": true,
+    "note": "stage.sh is idempotent (re-staging overwrites files deterministically). Runtime state under /var/lib/namtor/ (generated_state) is not touched by stage.sh — preserved across re-staging."
+  },
+  "lifecycle_matrix": {
+    "a_fresh_install": {
+      "status": "PASS",
+      "checks": [
+        "stage.sh --package core succeeds (fresh install)",
+        "all 21 core manifest files present",
+        "all 13 core manifest dirs present",
+        "no /etc/pam.d (PAM default-off)",
+        "mandatory core files spot-checked: daemon, worker, CLI, PAM module, socket, service, lifecycle.sh, install-manifest.toml"
+      ]
+    },
+    "b_upgrade_preservation": {
+      "status": "PASS",
+      "checks": [
+        "re-stage core over existing succeeds (simulates version bump)",
+        "template uid_1000.bin preserved (sha256 receipt match before/after)",
+        "templates.key preserved (sha256 receipt match)",
+        "backoff.json preserved (sha256 receipt match)",
+        "model yunet_2023mar.onnx preserved (sha256 receipt match)",
+        "all core manifest files still present after upgrade",
+        "install-manifest.toml present after upgrade (re-copied = updated)",
+        "daemon binary sha256 stable (same source, idempotent re-copy)",
+        "no stale files in namtor-owned dirs (outside generated_state)",
+        "no /etc/pam.d after re-stage (PAM still default-off)"
+      ],
+      "preservation_receipts": {
+        "template": "sha256 before == sha256 after (byte-identical)",
+        "templates_key": "sha256 before == sha256 after (byte-identical)",
+        "backoff_json": "sha256 before == sha256 after (byte-identical)",
+        "model": "sha256 before == sha256 after (byte-identical)"
+      }
+    },
+    "c_add_desktop_gnome": {
+      "status": "PASS",
+      "checks": [
+        "stage.sh --package gnome succeeds over core",
+        "all 4 gnome manifest files present (enroll-wizard, .desktop, .metainfo.xml, .svg)",
+        "core files still present after gnome added",
+        "template still preserved after gnome staged (sha256 match)"
+      ]
+    },
+    "d_cross_desktop_kde": {
+      "status": "PASS",
+      "checks": [
+        "stage.sh --package kde succeeds over core+gnome",
+        "all 3 kde manifest files present (kcm .desktop, .metainfo.xml, .svg)",
+        "gnome files still present after kde added (split packages coexist)",
+        "core files still present after kde added",
+        "gnome enroll-wizard + .desktop coexist with kde files"
+      ]
+    },
+    "e_rollback_desktop_removal": {
+      "status": "PASS",
+      "checks": [
+        "removed 7 desktop package file(s) (4 gnome + 3 kde)",
+        "all gnome files removed (count_missing == total_gnome)",
+        "all kde files removed (count_missing == total_kde)",
+        "core still fully present after desktop removal (0 missing core files)",
+        "template preserved through desktop removal (sha256 match)"
+      ]
+    },
+    "f_full_removal_purge": {
+      "status": "PASS",
+      "checks": [
+        "uninstall.sh exits 0",
+        "zero manifest-declared files remain (all 28 files purged)",
+        "namtor-specific dirs purged (/usr/lib/namtor, /usr/share/namtor, /var/lib/namtor, /run/namtor)",
+        "all generated_state paths purged (templates, templates.key, models, backoff.json)",
+        "stock /usr/bin/ls survived (sha256 receipt match before/after)",
+        "stock /etc/pam.d/system-auth survived (sha256 receipt match before/after)"
+      ],
+      "purge_receipts": {
+        "stock_ls": "sha256 before == sha256 after (uninstall only removes namtor paths)",
+        "stock_pam": "sha256 before == sha256 after (uninstall never touches stock PAM files)"
+      }
+    },
+    "g_password_login_preservation": {
+      "status": "PASS",
+      "checks": [
+        "0 pam_namtor refs after fresh core install",
+        "0 pam_namtor refs after upgrade (re-stage)",
+        "0 pam_namtor refs after gnome added",
+        "0 pam_namtor refs after kde added",
+        "0 pam_namtor refs after full removal",
+        "lifecycle.sh post-install does not call pam-edit (structural check)"
+      ],
+      "rationale": "PAM is default-off at install time. No /etc/pam.d modifications happen during stage.sh or uninstall.sh. PAM services are enabled only via the D-Bus Manager2 interface (polkit-authorized, transactional). Password login (pam_unix / pam_systemd_home) is never disrupted."
+    }
+  },
+  "withheld_clean_distro_vm_gates": {
+    "real_pacman_upgrade": {
+      "status": "WITHHELD",
+      "reason": "Requires a clean Arch VM with the package installed via pacman -U, then upgrading to a new version. CI uses DESTDIR fake-root staging, which cannot run pacman."
+    },
+    "real_dnf_upgrade": {
+      "status": "WITHHELD",
+      "reason": "Requires a clean Fedora VM with the package installed via dnf, then upgrading. CI uses DESTDIR fake-root staging."
+    },
+    "real_apt_upgrade": {
+      "status": "WITHHELD",
+      "reason": "Requires a clean Debian VM with the package installed via apt, then upgrading. CI uses DESTDIR fake-root staging."
+    },
+    "real_package_rollback": {
+      "status": "WITHHELD",
+      "reason": "Requires a clean distro VM with a previous package version installed, then downgrading (pacman -U old.pkg, dnf downgrade, apt install old). CI simulates rollback by removing desktop manifest files from the staged root."
+    },
+    "real_cross_desktop_live_session": {
+      "status": "WITHHELD",
+      "reason": "Requires a live desktop session with both GNOME and KDE installed, switching between them. CI verifies file-level coexistence structurally."
+    },
+    "real_removal_with_systemd": {
+      "status": "WITHHELD",
+      "reason": "Requires a clean distro VM with systemd running to verify systemctl disable, userdel, groupdel during removal. CI runs uninstall.sh with DESTDIR (skips systemd/userdel)."
+    }
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_lifecycle_cert.sh",
+    "passed": 82,
+    "failed": 0,
+    "exit_code": 0
+  },
+  "files_created": [
+    "packaging/tests/test_lifecycle_cert.sh",
+    "docs/evidence/public-release/31-lifecycle-matrix.json",
+    "docs/evidence/public-release/31-lifecycle-failures.json"
+  ],
+  "files_not_modified": [
+    "packaging/stage.sh — read-only (MUST NOT modify)",
+    "packaging/uninstall.sh — read-only (MUST NOT modify)",
+    "packaging/lifecycle.sh — read-only (MUST NOT modify)",
+    "packaging/install-manifest.toml — read-only (MUST NOT modify)",
+    "No Rust source, Cargo.toml, or distro packaging modified"
+  ]
+}

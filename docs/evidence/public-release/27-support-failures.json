@@ -1,0 +1,164 @@
+{
+  "task": "27-failures",
+  "title": "Privacy-safe support bundle — failure and forbidden-data evidence",
+  "gate": "support-bundle-failures",
+  "status": "PASS",
+  "timestamp": "2026-08-09T04:00:00Z",
+  "summary": "Evidence that the privacy scanner catches forbidden data in diagnostic output, that hex redaction prevents full hash exposure, that migration detection correctly identifies old install artifacts, and that the bundle creation rejects content carrying biometric terms.",
+  "failure_modes_tested": {
+    "forbidden_term_in_diagnostic_output": {
+      "test": "privacy_scanner_rejects_embedding_template_pixel",
+      "method": "PrivacyScanner.scan() receives strings containing 'embedding', 'template', 'pixel' and must return ForbiddenTerm error",
+      "status": "pass",
+      "error_type": "PrivacyError::ForbiddenTerm"
+    },
+    "forbidden_term_frame_crop_threshold_nonce": {
+      "test": "privacy_scanner_rejects_frame_and_crop_and_threshold_and_nonce",
+      "method": "PrivacyScanner.scan() receives strings containing 'frame', 'crop', 'threshold', 'nonce' and must return ForbiddenTerm error",
+      "status": "pass",
+      "error_type": "PrivacyError::ForbiddenTerm"
+    },
+    "forbidden_term_score": {
+      "test": "privacy_scanner_rejects_raw_score",
+      "method": "PrivacyScanner.scan() receives 'match score=0.8723 accepted' — 'score' is now a forbidden term, caught as ForbiddenTerm (previously caught as RawScore)",
+      "status": "pass",
+      "error_type": "PrivacyError::ForbiddenTerm { term: 'score' }"
+    },
+    "hex_sequence_in_content": {
+      "test": "privacy_scanner_rejects_hex_sequence_and_key_material",
+      "method": "PrivacyScanner.scan() receives '0xdeadbeefcafef00d' (0x + 8+ hex) and 'aaaa...4444' (32+ contiguous hex) — both rejected",
+      "status": "pass",
+      "error_type": "PrivacyError::HexSequence / PrivacyError::KeyMaterial"
+    },
+    "pem_key_marker_in_content": {
+      "test": "privacy_scanner_rejects_hex_sequence_and_key_material",
+      "method": "PrivacyScanner.scan() receives '-----BEGIN PRIVATE KEY-----' — rejected as key material",
+      "status": "pass",
+      "error_type": "PrivacyError::KeyMaterial"
+    },
+    "bundle_rejects_biometric_term": {
+      "test": "bundle_rejects_content_with_biometric_term",
+      "method": "Create a config with vid_pid='embedding-leak', run doctor, attempt bundle creation — must fail with PrivacyError::ForbiddenTerm",
+      "status": "pass",
+      "error_type": "BundleError::Privacy(PrivacyError::ForbiddenTerm)"
+    },
+    "bundle_rejects_unfiltered_log": {
+      "test": "bundle_rejects_unfiltered_log_with_biometric_data",
+      "method": "BundleInfo.log_excerpts contains 'embedding leaked into unfiltered log' — bundle creation must fail",
+      "status": "pass",
+      "error_type": "BundleError::Privacy(PrivacyError::ForbiddenTerm)"
+    },
+    "log_filter_removes_biometric_terms": {
+      "test": "filter_log_lines_removes_biometric_terms",
+      "method": "Input with 'embedding', 'score=', 'threshold', 'template', 'key material', 'path resolved' — all filtered out; 'daemon started', 'socket bound', 'ready for auth' preserved",
+      "status": "pass"
+    }
+  },
+  "hex_redaction_failure_prevention": {
+    "long_hex_truncated": {
+      "test": "redact_hex_id_long_truncated",
+      "method": "64-char hex string → first 8 chars + '...', rest not present",
+      "status": "pass"
+    },
+    "colon_separated_truncated": {
+      "test": "redact_sha256_colon_truncates_to_first_4_bytes",
+      "method": "8-byte SHA-256 digest → 'aa:bb:cc:dd...' (first 4 bytes colon-separated + ellipsis)",
+      "status": "pass"
+    },
+    "short_hex_unchanged": {
+      "test": "redact_hex_id_short_unchanged",
+      "method": "8-char hex string → unchanged (below 16-char threshold)",
+      "status": "pass"
+    },
+    "model_sha256_redacted": {
+      "test": "collect_model_info_reads_onnx_files",
+      "method": "Model SHA-256 ends with '...' — full hash not present in output",
+      "status": "pass"
+    }
+  },
+  "migration_detection_failure_modes": {
+    "legacy_setuid_detected": {
+      "test": "detect_legacy_setuid_artifact",
+      "method": "Create namtor-worker-spawn file → detect_migration_artifacts returns artifact with kind='legacy-setuid'",
+      "status": "pass"
+    },
+    "legacy_install_script_detected": {
+      "test": "detect_legacy_install_script",
+      "method": "Create install.sh file → detect_migration_artifacts returns artifact with kind='legacy-install-script'",
+      "status": "pass"
+    },
+    "manual_install_detected": {
+      "test": "detect_manual_install_artifact",
+      "method": "Create namtor-daemon without install-manifest.toml → detect_migration_artifacts returns artifact with kind='manual-install'",
+      "status": "pass"
+    },
+    "clean_install_no_artifacts": {
+      "test": "no_artifacts_when_clean_split_install",
+      "method": "Create daemon + manifest (clean split install) → detect_migration_artifacts returns empty vec",
+      "status": "pass"
+    },
+    "migration_display_no_paths": {
+      "test": "migration_artifact_display_is_privacy_safe",
+      "method": "MigrationArtifact Display output must not contain '/' (no file paths)",
+      "status": "pass"
+    },
+    "doctor_report_shows_migration": {
+      "test": "doctor_report_detects_migration_artifacts",
+      "method": "Full doctor report with legacy setuid present must contain 'migration:' and 'legacy-setuid'",
+      "status": "pass"
+    }
+  },
+  "package_detection_failure_modes": {
+    "all_three_detected": {
+      "test": "detect_all_three_split_packages",
+      "method": "Create core+gnome+kde characteristic files → all three detected, manual=false",
+      "status": "pass"
+    },
+    "core_only_detected": {
+      "test": "detect_core_only",
+      "method": "Create only core files → core=true, gnome=false, kde=false",
+      "status": "pass"
+    },
+    "manual_install_detected": {
+      "test": "detect_manual_install_without_manifest",
+      "method": "Create daemon without manifest → core=false, manual=true",
+      "status": "pass"
+    },
+    "no_packages_detected": {
+      "test": "detect_no_packages",
+      "method": "Empty root → all false, display='none'",
+      "status": "pass"
+    },
+    "no_forbidden_tokens_in_display": {
+      "test": "installed_packages_display_no_forbidden_tokens",
+      "method": "InstalledPackages Display output must not contain 'embedding', 'template', 'threshold', 'score', 'biometric', 'gate', 'raw', 'path', 'key'",
+      "status": "pass"
+    }
+  },
+  "pam_count_failure_modes": {
+    "missing_dir_returns_zero": {
+      "test": "count_enabled_pam_services_zero_when_dir_missing",
+      "method": "Nonexistent pam.d dir → count=0",
+      "status": "pass"
+    },
+    "backups_and_dotfiles_skipped": {
+      "test": "count_enabled_pam_services_skips_backups_and_dotfiles",
+      "method": "PAM files with .bak, ~, .hidden, .namtor.bak extensions are skipped",
+      "status": "pass"
+    }
+  },
+  "protection_state_failure_modes": {
+    "uninitialized_when_no_key": {
+      "test": "detect_protection_state_uninitialized_when_no_key",
+      "method": "No sealing material file → sealing='uninitialized'",
+      "status": "pass"
+    },
+    "privacy_safe_display": {
+      "test": "protection_info_display_is_privacy_safe",
+      "method": "ProtectionInfo Display must not contain 'key' or '/' (paths)",
+      "status": "pass"
+    }
+  },
+  "all_tests_pass": true,
+  "total_failure_mode_tests": 24
+}

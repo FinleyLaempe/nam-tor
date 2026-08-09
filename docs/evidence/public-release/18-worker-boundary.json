@@ -1,0 +1,80 @@
+{
+  "task": "18",
+  "title": "Worker boundary — trust model and setuid helper removal",
+  "summary": "The unused setuid helper namtor-worker-spawn has been removed. The worker runs as the namtor user (same as the daemon) and self-applies seccomp + landlock. The sandbox is the privilege boundary, not a UID drop.",
+  "worker_trust_model": {
+    "worker_uid": "namtor",
+    "daemon_uid": "namtor",
+    "privilege_boundary": "seccomp + landlock (self-applied by worker after model load)",
+    "setuid_binaries": "none — namtor-worker-spawn removed",
+    "spawn_method": "ChildSupervisor::spawn in namtor-daemon/src/supervisor.rs spawns namtor-worker directly via std::process::Command",
+    "sandbox_application": "worker calls sandbox::apply_sandbox() (landlock then seccomp) before the request loop when --apply-sandbox is passed"
+  },
+  "landlock_restrictions": {
+    "filesystem": "all paths denied (no allow rules) — AccessFs::from_all(ABI::V6) with no permitted paths",
+    "network": "all bind/connect denied via AccessNet::from_all(ABI::V6) where kernel supports it; seccomp socket/connect/bind is the fallback"
+  },
+  "seccomp_restrictions": {
+    "mode": "deny-by-default allowlist (ScmpAction::Errno(EPERM))",
+    "allowed_syscalls": [
+      "read", "write", "close", "fcntl", "fstat", "lseek",
+      "mmap", "mprotect", "munmap", "brk",
+      "rt_sigaction", "rt_sigprocmask", "rt_sigreturn",
+      "ioctl", "recvfrom", "sendto", "shutdown",
+      "poll", "nanosleep", "clock_gettime", "getpid",
+      "exit", "exit_group"
+    ],
+    "denied_syscalls": [
+      "open", "openat", "creat",
+      "socket", "connect", "bind", "listen", "accept", "socketpair",
+      "execve", "execveat",
+      "fork", "clone", "clone3"
+    ]
+  },
+  "package_scan": {
+    "setuid_files_in_manifest": "none — install-manifest.toml has no mode 4755 entries",
+    "setuid_files_in_binary_list": "none — verify-reproducible.sh and sign-packages.sh no longer list namtor-worker-spawn",
+    "arch_post_install": "chmod u+s on namtor-worker-spawn removed from packaging/arch/namtor.install"
+  },
+  "files_removed": [
+    "crates/namtor-worker/src/bin/namtor-worker-spawn.rs"
+  ],
+  "files_modified": [
+    "crates/namtor-worker/Cargo.toml",
+    "crates/namtor-worker/src/bin/namtor-worker.rs",
+    "crates/namtor-worker/tests/escape.rs",
+    "crates/namtor-daemon/src/supervisor.rs",
+    "crates/namtor-layout/src/install_layout.rs",
+    "packaging/install-manifest.toml",
+    "packaging/systemd/namtor-daemon.service",
+    "packaging/README.md",
+    "packaging/uninstall.sh",
+    "packaging/verify-reproducible.sh",
+    "packaging/sign-packages.sh",
+    "packaging/arch/namtor.install",
+    "packaging/fedora/namtor.spec",
+    "packaging/debian/control",
+    "packaging/debian/changelog",
+    "packaging/debian/rules",
+    "scripts/hil/reference-auth-hil.sh",
+    "docs/threat-model.md",
+    "docs/superpowers/specs/2026-08-04-nam-tor-design.md",
+    "docs/evidence/packaging/systemd-hardening.md",
+    "docs/evidence/packaging/install-layout.md",
+    "docs/evidence/packaging/signatures-sbom.md",
+    "docs/evidence/packaging/distro-packages.md",
+    "docs/evidence/status-audit.md",
+    "docs/evidence/g7-status-reconciliation.md",
+    "docs/adr/turnkey-architecture.md",
+    "README.md",
+    "AGENTS.md"
+  ],
+  "verification": {
+    "cargo_test_namtor_daemon_lib": "380 passed; 0 failed; 1 ignored",
+    "cargo_test_namtor_worker_lib": "73 passed; 0 failed; 3 ignored",
+    "cargo_test_escape": "9 passed; 0 failed (including 3 new: denied_open_templates, denied_open_keys, denied_open_models)",
+    "cargo_test_namtor_layout_lib": "22 passed; 0 failed",
+    "cargo_clippy": "clean (no warnings)",
+    "lsp_diagnostics": "no errors on all changed source files"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "task": "4. Create mandatory reproducible signed model-source artifacts for every public build",
+  "date": "2026-08-08",
+  "gate": "tamper-evidence",
+  "method": "copy archive + .sha256 sidecar; flip one byte at three offsets; build-model-archive.sh --verify must exit non-zero. Clean archive + sidecar must verify (exit 0).",
+  "archive_version": "0.1.0",
+  "clean_archive_sha256": "c09bfa9840cf5b3b8f6a03d0a044489adc8223e9e588022fc4eede988890d9d5",
+  "tamper_tests": [
+    {
+      "label": "mid",
+      "byte_offset": 1024,
+      "verify_exit_code": 1,
+      "tamper_detected": true
+    },
+    {
+      "label": "last_byte",
+      "byte_offset": 36100973,
+      "verify_exit_code": 1,
+      "tamper_detected": true
+    },
+    {
+      "label": "first_byte",
+      "byte_offset": 0,
+      "verify_exit_code": 1,
+      "tamper_detected": true
+    }
+  ],
+  "clean_verify_exit_code": 0,
+  "clean_verifies": true,
+  "verification_layers": [
+    "whole-archive sha256 vs .sha256 sidecar (catches any byte flip in the gzip container)",
+    "per-file sha256 vs MANIFEST.json (catches content tamper even without sidecar)",
+    "per-model sha256 vs packaging/model-manifest.toml (catches model substitution)"
+  ],
+  "result": "PASS"
+}

@@ -1,0 +1,70 @@
+{
+  "task": "11-pam-dbus-pass",
+  "description": "v2 PAM D-Bus methods (ListPamServices, SetPamServiceEnabled, GetProtectionStatus) exposed on system bus with polkit authorization — pass/allow scenarios",
+  "date": "2026-08-08",
+  "crate": "namtor-daemon",
+  "modules": {
+    "manager/dbus.rs": "v2 Manager2Service: PamApi trait, Manager2DBusError, PamSignal, error mapping",
+    "manager/bus.rs": "Manager2Iface zbus interface (org.namtor.Manager2) wired into ManagerBusService",
+    "manager/polkit.rs": "StubPolkit updated to allow CONFIGURE_PAM for root",
+    "dbus.rs": "action::CONFIGURE_PAM constant added"
+  },
+  "polkit_action": "org.namtor.configure-pam",
+  "interface": "org.namtor.Manager2",
+  "methods": {
+    "ListPamServices": "a(ssbss) — classified PAM service inventory (no polkit required)",
+    "SetPamServiceEnabled": "sb -> b — toggle pam_namtor.so (requires org.namtor.configure-pam)",
+    "GetProtectionStatus": "(sbs) — template storage protection status"
+  },
+  "signals": {
+    "PamServicesChanged": "a(ssbss) — emitted after successful toggle",
+    "ProtectionStatusChanged": "(sbs)"
+  },
+  "tests": {
+    "total": 26,
+    "all_pass": true,
+    "manager_dbus_tests": 24,
+    "manager_bus_v2_tests": 2
+  },
+  "test_categories": {
+    "list_pam_services": [
+      "list_pam_services_returns_classified_inventory",
+      "list_pam_services_empty_dir_returns_empty",
+      "list_pam_services_no_polkit_required"
+    ],
+    "authorization_pass": [
+      "set_pam_service_enabled_allowed_for_root",
+      "set_pam_service_enabled_challenged_when_polkit_says_challenge"
+    ],
+    "enable_disable_round_trip": [
+      "enable_then_disable_round_trips",
+      "set_pam_service_enabled_emits_pam_services_changed",
+      "list_pam_services_does_not_emit_signal"
+    ],
+    "registry_persistence": [
+      "restart_preserves_registry"
+    ],
+    "protection_status": [
+      "get_protection_status_returns_store_status"
+    ],
+    "v1_unchanged": [
+      "v1_contract_constants_unchanged",
+      "v2_contract_constants_unchanged"
+    ],
+    "bus_introspection": [
+      "p2p_introspection_contains_v2_interface",
+      "v2_api_version_property_is_frozen"
+    ],
+    "error_mapping": [
+      "error_mapping_covers_all_edit_errors",
+      "pcm_to_contract_info_maps_fields",
+      "pcm_to_contract_compat_exhaustive",
+      "pam_api_error_to_dbus_error_exhaustive"
+    ]
+  },
+  "verification": {
+    "cargo_test": "380 passed, 0 failed, 1 ignored",
+    "cargo_clippy": "clean (-D warnings)",
+    "cargo_fmt": "clean"
+  }
+}

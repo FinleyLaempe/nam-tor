@@ -1,0 +1,65 @@
+{
+  "task": "31",
+  "title": "Lifecycle failure matrix — interrupted, stale, concurrent, missing-manifest, and PAM-leftover scenarios",
+  "gate": "lifecycle-failure-matrix",
+  "status": "PASS",
+  "timestamp": "2026-08-09T06:00:00Z",
+  "summary": "The failure matrix verifies that lifecycle error conditions are detected or handled gracefully: interrupted upgrade (partial staging) is detected via missing-file count and is recoverable by re-staging; stale files from a previous version (not in the current manifest) are detected by scanning namtor-owned dirs; concurrent staging attempts produce a consistent tree (stage.sh is idempotent — re-staging overwrites deterministically); removal with a missing manifest exits nonzero with a FATAL message and does not remove any files (clean early exit); PAM block leftovers are detectable via grep and trigger the uninstall grep+warn fallback, and a clean install+uninstall leaves zero pam_namtor references (default-off verified). All 5 failure scenarios pass.",
+  "method": "Each failure scenario stages core via stage.sh --package core into a DESTDIR fake-root, then introduces the fault condition and verifies detection/handling. (F1) Interrupted upgrade: delete the first half of core manifest files, verify count_missing_files > 0 (detected), then re-stage and verify 0 missing (recovered). (F2) Stale file: plant a non-manifest file under /usr/lib/namtor/, run scan_stale to detect files not in the manifest. (F3) Concurrent staging: launch two stage.sh in parallel into the same DESTDIR, verify the resulting tree has 0 missing files and matches a single-stage reference sha256-for-sha256. (F4) Missing manifest: remove the staged manifest and pass an empty SRCDIR, verify uninstall exits nonzero with FATAL message and staged files are untouched. (F5) PAM leftover: stage core, plant a fake pam_namtor block in /etc/pam.d/gdm-password, remove lifecycle.sh + pam-edit to force the grep+warn fallback, run uninstall, verify it warns about pam_namtor; then verify a clean install+uninstall leaves 0 pam_namtor refs.",
+  "failure_matrix": {
+    "F1_interrupted_upgrade": {
+      "scenario": "Interrupted upgrade (partial staging) — upgrade is interrupted after deleting half the files",
+      "trigger": "First half of core manifest files removed from DESTDIR (simulates a crash mid-upgrade)",
+      "expected": "Incomplete state detected (missing files > 0); re-staging restores the full set",
+      "detection_method": "count_missing_files compares staged tree against manifest-declared file list",
+      "result": "PASS",
+      "details": "10 core file(s) missing detected; re-staging restored 0 missing (full set recovered)",
+      "ci_testable": true
+    },
+    "F2_stale_files": {
+      "scenario": "Stale files from a previous version not in the new manifest",
+      "trigger": "A non-manifest file (namtor-legacy-old) planted under /usr/lib/namtor/",
+      "expected": "Detected as stale by scanning namtor-owned dirs for files not in the manifest",
+      "detection_method": "scan_stale walks /usr/lib/namtor, /usr/share/namtor, /usr/share/doc/namtor and reports files whose path is not in the manifest's [[files]] dest set",
+      "result": "PASS",
+      "details": "1 stale file detected (namtor-legacy-old flagged)",
+      "ci_testable": true,
+      "note": "stage.sh does not remove stale files (it only copies manifest-declared files). Stale detection is a diagnostic scan, not auto-removal. Operators must remove stale files manually or re-stage into a clean DESTDIR."
+    },
+    "F3_concurrent_staging": {
+      "scenario": "Concurrent staging attempts into the same DESTDIR",
+      "trigger": "Two stage.sh --package core processes launched in parallel against the same root",
+      "expected": "stage.sh is idempotent (re-staging overwrites deterministically); the resulting tree is consistent and matches a single-stage reference",
+      "detection_method": "count_missing_files after concurrent staging + sha256 comparison against a single-stage reference tree",
+      "result": "PASS",
+      "details": "0 missing core files; concurrent-staged tree matches single-stage reference sha256-for-sha256 (rc1=0 rc2=0)",
+      "ci_testable": true,
+      "note": "stage.sh has no lock mechanism. Idempotent re-staging makes concurrent staging safe for the same package (files are overwritten deterministically). Concurrent staging of different packages (e.g. core + gnome) into the same root is also safe (different file sets). A real package manager serialises installs via a lock; this test proves the staging operation itself is race-safe."
+    },
+    "F4_missing_manifest_removal": {
+      "scenario": "Removal with a missing install-manifest.toml",
+      "trigger": "Manifest removed from staged root AND SRCDIR points at an empty dir (no manifest found)",
+      "expected": "uninstall.sh exits nonzero with a FATAL message and does not remove any files (clean early exit before the removal phase)",
+      "detection_method": "uninstall.sh manifest resolution: tries $DESTDIR/usr/share/namtor/install-manifest.toml then $SRCDIR/install-manifest.toml; if neither exists, prints FATAL and exits 1",
+      "result": "PASS",
+      "details": "exit rc=1; FATAL message printed; staged daemon binary still present (no files removed)",
+      "ci_testable": true
+    },
+    "F5_pam_leftover_after_removal": {
+      "scenario": "PAM block leftover after removal (should not exist since default-off)",
+      "trigger": "A fake pam_namtor block planted in /etc/pam.d/gdm-password; lifecycle.sh + pam-edit removed to force the grep+warn fallback",
+      "expected": "Leftover is detectable via grep; uninstall's grep+warn fallback warns the operator; a clean install+uninstall leaves zero pam_namtor references (default-off means no leftover to begin with)",
+      "detection_method": "grep -rl 'pam_namtor' under /etc/pam.d; uninstall grep+warn fallback scans /etc/pam.d for pam_namtor and warns; clean install+uninstall verified 0 refs",
+      "result": "PASS",
+      "details": "leftover detectable (1 file); uninstall warns about pam_namtor leftover; clean install+uninstall leaves 0 pam_namtor refs",
+      "ci_testable": true,
+      "note": "PAM is default-off: no /etc/pam.d modifications at install time, so there is no leftover to remove at uninstall time. The grep+warn fallback in uninstall.sh is a safety net for the case where an operator manually added a pam_namtor block. uninstall.sh never auto-edits PAM without the transactional namtor-pam-edit engine — it only warns."
+    }
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_lifecycle_cert.sh",
+    "failure_matrix_passed": 5,
+    "failed": 0,
+    "exit_code": 0
+  }
+}

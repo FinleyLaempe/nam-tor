@@ -1,0 +1,41 @@
+{
+  "task": "32-mutation",
+  "timestamp": "2026-08-09T08:26:45Z",
+  "categories": [
+    {
+      "name": "reconciliation",
+      "checks": [
+        {
+          "name": "F.mutation_delete_file",
+          "result": "PASS",
+          "detail": "reconciliation failed after deleting 13-install-default-off.json (correct)"
+        },
+        {
+          "name": "F.mutation_tamper_file",
+          "result": "PASS",
+          "detail": "reconciliation failed after tampering 28-ci-baseline.json (correct)"
+        },
+        {
+          "name": "F.mutation_summary",
+          "result": "PASS",
+          "detail": "mutation tests: 2 pass, 0 fail"
+        }
+      ]
+    },
+    {
+      "name": "summary",
+      "checks": [
+        {
+          "name": "total_checks",
+          "result": "PASS",
+          "detail": "pass=3 fail=0 withheld=0"
+        },
+        {
+          "name": "overall",
+          "result": "PASS",
+          "detail": "RC reconciliation passed"
+        }
+      ]
+    }
+  ]
+}

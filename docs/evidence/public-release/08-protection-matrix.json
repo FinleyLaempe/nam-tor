@@ -1,0 +1,102 @@
+{
+  "task": "8. Implement TPM2-first keys with explicit secure fallback status",
+  "date": "2026-08-08",
+  "gate": "protection-matrix",
+  "method": "cargo test -p namtor-store --lib + cargo test -p namtor-daemon --lib manager:: + cargo clippy -p namtor-store -p namtor-daemon -- -D warnings",
+  "protection_kinds": [
+    {
+      "kind": "tpm2",
+      "description": "TPM2 2.0 hardware-bound sealing via tpm2-tools CLI (feature-gated tpm2). Device-bound, non-migratable. PCR binding opt-in.",
+      "has_warning": false,
+      "auto_selected_when": "/dev/tpmrm0 present and tpm2 feature enabled and tpm2_pcrread probe succeeds"
+    },
+    {
+      "kind": "software",
+      "description": "AES-256-GCM with root/namtor-owned 0600 key file. Always available fallback.",
+      "has_warning": true,
+      "auto_selected_when": "TPM2 unavailable (no /dev/tpmrm0, feature off, or probe failed)"
+    }
+  ],
+  "tests": [
+    {
+      "name": "protection_state_tpm2_has_no_warning",
+      "file": "crates/namtor-store/src/crypto.rs",
+      "asserts": "TPM2-sealed key produces ProtectionState with empty warning",
+      "passed": true
+    },
+    {
+      "name": "protection_state_software_has_visible_warning",
+      "file": "crates/namtor-store/src/crypto.rs",
+      "asserts": "Software fallback key produces non-empty warning string",
+      "passed": true
+    },
+    {
+      "name": "protection_state_has_tpm_reflects_device_presence",
+      "file": "crates/namtor-store/src/crypto.rs",
+      "asserts": "has_tpm field matches tpm2_device_present() (/dev/tpmrm0 check)",
+      "passed": true
+    },
+    {
+      "name": "protection_state_contains_no_key_material",
+      "file": "crates/namtor-store/src/crypto.rs",
+      "asserts": "ProtectionState debug output contains no raw key bytes (hex) or key path",
+      "passed": true
+    },
+    {
+      "name": "fallback_key_file_is_0600",
+      "file": "crates/namtor-store/src/crypto.rs",
+      "asserts": "Software fallback key file mode is exactly 0600",
+      "passed": true
+    },
+    {
+      "name": "mock_seal_unseal_round_trip",
+      "file": "crates/namtor-store/src/crypto.rs",
+      "asserts": "TPM2-type backend seal->unseal roundtrip recovers the original key",
+      "passed": true
+    },
+    {
+      "name": "mock_pcr_seal_unseal_round_trip",
+      "file": "crates/namtor-store/src/crypto.rs",
+      "asserts": "PCR-bound seal->unseal roundtrip succeeds with matching PCR state",
+      "passed": true
+    },
+    {
+      "name": "pcr_mismatch_denied_after_reboot",
+      "file": "crates/namtor-store/src/crypto.rs",
+      "asserts": "PCR mismatch after reboot is denied with Tpm2 error containing 'PCR policy mismatch'",
+      "passed": true
+    },
+    {
+      "name": "template_store_protection_status_software_fallback",
+      "file": "crates/namtor-daemon/src/manager/store.rs",
+      "asserts": "TemplateProfileStore.protection_status() maps KeySource::File to ProtectionKeyKind::Software with non-empty warning",
+      "passed": true
+    },
+    {
+      "name": "null_store_protection_status_reports_no_store",
+      "file": "crates/namtor-daemon/src/manager/store.rs",
+      "asserts": "NullProfileStore.protection_status() returns Software with 'no store loaded' warning",
+      "passed": true
+    },
+    {
+      "name": "protection_status_contains_no_key_material",
+      "file": "crates/namtor-daemon/src/manager/store.rs",
+      "asserts": "ProtectionStatus debug output contains no store path or /var/lib/namtor path",
+      "passed": true
+    }
+  ],
+  "status_contract": {
+    "store_type": "ProtectionState { sealing: KeySource, has_tpm: bool, warning: String }",
+    "contract_type": "ProtectionStatus { sealing: ProtectionKeyKind, has_tpm: bool, warning: String }",
+    "mapping": "KeySource::Tpm2 -> ProtectionKeyKind::Tpm2; KeySource::File -> ProtectionKeyKind::Software",
+    "wire_signature": "(sbs)",
+    "exposed_via": "ManagerService::protection_status() (v2 GetProtectionStatus method, Task 9/17 wires bus interface)",
+    "no_key_material": true
+  },
+  "store_tests_passed": 53,
+  "store_tests_failed": 0,
+  "manager_tests_passed": 79,
+  "dbus_tests_passed": 82,
+  "clippy_clean": true,
+  "result": "PASS"
+}

@@ -1,0 +1,77 @@
+{
+  "task": "02-licence-inventory",
+  "date": "2026-08-08",
+  "description": "Verify all canonical licence files exist, hashes match model-manifest.toml, and no stale BSD-3 claims remain for models.",
+  "files": [
+    {
+      "file": "MIT.txt",
+      "exists": true,
+      "sha256": "c3b1b78bc8bd3ea13aa4bc9778442d16560270afa235006d816e5e88cef24db4",
+      "expected_sha256": "c3b1b78bc8bd3ea13aa4bc9778442d16560270afa235006d816e5e88cef24db4",
+      "hash_matches": true
+    },
+    {
+      "file": "APACHE-2.0.txt",
+      "exists": true,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "expected_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "hash_matches": true
+    },
+    {
+      "file": "GPL-3.0.txt",
+      "exists": true,
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "expected_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "hash_matches": true
+    },
+    {
+      "file": "yunet_2023mar.LICENSE",
+      "exists": true,
+      "sha256": "c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958",
+      "expected_sha256": "c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958",
+      "hash_matches": true
+    },
+    {
+      "file": "sface_2021dec.LICENSE",
+      "exists": true,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "expected_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "hash_matches": true
+    },
+    {
+      "file": "minifasnet_pad.NOTICE",
+      "exists": true,
+      "sha256": "f2c492d09b34b6f941fa2ea8be7c213849e800af21d77b774913146ec9b47ffe",
+      "hash_matches": "N/A (provenance notice)"
+    }
+  ],
+  "manifest_cross_check": [
+    {
+      "model_id": "yunet_2023mar",
+      "licence_url": "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/face_detection_yunet/LICENSE",
+      "licence_sha256": "c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958",
+      "contains_bsd3_ref": false
+    },
+    {
+      "model_id": "sface_2021dec",
+      "licence_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "licence_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "contains_bsd3_ref": false
+    },
+    {
+      "model_id": "minifasnet_pad",
+      "licence_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "licence_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "contains_bsd3_ref": false
+    }
+  ],
+  "stale_bsd3_refs": [],
+  "summary": {
+    "total_files": 6,
+    "passed": 6,
+    "failed": 0,
+    "missing": 0,
+    "orphaned": 0,
+    "status": "PASS"
+  }
+}

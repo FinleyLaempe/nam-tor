@@ -1,0 +1,108 @@
+{
+  "task": "19",
+  "title": "Add a package-independent deterministic lifecycle helper",
+  "gate": "lifecycle-helper",
+  "status": "PASS",
+  "timestamp": "2026-08-08T23:57:00Z",
+  "summary": "A single shared lifecycle helper (packaging/lifecycle.sh) provides six typed phases — pre-install, post-install, pre-upgrade, post-upgrade, pre-remove, post-remove — used by all three distro package hooks (Arch .install, Fedora .spec, Debian postinst/prerm/postrm). The helper validates model layout + sha256 hashes against model-manifest.toml, verifies identities/dirs (sysusers, tmpfiles, /var/lib/namtor, /run/namtor), socket + D-Bus service units, and the PAM module. It drives `namtor-pam-edit` as a subprocess for snapshot (pre-upgrade), migrate (post-upgrade), disable-all (pre-remove), and purge (post-remove). It emits a deterministic receipt per phase. PAM is default-off: post-install and pre-install never call namtor-pam-edit and never write under /etc/pam.d. The helper is idempotent and fake-root testable via --root <DESTDIR>; systemd/desktop-cache invocations are skipped on fake roots so the suite runs without root or a running systemd.",
+  "phases": {
+    "pre-install": "register sysusers + tmpfiles; verify prerequisite config files are staged under --root. Never edits PAM.",
+    "post-install": "validate model layout/hashes, identities/dirs, socket + D-Bus units, PAM module; update desktop caches; enable socket. Emit receipt. Never edits PAM.",
+    "pre-upgrade": "snapshot PAM state via `namtor-pam-edit snapshot`; stop the daemon. Never edits PAM lines.",
+    "post-upgrade": "migrate PAM via `namtor-pam-edit migrate`; re-validate model layout/hashes + services. Emit receipt.",
+    "pre-remove": "disable all PAM services via `namtor-pam-edit disable-all`; stop the daemon.",
+    "post-remove": "purge all PAM state via `namtor-pam-edit purge`; remove runtime dirs. Emit receipt."
+  },
+  "assertions": {
+    "helper_exists_and_executable": "PASS — packaging/lifecycle.sh present, mode 0755",
+    "unknown_phase_fails_nonzero": "PASS — exit 2 for bogus phases",
+    "all_six_phases_accepted_on_complete_root": "PASS — pre-install, post-install, pre-upgrade, post-upgrade, pre-remove, post-remove all exit 0 on a complete fake root",
+    "post_install_emits_receipt": "PASS — <root>/var/lib/namtor/lifecycle/post-install.receipt written with phase, version, root, status, checks_total/passed/failed, pam_edited, models_validated",
+    "post_install_no_pam_edit": "PASS — post-install does not invoke namtor-pam-edit (PAM default-off)",
+    "post_install_no_pam_d": "PASS — post-install does not create /etc/pam.d",
+    "mandatory_failure_missing_models": "PASS — post-install returns nonzero when /var/lib/namtor/models is empty",
+    "mandatory_failure_missing_sysusers": "PASS — post-install returns nonzero when sysusers.d/namtor.conf is absent",
+    "mandatory_failure_missing_service_unit": "PASS — post-install returns nonzero when namtor-daemon.service is absent",
+    "mandatory_failure_missing_dbus": "PASS — post-install returns nonzero when org.namtor.Manager.service is absent",
+    "mandatory_failure_missing_pam_module": "PASS — post-install returns nonzero when pam_namtor.so is absent",
+    "mandatory_failure_tampered_model": "PASS — post-install returns nonzero when an onnx file's sha256 does not match the manifest variant",
+    "idempotent": "PASS — running post-install twice yields the same exit code (0) and the same receipt content (ignoring the timestamp field)",
+    "fake_root_honoured": "PASS — receipt and validation operate under --root <DESTDIR>; the real /var/lib/namtor is untouched",
+    "pre_upgrade_calls_snapshot": "PASS — pre-upgrade invokes `namtor-pam-edit snapshot`",
+    "post_upgrade_calls_migrate": "PASS — post-upgrade invokes `namtor-pam-edit migrate`",
+    "pre_remove_calls_disable_all": "PASS — pre-remove invokes `namtor-pam-edit disable-all`",
+    "post_remove_calls_purge": "PASS — post-remove invokes `namtor-pam-edit purge`",
+    "post_remove_purges_runtime_dirs": "PASS — /var/lib/namtor/models removed under the fake root",
+    "no_nonexistent_cli": "PASS — lifecycle.sh contains no `models ensure` or `namtor-cli models` reference",
+    "no_pam_editing_in_post_install_body": "PASS — the namtor_lc_phase_post_install function body contains no pam-edit enable/disable/migrate/snapshot/purge or /etc/pam.d reference",
+    "no_pam_editing_in_pre_install_body": "PASS — the namtor_lc_phase_pre_install function body contains no PAM editing",
+    "no_pam_default_target": "PASS — lifecycle.sh does not hardcode gdm-password/system-auth/password-auth/common-auth",
+    "arch_install_invokes_lifecycle": "PASS — packaging/arch/namtor.install references lifecycle.sh with a typed phase",
+    "fedora_spec_invokes_lifecycle": "PASS — packaging/fedora/namtor.spec references lifecycle.sh with a typed phase",
+    "debian_scripts_invoke_lifecycle": "PASS — at least one Debian maintainer script references lifecycle.sh with a typed phase",
+    "arch_delegates_pam": "PASS — Arch .install contains no direct namtor-pam-edit snapshot/migrate/disable-all/purge call",
+    "fedora_delegates_pam": "PASS — Fedora .spec contains no direct namtor-pam-edit snapshot/migrate/disable-all/purge call",
+    "debian_postinst_delegates_pam": "PASS — Debian postinst contains no direct pam-edit lifecycle call",
+    "debian_prerm_delegates_pam": "PASS — Debian prerm contains no direct pam-edit lifecycle call",
+    "debian_postrm_delegates_pam": "PASS — Debian postrm contains no direct pam-edit lifecycle call"
+  },
+  "distro_hook_mapping": {
+    "arch": {
+      "post_install": "lifecycle.sh post-install (mandatory failure returns 1)",
+      "pre_upgrade": "lifecycle.sh pre-upgrade",
+      "post_upgrade": "lifecycle.sh post-upgrade",
+      "pre_remove": "lifecycle.sh pre-remove + cache helper to /var/tmp/namtor-lifecycle.sh",
+      "post_remove": "cached lifecycle.sh post-remove + rm cache",
+      "pre_install": "not called (pacman has not extracted the payload yet; the helper is not on disk)"
+    },
+    "fedora": {
+      "pre": "%sysusers_create_package + %tmpfiles_create_package (Fedora macros; payload not unpacked at %pre)",
+      "post_install": "lifecycle.sh post-install ($1 == 1; mandatory failure exits 1)",
+      "posttrans_upgrade": "lifecycle.sh post-upgrade ($1 == 2)",
+      "preun_remove": "lifecycle.sh pre-remove ($1 == 0) + cache helper to /var/tmp",
+      "postun_remove": "cached lifecycle.sh post-remove ($1 == 0) + rm cache"
+    },
+    "debian": {
+      "postinst_configure_fresh": "lifecycle.sh post-install (mandatory failure exits 1)",
+      "postinst_configure_upgrade": "lifecycle.sh post-upgrade (--version $2)",
+      "prerm_remove": "lifecycle.sh pre-remove + cache helper to /var/tmp",
+      "prerm_upgrade": "lifecycle.sh pre-upgrade",
+      "postrm_remove": "light tmpfiles cleanup only (keep user state for reinstall)",
+      "postrm_purge": "cached lifecycle.sh post-remove + rm cache",
+      "postrm_upgrade": "lifecycle.sh post-upgrade (new payload already on disk)"
+    }
+  },
+  "post_remove_cache_invariant": "pacman, RPM, and dpkg all delete the package payload BEFORE the final post-remove hook runs. The distro hooks cache /usr/share/namtor/lifecycle.sh to /var/tmp/namtor-lifecycle.sh in pre-remove so post-remove can still invoke it. The cache is removed after post-remove completes.",
+  "manifest_resolution": {
+    "explicit": "--manifest <path> takes precedence",
+    "staged": "<root>/usr/share/namtor/model-manifest.toml (installed by the package)",
+    "repo_fallback": "packaging/model-manifest.toml — used ONLY on a real root (--root /); suppressed on fake roots so test fixtures with arbitrary weights are not validated against the production manifest's hashes",
+    "presence_only": "if no manifest is resolvable, validate_models falls back to requiring at least one .onnx under the models dir"
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_lifecycle.sh",
+    "passed": 38,
+    "failed": 0,
+    "exit_code": 0
+  },
+  "regression_checks": {
+    "test_install_default_off_sh": "PASS — 19/19 (migrated from namtor_validate to lifecycle.sh post-install; build_complete_root extended to stage tmpfiles.d, templates dir, /run/namtor)",
+    "namtor_layout_tests": "PASS — 22/22 (install-manifest.toml new entry validates with no collisions/orphans)",
+    "test_model_archive_sh": "PASS — 17/17",
+    "stage_sh": "PASS — stages lifecycle.sh at /usr/share/namtor/lifecycle.sh mode 0755 package core",
+    "test_pam_install_sh": "PRE-EXISTING FAILURE (not caused by Task 19) — a prior task rewrote packaging/pam-install.sh into a thin wrapper around the Rust namtor-pam-edit binary; the shell-based test matrix predates that rewrite. test_pam_install.sh references none of the files Task 19 touched (verified by grep)."
+  },
+  "files_created": [
+    "packaging/lifecycle.sh",
+    "packaging/tests/test_lifecycle.sh"
+  ],
+  "files_modified": [
+    "packaging/arch/namtor.install",
+    "packaging/fedora/namtor.spec",
+    "packaging/debian/namtor.postinst",
+    "packaging/debian/namtor.prerm",
+    "packaging/debian/namtor.postrm",
+    "packaging/install-manifest.toml",
+    "packaging/tests/test_install_default_off.sh"
+  ]
+}

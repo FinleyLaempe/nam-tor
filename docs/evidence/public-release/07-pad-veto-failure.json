@@ -1,0 +1,97 @@
+{
+  "task": "07-pad-veto-failure",
+  "description": "Learned PAD failure modes: load failure, inference failure, model uncertainty (FailClosed), and privacy boundary enforcement. All model failures map to Unavailable, never silent analytic-only fallback.",
+  "date": "2026-08-08",
+  "gates": [
+    {
+      "gate": "fail_closed_maps_to_unavailable",
+      "description": "FinalVerdict::FailClosed (model uncertain/unavailable) → Verdict::Unavailable, NOT silent analytic-only fallback",
+      "test": "verify::tests::fail_closed_maps_to_unavailable_not_analytic_only",
+      "status": "pass"
+    },
+    {
+      "gate": "inference_failure_maps_to_unavailable",
+      "description": "Backend infer() returning Err → Verdict::Unavailable (learned pad failed), not NoMatch and not silent fallback",
+      "test": "verify::tests::inference_failure_maps_to_unavailable",
+      "status": "pass"
+    },
+    {
+      "gate": "load_failure_prevents_construction",
+      "description": "OnnxCpuLearnedPad::load with missing model returns Err → daemon cannot construct the backend → daemon must not start",
+      "test": "verify::tests::load_failure_prevents_backend_construction",
+      "status": "pass"
+    },
+    {
+      "gate": "onnx_load_missing_model_errors",
+      "description": "OnnxCpuLearnedPad load with nonexistent path returns error, never panics",
+      "test": "learned_pad::tests::onnx_tests::onnx_load_missing_model_errors",
+      "status": "pass"
+    },
+    {
+      "gate": "mock_load_missing_model_not_found",
+      "description": "MockLearnedPadBackend load with nonexistent path returns NotFound, never panics",
+      "test": "learned_pad::tests::test_load_missing_model_is_not_found",
+      "status": "pass"
+    },
+    {
+      "gate": "empty_differential_shape_error",
+      "description": "Empty differential input → LearnedPadError::Shape, not panic, not Uncertain",
+      "test": "learned_pad::tests::test_empty_differential_is_shape_error",
+      "status": "pass"
+    },
+    {
+      "gate": "onnx_empty_differential_shape_error",
+      "description": "OnnxCpuLearnedPad infer with empty differential → Shape error (returns before session use)",
+      "test": "learned_pad::tests::onnx_tests::onnx_empty_differential_is_shape_error",
+      "status": "pass"
+    },
+    {
+      "gate": "learned_uncertain_is_fail_closed",
+      "description": "Analytic live + learned uncertain → FailClosed (fail-closed refuse, mapped to Unavailable)",
+      "test": "learned_pad::tests::test_learned_uncertain_is_fail_closed",
+      "status": "pass"
+    },
+    {
+      "gate": "unavailable_is_uncertain_and_refuses",
+      "description": "PadResult::unavailable() is Uncertain and refuses (fail-closed sentinel)",
+      "test": "learned_pad::tests::test_unavailable_is_uncertain_and_refuses",
+      "status": "pass"
+    },
+    {
+      "gate": "policy_validate_rejects_inverted_thresholds",
+      "description": "VetoPolicy::validate rejects live_min <= spoof_max (misconfiguration caught at construction)",
+      "test": "learned_pad::tests::test_policy_validate_rejects_inverted_thresholds",
+      "status": "pass"
+    },
+    {
+      "gate": "privacy_boundary_no_biometric_data_in_veto",
+      "description": "Learned PAD veto reasons carry no biometric data: no gate names, scores, embeddings, thresholds, or probabilities in external reasons",
+      "test": "verify::tests::learned_pad_veto_reason_carries_no_biometric_data",
+      "status": "pass"
+    },
+    {
+      "gate": "privacy_boundary_unavailable_reason_generic",
+      "description": "External reason for learned PAD Unavailable is generic — does not leak PAD internals to the PAM client",
+      "test": "verify::tests::external_reason_for_learned_pad_unavailable_is_generic",
+      "status": "pass"
+    },
+    {
+      "gate": "external_reason_strips_all_pad_veto_variants",
+      "description": "All PAD veto variants (energy, gradient, specular, radial, learned, analytic) are stripped to None at the trust boundary",
+      "test": "verify::tests::external_reason_strips_all_pad_veto_variants",
+      "status": "pass"
+    },
+    {
+      "gate": "no_gpu_configuration_in_veto_policy",
+      "description": "VetoPolicy introduces no GPU-related configuration; the CPU-only provider is enforced by OnnxCpuLearnedPad's session builder",
+      "test": "verify::tests::veto_policy_introduces_no_gpu_configuration",
+      "status": "pass"
+    }
+  ],
+  "summary": {
+    "total_gates": 14,
+    "passed": 14,
+    "failed": 0,
+    "status": "PASS"
+  }
+}

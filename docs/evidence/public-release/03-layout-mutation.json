@@ -1,0 +1,88 @@
+{
+  "task": "3. Extend the install manifest into the authoritative split-package schema",
+  "date": "2026-08-08",
+  "evidence_type": "mutation — validation detects collisions and orphans",
+  "schema_version": 2,
+  "validation_tests": [
+    {
+      "name": "validate_split_manifest_passes_for_valid_manifest",
+      "given": "a manifest with package ownership on every entry and no path collisions",
+      "when": "validate() is called",
+      "then": "returns an empty error list",
+      "result": "pass"
+    },
+    {
+      "name": "validate_split_manifest_detects_collision_between_file_and_dir",
+      "given": "a manifest where a file dest equals a dir path with a different package",
+      "when": "validate() is called",
+      "then": "returns a ValidationError::Collision for that path",
+      "result": "pass"
+    },
+    {
+      "name": "validate_split_manifest_detects_duplicate_file_dest",
+      "given": "a manifest with two [[files]] entries having the same dest but different packages",
+      "when": "validate() is called",
+      "then": "returns a ValidationError::Collision for the duplicate dest",
+      "result": "pass"
+    },
+    {
+      "name": "validate_split_manifest_detects_orphan_entry_without_package",
+      "given": "a manifest with a [[files]] entry missing the package field",
+      "when": "validate() is called",
+      "then": "returns a ValidationError::Orphan for that entry's dest",
+      "result": "pass"
+    },
+    {
+      "name": "validate_split_manifest_detects_orphan_generated_state_without_package",
+      "given": "a manifest with a [[generated_state]] entry missing the package field",
+      "when": "validate() is called",
+      "then": "returns a ValidationError::Orphan for that entry's path",
+      "result": "pass"
+    },
+    {
+      "name": "repo_manifest_validates_with_no_errors",
+      "given": "the real packaging/install-manifest.toml",
+      "when": "parse_split_manifest + validate() is called",
+      "then": "returns an empty error list",
+      "result": "pass"
+    },
+    {
+      "name": "repo_manifest_has_package_ownership_on_every_entry",
+      "given": "the real packaging/install-manifest.toml",
+      "when": "every file and dir entry is checked for package.is_some()",
+      "then": "all entries have package ownership",
+      "result": "pass"
+    },
+    {
+      "name": "repo_manifest_gnome_package_has_no_kde_payload",
+      "given": "the real manifest, GNOME package dests filtered",
+      "when": "each GNOME file path is checked for kde/qt6/qml/kpackage indicators",
+      "then": "no GNOME file contains KDE/Qt payload",
+      "result": "pass"
+    },
+    {
+      "name": "repo_manifest_kde_package_has_no_gnome_payload",
+      "given": "the real manifest, KDE package dests filtered",
+      "when": "each KDE file path is checked for wizard/gnome/gtk/adwaita indicators",
+      "then": "no KDE file contains GNOME/GTK payload",
+      "result": "pass"
+    }
+  ],
+  "package_separation": {
+    "core_files": 21,
+    "gnome_files": 4,
+    "kde_files": 3,
+    "total_files": 28,
+    "gnome_paths": [
+      "/usr/bin/namtor-enroll-wizard",
+      "/usr/share/applications/org.namtor.Wizard.desktop",
+      "/usr/share/metainfo/org.namtor.Wizard.metainfo.xml",
+      "/usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg"
+    ],
+    "kde_paths": [
+      "/usr/share/applications/org.namtor.kcm.desktop",
+      "/usr/share/metainfo/org.namtor.kcm.metainfo.xml",
+      "/usr/share/icons/hicolor/scalable/apps/org.namtor.kcm.svg"
+    ]
+  }
+}

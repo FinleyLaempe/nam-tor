@@ -1,0 +1,76 @@
+{
+  "task": "26",
+  "title": "Reconcile public documentation and honest claims — mutation evidence",
+  "gate": "doc-audit-mutation",
+  "status": "PASS",
+  "timestamp": "2026-08-09T12:00:00Z",
+  "summary": "The doc audit test detects injected stale strings. Each mutation appends a stale string as an HTML comment to a target file, runs the audit, and verifies the test fails (detecting the injection). The test then cleans up the injected line. All mutations were detected.",
+  "mutation_method": "Append '<!-- STALE: NAMTOR_ACCEPT_LICENCE=1 -->' to the target file, run test_doc_audit.sh --mutation <file>, verify exit code 0 (mutation detected) and at least 1 failure in the stale-string check section, verify cleanup (no STALE lines remain).",
+  "mutations": [
+    {
+      "target_file": "README.md",
+      "injected_string": "NAMTOR_ACCEPT_LICENCE=1",
+      "expected_detection": "stale-string check (a) flags README.md",
+      "detected": true,
+      "exit_code": 0,
+      "failures_detected": 1,
+      "cleanup_verified": true
+    },
+    {
+      "target_file": "packaging/README.md",
+      "injected_string": "NAMTOR_ACCEPT_LICENCE=1",
+      "expected_detection": "stale-string check (a) flags packaging/README.md",
+      "detected": true,
+      "exit_code": 0,
+      "failures_detected": 1,
+      "cleanup_verified": true
+    },
+    {
+      "target_file": "HANDOFF.md",
+      "injected_string": "NAMTOR_ACCEPT_LICENCE=1",
+      "expected_detection": "stale-string check (a) flags HANDOFF.md",
+      "detected": true,
+      "exit_code": 0,
+      "failures_detected": 1,
+      "cleanup_verified": true
+    },
+    {
+      "target_file": "COPYING.md",
+      "injected_string": "NAMTOR_ACCEPT_LICENCE=1",
+      "expected_detection": "stale-string check (a) flags COPYING.md",
+      "detected": true,
+      "exit_code": 0,
+      "failures_detected": 1,
+      "cleanup_verified": true
+    },
+    {
+      "target_file": "docs/evidence/status-audit.md",
+      "injected_string": "NAMTOR_ACCEPT_LICENCE=1",
+      "expected_detection": "stale-string check (a) flags docs/evidence/status-audit.md",
+      "detected": true,
+      "exit_code": 0,
+      "failures_detected": 1,
+      "cleanup_verified": true
+    }
+  ],
+  "stale_strings_covered": [
+    "models ensure",
+    "NAMTOR_ACCEPT_LICENCE",
+    "fetched at first-run",
+    "first run fetch",
+    "first-run fetch",
+    "BSD-3-Clause",
+    "runs as nobody",
+    "worker is nobody",
+    "setuid helper",
+    "setuid root",
+    "namtor-worker-spawn"
+  ],
+  "test_suite": {
+    "script": "packaging/tests/test_doc_audit.sh",
+    "mutation_mode_flag": "--mutation <file>",
+    "mutations_run": 5,
+    "mutations_detected": 5,
+    "all_cleaned_up": true
+  }
+}

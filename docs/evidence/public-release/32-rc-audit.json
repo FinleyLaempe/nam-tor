@@ -1,0 +1,181 @@
+{
+  "task": "32",
+  "timestamp": "2026-08-09T08:26:45Z",
+  "categories": [
+    {
+      "name": "reconciliation",
+      "checks": [
+        {
+          "name": "A.evidence_01_31_present",
+          "result": "PASS",
+          "detail": "all task-numbered evidence files 01-31 exist"
+        },
+        {
+          "name": "B.gate:G5.1/G5.2/G5.4 structural CI",
+          "result": "PASS",
+          "detail": "28-ci-baseline.json indicates PASS"
+        },
+        {
+          "name": "B.gate:Turnkey install matrix",
+          "result": "PASS",
+          "detail": "29-core-install-matrix.json indicates PASS"
+        },
+        {
+          "name": "B.gate:Desktop cert e2e",
+          "result": "PASS",
+          "detail": "30-desktop-e2e.json indicates PASS"
+        },
+        {
+          "name": "B.gate:Lifecycle matrix",
+          "result": "PASS",
+          "detail": "31-lifecycle-matrix.json indicates PASS"
+        },
+        {
+          "name": "B.gate:Supply chain pass",
+          "result": "PASS",
+          "detail": "24-supply-chain-pass.json indicates PASS"
+        },
+        {
+          "name": "B.gate:Release signatures",
+          "result": "PASS",
+          "detail": "25-release-signatures.json indicates PASS"
+        },
+        {
+          "name": "B.gate:Doc audit",
+          "result": "PASS",
+          "detail": "26-doc-audit.json indicates PASS"
+        },
+        {
+          "name": "B.gate:Privacy diagnostics / support bundle",
+          "result": "PASS",
+          "detail": "27-support-bundle.json indicates PASS"
+        },
+        {
+          "name": "B.gate:Model licensing inventory",
+          "result": "PASS",
+          "detail": "02-licence-inventory.json indicates PASS"
+        },
+        {
+          "name": "B.gate:Model policy pass",
+          "result": "PASS",
+          "detail": "05-model-policy-pass.json indicates PASS"
+        },
+        {
+          "name": "B.gate:PAM transactional editor",
+          "result": "PASS",
+          "detail": "10-pam-transaction.json indicates PASS"
+        },
+        {
+          "name": "B.gate:PAM default-off at install",
+          "result": "PASS",
+          "detail": "13-install-default-off.json indicates PASS"
+        },
+        {
+          "name": "C.withheld:G1",
+          "result": "WITHHELD",
+          "detail": "G1 documented WITHHELD in status-audit.md"
+        },
+        {
+          "name": "C.withheld:G2",
+          "result": "WITHHELD",
+          "detail": "G2 documented WITHHELD in status-audit.md"
+        },
+        {
+          "name": "C.withheld:G3",
+          "result": "WITHHELD",
+          "detail": "G3 documented WITHHELD in status-audit.md"
+        },
+        {
+          "name": "C.withheld:G4",
+          "result": "WITHHELD",
+          "detail": "G4 documented WITHHELD in status-audit.md"
+        },
+        {
+          "name": "C.withheld:G5.5",
+          "result": "WITHHELD",
+          "detail": "G5.5 documented WITHHELD in status-audit.md"
+        },
+        {
+          "name": "C.withheld:R5",
+          "result": "WITHHELD",
+          "detail": "R5 documented WITHHELD in status-audit.md"
+        },
+        {
+          "name": "C.withheld:R10",
+          "result": "WITHHELD",
+          "detail": "R10 documented WITHHELD in status-audit.md"
+        },
+        {
+          "name": "C.withheld:R4",
+          "result": "WITHHELD",
+          "detail": "R4 documented WITHHELD in status-audit.md"
+        },
+        {
+          "name": "C.withheld:S3",
+          "result": "WITHHELD",
+          "detail": "S3 documented WITHHELD in status-audit.md"
+        },
+        {
+          "name": "D.manifest_sha256",
+          "result": "PASS",
+          "detail": "model-manifest.toml has 6 sha256 entries (>= 6)"
+        },
+        {
+          "name": "D.sbom:namtor.spdx.json",
+          "result": "PASS",
+          "detail": "namtor.spdx.json present in docs/evidence/packaging/"
+        },
+        {
+          "name": "D.sbom:namtor.cyclonedx.json",
+          "result": "PASS",
+          "detail": "namtor.cyclonedx.json present in docs/evidence/packaging/"
+        },
+        {
+          "name": "D.package_matrix:21-fedora-matrix.json",
+          "result": "PASS",
+          "detail": "21-fedora-matrix.json present and indicates PASS"
+        },
+        {
+          "name": "D.package_matrix:22-debian-matrix.json",
+          "result": "PASS",
+          "detail": "22-debian-matrix.json present and indicates PASS"
+        },
+        {
+          "name": "D.package_matrix:20-arch-matrix.json",
+          "result": "PASS",
+          "detail": "20-arch-matrix.json present and indicates PASS"
+        },
+        {
+          "name": "E.readme_experimental_preview",
+          "result": "PASS",
+          "detail": "README.md states 'experimental preview'"
+        },
+        {
+          "name": "E.readme_withheld_table",
+          "result": "PASS",
+          "detail": "README.md contains WITHHELD gates table"
+        },
+        {
+          "name": "E.readme_settings_only",
+          "result": "PASS",
+          "detail": "README.md setup instructions are Settings-only"
+        }
+      ]
+    },
+    {
+      "name": "summary",
+      "checks": [
+        {
+          "name": "total_checks",
+          "result": "PASS",
+          "detail": "pass=22 fail=0 withheld=9"
+        },
+        {
+          "name": "overall",
+          "result": "PASS",
+          "detail": "RC reconciliation passed"
+        }
+      ]
+    }
+  ]
+}

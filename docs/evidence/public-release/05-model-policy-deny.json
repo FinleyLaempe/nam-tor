@@ -1,0 +1,83 @@
+{
+  "evidence": "05-model-policy-deny",
+  "date": "2026-08-08",
+  "description": "Typed model admission policy — DENY cases (restricted no-record, mismatched record, unknown model, missing variant, tampered, unauthorised restricted)",
+  "test_command": "cargo test -p namtor-daemon --lib -- licence:: models::",
+  "result": "PASS",
+  "test_cases": [
+    {
+      "name": "licence::tests::restricted_denied_without_record",
+      "verdict": "pass (denied as expected)",
+      "policy": "Restricted",
+      "record": "absent",
+      "env_var": "not used",
+      "expected": "Err — 'licence not accepted'",
+      "notes": "Restricted model with no acceptance record fails closed"
+    },
+    {
+      "name": "licence::tests::restricted_denied_with_mismatched_record",
+      "verdict": "pass (denied as expected)",
+      "policy": "Restricted",
+      "record": "present, sha256 mismatches",
+      "env_var": "not used",
+      "expected": "Err — 'sha256 mismatch'",
+      "notes": "Record with wrong licence_sha256 is rejected"
+    },
+    {
+      "name": "models::tests::manifest_validate_blocks_unaccepted_restricted_licence",
+      "verdict": "pass (denied as expected)",
+      "policy": "Restricted",
+      "record": "absent",
+      "allow_restricted": true,
+      "env_var": "not used",
+      "expected": "Err — 'licence not accepted'",
+      "notes": "Restricted model with allow_restricted=true but no record fails on the admission gate"
+    },
+    {
+      "name": "models::tests::manifest_validate_restricted_mismatched_record_denied",
+      "verdict": "pass (denied as expected)",
+      "policy": "Restricted",
+      "record": "present, sha256 mismatches manifest",
+      "allow_restricted": true,
+      "env_var": "not used",
+      "expected": "Err — 'sha256 mismatch'",
+      "notes": "Restricted model with mismatched record fails even with authorisation"
+    },
+    {
+      "name": "models::tests::manifest_validate_blocks_restricted_without_authorisation",
+      "verdict": "pass (denied as expected)",
+      "policy": "Restricted",
+      "record": "present, sha256 matches",
+      "allow_restricted": false,
+      "env_var": "not used",
+      "expected": "Err — 'restricted ... requires explicit authorisation'",
+      "notes": "Restricted model with valid record but no allow_restricted fails on authorisation gate"
+    },
+    {
+      "name": "models::tests::manifest_validate_blocks_unknown_model",
+      "verdict": "pass (denied as expected)",
+      "policy": "N/A (model not in manifest)",
+      "expected": "Err — 'not present in manifest'",
+      "notes": "Model not in manifest fails closed"
+    },
+    {
+      "name": "models::tests::manifest_validate_blocks_missing_variant",
+      "verdict": "pass (denied as expected)",
+      "policy": "Redistributable",
+      "expected": "Err — 'no Int8 variant'",
+      "notes": "Requesting a quant variant not declared in the manifest fails"
+    },
+    {
+      "name": "models::tests::manifest_validate_blocks_tampered_sha256_mismatch",
+      "verdict": "pass (denied as expected)",
+      "policy": "Redistributable",
+      "expected": "Err — 'tampered ... sha256 mismatch'",
+      "notes": "On-disk file sha256 not matching manifest fails before admission check"
+    }
+  ],
+  "total": 8,
+  "passed": 8,
+  "failed": 0,
+  "fail_closed": true,
+  "notes": "All denial paths fail closed — the daemon never loads an unadmitted, mismatched, or unauthorised model."
+}

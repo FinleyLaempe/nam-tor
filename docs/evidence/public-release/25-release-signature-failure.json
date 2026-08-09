@@ -1,0 +1,45 @@
+{
+  "task": "25",
+  "title": "Build signed reproducible release artifacts — tamper and wrong-key failure evidence",
+  "gate": "release-signature-failure",
+  "status": "PASS",
+  "timestamp": "2026-08-09T03:35:00Z",
+  "summary": "Negative-path evidence: a signed file that is modified after signing MUST fail GPG verification, and a signature from an unrelated key MUST fail verification against the original key's keyring. Both invariants are asserted by packaging/tests/test_release_signatures.sh gates 4 and 5. The test generates two throwaway Ed25519 GPG keys in isolated GNUPGHOME tempdirs (cleaned on exit), signs a payload with key A, then (a) flips one byte in the payload and confirms GPG verification fails (BAD signature), and (b) signs the same payload with key B and confirms verification against key A's keyring fails (NO_PUBKEY / WRONG key). The wrong-key signature DOES verify in key B's own keyring — a sanity check that the signature itself is well-formed and the failure is specifically a key-mismatch failure, not a malformed-signature false positive.",
+  "tamper_evidence": {
+    "method": "sign payload.bin with key A → produce payload.bin.asc → copy payload to payload.tampered.bin → flip byte at offset 10 → gpg --verify payload.bin.asc payload.tampered.bin",
+    "expected": "verification fails (GPG reports BAD signature: the signature hash no longer matches the modified content)",
+    "actual": "verification fails — exit non-zero",
+    "result": "PASS"
+  },
+  "wrong_key_evidence": {
+    "method": "generate unrelated key B in separate GNUPGHOME → sign payload.bin with key B → produce payload.wrong.asc → gpg --verify payload.wrong.asc payload.bin (in key A's keyring)",
+    "expected": "verification fails (GPG reports the signature was produced by a key not present in key A's keyring — NO_PUBKEY or key-mismatch)",
+    "actual": "verification fails against key A's keyring; verifies against key B's keyring (sanity)",
+    "result": "PASS",
+    "sanity_check": "the wrong-key signature verifies in key B's own keyring, proving the signature is well-formed and the failure is a key-mismatch, not a corrupt signature"
+  },
+  "no_private_key_evidence": {
+    "check_1": "grep -rEl 'BEGIN.*PRIVATE KEY BLOCK' packaging/ → no matches (no private key blocks committed)",
+    "check_2": "sign-packages.sh contains no 'generate-key', 'export-secret', or 'import-secret' operations",
+    "check_3": "test throwaway GNUPGHOMEs are confined to the test tempdir (mktemp -d) and removed by the EXIT trap",
+    "check_4": "gpg --armor --export <keyid> produces a public-key block with no 'PRIVATE KEY' markers",
+    "result": "PASS — no private key material enters the repo or any release artifact"
+  },
+  "test_assertions": {
+    "tamper_fails": "PASS — gpg --verify on tampered file exits non-zero",
+    "wrong_key_fails_against_original_keyring": "PASS — gpg --verify of wrong-key .asc in key A keyring exits non-zero",
+    "wrong_key_verifies_in_own_keyring": "PASS — sanity: the wrong-key .asc verifies in key B keyring (signature is well-formed)",
+    "no_private_key_in_packaging": "PASS — grep for private key blocks under packaging/ returns empty",
+    "script_never_handles_secrets": "PASS — sign-packages.sh has no generate/export/import secret-key operations",
+    "keyring_confined_to_tempdir": "PASS — both test GNUPGHOMEs are under $tmp (mktemp -d), removed on EXIT",
+    "public_export_clean": "PASS — gpg --export output contains no PRIVATE KEY markers"
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_release_signatures.sh",
+    "tamper_gate_passed": 1,
+    "wrong_key_gate_passed": 2,
+    "no_privkey_gate_passed": 5,
+    "total_failure_path_assertions": 8,
+    "exit_code": 0
+  }
+}

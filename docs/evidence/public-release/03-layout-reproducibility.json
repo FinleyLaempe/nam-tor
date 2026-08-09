@@ -1,0 +1,108 @@
+{
+  "task": "3. Extend the install manifest into the authoritative split-package schema",
+  "date": "2026-08-08",
+  "schema_version": 2,
+  "determinism_proof": {
+    "method": "stage.sh run twice into two empty DESTDIRs; compare sha256 + modes for every file",
+    "all_packages": {
+      "staged_files": 28,
+      "staged_dirs": 30,
+      "sha256_identical": true,
+      "modes_identical": true,
+      "dirs_identical": true
+    },
+    "per_package": {
+      "core": {
+        "files": 21,
+        "dirs": 30,
+        "file_paths": [
+          "usr/bin/namtor-cli",
+          "usr/lib/namtor/namtor-camera-emitter-off",
+          "usr/lib/namtor/namtor-daemon",
+          "usr/lib/namtor/namtor-worker",
+          "usr/lib/namtor/namtor-worker-spawn",
+          "usr/lib/security/pam_namtor.so",
+          "usr/lib/systemd/system/namtor-daemon.service",
+          "usr/lib/systemd/system/namtor-daemon.socket",
+          "usr/lib/sysusers.d/namtor.conf",
+          "usr/lib/tmpfiles.d/namtor.conf",
+          "usr/share/dbus-1/system-services/org.namtor.Manager.service",
+          "usr/share/doc/namtor/COPYING.md",
+          "usr/share/doc/namtor/README.md",
+          "usr/share/doc/namtor/namtor.cyclonedx.json",
+          "usr/share/doc/namtor/namtor.spdx.json",
+          "usr/share/namtor/install-manifest.toml",
+          "usr/share/namtor/model-manifest.toml",
+          "usr/share/namtor/pam-install.sh",
+          "usr/share/namtor/pam-preflight.sh",
+          "usr/share/namtor/pam-uninstall.sh",
+          "usr/share/polkit-1/actions/org.namtor.policy"
+        ]
+      },
+      "gnome": {
+        "files": 4,
+        "dirs": 9,
+        "file_paths": [
+          "usr/bin/namtor-enroll-wizard",
+          "usr/share/applications/org.namtor.Wizard.desktop",
+          "usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg",
+          "usr/share/metainfo/org.namtor.Wizard.metainfo.xml"
+        ]
+      },
+      "kde": {
+        "files": 3,
+        "dirs": 8,
+        "file_paths": [
+          "usr/share/applications/org.namtor.kcm.desktop",
+          "usr/share/icons/hicolor/scalable/apps/org.namtor.kcm.svg",
+          "usr/share/metainfo/org.namtor.kcm.metainfo.xml"
+        ]
+      }
+    },
+    "combined_equals_all": {
+      "method": "stage core+gnome+kde into one DESTDIR, then stage all into another; compare",
+      "sha256_identical": true,
+      "modes_identical": true
+    }
+  },
+  "package_ownership": {
+    "core": "daemon, worker, worker-spawn, camera-emitter-off, CLI, PAM, systemd, sysusers, tmpfiles, D-Bus, polkit, manifests, PAM scripts, README, COPYING, SBOM (SPDX + CycloneDX), udev rules dir slot",
+    "gnome": "enroll-wizard binary, Wizard .desktop, Wizard .metainfo.xml, Wizard .svg",
+    "kde": "kcm .desktop, kcm .metainfo.xml, kcm .svg"
+  },
+  "generated_state": [
+    {
+      "path": "/var/lib/namtor/templates",
+      "package": "core",
+      "on_upgrade": "preserve",
+      "on_purge": "remove"
+    },
+    {
+      "path": "/var/lib/namtor/templates.key",
+      "package": "core",
+      "on_upgrade": "preserve",
+      "on_purge": "remove"
+    },
+    {
+      "path": "/var/lib/namtor/models",
+      "package": "core",
+      "on_upgrade": "preserve",
+      "on_purge": "remove"
+    },
+    {
+      "path": "/var/lib/namtor/backoff.json",
+      "package": "core",
+      "on_upgrade": "preserve",
+      "on_purge": "remove"
+    }
+  ],
+  "retention": {
+    "purge_owner": "core"
+  },
+  "verification": {
+    "cargo_test": "22 passed; 0 failed",
+    "cargo_clippy": "clean (-D warnings)",
+    "gnome_no_kde_payload": true,
+    "kde_no_gnome_payload": true
+  }
+}

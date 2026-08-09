@@ -1,0 +1,141 @@
+{
+  "task": "30",
+  "title": "Certify GNOME and KDE Settings enrollment and PAM opt-in",
+  "gate": "desktop-e2e",
+  "status": "PASS",
+  "timestamp": "2026-08-09T00:00:00Z",
+  "summary": "Certification of the GNOME (GTK4/libadwaita) enrollment wizard and the KDE (Plasma 6 KCM) settings module for end-to-end enrollment + PAM opt-in. CI cannot run clean GNOME or Plasma sessions, so the CI-testable surface is structural (binaries/modules staged, system-bus usage, install-manifest ownership, accessibility anchors, warning constants, PAM sufficient control, polkit policy) plus the existing unit-test suites in namtor-gnome (29 presenter + 12 privacy) and namtor-kde (18 lib + 3 abi-smoke). Real enrollment with a camera, real PAM toggle against /etc/pam.d, and real authentication against a running PAM stack are human-gated on a desktop VM and recorded below as WITHHELD.",
+  "ci_testable": {
+    "structural": [
+      "GNOME enroll-wizard binary staged (install-manifest package=gnome, target/release/namtor-enroll-wizard present)",
+      "KDE QML module files staged (main.qml, metadata.json, CMakeLists.txt install rules, libnamtorqml.so build artifact, libnamtor_kde.so Rust cdylib)",
+      "KDE desktop-integration files owned by package=kde in install-manifest (3 entries: .desktop, .metainfo.xml, .svg)",
+      "Both UIs use the SYSTEM bus: 0 Connection::session/sessionBus references across dbus_client.rs, bridge.rs, namtor_kcm.cpp; systemBus references present in all three",
+      "PAM sufficient control: pam-install.sh defaults CONTROL=sufficient; namtor-pam-config editor defaults to NamtorControl::Sufficient; pam_namtor maps all errors to PAM_AUTHINFO_UNAVAIL (fall-through to password)",
+      "Polkit action org.namtor.configure-pam declared in org.namtor.policy"
+    ],
+    "unit_tests": {
+      "namtor-gnome presenter_flow": {
+        "total": 29,
+        "passed": 29,
+        "failed": 0,
+        "flow_coverage": [
+          "happy_path_start_enroll_commit_lists_profile",
+          "review_flow_stages_and_commits",
+          "commit_profile_persists_to_store",
+          "reconnect_restores_state"
+        ],
+        "pam_toggle_coverage": [
+          "pam_service_toggle_works",
+          "failed_pam_toggle_reverts_to_previous_state",
+          "unsupported_pam_service_cannot_be_toggled",
+          "set_pam_service_enabled_refuses_unsupported"
+        ],
+        "high_impact_coverage": [
+          "high_impact_pam_service_requires_confirmation",
+          "high_impact_warning_contains_required_phrases",
+          "disabling_risky_service_needs_no_confirmation"
+        ],
+        "protection_coverage": [
+          "protection_status_surfaced",
+          "software_fallback_protection_surfaced",
+          "readiness_view_populated_when_daemon_running",
+          "readiness_view_when_daemon_down",
+          "readiness_view_counts_profiles_and_pam"
+        ]
+      },
+      "namtor-gnome privacy_scan": {
+        "total": 12,
+        "passed": 12,
+        "failed": 0,
+        "mutation_tests": [
+          "mutation_test_forbidden_fields_in_protection_view",
+          "mutation_test_forbidden_fields_in_readiness_view",
+          "populated_presenter_model_carries_no_biometrics"
+        ]
+      },
+      "namtor-kde lib": {
+        "total": 18,
+        "passed": 18,
+        "failed": 0,
+        "flow_coverage": [
+          "happy_path",
+          "enrollment_signals_round_trip",
+          "review_returns_coarse_quality",
+          "profile_and_status_changed_signals_round_trip"
+        ]
+      },
+      "namtor-kde abi_smoke": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0,
+        "checks": ["abi_version_matches_constant", "abi_bus_name_is_canonical", "abi_object_path_is_canonical"]
+      }
+    },
+    "privacy_scan": {
+      "forbidden_substrings_verified": ["threshold", "score", "embedding", "vector", "landmark", "template", "biometric"],
+      "gnome_scan_tests": 12,
+      "kde_scan_test": "privacy_scan_no_biometric_data",
+      "no_biometric_data_exposed": true
+    },
+    "accessibility": {
+      "gnome": {
+        "pam_switch_tooltip": "tooltip_text + set_tooltip_text on PAM service Switch (components/pam_services.rs)",
+        "accessible_roles_assigned": 20,
+        "roles_used": ["Heading", "ListItem", "Switch", "Checkbox", "Label", "TextBox", "Note", "Status", "Alert"]
+      },
+      "kde": {
+        "pam_switch_focus_policy": "Qt.StrongFocus on QQC2.Switch in main.qml",
+        "accessible_annotations": 118,
+        "annotation_kinds": ["Accessible.name", "Accessible.role", "Accessible.description"]
+      }
+    },
+    "no_tpm_warning": {
+      "gnome": "ProtectionView.is_software_fallback boolean drives 'Software fallback in use — templates are not hardware-bound.' warning banner in wizard.rs",
+      "kde": "protectionHasTpm Q_PROPERTY drives 'No TPM2 device — software fallback.' label in main.qml",
+      "gnome_test": "software_fallback_protection_surfaced passes"
+    },
+    "high_impact_dialog": {
+      "gnome": {
+        "constant": "HIGH_IMPACT_WARNING in components/pam_services.rs",
+        "text": "FAR/FRR and real-attack PAD gates remain unmeasured. Enabling face authentication is experimental and not recommended for security-sensitive use.",
+        "confirmation_tests": 3
+      },
+      "kde": {
+        "invokable": "highImpactWarning() Q_INVOKABLE in namtor_kcm.cpp",
+        "text": "FAR/FRR and real-attack PAD gates remain unmeasured. Enabling face authentication is experimental and not recommended for security-sensitive use.",
+        "qml_binding": "pamConfirmDialog bound to highImpactWarning in main.qml"
+      }
+    },
+    "password_fallback": {
+      "pam_install_default_control": "sufficient",
+      "editor_default": "NamtorControl::Sufficient",
+      "module_error_mapping": "PAM_AUTHINFO_UNAVAIL on any daemon/timeout/error → sufficient → ignore → fall through to password module",
+      "rhost_refusal": "PAM_RHOST set → refuse (spec §8.2); sshd classified Unsupported"
+    }
+  },
+  "withheld_human_gated": {
+    "rationale": "Clean GNOME and Plasma sessions cannot be run in CI. The following require a human-gated desktop VM with a real camera, real /etc/pam.d, and a running PAM stack.",
+    "scenarios": [
+      "Real enrollment with a live IR camera (Discover settings surface → enroll → capture frames → review → commit → profile appears in list)",
+      "Real PAM service toggle against /etc/pam.d (list detected services → enable login → verify pam_namtor.so block inserted → disable → verify removed)",
+      "Real authentication against a running PAM stack (login/sudo/su/polkit with pam_namtor.so enabled → face match → success; daemon down → password fallback)",
+      "High-impact confirmation dialog rendered on a real display for login/sudo/su/polkit services",
+      "Accessibility verification with a real screen reader (Orca on GNOME, KMag/KRunner on KDE) and keyboard-only navigation",
+      "Persistence across session restart and reboot",
+      "Polkit prompt rendered on a real desktop for org.namtor.configure-pam"
+    ]
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_desktop_cert.sh",
+    "passed": 63,
+    "failed": 0,
+    "exit_code": 0
+  },
+  "files_created": [
+    "packaging/tests/test_desktop_cert.sh"
+  ],
+  "files_not_modified": [
+    "No Rust source, Cargo.toml, distro packaging, install-manifest.toml, model-manifest.toml, or existing test scripts were modified."
+  ]
+}

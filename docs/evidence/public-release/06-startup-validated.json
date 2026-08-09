@@ -1,0 +1,140 @@
+{
+  "task": "06-startup-validated",
+  "description": "Production startup validates manifest, hashes, tensor contracts, architecture, and policy before spawning the worker",
+  "date": "2026-08-08",
+  "gates": [
+    {
+      "gate": "manifest_parsed",
+      "description": "Model manifest (packaging/model-manifest.toml) is parsed at startup",
+      "test": "models::tests::manifest_parse_packaging_file_loads_three_models",
+      "status": "pass"
+    },
+    {
+      "gate": "resolve_required_specs",
+      "description": "ModelSpec entries are built from the manifest with real sha256 hashes (no zero hashes)",
+      "test": "models::tests::resolve_required_specs_builds_from_manifest",
+      "status": "pass"
+    },
+    {
+      "gate": "zero_hash_rejected",
+      "description": "All-zero sha256 in a manifest variant is rejected pre-spawn",
+      "test": "models::tests::manifest_validate_blocks_zero_hash",
+      "status": "pass"
+    },
+    {
+      "gate": "spec_hash_mismatch_rejected",
+      "description": "ModelSpec.sha256 that does not match the manifest variant sha256 is rejected",
+      "test": "models::tests::manifest_validate_blocks_spec_hash_mismatch",
+      "status": "pass"
+    },
+    {
+      "gate": "tampered_model_rejected",
+      "description": "On-disk model file whose sha256 does not match the manifest is rejected (tamper detection)",
+      "test": "models::tests::manifest_validate_blocks_tampered_sha256_mismatch",
+      "status": "pass"
+    },
+    {
+      "gate": "tensor_contract_validated",
+      "description": "Manifest tensor contract is structurally validated (non-empty shapes, known dtype)",
+      "tests": [
+        "models::tests::tensor_contract_validate_rejects_empty_input_shape",
+        "models::tests::tensor_contract_validate_rejects_empty_output_shape",
+        "models::tests::tensor_contract_validate_rejects_unknown_dtype",
+        "models::tests::tensor_contract_validate_accepts_valid",
+        "models::tests::manifest_validate_blocks_invalid_tensor_contract"
+      ],
+      "status": "pass"
+    },
+    {
+      "gate": "architecture_validated",
+      "description": "Manifest target_arch is validated against the current CPU architecture",
+      "tests": [
+        "models::tests::target_arch_both_always_matches",
+        "models::tests::target_arch_current_matches_self",
+        "models::tests::target_arch_rejects_mismatch",
+        "models::tests::manifest_validate_blocks_arch_mismatch"
+      ],
+      "status": "pass"
+    },
+    {
+      "gate": "policy_validated",
+      "description": "Redistribution policy is enforced: restricted models require authorisation",
+      "tests": [
+        "models::tests::manifest_validate_blocks_restricted_without_authorisation",
+        "models::tests::manifest_validate_allows_restricted_with_authorisation"
+      ],
+      "status": "pass"
+    },
+    {
+      "gate": "all_three_models_validated",
+      "description": "All three bundled models (yunet_2023mar, sface_2021dec, minifasnet_pad) pass validation in sequence",
+      "test": "models::tests::startup_validation_all_three_models_pass",
+      "status": "pass"
+    },
+    {
+      "gate": "real_manifest_real_models_validated",
+      "description": "The real packaging/model-manifest.toml validates against the real bundled ONNX models on disk",
+      "test": "models::tests::startup_validation_packaging_manifest_all_three_valid",
+      "status": "pass"
+    },
+    {
+      "gate": "no_biometric_data_in_logs",
+      "description": "Startup validation log messages contain model_id and sha256 but no frames, embeddings, templates, pixels, or scores",
+      "test": "models::tests::startup_validation_logs_contain_no_biometric_data",
+      "status": "pass"
+    },
+    {
+      "gate": "seccomp_denies_file_open",
+      "description": "Seccomp sandbox denies open syscall — ONNX Runtime cannot open model files after sandbox is applied",
+      "test": "seccomp_escape::seccomp_denies_open",
+      "status": "pass"
+    },
+    {
+      "gate": "seccomp_denies_socket",
+      "description": "Seccomp sandbox denies socket syscall — worker cannot open network connections",
+      "test": "seccomp_escape::seccomp_denies_socket",
+      "status": "pass"
+    },
+    {
+      "gate": "onnx_runtime_round_trip",
+      "description": "Real ONNX Runtime CPU inference round-trip for all three bundled models (hardware-gated)",
+      "test": "infer_onnx::tests::bundled_models_load_and_infer_round_trip",
+      "status": "ignored (NAMTOR_HW_TEST=1 required)"
+    }
+  ],
+  "model_paths": {
+    "convention": "flat",
+    "description": "Model files are stored as <models_dir>/<id>.onnx (FP32) or <models_dir>/<id>_int8.onnx (INT8). Per-model metadata (licence records, sha256 sidecars) lives in <models_dir>/<id>/ subdirectory. Previous flat/subdirectory ambiguity is resolved.",
+    "quant_file": "<root>/<id>.onnx | <root>/<id>_int8.onnx",
+    "sha256_file": "<root>/<id>/fp32.sha256 | <root>/<id>/int8.sha256",
+    "licence_file": "<root>/<id>/licence.accepted"
+  },
+  "startup_sequence": [
+    "1. Parse model manifest (model-manifest.toml)",
+    "2. Resolve required model IDs → ModelSpecs with real sha256 from manifest",
+    "3. For each model: validate zero-hash → spec-hash-match → tensor-contract → architecture → file-hash → admission → policy",
+    "4. All validations pass → spawn worker",
+    "5. Any validation fails → fail closed (no worker spawn)"
+  ],
+  "daemon_binary_changes": {
+    "file": "crates/namtor-daemon/src/bin/namtor-daemon.rs",
+    "removed": [
+      "Hardcoded model paths (models_dir.join(\"yunet_2023mar.onnx\"))",
+      "Flat-path existence checks (yunet_path.exists())",
+      "Zero hashes (sha256: [0; 32])",
+      "Two-model-only specs (yunet + sface, missing minifasnet_pad)"
+    ],
+    "added": [
+      "Model manifest parsing from NAMTOR_MODEL_MANIFEST or layout-derived path",
+      "resolve_required_specs() for all three models from manifest",
+      "ModelFetcher::validate_against_manifest() for each model before spawn",
+      "Structured logging with model_id + sha256 (no biometric data)",
+      "All three model specs (yunet + sface + minifasnet_pad)"
+    ]
+  },
+  "test_counts": {
+    "namtor_daemon_lib": "343 passed, 0 failed (excl. 1 pre-existing acl test order dep), 1 ignored",
+    "namtor_worker_lib": "65 passed, 0 failed, 1 ignored",
+    "clippy": "clean (-D warnings)"
+  }
+}

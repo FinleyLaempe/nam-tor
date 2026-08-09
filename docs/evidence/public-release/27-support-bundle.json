@@ -1,0 +1,102 @@
+{
+  "task": "27",
+  "title": "Privacy-safe support and migration tooling",
+  "gate": "support-bundle",
+  "status": "PASS",
+  "timestamp": "2026-08-09T04:00:00Z",
+  "summary": "Diagnostics are now package-aware: the support bundle reports package version, model state (loaded/valid/missing), service state (socket active/inactive), protection state (TPM/software), enabled PAM service count, installed split packages (namtor/namtor-gnome/namtor-kde), and migration artifacts from prior manual/monolithic installs — all without exposing file paths, boot IDs, model hashes (full), thresholds, scores, embeddings, gate names, raw logs, template paths, or key paths. Long hex IDs are redacted to first 8 chars + '...'. The privacy scanner forbidden terms were extended from 7 to 11 (added score, biometric, gate, raw). The log filter terms were extended from 9 to 13 (added key, path, gate, raw). The bundle README text was rewritten to avoid forbidden terms. Migration detection checks for legacy setuid helper (namtor-worker-spawn), legacy install script, and manual install without manifest.",
+  "diagnostics_report": {
+    "fields_reported": [
+      "package version (cli_version from CARGO_PKG_VERSION)",
+      "daemon version (from --version flag)",
+      "systemd status (is-active, is-enabled)",
+      "model state (yunet/sface/minifasnet: present/missing)",
+      "service state (daemon socket: active/inactive)",
+      "protection state (tpm: present/absent, sealing: tpm2/software/uninitialized)",
+      "enabled PAM service count (files in /etc/pam.d containing pam_namtor.so)",
+      "installed packages (namtor/namtor-gnome/namtor-kde/manual/none)",
+      "migration artifacts (legacy-setuid, legacy-install-script, manual-install)",
+      "device present/absent (no path)",
+      "emitter method (msxu/non-msxu/unknown)",
+      "storage enrollment count (no path)",
+      "auth outcome (match/no match/unavailable)"
+    ],
+    "fields_never_reported": [
+      "file paths",
+      "boot IDs",
+      "model hashes (full — redacted to first 8 chars)",
+      "thresholds",
+      "scores",
+      "embeddings",
+      "gate names",
+      "raw logs (filtered before write)",
+      "template paths",
+      "key paths",
+      "biometric data"
+    ]
+  },
+  "privacy_scanner": {
+    "forbidden_terms": [
+      "embedding", "template", "pixel", "frame", "crop",
+      "threshold", "nonce", "score", "biometric", "gate", "raw"
+    ],
+    "hex_detection": "0x followed by 8+ hex digits; 32+ contiguous hex digits (raw key/hash)",
+    "key_material_detection": "PEM markers (-----BEGIN), 32+ contiguous hex digits",
+    "raw_score_detection": "score= followed by a digit",
+    "log_filter_terms": [
+      "embedding", "template", "pixel", "frame", "crop",
+      "threshold", "nonce", "score", "biometric", "gate", "raw", "key", "path"
+    ]
+  },
+  "hex_redaction": {
+    "method": "redact_hex_id() filters hex chars, returns first 8 + '...' for strings >= 16 hex chars",
+    "sha256_format": "redact_sha256_colon() returns first 4 byte pairs colon-separated + '...'",
+    "example": "abcdef0123456789... → first 8 hex chars + ellipsis"
+  },
+  "migration_detection": {
+    "artifacts_checked": [
+      "legacy-setuid: /usr/lib/namtor/namtor-worker-spawn (removed in Task 18)",
+      "legacy-install-script: /usr/share/namtor/install.sh (old monolithic installer)",
+      "manual-install: daemon binary present without install-manifest.toml"
+    ],
+    "migration_path": "remove old artifacts and reinstall via split packages",
+    "no_deletion": "migration detection never deletes unrelated files — only reports"
+  },
+  "package_detection": {
+    "core": "namtor-daemon binary + install-manifest.toml present",
+    "gnome": "namtor-enroll-wizard binary + org.namtor.Wizard.desktop present",
+    "kde": "org.namtor.kcm.desktop present",
+    "manual": "namtor-daemon binary present without install-manifest.toml"
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_support_bundle.sh",
+    "passed": 32,
+    "failed": 0,
+    "exit_code": 0,
+    "categories": {
+      "a_unprivileged": "cargo test -p namtor-cli --lib passes (98 tests)",
+      "b_privacy_scan": "11 forbidden tokens verified absent from diagnostic output",
+      "c_hex_redaction": "model hashes truncated to first 8 chars + ellipsis",
+      "d_migration": "6 migration detection tests pass (legacy setuid, install script, manual, clean)",
+      "e_forbidden_mutation": "4 forbidden-data rejection tests pass",
+      "f_package_pam": "4 package detection + PAM count tests pass"
+    }
+  },
+  "cargo_tests": {
+    "total": 98,
+    "passed": 98,
+    "failed": 0,
+    "clippy": "clean (-D warnings)"
+  },
+  "files_created": [
+    "crates/namtor-cli/src/package_diagnostics.rs",
+    "packaging/tests/test_support_bundle.sh",
+    "docs/evidence/public-release/27-support-bundle.json",
+    "docs/evidence/public-release/27-support-failures.json"
+  ],
+  "files_modified": [
+    "crates/namtor-cli/src/diagnostics.rs — extended privacy scanner, removed paths from details, added package/pam/migration/protection fields to DiagnosticReport, redacted hex, updated tests",
+    "crates/namtor-cli/src/lib.rs — added package_diagnostics module",
+    "crates/namtor-cli/src/bin/namtor-cli.rs — imports updated"
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "task": "21",
+  "title": "Fedora split-package — failure / residual-risk matrix",
+  "gate": "fedora-failures",
+  "status": "PASS",
+  "timestamp": "2026-08-09T00:00:00Z",
+  "summary": "No structural failures. The split-spec test (packaging/tests/test_fedora_split.sh) reports 96/96 assertions passing. The residual risks below are environmental or human-gated, not defects in the spec.",
+  "failures": [],
+  "residual_risks": {
+    "rpmbuild_mock_not_installed": "rpmbuild, mock, and rpmlint are not available on this Arch host, so a real RPM compile/lint was not executed. The spec is verified structurally (96 assertions). A Fedora host with mock is required to confirm compilation, RPM lint, and the three-subpackage RPM payload. The build steps are unchanged from the previously-shipped monolithic spec that did compile.",
+    "real_mock_three_subpackages": "mock/rpmbuild producing exactly three binary RPMs (namtor, namtor-gnome, namtor-kde) from the one spec is asserted structurally (%package gnome, %package kde, bare %files + %files gnome + %files kde) but not exercised end-to-end without rpmbuild.",
+    "rpm_lint_clean": "rpmlint cleanliness (no duplicate-file, no dir-or-file-in-%files, no missing-requires) is not machine-verified here. The %files partitioning is disjoint by construction (core excludes the GNOME/KDE files the test enumerates), and each subpackage carries its own %license COPYING.md, but rpmlint may flag subtleties only visible after a real build.",
+    "desktop_cache_scriptlets_untested": "The %post/%postun gnome and %post/%postun kde scriptlets call update-desktop-database and gtk-update-icon-cache with `|| :` (best-effort). These are standard Fedora practice but are not exercised in CI (no running desktop).",
+    "qt6_kf6_runtime_deps_best_effort": "The KDE subpackage Requires qt6-qtbase, kf6-kirigami, kf6-kcoreaddons explicitly. The actual shared-library deps of libnamtorqml.so are resolved by rpmbuild's automatic Requires scanning at build time; the explicit Requires are a lower bound so the package is installable without auto-deps. A real build may add more auto-Requires.",
+    "pam_install_test_pre_existing": "packaging/tests/test_pam_install.sh fails on the dirty working tree (a prior task rewrote packaging/pam-install.sh into a thin wrapper around the Rust namtor-pam-edit binary; that test still targets the old shell block-insertion behaviour). Confirmed pre-existing: the test fails identically when packaging/fedora/namtor.spec is reverted to the monolithic version. Out of scope for Task 21 (MUST NOT modify the shared pam-install.sh)."
+  },
+  "must_not_do_violations": "none — only packaging/fedora/namtor.spec was modified among packaging files. No changes to packaging/arch/*, packaging/debian/*, packaging/lifecycle.sh, packaging/install-manifest.toml, packaging/stage.sh, or any Rust source.",
+  "scope_check": {
+    "files_modified_by_task_21": [
+      "packaging/fedora/namtor.spec",
+      "packaging/tests/test_fedora_split.sh",
+      "docs/evidence/public-release/21-fedora-matrix.json",
+      "docs/evidence/public-release/21-fedora-failures.json",
+      ".omo/notepads/model-licensing-strategy/learnings.md"
+    ],
+    "files_NOT_touched": [
+      "packaging/arch/PKGBUILD",
+      "packaging/arch/namtor.install",
+      "packaging/debian/*",
+      "packaging/lifecycle.sh",
+      "packaging/install-manifest.toml",
+      "packaging/stage.sh",
+      "packaging/pam-install.sh",
+      "packaging/pam-uninstall.sh",
+      "crates/**/*.rs"
+    ]
+  }
+}

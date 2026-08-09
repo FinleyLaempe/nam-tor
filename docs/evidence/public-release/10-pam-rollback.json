@@ -1,0 +1,52 @@
+{
+  "task": "10-pam-rollback",
+  "description": "Crash injection rollback evidence — every transition point tested for file consistency",
+  "date": "2026-08-08",
+  "crate": "namtor-pam-config",
+  "crash_points_tested": [
+    {
+      "point": "BeforeBackup",
+      "file_state_after_crash": "original (unchanged)",
+      "rerun_succeeds": true,
+      "test": "crash_before_backup_leaves_file_original"
+    },
+    {
+      "point": "AfterBackup",
+      "file_state_after_crash": "original (unchanged, backup exists on disk)",
+      "rerun_succeeds": true,
+      "test": "crash_after_backup_leaves_file_original"
+    },
+    {
+      "point": "BeforeWrite",
+      "file_state_after_crash": "original (unchanged, backup exists, candidate rendered but not written)",
+      "rerun_succeeds": true,
+      "test": "crash_before_write_leaves_file_original"
+    },
+    {
+      "point": "AfterWrite",
+      "file_state_after_crash": "fully edited (atomic rename completed)",
+      "rerun_succeeds": true,
+      "test": "crash_after_write_leaves_file_edited"
+    },
+    {
+      "point": "BeforeVerify",
+      "file_state_after_crash": "fully edited (atomic rename completed, post-verify not run)",
+      "rerun_succeeds": true,
+      "test": "crash_before_verify_leaves_file_edited"
+    },
+    {
+      "point": "AfterVerify",
+      "file_state_after_crash": "fully edited (all steps complete, registry not yet updated)",
+      "rerun_succeeds": true,
+      "test": "crash_after_verify_leaves_file_edited"
+    }
+  ],
+  "comprehensive_recovery_test": {
+    "test": "crash_recovery_all_points_can_rerun",
+    "description": "For each crash point: reset file to original, remove backup+registry, crash at that point, then re-run without crash. Assert: re-run succeeds, file has namtor block, file has pam_unix fallback.",
+    "all_points_pass": true
+  },
+  "atomicity_guarantee": "The atomic rename(2) on a same-filesystem temp file ensures the PAM file is either fully original or fully edited — never half-written. The temp file is created in the same directory as the target, fsynced before rename, and the parent directory is fsynced after rename.",
+  "backup_guarantee": "Before any edit, the original file is copied to <file>.namtor.bak with a SHA-256 checksum sidecar. Both are fsynced. The backup is preserved across re-enables (upgrade path). If the file was externally edited since the backup (stock content differs), the operation is refused with StaleEdit.",
+  "registry_guarantee": "The enabled-service registry is updated only after the PAM file edit is verified. A crash before registry update leaves the file edited but registry stale — the next enable re-runs and updates the registry (idempotent)."
+}

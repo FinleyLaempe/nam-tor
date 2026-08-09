@@ -1,0 +1,41 @@
+MiniFASNet PAD — Strobe-Differential Liveness Model
+====================================================
+
+Model id: minifasnet_pad
+Source: Self-trained on physics-based synthetic strobe-differential data
+Licence: Apache-2.0 (code reference: Silent-Face Anti-Spoofing)
+
+Provenance
+----------
+
+The ONNX weights (49 KB, ~80K parameters) were trained from scratch on
+physics-based synthetic strobe-differential data encoding the signals
+described in the Nam-tor design spec section 6.4:
+
+  - 1/r^2 falloff for live faces (inverse-square distance cue)
+  - Specular hotspot from the IR emitter (live skin reflectance)
+  - Subsurface scattering simulation (live tissue)
+  - Near-zero differential D = On - Off for screen replay attacks
+  - Weak/flat differential for print attacks
+  - Uniform differential for cutout attacks
+
+No licence-restricted dataset was used to derive these weights. The
+training data is entirely synthetic, generated from first-principles
+physics models. The training recipe is in ml/recipes/train_pad.py.
+
+Code Reference
+--------------
+
+The network architecture (MiniFASNet) is adapted from Silent-Face
+Anti-Spoofing (https://github.com/minivision-ai/Silent-Face-Anti-Spoofing),
+which is licensed under Apache-2.0. Only the architectural design was
+referenced; the weights are independently trained.
+
+Upstream Licence
+----------------
+
+Apache License 2.0
+https://www.apache.org/licenses/LICENSE-2.0.txt
+
+SHA-256 of canonical Apache-2.0 text:
+cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30

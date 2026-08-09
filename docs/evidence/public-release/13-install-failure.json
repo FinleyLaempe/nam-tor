@@ -1,0 +1,46 @@
+{
+  "task": "13",
+  "title": "Keep every PAM service disabled at package installation — mandatory failure",
+  "gate": "install-failure-nonzero",
+  "status": "PASS",
+  "timestamp": "2026-08-08T23:30:00Z",
+  "summary": "When a mandatory setup piece is missing (model, sysuser, systemd unit, D-Bus service, or PAM module), the install hook's validation function returns nonzero. This is asserted by the test suite for each missing piece individually. The install hooks print a FATAL line per missing piece to stderr before exiting nonzero.",
+  "test_cases": {
+    "models_missing": {
+      "given": "fake root with all mandatory pieces except /var/lib/namtor/models",
+      "when": "namtor_validate is called",
+      "then": "returns nonzero (exit 1)",
+      "result": "PASS"
+    },
+    "sysusers_missing": {
+      "given": "fake root with all mandatory pieces except /usr/lib/sysusers.d/namtor.conf",
+      "when": "namtor_validate is called",
+      "then": "returns nonzero (exit 1)",
+      "result": "PASS"
+    },
+    "socket_unit_missing": {
+      "given": "fake root with all mandatory pieces except namtor-daemon.socket",
+      "when": "namtor_validate is called",
+      "then": "returns nonzero (exit 1)",
+      "result": "PASS"
+    },
+    "dbus_service_missing": {
+      "given": "fake root with all mandatory pieces except org.namtor.Manager.service",
+      "when": "namtor_validate is called",
+      "then": "returns nonzero (exit 1)",
+      "result": "PASS"
+    },
+    "pam_module_missing": {
+      "given": "fake root with all mandatory pieces except pam_namtor.so",
+      "when": "namtor_validate is called",
+      "then": "returns nonzero (exit 1)",
+      "result": "PASS"
+    }
+  },
+  "fail_closed_contract": "All three distro hooks (Arch post_install, Fedora %post, Debian postinst configure) call namtor_validate after activating the socket. If validation fails, the hook prints 'mandatory setup incomplete' to stderr and returns/exits nonzero. No success message is printed when validation fails.",
+  "test_suite": {
+    "script": "packaging/tests/test_install_default_off.sh",
+    "validation_failure_tests_passed": 5,
+    "validation_failure_tests_failed": 0
+  }
+}

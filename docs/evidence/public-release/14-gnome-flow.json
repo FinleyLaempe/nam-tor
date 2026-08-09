@@ -1,0 +1,59 @@
+{
+  "task": "14-gnome-flow",
+  "description": "Connect GNOME management flows to the system bus (v1 + v2 contract)",
+  "date": "2026-08-08",
+  "tests": {
+    "presenter_flow": {
+      "total": 19,
+      "passed": 19,
+      "failed": 0,
+      "names": [
+        "happy_path_start_enroll_commit_lists_profile",
+        "daemon_unavailable_shows_error_and_recovery",
+        "cancel_mid_enrollment_cleans_up",
+        "polkit_denied_shows_auth_error",
+        "low_diversity_shows_guidance",
+        "merge_profiles_requires_confirmation",
+        "rename_enable_disable_delete_flow",
+        "replace_profile_requires_confirmation",
+        "service_not_registered_has_recovery_hint",
+        "duplicate_profile_name_surfaces_exists",
+        "commit_profile_persists_to_store",
+        "enrollment_persists_across_reconnect",
+        "reconnect_restores_state",
+        "pam_service_toggle_works",
+        "protection_status_surfaced",
+        "review_flow_stages_and_commits",
+        "cancel_pending_safe_when_idle",
+        "pam_service_row_view_has_no_biometrics",
+        "dbus_client_uses_system_bus"
+      ]
+    },
+    "privacy_scan": {
+      "total": 8,
+      "passed": 8,
+      "failed": 0,
+      "names": [
+        "profile_info_carries_no_biometrics",
+        "enrollment_progress_carries_no_biometrics",
+        "review_outcome_carries_no_biometrics",
+        "status_report_carries_no_biometrics",
+        "pam_service_info_carries_no_biometrics",
+        "protection_status_carries_no_biometrics",
+        "forbidden_substrings_list_is_nonempty",
+        "scan_flags_a_known_bad_struct"
+      ]
+    }
+  },
+  "clippy": "clean (-D warnings)",
+  "key_changes": {
+    "dbus_client": "Connection::session() -> Connection::system(); method names aligned to frozen v1/v2 contract (PascalCase); v2 methods added (ListPamServices, SetPamServiceEnabled, GetProtectionStatus)",
+    "client_trait": "Rewritten to match daemon contract: start_enrollment(uid, name), commit_profile(session) -> String, poll_progress(session) -> Option<EnrollmentProgress>, review_profile, get_status, v2 PAM/protection methods; &self instead of &mut self",
+    "presenter": "No-op commit_profile removed; uid stored; async dispatch via glib::spawn_future with cancellation; from_arc for reconnect testing; PAM toggles and protection status wired",
+    "fake": "Updated to match new trait; PAM services and protection status added; commit_profile returns Err on low diversity (matching daemon behavior)"
+  },
+  "system_bus_verified": true,
+  "no_placeholders": true,
+  "enrollment_persists": true,
+  "reconnect_restores_state": true
+}

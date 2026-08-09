@@ -1,0 +1,67 @@
+{
+  "task": "13",
+  "title": "Keep every PAM service disabled at package installation",
+  "gate": "install-default-off",
+  "status": "PASS",
+  "timestamp": "2026-08-08T23:30:00Z",
+  "summary": "Fresh install has zero Nam-tor PAM blocks. All three distro install hooks (Arch namtor.install, Fedora namtor.spec %post, Debian namtor.postinst) install module/manager binaries, activate systemd socket + D-Bus service, validate mandatory pieces (models, sysuser, units, D-Bus service, PAM module), and print a Settings-based setup message. No PAM config is edited at install time.",
+  "assertions": {
+    "no_pam_editing_in_install_hooks": {
+      "arch_post_install": "PASS — no pam-install.sh call, no pam_namtor insertion, no /etc/pam.d writes",
+      "fedora_post": "PASS — no pam-install.sh call, no pam_namtor insertion, no /etc/pam.d writes",
+      "debian_postinst_configure": "PASS — no pam-install.sh call, no pam_namtor insertion, no /etc/pam.d writes"
+    },
+    "no_models_ensure": {
+      "arch": "PASS — no 'models ensure' reference (command does not exist; models are bundled)",
+      "fedora": "PASS — no 'models ensure' reference",
+      "debian": "PASS — no 'models ensure' reference"
+    },
+    "no_dm_group_assumption": {
+      "arch": "PASS — no gpasswd/usermod namtor-auth at install time",
+      "fedora": "PASS — no gpasswd/usermod namtor-auth at install time",
+      "debian": "PASS — no gpasswd/usermod namtor-auth at install time"
+    },
+    "no_unverified_success": {
+      "arch": "PASS — no 'installed and running' message before validation"
+    },
+    "validation_succeeds_when_complete": {
+      "result": "PASS — namtor_validate returns 0 when all mandatory pieces present"
+    },
+    "validation_fails_nonzero": {
+      "models_missing": "PASS — returns nonzero",
+      "sysusers_missing": "PASS — returns nonzero",
+      "socket_unit_missing": "PASS — returns nonzero",
+      "daemon_service_missing": "PASS — returns nonzero (checked via namtor_validate)",
+      "dbus_service_missing": "PASS — returns nonzero",
+      "pam_module_missing": "PASS — returns nonzero"
+    },
+    "readme_documents_settings_flow": {
+      "references_settings_app": "PASS",
+      "references_enrollment": "PASS",
+      "install_section_no_pam_install": "PASS — install section does not instruct pam-install.sh"
+    },
+    "pam_install_not_called_during_install": {
+      "result": "PASS — pam-install.sh exists for manual/expert use only; no install hook invokes it"
+    }
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_install_default_off.sh",
+    "passed": 19,
+    "failed": 0,
+    "exit_code": 0
+  },
+  "files_modified": [
+    "packaging/arch/namtor.install",
+    "packaging/fedora/namtor.spec",
+    "packaging/debian/namtor.postinst",
+    "packaging/README.md"
+  ],
+  "files_created": [
+    "packaging/tests/test_install_default_off.sh"
+  ],
+  "syntax_checks": {
+    "bash_n_arch_install": "PASS",
+    "bash_n_debian_postinst": "PASS",
+    "bash_n_test_script": "PASS"
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "task": "01-contract-mutation",
+  "date": "2026-08-08",
+  "status": "PASS",
+  "summary": "Mutation tests verify that changing any v2 API signature, version, method set, or signal set causes a test failure. Each mutation guard test asserts exact counts and signatures.",
+  "mutation_tests": [
+    {
+      "test": "v2_method_signatures_are_stable",
+      "guards": [
+        "ListPamServices out arg type a(ssbss)",
+        "SetPamServiceEnabled in args (s, b) out arg b",
+        "GetProtectionStatus out arg type (sbs)"
+      ],
+      "mutation": "Change ListPamServices out type from a(ssbss) to a(ssbbb)",
+      "expected_result": "FAIL"
+    },
+    {
+      "test": "v2_signal_signatures_are_stable",
+      "guards": [
+        "PamServicesChanged arg type a(ssbss)",
+        "ProtectionStatusChanged arg type (sbs)"
+      ],
+      "mutation": "Change ProtectionStatusChanged arg type from (sbs) to (sbb)",
+      "expected_result": "FAIL"
+    },
+    {
+      "test": "v2_method_set_mutation_guard",
+      "guards": ["v2 method count == method_v2::ALL.len() (3)"],
+      "mutation": "Add or remove a v2 method from the XML",
+      "expected_result": "FAIL"
+    },
+    {
+      "test": "v2_signal_set_mutation_guard",
+      "guards": ["v2 signal count == signal_v2::ALL.len() (2)"],
+      "mutation": "Add or remove a v2 signal from the XML",
+      "expected_result": "FAIL"
+    },
+    {
+      "test": "contract_v2_defines_exactly_the_required_methods",
+      "guards": ["v2 method names == method_v2::ALL (sorted)"],
+      "mutation": "Rename a v2 method (e.g. ListPamServices -> GetPamServices)",
+      "expected_result": "FAIL"
+    },
+    {
+      "test": "contract_v2_defines_exactly_the_required_signals",
+      "guards": ["v2 signal names == signal_v2::ALL (sorted)"],
+      "mutation": "Rename a v2 signal",
+      "expected_result": "FAIL"
+    },
+    {
+      "test": "v2_api_version_is_frozen",
+      "guards": ["API_VERSION_V2 == 2"],
+      "mutation": "Change API_VERSION_V2 to 3",
+      "expected_result": "FAIL"
+    },
+    {
+      "test": "v2_types_have_correct_dbus_signatures",
+      "guards": [
+        "PamServiceInfo::SIGNATURE == (ssbss)",
+        "ProtectionStatus::SIGNATURE == (sbs)",
+        "PamServiceCompatibility::SIGNATURE == s",
+        "ProtectionKeyKind::SIGNATURE == s"
+      ],
+      "mutation": "Change a struct field type (e.g. enabled: bool -> u32)",
+      "expected_result": "FAIL"
+    },
+    {
+      "test": "v1_interface_preserved_in_v2_xml",
+      "guards": ["v1 interface block byte-for-byte in v2 XML"],
+      "mutation": "Modify the v1 interface section inside the v2 XML",
+      "expected_result": "FAIL"
+    },
+    {
+      "test": "privacy_scan_rejects_biometric_tokens_v2",
+      "guards": ["no forbidden token in v2 XML (case-insensitive)"],
+      "mutation": "Add a forbidden token (e.g. 'template') to v2 XML",
+      "expected_result": "FAIL"
+    },
+    {
+      "test": "v2_types_no_biometric_leak",
+      "guards": ["no forbidden token in serialized v2 types"],
+      "mutation": "Add a field containing a forbidden token name",
+      "expected_result": "FAIL"
+    },
+    {
+      "test": "negotiate_v2_higher_version_fails_safely",
+      "guards": ["v3 request -> IncompatibleVersion"],
+      "mutation": "Change negotiate_version_v2 to accept any version",
+      "expected_result": "FAIL"
+    }
+  ],
+  "total_mutation_guards": 12,
+  "verdict": "All mutation tests would fail on the described mutations, confirming the v2 contract is frozen."
+}

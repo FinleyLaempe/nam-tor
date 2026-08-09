@@ -1,0 +1,97 @@
+{
+  "task": "19",
+  "title": "Lifecycle helper — mandatory-failure matrix",
+  "gate": "lifecycle-helper-failures",
+  "status": "PASS",
+  "timestamp": "2026-08-08T23:57:00Z",
+  "summary": "Every mandatory failure mode of the lifecycle helper returns nonzero. The matrix below was exercised directly against packaging/lifecycle.sh with fake roots (--root <DESTDIR>) and a fake namtor-pam-edit stub. Each failure produces a FATAL line on stderr and a receipt with status=failed. No mandatory failure is swallowed.",
+  "matrix": [
+    {
+      "phase": "post-install",
+      "defect": "missing models directory (empty /var/lib/namtor/models)",
+      "expected": "nonzero",
+      "actual": "nonzero (FATAL: no ONNX models / model <id> missing onnx)",
+      "verdict": "PASS"
+    },
+    {
+      "phase": "post-install",
+      "defect": "missing /usr/lib/sysusers.d/namtor.conf",
+      "expected": "nonzero",
+      "actual": "nonzero (FATAL: sysusers.d/namtor.conf missing)",
+      "verdict": "PASS"
+    },
+    {
+      "phase": "post-install",
+      "defect": "missing /usr/lib/systemd/system/namtor-daemon.service",
+      "expected": "nonzero",
+      "actual": "nonzero (FATAL: namtor-daemon.service unit missing)",
+      "verdict": "PASS"
+    },
+    {
+      "phase": "post-install",
+      "defect": "missing /usr/share/dbus-1/system-services/org.namtor.Manager.service",
+      "expected": "nonzero",
+      "actual": "nonzero (FATAL: D-Bus service org.namtor.Manager missing)",
+      "verdict": "PASS"
+    },
+    {
+      "phase": "post-install",
+      "defect": "missing /usr/lib/security/pam_namtor.so",
+      "expected": "nonzero",
+      "actual": "nonzero (FATAL: pam_namtor.so module missing)",
+      "verdict": "PASS"
+    },
+    {
+      "phase": "post-install",
+      "defect": "tampered model — onnx sha256 does not match the manifest variant",
+      "expected": "nonzero",
+      "actual": "nonzero (FATAL: model <id> (<quant>) hash mismatch (expected <h>, got <h>))",
+      "verdict": "PASS"
+    },
+    {
+      "phase": "post-upgrade",
+      "defect": "tampered model after upgrade",
+      "expected": "nonzero",
+      "actual": "nonzero (same hash-mismatch FATAL as post-install)",
+      "verdict": "PASS"
+    },
+    {
+      "phase": "any",
+      "defect": "unknown phase name (e.g. bogus-phase)",
+      "expected": "nonzero",
+      "actual": "nonzero (exit 2; usage printed to stderr)",
+      "verdict": "PASS"
+    }
+  ],
+  "non_mandatory_best_effort": [
+    {
+      "item": "namtor-pam-edit binary absent",
+      "behaviour": "WARN and skip the PAM subprocess call; the phase still validates non-PAM state and exits 0 if all mandatory checks pass. Rationale: PAM may legitimately not be configured yet on a fresh system, and the helper must not fail an install because a optional integration tool is missing."
+    },
+    {
+      "item": "systemctl / systemd-sysusers / systemd-tmpfiles absent or fake-root",
+      "behaviour": "Skipped silently on fake roots (--root != /); best-effort `|| true` on real roots. Runtime dir creation is validated by check_dir regardless."
+    },
+    {
+      "item": "update-desktop-database / gtk-update-icon-cache absent",
+      "behaviour": "Best-effort, skipped on fake roots. Not a mandatory gate."
+    },
+    {
+      "item": "namtor-pam-edit snapshot/migrate/disable-all/purge returns nonzero",
+      "behaviour": "WARN and continue (`|| true`). A failed PAM snapshot must not block an upgrade; a failed disable-all must not block removal (PAM may already be disabled). The task spec lists missing model/sysuser/service as the mandatory failures, not PAM-subprocess failures."
+    }
+  ],
+  "invariants_asserted": {
+    "never_edit_pam_on_install": "PASS — pre-install and post-install phase bodies contain no pam-edit enable/disable/migrate/snapshot/purge and no /etc/pam.d write",
+    "never_call_nonexistent_cli": "PASS — no `models ensure` or `namtor-cli models` reference in lifecycle.sh",
+    "no_pam_default_target": "PASS — no gdm-password/system-auth/password-auth/common-auth hardcoded as a default",
+    "idempotent": "PASS — post-install twice → same exit code + same receipt (modulo timestamp)",
+    "fake_root_testable": "PASS — every operation rebased under --root; no real-filesystem writes when --root is set"
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_lifecycle.sh",
+    "passed": 38,
+    "failed": 0,
+    "exit_code": 0
+  }
+}

@@ -1,0 +1,186 @@
+{
+  "task": "29",
+  "title": "Certify core installation and daemon readiness on clean distros",
+  "gate": "core-install-matrix",
+  "status": "PASS",
+  "timestamp": "2026-08-09T04:30:00Z",
+  "summary": "A certification test script (packaging/tests/test_core_cert.sh) stages the core package via stage.sh --package core into a DESTDIR fake-root, extracts the bundled model archive, and structurally validates every mandatory piece of the core installation: system user/group (sysusers.d), runtime directories (tmpfiles.d), model validation call path (daemon binary + model-manifest.toml + bundled ONNX models with sha256 verification), socket activation unit (ListenStream, SocketMode 0660, SocketGroup namtor-auth), D-Bus system-bus service (not session), PAM module at canonical + multiarch paths, zero /etc/pam.d modifications at install, TPM/fallback protection state types (ProtectionState + DowngradeRefused), sandboxed ONNX inference path (worker binary + seccomp + landlock, no setuid), unprivileged diagnostics subcommand, and the lifecycle helper staged executable (mode 0755). Since clean distros cannot be run in CI, real daemon start, real IR frame capture, real TPM2 unseal, real ONNX inference, real socket activation, and real D-Bus name acquisition are documented as WITHHELD (human-gated on clean-distro VMs). The structural validation is the CI-testable portion and passes 100/100 assertions.",
+  "method": "DESTDIR fake-root staging + structural validation. stage.sh --package core produces a deterministic file tree; the model archive is extracted into the staged root's /var/lib/namtor/models/. Each mandatory file is checked for presence, mode, and content. sysusers.d and tmpfiles.d are parsed to verify identity and directory creation directives. The socket unit is parsed for ListenStream, SocketMode, SocketUser, SocketGroup, and Service directives. The D-Bus service is verified under system-services (not session-services). The PAM module is verified at /usr/lib/security/ and the multiarch resolution logic is verified in source. The lifecycle helper's post-install phase is verified to not call pam-edit. Protection state types (ProtectionState, tpm2_device_present, DowngradeRefused) are verified in namtor-store/src/crypto.rs. Worker sandbox modules (seccomp.rs, landlock.rs) are verified in the source tree. The CLI diagnostics subcommand is verified via --help output and source module presence.",
+  "staging": {
+    "script": "packaging/stage.sh --package core <DESTDIR> <SRCDIR>",
+    "model_archive": "namtor-models-0.1.0.tar.gz extracted into DESTDIR/var/lib/namtor/models/",
+    "deterministic": true,
+    "note": "stage.sh produces identical trees across runs (proven in 03-layout-reproducibility.json)"
+  },
+  "certification_matrix": {
+    "a_sysusers": {
+      "status": "PASS",
+      "checks": [
+        "sysusers.d/namtor.conf staged",
+        "declares user 'namtor' (u namtor)",
+        "declares group 'namtor-auth' (g namtor-auth)",
+        "namtor user home /var/lib/namtor shell /usr/sbin/nologin",
+        "namtor added to video + tss supplementary groups (m namtor video, m namtor tss)"
+      ]
+    },
+    "b_tmpfiles": {
+      "status": "PASS",
+      "checks": [
+        "tmpfiles.d/namtor.conf staged",
+        "creates /var/lib/namtor (d /var/lib/namtor 0750 namtor namtor)",
+        "creates /run/namtor (d /run/namtor 0750 root namtor-auth)",
+        "/var/lib/namtor/templates mode 0700 (biometric data, strictest)"
+      ]
+    },
+    "c_model_validation_path": {
+      "status": "PASS",
+      "checks": [
+        "daemon binary staged at /usr/lib/namtor/namtor-daemon",
+        "model-manifest.toml staged at /usr/share/namtor/model-manifest.toml",
+        "bundled ONNX models present (yunet_2023mar, sface_2021dec, minifasnet_pad)",
+        "all three model sha256 hashes match model-manifest.toml"
+      ]
+    },
+    "d_socket_activation": {
+      "status": "PASS",
+      "checks": [
+        "namtor-daemon.socket staged",
+        "ListenStream=/run/namtor/auth.sock",
+        "SocketMode=0660",
+        "SocketUser=root",
+        "SocketGroup=namtor-auth",
+        "Service=namtor-daemon.service",
+        "namtor-daemon.service staged",
+        "service User=namtor Group=namtor",
+        "service SupplementaryGroups=video tss",
+        "service CapabilityBoundingSet empty (no caps)",
+        "service NoNewPrivileges=true"
+      ]
+    },
+    "e_dbus_system_bus": {
+      "status": "PASS",
+      "checks": [
+        "D-Bus service staged under /usr/share/dbus-1/system-services/",
+        "NOT under /usr/share/dbus-1/services/ (session bus)",
+        "Name=org.namtor.Manager",
+        "Exec=/usr/lib/namtor/namtor-daemon",
+        "User=namtor",
+        "polkit policy staged at /usr/share/polkit-1/actions/org.namtor.policy"
+      ]
+    },
+    "f_pam_module_path": {
+      "status": "PASS",
+      "checks": [
+        "pam_namtor.so at canonical /usr/lib/security/pam_namtor.so",
+        "resolve_module_path checks canonical + 3 multiarch paths (x86_64-linux-gnu, aarch64-linux-gnu, lib64)"
+      ],
+      "multiarch_note": "Debian relocates to /usr/lib/<triplet>/security/ after staging; the staged tree uses the canonical path. The PAM scanner (namtor-pam-config::resolve_module_path) checks all four candidate paths at runtime."
+    },
+    "g_zero_pam_modifications": {
+      "status": "PASS",
+      "checks": [
+        "staged root has no /etc/pam.d (PAM default-off)",
+        "lifecycle.sh post-install does not call pam-edit"
+      ]
+    },
+    "h_tpm_fallback_status": {
+      "status": "PASS",
+      "checks": [
+        "ProtectionState type defined in namtor-store/src/crypto.rs",
+        "tpm2_device_present helper defined",
+        "ProtectionState has sealing + has_tpm + warning fields (no key material)",
+        "DowngradeRefused error type defined (no silent TPM-to-file fallback)"
+      ]
+    },
+    "i_sandboxed_onnx_inference": {
+      "status": "PASS",
+      "checks": [
+        "worker binary staged at /usr/lib/namtor/namtor-worker",
+        "seccomp sandbox module present (crates/namtor-worker/src/sandbox/seccomp.rs)",
+        "landlock sandbox module present (crates/namtor-worker/src/sandbox/landlock.rs)",
+        "worker binary mode 0755 (no setuid — sandbox is the privilege boundary)",
+        "worker binary has no setuid bit"
+      ]
+    },
+    "j_diagnostics_unprivileged": {
+      "status": "PASS",
+      "checks": [
+        "namtor-cli staged at /usr/bin/namtor-cli",
+        "namtor-cli has diagnostics subcommand (verified via --help)",
+        "diagnostics source module present (crates/namtor-cli/src/diagnostics.rs)",
+        "diagnostics source has no root requirement"
+      ],
+      "naming_note": "The task spec says 'namtor-cli doctor'; the actual subcommand is 'diagnostics'. Same functionality — generates a privacy-safe diagnostics support bundle."
+    },
+    "k_lifecycle_helper": {
+      "status": "PASS",
+      "checks": [
+        "lifecycle.sh staged at /usr/share/namtor/lifecycle.sh",
+        "lifecycle.sh mode 0755 (executable)"
+      ]
+    },
+    "additional_mandatory_files": {
+      "status": "PASS",
+      "checks": [
+        "install-manifest.toml staged at /usr/share/namtor/install-manifest.toml",
+        "packaging README staged at /usr/share/doc/namtor/README.md",
+        "COPYING.md staged at /usr/share/doc/namtor/COPYING.md",
+        "SBOM (SPDX) staged at /usr/share/doc/namtor/namtor.spdx.json",
+        "SBOM (CycloneDX) staged at /usr/share/doc/namtor/namtor.cyclonedx.json",
+        "pam-install.sh staged (manual/explicit use only)",
+        "pam-uninstall.sh staged (manual/explicit use only)",
+        "pam-preflight.sh staged (manual/explicit use only)",
+        "namtor-camera-emitter-off staged (ExecStopPost fallback)"
+      ]
+    }
+  },
+  "withheld_clean_distro_vm_gates": {
+    "real_daemon_start": {
+      "status": "WITHHELD",
+      "reason": "Requires a clean Arch/Fedora/Debian x86_64 VM with the package installed via the distro package manager. CI uses DESTDIR fake-root staging, which cannot start systemd services."
+    },
+    "real_ir_frame_capture": {
+      "status": "WITHHELD",
+      "reason": "Requires the reference IR camera (Sonix 3277:0018 on /dev/video2) on a clean-distro VM. CI has no camera."
+    },
+    "real_tpm2_unseal": {
+      "status": "WITHHELD",
+      "reason": "Requires a clean-distro VM with a TPM 2.0 device (/dev/tpmrm0). CI has no TPM. The ProtectionState + DowngradeRefused types are structurally verified; the actual TPM2 sealing/unseal roundtrip is tested in namtor-store unit tests (08-protection-matrix.json)."
+    },
+    "real_sandboxed_onnx_inference": {
+      "status": "WITHHELD",
+      "reason": "Requires a clean-distro VM with the daemon running, a real camera frame, and the worker process spawning under seccomp + landlock. CI verifies the worker binary, sandbox modules, and model hashes structurally. The actual inference roundtrip is hardware-gated (06-startup-validated.json)."
+    },
+    "real_socket_activation": {
+      "status": "WITHHELD",
+      "reason": "Requires systemd on a clean-distro VM to verify socket activation (socket unit -> service activation on incoming connection). CI verifies the socket unit structurally."
+    },
+    "real_dbus_name_acquisition": {
+      "status": "WITHHELD",
+      "reason": "Requires a running dbus-daemon on a clean-distro VM to verify org.namtor.Manager name acquisition on the system bus. CI verifies the D-Bus service file structurally."
+    }
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_core_cert.sh",
+    "passed": 100,
+    "failed": 0,
+    "exit_code": 0
+  },
+  "files_created": [
+    "packaging/tests/test_core_cert.sh",
+    "docs/evidence/public-release/29-core-install-matrix.json",
+    "docs/evidence/public-release/29-core-install-failures.json"
+  ],
+  "files_not_modified": [
+    "packaging/install-manifest.toml — read-only (MUST NOT modify)",
+    "packaging/model-manifest.toml — read-only (MUST NOT modify)",
+    "packaging/lifecycle.sh — read-only (MUST NOT modify)",
+    "packaging/stage.sh — used as-is",
+    "packaging/systemd/namtor-daemon.socket — read-only",
+    "packaging/systemd/namtor-daemon.service — read-only",
+    "packaging/sysusers.d/namtor.conf — read-only",
+    "packaging/tmpfiles.d/namtor.conf — read-only",
+    "packaging/dbus-1/org.namtor.Manager.service — read-only",
+    "No Rust source, Cargo.toml, or distro packaging modified"
+  ]
+}

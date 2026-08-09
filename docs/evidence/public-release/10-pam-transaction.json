@@ -1,0 +1,79 @@
+{
+  "task": "10-pam-transaction",
+  "description": "Transactional PAM editing engine — idempotent enable/disable, stale edit conflict, crash injection rollback, include-aware fallback",
+  "date": "2026-08-08",
+  "crate": "namtor-pam-config",
+  "modules": {
+    "editor.rs": "Transactional PAM editor: enable_service, disable_service, CrashPoint, EditOptions, NamtorControl",
+    "candidate.rs": "Block rendering and candidate verification (remove_block, render_enable, verify_candidate)",
+    "flock.rs": "Filesystem primitives: flock, atomic_write, backup+checksum, stale temp cleanup",
+    "registry.rs": "Root-owned enabled-service registry with atomic JSON save"
+  },
+  "binary": "namtor-pam-edit (enable/disable CLI)",
+  "tests": {
+    "lib_tests": 6,
+    "editor_integration_tests": 36,
+    "inventory_tests": 36,
+    "total": 78,
+    "all_pass": true
+  },
+  "test_categories": {
+    "idempotent_enable": ["enable_inserts_block_before_first_auth_line", "enable_is_idempotent", "disable_is_idempotent_when_no_block", "enable_then_disable_then_enable_cycle"],
+    "stale_edit_conflict": ["stale_external_edit_rejected_on_reenable", "stale_external_edit_rejected_on_disable", "editing_namtor_block_only_is_not_stale"],
+    "crash_injection_rollback": [
+      "crash_before_backup_leaves_file_original",
+      "crash_after_backup_leaves_file_original",
+      "crash_before_write_leaves_file_original",
+      "crash_after_write_leaves_file_edited",
+      "crash_before_verify_leaves_file_edited",
+      "crash_after_verify_leaves_file_edited",
+      "crash_recovery_all_points_can_rerun"
+    ],
+    "include_aware_fallback": ["include_aware_fallback_debian_gdm", "include_aware_fallback_arch_polkit", "include_aware_fallback_fedora_sddm", "disable_preserves_include_fallback"],
+    "unsafe_ordering_refusal": ["deny_at_insertion_point_rejected", "deny_between_block_and_password_rejected", "no_auth_lines_rejected"],
+    "backup_and_checksum": ["backup_created_on_first_enable", "backup_preserves_original_content", "backup_checksum_matches"],
+    "stock_byte_preservation": ["stock_bytes_preserved_outside_block"],
+    "symlink_rejection": ["symlink_target_rejected"],
+    "registry_tracking": ["registry_updated_on_enable", "registry_updated_on_disable", "registry_tracks_multiple_services"],
+    "control_field": ["default_ignore_control_renders_correctly", "control_change_is_an_upgrade_not_stale"],
+    "service_id_validation": ["invalid_service_ids_rejected"],
+    "full_distro_cycles": ["full_arch_enable_disable_cycle", "full_fedora_enable_disable_cycle", "full_debian_enable_disable_cycle"]
+  },
+  "safety_properties": {
+    "idempotent": true,
+    "stale_edit_conflict": true,
+    "crash_safe_atomic_rename": true,
+    "fsynced_backup_with_checksum": true,
+    "flock_concurrency_lock": true,
+    "fallback_preserved_after_block": true,
+    "include_aware_fallback_verification": true,
+    "deny_before_block_rejected": true,
+    "deny_before_password_rejected": true,
+    "symlink_rejected": true,
+    "stock_bytes_preserved": true,
+    "no_unsafe_control_fields": true
+  },
+  "packaging": {
+    "pam_install_sh": "thin wrapper calling namtor-pam-edit enable",
+    "pam_uninstall_sh": "thin wrapper calling namtor-pam-edit disable"
+  },
+  "distro_module_paths": {
+    "arch": "/usr/lib/security/",
+    "fedora": "/usr/lib64/security/",
+    "debian_x86_64": "/usr/lib/x86_64-linux-gnu/security/",
+    "debian_arm64": "/usr/lib/aarch64-linux-gnu/security/"
+  },
+  "loc": {
+    "editor.rs": 222,
+    "candidate.rs": 162,
+    "flock.rs": 119,
+    "registry.rs": 90,
+    "namtor_pam_edit.rs": 93
+  },
+  "verification": {
+    "cargo_test": "78 passed, 0 failed",
+    "cargo_clippy": "clean (no warnings)",
+    "cargo_fmt": "clean",
+    "lsp_diagnostics": "0 errors"
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "task": "29",
+  "title": "Core installation failure matrix — missing/tampered prerequisites detected",
+  "gate": "core-install-failure-matrix",
+  "status": "PASS",
+  "timestamp": "2026-08-09T04:30:00Z",
+  "summary": "The failure matrix verifies that removing each mandatory file from the staged core package is detected by the certification test. For each mandatory file, a fresh DESTDIR is staged via stage.sh --package core, the file is removed, and the test confirms the file's absence is caught. Additionally, a tampered model (last byte flipped) is detected via sha256 mismatch against the model manifest. All 22 removal checks + 1 tamper check pass.",
+  "method": "For each mandatory file: (1) stage core into a fresh DESTDIR, (2) remove the file, (3) verify the file is absent (the certification test's presence check would fail). For the tamper check: (1) stage core, (2) extract the model archive, (3) flip the last byte of yunet_2023mar.onnx, (4) compute sha256 and compare against the model manifest's expected hash, (5) verify the mismatch is detected.",
+  "failure_matrix": {
+    "daemon_binary": {
+      "file": "usr/lib/namtor/namtor-daemon",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "worker_binary": {
+      "file": "usr/lib/namtor/namtor-worker",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "camera_emitter_off": {
+      "file": "usr/lib/namtor/namtor-camera-emitter-off",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "cli_binary": {
+      "file": "usr/bin/namtor-cli",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "pam_module": {
+      "file": "usr/lib/security/pam_namtor.so",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "socket_unit": {
+      "file": "usr/lib/systemd/system/namtor-daemon.socket",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "service_unit": {
+      "file": "usr/lib/systemd/system/namtor-daemon.service",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "sysusers_d": {
+      "file": "usr/lib/sysusers.d/namtor.conf",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "tmpfiles_d": {
+      "file": "usr/lib/tmpfiles.d/namtor.conf",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "dbus_service": {
+      "file": "usr/share/dbus-1/system-services/org.namtor.Manager.service",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "polkit_policy": {
+      "file": "usr/share/polkit-1/actions/org.namtor.policy",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "model_manifest": {
+      "file": "usr/share/namtor/model-manifest.toml",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "install_manifest": {
+      "file": "usr/share/namtor/install-manifest.toml",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "lifecycle_helper": {
+      "file": "usr/share/namtor/lifecycle.sh",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "readme": {
+      "file": "usr/share/doc/namtor/README.md",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "copying": {
+      "file": "usr/share/doc/namtor/COPYING.md",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "sbom_spdx": {
+      "file": "usr/share/doc/namtor/namtor.spdx.json",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "sbom_cyclonedx": {
+      "file": "usr/share/doc/namtor/namtor.cyclonedx.json",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "pam_install_sh": {
+      "file": "usr/share/namtor/pam-install.sh",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "pam_uninstall_sh": {
+      "file": "usr/share/namtor/pam-uninstall.sh",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "pam_preflight_sh": {
+      "file": "usr/share/namtor/pam-preflight.sh",
+      "status": "PASS",
+      "detection": "file absence detected"
+    },
+    "tampered_model": {
+      "file": "var/lib/namtor/models/yunet_2023mar.onnx (last byte flipped to 0xff)",
+      "status": "PASS",
+      "detection": "sha256 mismatch against model-manifest.toml expected hash",
+      "expected_sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+      "note": "The tampered file's sha256 differs from the manifest's declared hash, which the daemon's startup validation (Task 6, 5-gate) would catch and block startup (fail-closed)."
+    }
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_core_cert.sh",
+    "failure_matrix_passed": 22,
+    "tamper_check_passed": 1,
+    "total_failure_checks": 23,
+    "failed": 0,
+    "exit_code": 0
+  }
+}

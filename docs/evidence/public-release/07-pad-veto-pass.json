@@ -1,0 +1,109 @@
+{
+  "task": "07-pad-veto-pass",
+  "description": "Learned PAD model integrated as fail-closed veto in the authentication path. Both analytic AND learned PAD must pass for authentication to proceed.",
+  "date": "2026-08-08",
+  "gates": [
+    {
+      "gate": "both_pad_gates_pass_proceeds",
+      "description": "Analytic live + learned live → FinalVerdict::Live → authentication proceeds",
+      "test": "verify::tests::both_pad_gates_pass_proceeds",
+      "status": "pass"
+    },
+    {
+      "gate": "analytic_first_veto_short_circuits",
+      "description": "Analytic spoof short-circuits: learned model is not consulted, outcome is NoMatch with stripped reason",
+      "test": "verify::tests::analytic_first_veto_short_circuits_learned",
+      "status": "pass"
+    },
+    {
+      "gate": "learned_first_veto_after_analytic_pass",
+      "description": "Analytic passes + learned spoof → NoMatch. Learned PAD is a veto, not a weighted term.",
+      "test": "verify::tests::learned_first_veto_after_analytic_pass",
+      "status": "pass"
+    },
+    {
+      "gate": "evaluate_both_live",
+      "description": "evaluate() returns Live when both analytic and learned pass (unit test in learned_pad.rs)",
+      "test": "learned_pad::tests::test_both_live_proceeds",
+      "status": "pass"
+    },
+    {
+      "gate": "evaluate_analytic_spoof_ignored_learned",
+      "description": "evaluate() returns AnalyticSpoof regardless of learned result (analytic-first veto order)",
+      "test": "learned_pad::tests::test_analytic_spoof_vetoes_regardless_of_learned",
+      "status": "pass"
+    },
+    {
+      "gate": "evaluate_learned_spoof_after_analytic_live",
+      "description": "evaluate() returns LearnedSpoof when analytic passes but learned returns spoof (learned-first veto order)",
+      "test": "learned_pad::tests::test_learned_spoof_after_analytic_live_refuses",
+      "status": "pass"
+    },
+    {
+      "gate": "learned_disabled_bypass",
+      "description": "VetoPolicy::learned_disabled bypasses the learned model; analytic alone decides (rollout bypass, not silent fallback)",
+      "test": "verify::tests::learned_disabled_bypasses_learned_veto",
+      "status": "pass"
+    },
+    {
+      "gate": "learned_disabled_still_respects_analytic",
+      "description": "learned_disabled does not weaken the analytic veto",
+      "test": "learned_pad::tests::test_learned_disabled_still_respects_analytic_veto",
+      "status": "pass"
+    },
+    {
+      "gate": "matcher_threshold_unchanged",
+      "description": "DEFAULT_MATCH_THRESHOLD is still 0.45; PAD integration does not alter the face matching threshold",
+      "test": "verify::tests::matcher_threshold_unchanged_by_pad_integration",
+      "status": "pass"
+    },
+    {
+      "gate": "cpu_only_provider",
+      "description": "OnnxCpuLearnedPad uses CPU-only ONNX Runtime (no GPU EP, spec §5.3). Session builder uses with_intra_threads(1) and no GPU EP registration.",
+      "test": "learned_pad::tests::onnx_tests::onnx_backend_uses_cpu_only_provider",
+      "status": "pass"
+    },
+    {
+      "gate": "onnx_backend_loads_model",
+      "description": "OnnxCpuLearnedPad loads a valid ONNX model file and constructs a CPU session",
+      "test": "learned_pad::tests::onnx_tests::onnx_empty_differential_is_shape_error",
+      "status": "pass"
+    },
+    {
+      "gate": "resize_nearest_upscale",
+      "description": "Nearest-neighbor resize correctly upscales 2×2 to 4×4",
+      "test": "learned_pad::tests::onnx_tests::resize_nearest_upscales_2x2_to_4x4",
+      "status": "pass"
+    },
+    {
+      "gate": "resize_nearest_downscale",
+      "description": "Nearest-neighbor resize correctly downscales 8×8 to 2×2",
+      "test": "learned_pad::tests::onnx_tests::resize_nearest_downscales_8x8_to_2x2",
+      "status": "pass"
+    },
+    {
+      "gate": "softmax_dominant_live",
+      "description": "Softmax returns ~1.0 live probability when live logit dominates",
+      "test": "learned_pad::tests::onnx_tests::softmax_live_probability_dominant_live",
+      "status": "pass"
+    },
+    {
+      "gate": "softmax_dominant_spoof",
+      "description": "Softmax returns ~0.0 live probability when spoof logit dominates",
+      "test": "learned_pad::tests::onnx_tests::softmax_live_probability_dominant_spoof",
+      "status": "pass"
+    },
+    {
+      "gate": "softmax_equal_logits",
+      "description": "Softmax returns 0.5 for equal logits",
+      "test": "learned_pad::tests::onnx_tests::softmax_live_probability_equal_logits",
+      "status": "pass"
+    }
+  ],
+  "summary": {
+    "total_gates": 16,
+    "passed": 16,
+    "failed": 0,
+    "status": "PASS"
+  }
+}
