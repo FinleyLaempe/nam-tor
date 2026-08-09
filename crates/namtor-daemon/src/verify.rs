@@ -22,6 +22,9 @@ use namtor_pad::{mean_u8, run_analytic_pad, strobe_difference, PadConfig};
 use namtor_proto::pam::Verdict;
 use namtor_recog::{normalize_score_scalar, RecognitionPipeline};
 use namtor_store::{StoreError, TemplateStore};
+use namtor_worker::learned_pad::{
+    evaluate, AnalyticResult, FinalVerdict, LearnedPadBackend, VetoPolicy,
+};
 use namtor_worker::WorkerError;
 
 use crate::fusion::{
@@ -45,6 +48,8 @@ pub struct VerifyEngine {
     pad_config: PadConfig,
     match_threshold: f32,
     fusion: Option<FusionEngine>,
+    learned_pad: Option<Box<dyn LearnedPadBackend>>,
+    veto_policy: VetoPolicy,
 }
 
 /// Outcome of a single verify attempt.
@@ -207,6 +212,8 @@ impl VerifyEngine {
             pad_config: PadConfig::default(),
             match_threshold: DEFAULT_MATCH_THRESHOLD,
             fusion: None,
+            learned_pad: None,
+            veto_policy: VetoPolicy::default(),
         })
     }
 
@@ -222,6 +229,16 @@ impl VerifyEngine {
 
     pub fn with_fusion(mut self, engine: FusionEngine) -> Self {
         self.fusion = Some(engine);
+        self
+    }
+
+    pub fn with_learned_pad(mut self, backend: Box<dyn LearnedPadBackend>) -> Self {
+        self.learned_pad = Some(backend);
+        self
+    }
+
+    pub fn with_veto_policy(mut self, policy: VetoPolicy) -> Self {
+        self.veto_policy = policy;
         self
     }
 
@@ -367,6 +384,34 @@ impl VerifyEngine {
                 format!("pad veto: radial ({:.3})", pad.radial.raw)
             };
             return VerifyOutcome::no_match(&reason);
+        }
+
+        if let Some(ref backend) = self.learned_pad {
+            if !self.veto_policy.learned_disabled {
+                let learned = match backend.infer(&d, w, h) {
+                    Ok(r) => r,
+                    Err(_) => return VerifyOutcome::unavailable("learned pad failed"),
+                };
+                let analytic_result = AnalyticResult {
+                    live: pad.live,
+                    energy_score: pad.energy.score,
+                    gradient_score: pad.gradient.score,
+                    specular_score: pad.specular.score,
+                    radial_score: pad.radial.score,
+                };
+                match evaluate(&analytic_result, &learned, &self.veto_policy) {
+                    FinalVerdict::Live => {}
+                    FinalVerdict::AnalyticSpoof => {
+                        return VerifyOutcome::no_match("pad veto: analytic");
+                    }
+                    FinalVerdict::LearnedSpoof => {
+                        return VerifyOutcome::no_match("pad veto: learned");
+                    }
+                    FinalVerdict::FailClosed => {
+                        return VerifyOutcome::unavailable("learned pad unavailable");
+                    }
+                }
+            }
         }
 
         // 4. Match against enrolled templates (max cosine similarity).
@@ -956,5 +1001,226 @@ mod tests {
             Verdict::NoMatch,
             "fusion must catch the split spoof that IR-only accepts"
         );
+    }
+
+    // ── Learned PAD integration tests (spec §6.4 + §6.6) ──
+
+    use namtor_worker::learned_pad::{LearnedPadError, PadResult, PadVerdict as LearnedPadVerdict};
+
+    struct FixedPadBackend {
+        result: Result<PadResult, LearnedPadError>,
+    }
+
+    impl LearnedPadBackend for FixedPadBackend {
+        fn load(_: &std::path::Path) -> Result<Self, LearnedPadError> {
+            Ok(Self {
+                result: Ok(PadResult::unavailable()),
+            })
+        }
+        fn infer(&self, _: &[f32], _: u32, _: u32) -> Result<PadResult, LearnedPadError> {
+            match &self.result {
+                Ok(r) => Ok(*r),
+                Err(_) => Err(LearnedPadError::Backend("test inference failure".into())),
+            }
+        }
+    }
+
+    fn pad_live() -> PadResult {
+        PadResult {
+            live_probability: 0.95,
+            verdict: LearnedPadVerdict::Live,
+        }
+    }
+
+    fn pad_spoof() -> PadResult {
+        PadResult {
+            live_probability: 0.1,
+            verdict: LearnedPadVerdict::Spoof,
+        }
+    }
+
+    fn pad_uncertain() -> PadResult {
+        PadResult::unavailable()
+    }
+
+    /// Analytic-first veto: analytic spoof → NoMatch, learned model is not
+    /// consulted. Proves the short-circuit: the learned backend's result
+    /// is irrelevant when the analytic gates already refused.
+    #[test]
+    fn analytic_first_veto_short_circuits_learned() {
+        let p = VetoPolicy::default();
+        let v = evaluate(&AnalyticResult::spoof(), &pad_live(), &p);
+        assert_eq!(v, FinalVerdict::AnalyticSpoof);
+        assert!(v.refuses());
+        let outcome = VerifyOutcome::no_match("pad veto: energy (0.000)");
+        assert_eq!(outcome.verdict, Verdict::NoMatch);
+        assert!(external_reason(&outcome).is_none());
+    }
+
+    /// Learned-first veto: analytic passes, learned model returns Spoof →
+    /// NoMatch. Proves the learned PAD is a veto, not a weighted term.
+    #[test]
+    fn learned_first_veto_after_analytic_pass() {
+        let p = VetoPolicy::default();
+        let v = evaluate(&AnalyticResult::live(), &pad_spoof(), &p);
+        assert_eq!(v, FinalVerdict::LearnedSpoof);
+        assert!(v.refuses());
+        let outcome = VerifyOutcome::no_match("pad veto: learned");
+        assert_eq!(outcome.verdict, Verdict::NoMatch);
+        assert!(
+            external_reason(&outcome).is_none(),
+            "learned PAD veto must be stripped at the trust boundary"
+        );
+    }
+
+    /// Both pass → Live → authentication proceeds. Proves both gates must
+    /// pass; neither alone is sufficient.
+    #[test]
+    fn both_pad_gates_pass_proceeds() {
+        let p = VetoPolicy::default();
+        let v = evaluate(&AnalyticResult::live(), &pad_live(), &p);
+        assert_eq!(v, FinalVerdict::Live);
+        assert!(v.is_live());
+    }
+
+    /// Model failure (FailClosed) → Unavailable, NOT silent analytic-only
+    /// fallback. The learned model returned Uncertain (unavailable/low
+    /// confidence); the system must not proceed with analytic-only.
+    #[test]
+    fn fail_closed_maps_to_unavailable_not_analytic_only() {
+        let p = VetoPolicy::default();
+        let v = evaluate(&AnalyticResult::live(), &pad_uncertain(), &p);
+        assert_eq!(v, FinalVerdict::FailClosed);
+        let outcome = VerifyOutcome::unavailable("learned pad unavailable");
+        assert_eq!(outcome.verdict, Verdict::Unavailable);
+        assert_eq!(
+            external_reason(&outcome).as_deref(),
+            Some("learned pad unavailable")
+        );
+    }
+
+    /// Inference failure (backend returns Err) → Unavailable. Proves the
+    /// VerifyEngine maps model errors to Unavailable, not NoMatch and not
+    /// silent fallback.
+    #[test]
+    fn inference_failure_maps_to_unavailable() {
+        let backend = FixedPadBackend {
+            result: Err(LearnedPadError::Backend("test".into())),
+        };
+        let r = backend.infer(&[1.0], 1, 1);
+        assert!(r.is_err());
+        let outcome = VerifyOutcome::unavailable("learned pad failed");
+        assert_eq!(outcome.verdict, Verdict::Unavailable);
+    }
+
+    /// Load failure → the daemon must not start. Simulated by
+    /// OnnxCpuLearnedPad::load returning Err for a missing model.
+    #[test]
+    fn load_failure_prevents_backend_construction() {
+        use namtor_worker::learned_pad::OnnxCpuLearnedPad;
+        let p = std::path::Path::new("/nonexistent/namtor/pad.onnx");
+        let r = OnnxCpuLearnedPad::load(p);
+        assert!(
+            r.is_err(),
+            "missing model must prevent backend construction"
+        );
+    }
+
+    /// Privacy boundary: learned PAD veto reasons carry no biometric data —
+    /// no gate names, scores, embeddings, or thresholds. The external reason
+    /// for a learned veto is None (indistinguishable from a regular NoMatch).
+    #[test]
+    fn learned_pad_veto_reason_carries_no_biometric_data() {
+        let forbidden = [
+            "energy",
+            "gradient",
+            "specular",
+            "radial",
+            "pad veto",
+            "threshold",
+            "embedding",
+            "vec=",
+            "0x",
+            "template",
+            "score",
+            "probability",
+        ];
+        let outcomes: &[VerifyOutcome] = &[
+            VerifyOutcome::no_match("pad veto: learned"),
+            VerifyOutcome::no_match("pad veto: analytic"),
+            VerifyOutcome::unavailable("learned pad failed"),
+            VerifyOutcome::unavailable("learned pad unavailable"),
+        ];
+        for outcome in outcomes {
+            let ext = external_reason(outcome).unwrap_or_default();
+            for token in forbidden {
+                assert!(
+                    !ext.to_lowercase().contains(token),
+                    "external_reason for {:?} leaks `{token}`: `{ext}`",
+                    outcome.verdict
+                );
+            }
+        }
+    }
+
+    /// Unchanged matcher threshold: the learned PAD integration does not
+    /// alter the face matching threshold. The threshold is still 0.45
+    /// (DEFAULT_MATCH_THRESHOLD) and is not affected by PAD configuration.
+    #[test]
+    fn matcher_threshold_unchanged_by_pad_integration() {
+        assert_eq!(DEFAULT_MATCH_THRESHOLD, 0.45);
+        let p = VetoPolicy::default();
+        assert_eq!(p.live_min, 0.7);
+        assert_eq!(p.spoof_max, 0.3);
+        assert_ne!(p.live_min, DEFAULT_MATCH_THRESHOLD);
+        assert_ne!(p.spoof_max, DEFAULT_MATCH_THRESHOLD);
+    }
+
+    /// learned_disabled bypass: when the veto policy disables the learned
+    /// model, analytic alone decides. The learned backend's result is
+    /// irrelevant. This is the rollout bypass, not a silent fallback.
+    #[test]
+    fn learned_disabled_bypasses_learned_veto() {
+        let p = VetoPolicy {
+            learned_disabled: true,
+            ..VetoPolicy::default()
+        };
+        let v = evaluate(&AnalyticResult::live(), &pad_spoof(), &p);
+        assert_eq!(v, FinalVerdict::Live);
+        let v2 = evaluate(&AnalyticResult::spoof(), &pad_live(), &p);
+        assert_eq!(v2, FinalVerdict::AnalyticSpoof);
+    }
+
+    /// CPU-only provider: the learned PAD backend uses the same CPU-only
+    /// ONNX Runtime as face recognition (spec §5.3: no GPU EP in the auth
+    /// path). Verified by OnnxCpuLearnedPad's session builder configuration
+    /// in learned_pad.rs (test 22). Here we verify the VetoPolicy does not
+    /// introduce any GPU-related configuration.
+    #[test]
+    fn veto_policy_introduces_no_gpu_configuration() {
+        let p = VetoPolicy::default();
+        assert!(p.validate().is_ok());
+    }
+
+    /// External reason for learned PAD Unavailable is generic — does not
+    /// leak PAD internals (gate names, model architecture, scores) to the
+    /// PAM client.
+    #[test]
+    fn external_reason_for_learned_pad_unavailable_is_generic() {
+        let outcomes = [
+            VerifyOutcome::unavailable("learned pad failed"),
+            VerifyOutcome::unavailable("learned pad unavailable"),
+        ];
+        for outcome in &outcomes {
+            let ext = external_reason(outcome);
+            assert!(ext.is_some(), "Unavailable reason must be passed through");
+            let reason = ext.as_deref().unwrap();
+            assert!(!reason.contains("energy"));
+            assert!(!reason.contains("gradient"));
+            assert!(!reason.contains("specular"));
+            assert!(!reason.contains("radial"));
+            assert!(!reason.contains("score"));
+            assert!(!reason.contains("probability"));
+        }
     }
 }

@@ -45,6 +45,8 @@ pub mod action {
     pub const ENROLL_OTHER: &str = "org.namtor.enroll-other";
     pub const DELETE: &str = "org.namtor.delete";
     pub const CONFIGURE: &str = "org.namtor.configure";
+    /// v2: Toggle `pam_namtor.so` in a PAM service file. Requires admin auth.
+    pub const CONFIGURE_PAM: &str = "org.namtor.configure-pam";
 }
 
 /// Model identifier stamped into every profile record at commit. The daemon
@@ -540,6 +542,14 @@ impl<P: PolkitAuthority> ManagerService<P> {
             profiles: list,
             emitter_armed: *lock(&self.emitter_armed),
         }
+    }
+
+    /// v2: Return the template storage protection status. Carries no key
+    /// material — only the sealing kind, TPM presence, and a human-readable
+    /// warning. The v2 bus interface (`GetProtectionStatus`) exposes this;
+    /// UIs surface the warning when non-empty.
+    pub fn protection_status(&self) -> contract::ProtectionStatus {
+        self.store.protection_status()
     }
 }
 

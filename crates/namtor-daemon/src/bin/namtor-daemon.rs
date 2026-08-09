@@ -27,12 +27,17 @@ use namtor_daemon::dbus::{ManagerService, SystemPolkit};
 use namtor_daemon::dispatch::DaemonDispatcher;
 use namtor_daemon::lifecycle::SystemClock;
 use namtor_daemon::manager::bus::ManagerBusService;
+use namtor_daemon::manager::dbus::Manager2Service;
 use namtor_daemon::manager::store::{ProfileStore, TemplateProfileStore};
+use namtor_daemon::models::{
+    hex, resolve_required_specs, ManifestGate, ModelFetcher, ModelManifest, NoFetch,
+};
 use namtor_daemon::startup;
 use namtor_daemon::supervisor::ChildSupervisor;
 use namtor_daemon::verify::VerifyEngine;
 use namtor_layout::{InstallRoot, LayoutPaths};
 use namtor_store::TemplateStore;
+use namtor_worker::learned_pad::LearnedPadBackend;
 use tracing_subscriber::EnvFilter;
 
 #[path = "namtor-daemon/live_capture.rs"]
@@ -112,34 +117,66 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or(layout.backoff_path);
 
-    let yunet_path = models_dir.join("yunet_2023mar.onnx");
-    let sface_path = models_dir.join("sface_2021dec.onnx");
+    let yunet_path: PathBuf;
+    let sface_path: PathBuf;
+    let pad_path: PathBuf;
+    let model_specs = {
+        let model_manifest_path = std::env::var("NAMTOR_MODEL_MANIFEST")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                layout
+                    .manifest_path
+                    .parent()
+                    .map(|p| p.join("model-manifest.toml"))
+                    .unwrap_or_else(|| PathBuf::from("/usr/share/namtor/model-manifest.toml"))
+            });
 
-    if !yunet_path.exists() {
-        return Err(format!("YuNet model not found: {}", yunet_path.display()).into());
-    }
-    if !sface_path.exists() {
-        return Err(format!("SFace model not found: {}", sface_path.display()).into());
-    }
+        let manifest = ModelManifest::parse(&model_manifest_path)?;
+        tracing::info!(path = %model_manifest_path.display(), "model manifest parsed");
 
-    let model_specs = vec![
-        namtor_proto::worker::ModelSpec {
-            id: "yunet_2023mar".into(),
-            quant: namtor_proto::worker::Quant::Fp32,
-            sha256: [0; 32],
-        },
-        namtor_proto::worker::ModelSpec {
-            id: "sface_2021dec".into(),
-            quant: namtor_proto::worker::Quant::Fp32,
-            sha256: [0; 32],
-        },
-    ];
+        let required_ids: [&str; 3] = ["yunet_2023mar", "sface_2021dec", "minifasnet_pad"];
+        let specs = resolve_required_specs(&manifest, &required_ids)?;
+
+        let fetcher = ModelFetcher::new(&models_dir, Box::new(NoFetch));
+        let accepted_by = std::env::var("USER").unwrap_or_else(|_| "namtor".into());
+        let gate = ManifestGate {
+            manifest: &manifest,
+            accepted_by: &accepted_by,
+            allow_restricted: false,
+        };
+
+        let mut validated_paths: Vec<PathBuf> = Vec::new();
+        for spec in &specs {
+            let path = fetcher.validate_against_manifest(&gate, spec)?;
+            tracing::info!(
+                model_id = %spec.id,
+                sha256 = %hex(&spec.sha256),
+                path = %path.display(),
+                "model validated"
+            );
+            validated_paths.push(path);
+        }
+        tracing::info!(count = validated_paths.len(), "all models validated");
+
+        yunet_path = validated_paths[0].clone();
+        sface_path = validated_paths[1].clone();
+        pad_path = validated_paths[2].clone();
+        specs
+    };
+
     let mock_infer = std::env::var("NAMTOR_MOCK_INFER").is_ok();
     tracing::info!(worker = %worker_bin.display(), mock_infer, "spawning worker");
     let supervisor = ChildSupervisor::spawn(&worker_bin, &model_specs, mock_infer, &models_dir)?;
 
     tracing::info!(store = %store_dir.display(), "opening template store");
-    let verify = VerifyEngine::new(&yunet_path, &sface_path, &store_dir, &key_path)?;
+    let learned_pad = namtor_worker::learned_pad::OnnxCpuLearnedPad::load(&pad_path)
+        .map_err(|e| {
+            tracing::error!(error = %e, path = %pad_path.display(), "learned PAD model load failed");
+            e
+        })?;
+    tracing::info!(path = %pad_path.display(), "learned PAD model loaded");
+    let verify = VerifyEngine::new(&yunet_path, &sface_path, &store_dir, &key_path)?
+        .with_learned_pad(Box::new(learned_pad));
 
     let capture_factory = if std::env::var("NAMTOR_NO_CAMERA").is_ok() {
         tracing::info!("camera disabled (NAMTOR_NO_CAMERA)");
@@ -246,9 +283,17 @@ fn start_manager_bus(
     let profile_store: Arc<dyn ProfileStore> = Arc::new(TemplateProfileStore::new(store));
     let svc = Arc::new(ManagerService::new_with_store(
         SystemPolkit::default(),
-        profile_store,
+        profile_store.clone(),
     ));
-    match ManagerBusService::start_system(svc.clone()) {
+    let pamd_root = std::path::PathBuf::from("/etc/pam.d");
+    let registry_root = std::path::PathBuf::from("/var/lib/namtor");
+    let svc2 = Arc::new(Manager2Service::new(
+        SystemPolkit::default(),
+        profile_store,
+        pamd_root,
+        registry_root,
+    ));
+    match ManagerBusService::start_system(svc.clone(), svc2) {
         Ok(bus) => Some((bus, svc)),
         Err(e) => {
             tracing::warn!(error = %e, "manager d-bus service not started (pam path continues)");
