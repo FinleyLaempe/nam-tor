@@ -60,14 +60,23 @@ This is why spec §10.3 sequences analytic PAD first — physics-based gates nee
 
 ## Pretrained weights
 
-Fetched at first run under the upstream licence. Never vendored.
+Acquired out-of-band and bundled into the deterministic, signed model source
+archive (`namtor-models-<version>.tar.gz`, built by
+`packaging/build-model-archive.sh`). Every distro recipe (Arch PKGBUILD,
+Fedora namtor.spec, Debian rules) bundles the archive — no model is fetched
+at install time. The archive is reproducible (fixed epoch, sorted entries,
+`gzip -n`), tamper-evident (MANIFEST.json + sha256 sidecar + per-model hash
+verification against `packaging/model-manifest.toml`), and signed alongside
+the release packages (`packaging/sign-packages.sh`). Never vendored in this
+repository.
 
 | Source | Licence | Note |
 |---|---|---|
+| **YuNet** (OpenCV Zoo) | **MIT** | Primary face detector; permissive, redistributable |
+| **SFace** (OpenCV Zoo) | **Apache-2.0** | Face embedding model; permissive, redistributable |
 | **InsightFace** model zoo (`buffalo_*`) | Code MIT; **several models are non-commercial research use** | Check per model, not per repository |
-| **AdaFace** released weights | Per upstream repository | Primary embedding backbone (spec §6.3) |
-| **YuNet** (OpenCV Zoo) | Permissive | Primary face detector, chosen partly for this |
-| **MiniFASNet / Silent-Face** | Code Apache-2.0; **weights trained on non-permissive data** | Reference only; we train our own on differentials |
+| **AdaFace** released weights | Per upstream repository | Alternative embedding backbone (spec §6.3) |
+| **MiniFASNet / Silent-Face** | Code Apache-2.0; **our PAD weights are self-trained on synthetic differentials** | We train our own — no licence-restricted data derived |
 
 **Licence status of code and of weights differ constantly.** An MIT repository routinely ships weights under a research-only licence. Check both.
 

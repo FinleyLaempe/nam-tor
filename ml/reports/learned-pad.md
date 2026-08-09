@@ -106,3 +106,179 @@ ml/reports/learned-pad.md                       (this file)
 - `crates/namtor-pad/` — analytic PAD calibration (task 21). Not touched.
 - Daemon wiring of the learned backend into `VerifyEngine` — separate integration task.
 - Real-data evaluation and APCER/BPCER reporting — task 22 follow-on after §10.4 collection.
+
+## Task 7 — Integration into the authentication path (2026-08-08)
+
+### What landed
+
+The learned PAD model is now enforced as a fail-closed veto in the daemon's
+authentication path. Both analytic AND learned PAD must pass for
+authentication to proceed.
+
+#### `crates/namtor-worker/src/learned_pad.rs` — `OnnxCpuLearnedPad` backend
+
+- New `OnnxCpuLearnedPad` struct (feature-gated behind `onnx`), implementing
+  `LearnedPadBackend` via the `ort` crate (CPU-only ONNX Runtime, same
+  Execution Provider as `OnnxCpu` for face recognition — no GPU EP, spec
+  §5.3).
+- `infer()` preprocesses the strobe differential `D = On − Off`:
+  1. Nearest-neighbor resize to 80×80 (the model's training input size).
+  2. Clip to `[0, 255]` and normalize to `[0, 1]` (matching the training
+     recipe `np.clip(img, 0, 255).astype(np.float32) / 255.0`).
+  3. Run the ONNX session with shape `[1, 1, 80, 80]` (1-channel, matching
+     the model's `nn.Conv2d(1, 16, ...)` first layer).
+  4. Softmax over the 2-logit output → `live_probability = softmax[0]`
+     (class 0 = live, class 1 = spoof).
+  5. `PadResult::from_probability(p, live_min, spoof_max)` bands the
+     probability into Live / Spoof / Uncertain.
+- `LearnedPadBackend::infer` signature changed from `infer(&self, &[f32])` to
+  `infer(&self, &[f32], w: u32, h: u32)` — the ONNX backend needs spatial
+  dimensions for resizing. The mock backend ignores them.
+- `evaluate()` simplified: the unused generic `_backend: &B` parameter was
+  removed (it was never used; the function is pure). All 6 existing evaluate
+  tests updated.
+- 11 new ONNX backend tests (tests 14–24): load missing model, empty
+  differential, resize upscale/downscale, softmax dominant live/spoof/equal,
+  CPU-only provider, 2 hw-gated real-model tests.
+
+#### `crates/namtor-daemon/src/verify.rs` — two-stage PAD veto
+
+- `VerifyEngine` gained `learned_pad: Option<Box<dyn LearnedPadBackend>>` and
+  `veto_policy: VetoPolicy` fields, with `with_learned_pad()` and
+  `with_veto_policy()` builders.
+- In `verify_pair()`, after the analytic gates pass, the learned PAD backend
+  runs on the same strobe differential `D`:
+  - `backend.infer(&d, w, h)` → `PadResult`
+  - `evaluate(&analytic_result, &learned, &veto_policy)` → `FinalVerdict`
+  - `FinalVerdict::Live` → proceed to face matching
+  - `FinalVerdict::AnalyticSpoof` → `NoMatch("pad veto: analytic")`
+  - `FinalVerdict::LearnedSpoof` → `NoMatch("pad veto: learned")`
+  - `FinalVerdict::FailClosed` → `Unavailable("learned pad unavailable")`
+  - Inference `Err` → `Unavailable("learned pad failed")`
+- Model failure (load or inference) → `Unavailable`, NOT silent
+  analytic-only fallback (spec §6.6).
+- `external_reason()` already strips all `"pad veto: ..."` reasons to `None`
+  for `NoMatch` — the learned veto ("pad veto: learned") is covered by the
+  existing `starts_with("pad veto")` check.
+- 11 new verify tests: both veto orders (analytic-first, learned-first),
+  both pass, FailClosed → Unavailable, inference failure → Unavailable, load
+  failure prevents construction, privacy boundary, unchanged matcher
+  threshold, learned_disabled bypass, CPU-only provider, generic Unavailable
+  reasons.
+
+#### `crates/namtor-daemon/src/bin/namtor-daemon.rs` — startup wiring
+
+- The PAD model path (`validated_paths[2]`, already validated by Task 6's
+  5-gate pre-spawn validation) is loaded into `OnnxCpuLearnedPad::load()`
+  at startup. If the load fails, the daemon exits with `FAILURE` — the
+  learned PAD model is mandatory (fail-closed).
+- The `VerifyEngine` is constructed with `.with_learned_pad(Box::new(learned_pad))`.
+
+### Verification
+
+```
+cargo test -p namtor-worker --lib          → 73 passed, 3 ignored (hw-gated)
+cargo test -p namtor-daemon --lib verify:: → 35 passed, 0 failed
+cargo clippy -p namtor-worker -p namtor-daemon -- -D warnings → clean
+cargo build -p namtor-daemon --bin namtor-daemon → compiles
+```
+
+### Evidence
+
+- `docs/evidence/public-release/07-pad-veto-pass.json` — 16 gates, all pass
+- `docs/evidence/public-release/07-pad-veto-failure.json` — 14 gates, all pass
+
+### Key decisions
+
+- **CPU-only, in-process**: `OnnxCpuLearnedPad` loads the model in the
+  daemon process (same as `RecognitionPipeline` for YuNet/SFace), using the
+  `ort` crate's CPU EP. The sandboxed worker process is not involved — the
+  verify engine runs in the daemon. The CPU-only constraint (spec §5.3) is
+  enforced by the session builder: `with_intra_threads(1)` and no GPU EP
+  registration (the CPU EP is the `ort` default).
+- **Trait signature change**: `infer()` now takes `(differential, w, h)`
+  because the ONNX backend needs spatial dimensions for resizing. The mock
+  backend ignores them. This is a backward-incompatible change to the
+  `LearnedPadBackend` trait, but the trait is internal (no external callers).
+- **`evaluate()` simplified**: the unused `_backend: &B` generic parameter
+  was removed. The function is pure — it only uses the analytic result, the
+  learned `PadResult`, and the `VetoPolicy`. The backend is not consulted
+  during the decision (the caller already ran `infer()` to produce the
+  `PadResult`).
+- **FailClosed → Unavailable, not NoMatch**: when the learned model returns
+  `Uncertain` (low confidence, unavailable), the outcome is
+  `Unavailable("learned pad unavailable")`, not `NoMatch`. This is stronger
+  than a veto — the system cannot authenticate because the liveness check
+  is non-functional, not because the user was rejected. This matches the
+  task requirement: "Model failure → Unavailable, NOT silent analytic-only
+  fallback."
+- **Privacy boundary**: learned PAD veto reasons ("pad veto: learned",
+  "pad veto: analytic") are stripped to `None` by the existing
+  `external_reason()` function, making them indistinguishable from a
+  reason-less NoMatch. Unavailable reasons ("learned pad failed", "learned
+  pad unavailable") are passed through but contain no gate names, scores, or
+  biometric data — they are as generic as the existing "pad failed" and
+  "inference failed" reasons.
+
+## Model Card — MiniFASNet PAD (`minifasnet_pad`)
+
+### Overview
+
+| Field | Value |
+|---|---|
+| Model ID | `minifasnet_pad` |
+| Version | 0.1.0 |
+| Architecture | MiniFASNet (depthwise-separable CNN, GAP, linear classifier) |
+| Parameters | ~80,000 (49 KB ONNX) |
+| Input shape | `[1, 1, 80, 80]` (single-channel strobe differential `D = On − Off`) |
+| Output shape | `[1, 2]` (class 0 = live, class 1 = spoof) |
+| Licence | Apache-2.0 (self-trained; code reference: Silent-Face, Apache-2.0) |
+| ONNX sha256 | `3f86c8e4bb1138098ed2f8dc1682c6e1e1d6c5fffcf65dd6955c0cd60579a155` |
+
+### Training Recipe
+
+- **Script**: `ml/recipes/train_pad.py`
+- **Framework**: PyTorch 2.13.0+cu126, ONNX export opset 14
+- **Hyperparameters**: 50 epochs, batch size 256, learning rate 1e-3, seed 42
+- **Optimizer**: Adam
+- **Loss**: Cross-entropy
+- **Best-model selection**: highest validation accuracy (model state saved at best epoch)
+- **Data augmentation**: per-subject gain/offset perturbation (device-axis modelling)
+- **Subject-disjoint split**: 125 train / 15 val / 15 test subjects (no subject appears in more than one split)
+- **Synthetic-only flag**: `--synthetic-only` (default True); `--allow-real-data` is currently refused regardless
+
+### Dataset Description
+
+The model is trained **entirely on physics-based synthetic strobe-differential
+data** — no real biometric data, no licence-restricted dataset. The synthetic
+data encodes the signals described in the Nam-tor design spec §6.4:
+
+- **Live faces**: 1/r² inverse-square falloff, specular hotspot from 850 nm IR
+  emitter, subsurface scattering simulation
+- **Screen replay**: near-zero differential `D` (panels emit almost nothing at 850 nm)
+- **Print attacks**: weak/flat differential
+- **Cutout attacks**: uniform differential
+
+Each synthetic subject's samples are drawn from a deterministic RNG stream
+keyed by `(subject_id, class)`, ensuring reproducibility.
+
+### Performance Metrics
+
+- **Validation accuracy**: 100% (on synthetic validation split)
+- **Held-out test accuracy**: 100% (on subject-disjoint synthetic test split)
+- **APCER / BPCER on real attacks**: **UNMEASURED** — the model is trained on
+  synthetic data only. The analytic PAD gates (§6.4) carry the liveness load
+  until consent-gated real data collection (§10.4 `namtor-collect`) provides
+  real attack samples for evaluation.
+
+### Limitations
+
+- **Synthetic-only training**: the 100% accuracy reflects the synthetic data
+  distribution, not real-world attack diversity. Do not interpret this as a
+  production readiness claim.
+- **Fail-closed**: missing model, wrong shape, or uncertain inference →
+  `Unavailable` (authentication refused, never silent fallback).
+- **Veto, not weighted term**: the learned PAD is a hard veto. Both analytic
+  AND learned PAD must pass for authentication to proceed.
+- **No GUI threshold exposure**: `VetoPolicy` thresholds are config-only
+  (spec hard rule).

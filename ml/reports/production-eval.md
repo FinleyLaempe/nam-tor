@@ -14,7 +14,7 @@ Reference: `docs/superpowers/specs/2026-08-04-nam-tor-design.md` §12.
 | Field | Value |
 |---|---|
 | Commit at protocol definition | `2acd9b4e96a2697015dd619ba3fad5840aa42780` |
-| Model hashes | YuNet 2023mar (232 KB, BSD-3), SFace 2021dec (37 MB, BSD-3), MiniFASNet PAD (49 KB, self-trained). Full SHA-256 recorded at run time in `EvalConfig.model_hashes`. |
+| Model hashes | YuNet 2023mar (232 KB, MIT), SFace 2021dec (37 MB, Apache-2.0), MiniFASNet PAD (49 KB, self-trained). Full SHA-256 recorded at run time in `EvalConfig.model_hashes`. |
 | Hardware hash | Computed at run time from sysfs USB descriptors; recorded in `EvalConfig.hardware_hash`. Reference device: ASUS ROG Flow X16 GV601VI, Sonix `3277:0018`. |
 
 ## Protocol (enforced by `validate_protocol`)
