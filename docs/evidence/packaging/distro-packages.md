@@ -112,7 +112,6 @@ build/install rules.
 |---|---|---|
 | Daemon binary | `/usr/lib/namtor/namtor-daemon` | 0755 |
 | Worker binary | `/usr/lib/namtor/namtor-worker` | 0755 |
-| Setuid spawn helper | `/usr/lib/namtor/namtor-worker-spawn` | 4755 |
 | Emitter-off helper | `/usr/lib/namtor/namtor-camera-emitter-off` | 0755 |
 | CLI | `/usr/bin/namtor-cli` | 0755 |
 | GNOME enroll wizard | `/usr/bin/namtor-enroll-wizard` | 0755 |
@@ -210,8 +209,8 @@ $ cargo build --workspace --release
 Finished `release` profile [optimized] target(s) in 1m 17s
 ```
 
-All 8 release artifacts produced: namtor-daemon, namtor-worker,
-namtor-worker-spawn, namtor-camera-emitter-off, namtor-cli,
+All 7 release artifacts produced: namtor-daemon, namtor-worker,
+namtor-camera-emitter-off, namtor-cli,
 namtor-enroll-wizard, libpam_namtor.so (libnamtor_pam.so),
 libnamtor_kde.so.
 

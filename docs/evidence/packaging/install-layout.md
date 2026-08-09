@@ -122,7 +122,7 @@ the Qt6 QML import dir).
 | `DEFAULT_SOCKET = "/run/namtor/auth.sock"` | `namtor-pam/src/client.rs` | PAM module must stay < 500 KB, no TOML/serde deps. Cross-checked by test. |
 | `/usr/share/namtor/quirks/devices` | `namtor-camera/src/inventory.rs` `Default` impl | Low-level crate; `Default` is a convenience, callers pass explicit dirs. Matches layout's `quirks_dirs[0]`. |
 | `/usr/share/namtor/quirks/devices/3277-0018.toml` | `namtor-camera-emitter-off.rs` | Last-resort fallback for the reference device; env var `NAMTOR_QUIRKS` overrides. |
-| `/usr/lib/namtor/namtor-worker` | `namtor-worker-spawn.rs` test | Test fixture, not production code. Production takes `--worker <path>` as a CLI arg. |
+| `/usr/lib/namtor/namtor-worker` | `namtor-daemon/src/supervisor.rs` `ChildSupervisor::spawn` | Production worker binary spawned directly by the daemon. |
 | Fallback defaults in `namtor-layout` | `install_layout.rs` `parse_dests` | Single location; used only when the manifest is unreadable. |
 
 ## Tests
