@@ -2,7 +2,7 @@
 //! KCM bridge: the Rust backend a thin C++ `KCModule` shim exposes to QML.
 //!
 //! Every operation routes through the [`Manager`] D-Bus proxy
-//! (`org.namtor.Manager` on the session bus). The bridge holds no template
+//! (`org.namtor.Manager` on the system bus). The bridge holds no template
 //! store handle, no socket, and no biometric state — it is fully unprivileged
 //! and fail-closed: a D-Bus error becomes [`KcmError::DaemonUnavailable`] or
 //! [`KcmError::Call`], never a silent fallback.
@@ -25,7 +25,7 @@ pub const MANAGER_OBJECT_PATH: &str = "/org/namtor/Manager";
 
 /// Connection to the `org.namtor.Manager` service.
 ///
-/// Constructed for production with [`KcmBridge::connect`] (session bus), or
+/// Constructed for production with [`KcmBridge::connect`] (system bus), or
 /// for tests with [`KcmBridge::new`] against an injected connection (e.g. a
 /// p2p socket pair driving a fake service, see [`crate::fake`]).
 pub struct KcmBridge {
@@ -33,10 +33,10 @@ pub struct KcmBridge {
 }
 
 impl KcmBridge {
-    /// Production constructor: connect to the session bus and bind a proxy to
+    /// Production constructor: connect to the system bus and bind a proxy to
     /// `org.namtor.Manager` at the canonical object path.
     pub async fn connect() -> Result<Self, KcmError> {
-        let conn = Connection::session().await.map_err(KcmError::from)?;
+        let conn = Connection::system().await.map_err(KcmError::from)?;
         Self::new(&conn).await
     }
 
