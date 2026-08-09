@@ -116,9 +116,9 @@ gates and is recorded as `WITHHELD: <reason>` rather than fake-success.
 
 | Input | Blocks | Status |
 |---|---|---|
-| Root: install systemd units, `namtor` user, `namtor-auth` group, setuid `namtor-worker-spawn` | Live daemon run, G1.1/G1.5 HIL | `WITHHELD: needs root install` |
+| Root: install systemd units, `namtor` user, `namtor-auth` group | Live daemon run, G1.1/G1.5 HIL | `WITHHELD: needs root install` |
 | Python onnxruntime binding compatible with system Python | R4 INT8-vs-FP32, task 16 cohort tooling | `WITHHELD: python3 -c "import onnxruntime" fails (Python 3.14 incompat)` |
-| Model selection + upstream licence acceptance (`NAMTOR_ACCEPT_LICENCE=1`) | R4, production inference | `WITHHELD: licences not accepted` |
+| Model selection + upstream licence acceptance for restricted models | R4, production inference | `WITHHELD: no restricted model bundled; redistributable models admit without acceptance record` |
 | R5 cohort dataset (licence-verified) | G3, z-norm calibration, task 16 | `WITHHELD: no dataset selected` |
 | Consented human subjects + attack props for PAD calibration | G4, tasks 21-22 | `WITHHELD: no collection campaign` |
 | Second TPM-equipped machine | G5.5 cross-hardware unseal | `WITHHELD: single TPM machine available` |
@@ -172,3 +172,4 @@ inputs (signing keys, hardware access, consented data, S3 cycles, second
 TPM) remain WITHHELD and block the corresponding production gates.
 
 For the current RC gate snapshot, see `docs/evidence/rc-g2-g5.md`.
+

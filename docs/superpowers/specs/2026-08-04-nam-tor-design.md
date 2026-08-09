@@ -165,7 +165,7 @@ most-exposed code must not reach the most-valuable data.
                   │ pipe: frames in → vectors out
                   ▼
  ┌────────────────────────────────────────────────────┐
- │ namtor-worker    user: nobody, seccomp + landlock  │
+ │ namtor-worker    user: namtor, seccomp + landlock  │
  │  no filesystem, no network, no IPC but the pipe    │
  │  does: image decode + ONNX inference, nothing else │
  └────────────────────────────────────────────────────┘
@@ -756,7 +756,7 @@ What it would cost:
 | Cost | Detail |
 |---|---|
 | **Contradicts "just works"** | An out-of-tree module means DKMS, rebuilds on every kernel update, and either disabling Secure Boot or signing the module. That is a worse setup experience than the manual configuration we are eliminating. |
-| **Architecturally backwards** | This project's central security argument is privilege separation — inference confined to a sandboxed `nobody` process. Adding ring-0 code to an authentication system inverts that. |
+| **Architecturally backwards** | This project's central security argument is privilege separation — inference confined to a sandboxed process under seccomp and landlock. Adding ring-0 code to an authentication system inverts that. |
 | **Unmaintainable at this scale** | Out-of-tree modules track a moving internal ABI. For a solo maintainer with no budget it is the highest-maintenance artifact available. |
 | **Undistributable** | No distribution will package an out-of-tree kernel module for a face-authentication tool. |
 
