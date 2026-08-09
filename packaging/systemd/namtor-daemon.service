@@ -20,9 +20,9 @@ TimeoutStopSec=2
 # --- Privilege reduction ---------------------------------------------------
 # The daemon is not root. It has no capabilities (bounding set empty, no
 # ambient capabilities). NoNewPrivileges prevents any child from gaining
-# privileges via setuid binaries — note this means namtor-worker-spawn
-# (setuid root) cannot be execed from within this unit; the worker is
-# spawned directly and self-applies seccomp + landlock (see evidence doc).
+# privileges via setuid binaries. The worker is spawned directly as a
+# child of the daemon (same user `namtor`) and self-applies seccomp +
+# landlock — the sandbox is the privilege boundary, not a UID drop.
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=
