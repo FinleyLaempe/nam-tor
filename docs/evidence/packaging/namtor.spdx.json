@@ -1,13 +1,13 @@
 {
   "SPDXID": "SPDXRef-DOCUMENT",
   "creationInfo": {
-    "created": "2026-08-08T11:55:50Z",
+    "created": "2026-01-01T00:00:00Z",
     "creators": [
       "Tool: Nam-tor generate-sbom.py (1.0)"
     ]
   },
   "dataLicense": "CC0-1.0",
-  "documentNamespace": "https://namtor.dev/spdx/66999eb0-126d-4f75-b75f-2b8c2fc5fb89",
+  "documentNamespace": "https://namtor.dev/spdx/94f32162-4b93-58d1-b7a7-e97b5730d8c2",
   "name": "namtor",
   "packages": [
     {
@@ -1734,6 +1734,16 @@
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-pam",
+      "versionInfo": "0.1.0"
+    },
+    {
+      "SPDXID": "SPDXRef-namtor-pam-config-0-1-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0-only",
+      "name": "namtor-pam-config",
       "versionInfo": "0.1.0"
     },
     {
@@ -3731,6 +3741,126 @@
       "name": "zvariant_utils",
       "packageVerificationCode": "90cb9383f9b45290407a1258b202d3f8f01db719eb60b4e4055c6375af4fc7c7",
       "versionInfo": "3.5.0"
+    },
+    {
+      "SPDXID": "SPDXRef-binary-libnamtorqml-so-0-1-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0-only",
+      "name": "libnamtorqml.so",
+      "packageVerificationCode": "06197f56f7433126b7d5256bfeccc6cdcafd77477d4d9c8bd8aae7102c2a1580",
+      "sourceInfo": "Built from Nam-tor source (cargo build --release)",
+      "versionInfo": "0.1.0"
+    },
+    {
+      "SPDXID": "SPDXRef-binary-namtor-camera-emitter-off-0-1-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0-only",
+      "name": "namtor-camera-emitter-off",
+      "packageVerificationCode": "909a6d590d19be9dff78599c997adc5bb51ccc7ebd01c985395d75f501e37293",
+      "sourceInfo": "Built from Nam-tor source (cargo build --release)",
+      "versionInfo": "0.1.0"
+    },
+    {
+      "SPDXID": "SPDXRef-binary-namtor-cli-0-1-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0-only",
+      "name": "namtor-cli",
+      "packageVerificationCode": "638d4f71315002cf31bafef17de4373a93967a13ab7fe20553147b893aae9ed6",
+      "sourceInfo": "Built from Nam-tor source (cargo build --release)",
+      "versionInfo": "0.1.0"
+    },
+    {
+      "SPDXID": "SPDXRef-binary-namtor-daemon-0-1-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0-only",
+      "name": "namtor-daemon",
+      "packageVerificationCode": "105f9742ba472871adc27427e8ffa7ef106f29b43d7acd1fd2f8bcc470fad488",
+      "sourceInfo": "Built from Nam-tor source (cargo build --release)",
+      "versionInfo": "0.1.0"
+    },
+    {
+      "SPDXID": "SPDXRef-binary-namtor-enroll-wizard-0-1-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0-only",
+      "name": "namtor-enroll-wizard",
+      "packageVerificationCode": "eeb4c01779e168d5f42ba05c4aba591b6d85038cdee2b62e8a7a5f1a451fb57e",
+      "sourceInfo": "Built from Nam-tor source (cargo build --release)",
+      "versionInfo": "0.1.0"
+    },
+    {
+      "SPDXID": "SPDXRef-binary-namtor-worker-0-1-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0-only",
+      "name": "namtor-worker",
+      "packageVerificationCode": "9876729bb42dff0fcb306cbe0cb6635ce6eb154f193e26f69ea56d5094804d0b",
+      "sourceInfo": "Built from Nam-tor source (cargo build --release)",
+      "versionInfo": "0.1.0"
+    },
+    {
+      "SPDXID": "SPDXRef-binary-pam-namtor-so-0-1-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0-only",
+      "name": "pam_namtor.so",
+      "packageVerificationCode": "108ea742e06384b01075c8bdda0e0ad5d64fcb0afc2b65d1585f6722371859c2",
+      "sourceInfo": "Built from Nam-tor source (cargo build --release)",
+      "versionInfo": "0.1.0"
+    },
+    {
+      "SPDXID": "SPDXRef-model-minifasnet-pad-0-1-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "name": "minifasnet_pad",
+      "packageVerificationCode": "3f86c8e4bb1138098ed2f8dc1682c6e1e1d6c5fffcf65dd6955c0cd60579a155",
+      "sourceInfo": "Built from Nam-tor commit 5e3727edf5f966a8aa0df3f060aeb93be4bce535; licence_sha256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30; model_card=ml/reports/learned-pad.md",
+      "versionInfo": "0.1.0"
+    },
+    {
+      "SPDXID": "SPDXRef-model-sface-2021dec-0-1-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "name": "sface_2021dec",
+      "packageVerificationCode": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+      "sourceInfo": "Built from Nam-tor commit 5e3727edf5f966a8aa0df3f060aeb93be4bce535; licence_sha256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "versionInfo": "0.1.0"
+    },
+    {
+      "SPDXID": "SPDXRef-model-yunet-2023mar-0-1-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "name": "yunet_2023mar",
+      "packageVerificationCode": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+      "sourceInfo": "Built from Nam-tor commit 5e3727edf5f966a8aa0df3f060aeb93be4bce535; licence_sha256=c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958",
+      "versionInfo": "0.1.0"
     }
   ],
   "relationships": [
@@ -6020,6 +6150,11 @@
       "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
     },
     {
+      "relatedSpdxElement": "SPDXRef-namtor-pam-config-0-1-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+    },
+    {
       "relatedSpdxElement": "SPDXRef-namtor-proto-0-1-0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
@@ -6298,6 +6433,31 @@
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-namtor-pam-0-1-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-libc-0-2-189",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-pam-config-0-1-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-serde-1-0-229",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-pam-config-0-1-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-pam-config-0-1-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-sha2-0-10-9",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-pam-config-0-1-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-pam-config-0-1-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-clap-4-6-5",

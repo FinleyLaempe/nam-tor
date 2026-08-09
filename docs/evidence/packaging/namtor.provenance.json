@@ -18,39 +18,68 @@
       "resolvedDependencies": [
         {
           "digest": {
-            "gitCommit": "abff0a87d417b5dbc63341518ba537c2982c769b"
+            "gitCommit": "5e3727edf5f966a8aa0df3f060aeb93be4bce535"
           },
           "uri": "git+local"
         },
         {
           "digest": {
-            "sha256": "55faf434e1d871bed498e4039afff3cb732422c659fd587b6ccf3905dc30a742"
+            "sha256": "3ba73c6c1e400ba928fdf9bd930a25041900053c09f32b40029f3a3f7d96e3a1"
           },
           "uri": "file://Cargo.lock"
         }
       ]
     },
+    "modelProvenance": [
+      {
+        "builtFromCommit": "5e3727edf5f966a8aa0df3f060aeb93be4bce535",
+        "licence": "MIT",
+        "licenceSha256": "c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958",
+        "modelId": "yunet_2023mar",
+        "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+        "upstreamUrl": "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+      },
+      {
+        "builtFromCommit": "5e3727edf5f966a8aa0df3f060aeb93be4bce535",
+        "licence": "Apache-2.0",
+        "licenceSha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "modelId": "sface_2021dec",
+        "sha256": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+        "upstreamUrl": "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+      },
+      {
+        "builtFromCommit": "5e3727edf5f966a8aa0df3f060aeb93be4bce535",
+        "licence": "Apache-2.0",
+        "licenceSha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "modelCard": "ml/reports/learned-pad.md",
+        "modelId": "minifasnet_pad",
+        "notice": "packaging/licences/minifasnet_pad.NOTICE",
+        "sha256": "3f86c8e4bb1138098ed2f8dc1682c6e1e1d6c5fffcf65dd6955c0cd60579a155",
+        "trainingRecipe": "ml/recipes/train_pad.py",
+        "upstreamUrl": "self-trained"
+      }
+    ],
     "runDetails": {
       "builder": {
-        "id": "host://ROGArchLaptop"
+        "id": "https://namtor.dev/builders/cargo-release-v1"
       },
       "byproducts": [
         {
           "digest": {
-            "sha256": "4478bb511be79fb3114d2242c9636ea3167ab22d71777f62030d5436eee2b27e"
+            "sha256": "daab3c6ad21324c6fde90835ba5ed29e42f91af574957724eb74be206df62149"
           },
           "name": "namtor.cyclonedx.json"
         },
         {
           "digest": {
-            "sha256": "5561c55b7545f8f2d7d80ea52d7fdbefa8b474fe6aee0133ec41a9a2aa016447"
+            "sha256": "e5bd98f6a081be96dffa067f8357ec6b1b86ada03c7b34202d2bd5d466e4a1f6"
           },
           "name": "namtor.spdx.json"
         }
       ],
       "metadata": {
-        "invocationId": "abff0a87d417b5dbc63341518ba537c2982c769b",
-        "startedOn": "2026-08-08T11:53:16.355757+00:00"
+        "invocationId": "5e3727edf5f966a8aa0df3f060aeb93be4bce535",
+        "startedOn": "2026-01-01T00:00:00Z"
       }
     }
   },
@@ -67,12 +96,6 @@
         "sha256": "9876729bb42dff0fcb306cbe0cb6635ce6eb154f193e26f69ea56d5094804d0b"
       },
       "name": "namtor-worker"
-    },
-    {
-      "digest": {
-        "sha256": "b3ee8c222893723b27274eef0340954430572bdb31635fe49d8016745b9ca67a"
-      },
-      "name": "namtor-worker-spawn"
     },
     {
       "digest": {
@@ -94,9 +117,15 @@
     },
     {
       "digest": {
-        "sha256": "94af09fd7ebd94360190bde162b6b611112a47ace7377e4b2fd16ec7fa9300d2"
+        "sha256": "108ea742e06384b01075c8bdda0e0ad5d64fcb0afc2b65d1585f6722371859c2"
       },
       "name": "libnamtor_pam.so"
+    },
+    {
+      "digest": {
+        "sha256": "c09bfa9840cf5b3b8f6a03d0a044489adc8223e9e588022fc4eede988890d9d5"
+      },
+      "name": "namtor-models-0.1.0.tar.gz"
     }
   ]
 }

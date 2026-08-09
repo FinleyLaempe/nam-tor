@@ -3840,6 +3840,21 @@
       "version": "0.1.0"
     },
     {
+      "bom-ref": "namtor-pam-config@0.1.0",
+      "externalRefs": [],
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only"
+          }
+        }
+      ],
+      "name": "namtor-pam-config",
+      "purl": "pkg:generic/namtor-pam-config@0.1.0",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
       "bom-ref": "namtor-probe@0.1.0",
       "externalRefs": [],
       "licenses": [
@@ -8270,6 +8285,243 @@
       "purl": "pkg:cargo/zvariant_utils@3.5.0",
       "type": "library",
       "version": "3.5.0"
+    },
+    {
+      "bom-ref": "binary-libnamtorqml.so@0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "06197f56f7433126b7d5256bfeccc6cdcafd77477d4d9c8bd8aae7102c2a1580"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only"
+          }
+        }
+      ],
+      "name": "libnamtorqml.so",
+      "type": "application",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "binary-namtor-camera-emitter-off@0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "909a6d590d19be9dff78599c997adc5bb51ccc7ebd01c985395d75f501e37293"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only"
+          }
+        }
+      ],
+      "name": "namtor-camera-emitter-off",
+      "type": "application",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "binary-namtor-cli@0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "638d4f71315002cf31bafef17de4373a93967a13ab7fe20553147b893aae9ed6"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only"
+          }
+        }
+      ],
+      "name": "namtor-cli",
+      "type": "application",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "binary-namtor-daemon@0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "105f9742ba472871adc27427e8ffa7ef106f29b43d7acd1fd2f8bcc470fad488"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only"
+          }
+        }
+      ],
+      "name": "namtor-daemon",
+      "type": "application",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "binary-namtor-enroll-wizard@0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "eeb4c01779e168d5f42ba05c4aba591b6d85038cdee2b62e8a7a5f1a451fb57e"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only"
+          }
+        }
+      ],
+      "name": "namtor-enroll-wizard",
+      "type": "application",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "binary-namtor-worker@0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9876729bb42dff0fcb306cbe0cb6635ce6eb154f193e26f69ea56d5094804d0b"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only"
+          }
+        }
+      ],
+      "name": "namtor-worker",
+      "type": "application",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "binary-pam_namtor.so@0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "108ea742e06384b01075c8bdda0e0ad5d64fcb0afc2b65d1585f6722371859c2"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only"
+          }
+        }
+      ],
+      "name": "pam_namtor.so",
+      "type": "application",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "model-minifasnet_pad@0.1.0",
+      "externalRefs": [],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3f86c8e4bb1138098ed2f8dc1682c6e1e1d6c5fffcf65dd6955c0cd60579a155"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "minifasnet_pad",
+      "properties": [
+        {
+          "name": "namtor:builtFromCommit",
+          "value": "5e3727edf5f966a8aa0df3f060aeb93be4bce535"
+        },
+        {
+          "name": "namtor:licenceSha256",
+          "value": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "name": "namtor:modelCard",
+          "value": "ml/reports/learned-pad.md"
+        }
+      ],
+      "type": "machine-learning-model",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "model-sface_2021dec@0.1.0",
+      "externalRefs": [
+        {
+          "type": "distribution",
+          "url": "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "sface_2021dec",
+      "properties": [
+        {
+          "name": "namtor:builtFromCommit",
+          "value": "5e3727edf5f966a8aa0df3f060aeb93be4bce535"
+        },
+        {
+          "name": "namtor:licenceSha256",
+          "value": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ],
+      "type": "machine-learning-model",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "model-yunet_2023mar@0.1.0",
+      "externalRefs": [
+        {
+          "type": "distribution",
+          "url": "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "yunet_2023mar",
+      "properties": [
+        {
+          "name": "namtor:builtFromCommit",
+          "value": "5e3727edf5f966a8aa0df3f060aeb93be4bce535"
+        },
+        {
+          "name": "namtor:licenceSha256",
+          "value": "c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958"
+        }
+      ],
+      "type": "machine-learning-model",
+      "version": "0.1.0"
     }
   ],
   "dependencies": [
@@ -9438,6 +9690,7 @@
         "namtor-hwdb@0.1.0",
         "namtor-layout@0.1.0",
         "namtor-pad@0.1.0",
+        "namtor-pam-config@0.1.0",
         "namtor-proto@0.1.0",
         "namtor-recog@0.1.0",
         "namtor-store@0.1.0",
@@ -9531,6 +9784,16 @@
         "tempfile@3.27.0"
       ],
       "ref": "namtor-pam@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "libc@0.2.189",
+        "serde@1.0.229",
+        "serde_json@1.0.151",
+        "sha2@0.10.9",
+        "tempfile@3.27.0"
+      ],
+      "ref": "namtor-pam-config@0.1.0"
     },
     {
       "dependsOn": [
@@ -10869,6 +11132,46 @@
       "ref": "zvariant_utils@3.5.0"
     },
     {
+      "dependsOn": [],
+      "ref": "binary-libnamtorqml.so@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "binary-namtor-camera-emitter-off@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "binary-namtor-cli@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "binary-namtor-daemon@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "binary-namtor-enroll-wizard@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "binary-namtor-worker@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "binary-pam_namtor.so@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "model-minifasnet_pad@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "model-sface_2021dec@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "model-yunet_2023mar@0.1.0"
+    },
+    {
       "dependsOn": [
         "aead@0.5.2",
         "aes@0.8.4",
@@ -11028,6 +11331,7 @@
         "namtor-layout@0.1.0",
         "namtor-pad@0.1.0",
         "namtor-pam@0.1.0",
+        "namtor-pam-config@0.1.0",
         "namtor-probe@0.1.0",
         "namtor-proto@0.1.0",
         "namtor-recog@0.1.0",
@@ -11209,7 +11513,17 @@
         "zmij@1.0.23",
         "zvariant@5.13.1",
         "zvariant_derive@5.13.1",
-        "zvariant_utils@3.5.0"
+        "zvariant_utils@3.5.0",
+        "binary-libnamtorqml.so@0.1.0",
+        "binary-namtor-camera-emitter-off@0.1.0",
+        "binary-namtor-cli@0.1.0",
+        "binary-namtor-daemon@0.1.0",
+        "binary-namtor-enroll-wizard@0.1.0",
+        "binary-namtor-worker@0.1.0",
+        "binary-pam_namtor.so@0.1.0",
+        "model-minifasnet_pad@0.1.0",
+        "model-sface_2021dec@0.1.0",
+        "model-yunet_2023mar@0.1.0"
       ],
       "ref": "namtor-workspace@0.1.0"
     }
@@ -11228,7 +11542,7 @@
       "type": "application",
       "version": "0.1.0"
     },
-    "timestamp": "2026-08-08T11:55:50.827929+00:00",
+    "timestamp": "2026-01-01T00:00:00Z",
     "tools": [
       {
         "name": "generate-sbom.py",
@@ -11237,7 +11551,7 @@
       }
     ]
   },
-  "serialNumber": "urn:uuid:ebfdbb02-3b41-425c-aa43-cf2e9aaa5bd3",
+  "serialNumber": "urn:uuid:216f76f9-bc84-514c-8040-4a9525722837",
   "specVersion": "1.5",
   "version": 1
 }

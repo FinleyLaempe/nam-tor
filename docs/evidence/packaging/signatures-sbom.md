@@ -92,7 +92,6 @@ Default file set (when no files are passed explicitly):
 
 - `target/release/namtor-daemon`
 - `target/release/namtor-worker`
-- `target/release/namtor-worker-spawn`
 - `target/release/namtor-camera-emitter-off`
 - `target/release/namtor-cli`
 - `target/release/namtor-enroll-wizard`
@@ -183,7 +182,6 @@ All 7 artifacts are byte-identical across two independent builds:
 |---|---|
 | `namtor-daemon` | yes |
 | `namtor-worker` | yes |
-| `namtor-worker-spawn` | yes |
 | `namtor-camera-emitter-off` | yes |
 | `namtor-cli` | yes |
 | `namtor-enroll-wizard` | yes |
