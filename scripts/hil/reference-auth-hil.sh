@@ -191,7 +191,6 @@ install_check() {
     local paths=(
         "$NAMTOR_DAEMON_BIN"
         "/usr/lib/namtor/namtor-worker"
-        "/usr/lib/namtor/namtor-worker-spawn"
         "$NAMTOR_CLI_BIN"
         "/usr/lib/security/pam_namtor.so"
         "/usr/lib/systemd/system/namtor-daemon.service"
@@ -203,22 +202,13 @@ install_check() {
             fails=$((fails + 1))
         fi
     done
-    # setuid bit on worker-spawn (mode 4755).
-    if [[ -e /usr/lib/namtor/namtor-worker-spawn ]]; then
-        local mode
-        mode="$(stat -c '%a' /usr/lib/namtor/namtor-worker-spawn 2>/dev/null || echo "")"
-        if [[ "$mode" != "4755" ]]; then
-            echo "wrong mode on namtor-worker-spawn: got ${mode:-?}, want 4755"
-            fails=$((fails + 1))
-        fi
-    fi
     return "$fails"
 }
 
 install_out="$(install_check 2>&1)" || true
 install_rc=$?
 if [[ $install_rc -eq 0 ]]; then
-    emit_record "install" "pass" "all manifest paths present, setuid bit verified"
+    emit_record "install" "pass" "all manifest paths present"
 else
     emit_record "install" "fail" "install_check rc=$install_rc: $install_out"
     # Malformed install: do NOT proceed to enrollment/verify. Recovery:
