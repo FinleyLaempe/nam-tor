@@ -111,7 +111,7 @@ gate evidence.
 
 | Input | Blocks | Status |
 |---|---|---|
-| Root: systemd units, namtor user, namtor-auth group, setuid | G1.1/G1.5 HIL, live daemon | WITHHELD |
+| Root: systemd units, namtor user, namtor-auth group | G1.1/G1.5 HIL, live daemon | WITHHELD |
 | Python onnxruntime binding (Python 3.14 incompat) | R4 INT8 eval, cohort tooling | WITHHELD |
 | Model licences (`NAMTOR_ACCEPT_LICENCE=1`) | R4, production inference | WITHHELD |
 | R5 cohort dataset (licence-verified) | G3, z-norm calibration | WITHHELD |

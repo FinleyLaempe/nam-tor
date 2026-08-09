@@ -26,9 +26,9 @@ are implemented and tested, but the production measurement has not run.
 `namtor_recog` ships the full detection-to-embedding pipeline:
 
 - **YuNet 2023mar** face detection (5-pt landmarks, NMS, 3 strides), 232 KB
-  ONNX, BSD-3 licence.
+  ONNX, MIT licence.
 - **5-pt similarity transform** alignment to 112x112.
-- **SFace 2021dec** 128-d L2-normalised embedding, 37 MB ONNX, BSD-3 licence.
+- **SFace 2021dec** 128-d L2-normalised embedding, 37 MB ONNX, Apache-2.0 licence.
 - **Cosine similarity** matching against enrolled templates, max selection.
 - Full pipeline: detect -> align -> embed -> match.
 
@@ -93,7 +93,7 @@ is asserted by `rule_of_three_upper_bound_at_100k_is_above_1e5` and
 - The synthetic z-norm bootstrap is explicitly `non_production` and must
   never feed a live threshold.
 - SFace was selected as the production embedding model over the spec's
-  AdaFace R50 target through architectural grounds (BSD-3 licence, smaller,
+  AdaFace R50 target through architectural grounds (Apache-2.0 licence, smaller,
   CPU-friendly). The spec amendment is recorded in the R4 report. This
   selection is not a G3 pass; it is a model choice.
 
