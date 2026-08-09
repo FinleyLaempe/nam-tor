@@ -36,7 +36,7 @@ Every rate above is a claim until the eval harness measures it. Published figure
 | Unprivileged process asks the daemon to authenticate someone | `SO_PEERCRED` on every connection; caller must be uid 0 or in `namtor-auth` |
 | Replay of a captured success response | Daemon-issued nonce bound into every reply |
 | Reading templates off disk | Daemon runs as `namtor`, files are not world-readable, contents are sealed |
-| Memory disclosure via the inference stack | Inference runs in a `nobody` worker under seccomp and landlock with no filesystem, no network, and no template access. A memory-corruption bug in ONNX Runtime or an image decoder lands nowhere useful. |
+| Memory disclosure via the inference stack | Inference runs in a worker process under seccomp and landlock with no filesystem, no network, and no template access. The worker shares the daemon's UID (`namtor`) but the sandbox denies all file opens after model load. A memory-corruption bug in ONNX Runtime or an image decoder lands nowhere useful. |
 | Brute-forcing presentations | Per-uid exponential backoff with lockout |
 | Learning which signal rejected them | PAD vetoes and match failures are indistinguishable to the user; the journal records the truth |
 

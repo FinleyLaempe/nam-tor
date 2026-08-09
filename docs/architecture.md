@@ -20,7 +20,7 @@ A navigational map into the [specification](superpowers/specs/2026-08-04-nam-tor
                   │ pipe: frames in → vectors out
                   ▼
  ┌────────────────────────────────────────────────────┐
- │ namtor-worker    user: nobody, seccomp + landlock  │
+ │ namtor-worker    user: namtor, seccomp + landlock  │
  │  no filesystem, no network, no IPC but the pipe    │
  └────────────────────────────────────────────────────┘
 ```
