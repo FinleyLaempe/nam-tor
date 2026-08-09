@@ -84,3 +84,46 @@ fn allowed_write_to_inherited_fd() {
     );
     assert!(stdout.contains("ok"), "expected ok, got: {stdout}");
 }
+
+/// The worker runs as `namtor` (same UID as the daemon), which has read
+/// access to `/var/lib/namtor/templates`. Seccomp denies the `open` syscall
+/// itself (EPERM) before the kernel resolves the path, so the test works
+/// even when the path does not exist on the CI host.
+#[test]
+fn denied_open_templates() {
+    let (status, stdout) = run_self_test("open_templates");
+    assert!(
+        !status.success(),
+        "open_templates must be denied, status={status}, stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("errno 1") || stdout.contains("errno 13"),
+        "expected EPERM/EACCES, got: {stdout}"
+    );
+}
+
+#[test]
+fn denied_open_keys() {
+    let (status, stdout) = run_self_test("open_keys");
+    assert!(
+        !status.success(),
+        "open_keys must be denied, status={status}, stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("errno 1") || stdout.contains("errno 13"),
+        "expected EPERM/EACCES, got: {stdout}"
+    );
+}
+
+#[test]
+fn denied_open_models() {
+    let (status, stdout) = run_self_test("open_models");
+    assert!(
+        !status.success(),
+        "open_models must be denied, status={status}, stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("errno 1") || stdout.contains("errno 13"),
+        "expected EPERM/EACCES, got: {stdout}"
+    );
+}

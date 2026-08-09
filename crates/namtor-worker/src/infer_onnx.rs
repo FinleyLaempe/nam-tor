@@ -92,40 +92,29 @@ impl OnnxCpu {
         self
     }
 
-    fn quant_file(quant: Quant) -> &'static str {
-        match quant {
-            Quant::Fp32 => "fp32.onnx",
-            Quant::Int8 => "int8.onnx",
-        }
-    }
-
     fn model_path(&self, spec: &ModelSpec) -> PathBuf {
-        self.root.join(&spec.id).join(Self::quant_file(spec.quant))
+        match spec.quant {
+            Quant::Fp32 => self.root.join(format!("{}.onnx", spec.id)),
+            Quant::Int8 => self.root.join(format!("{}_int8.onnx", spec.id)),
+        }
     }
 
     /// Load a model directly from a file path, bypassing the
     /// `<root>/<id>/<quant>.onnx` convention. The `spec.id` is used only
     /// as the session key and metadata label.
     pub fn load_file(&mut self, path: &Path, spec: &ModelSpec) -> Result<Loaded, WorkerError> {
-        let bytes = std::fs::read(path)
-            .map_err(|e| WorkerError::Infer(format!("read {}: {e}", path.display())))?;
-        self.load_bytes(path, &bytes, spec)
-    }
-
-    fn load_bytes(
-        &mut self,
-        path: &Path,
-        bytes: &[u8],
-        spec: &ModelSpec,
-    ) -> Result<Loaded, WorkerError> {
         let session = Session::builder()
             .map_err(|e| WorkerError::Infer(format!("ort builder: {e}")))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(|e| WorkerError::Infer(format!("opt level: {e}")))?
             .with_intra_threads(self.threads)
             .map_err(|e| WorkerError::Infer(format!("intra threads: {e}")))?
-            .commit_from_memory(bytes)
+            .commit_from_file(path)
             .map_err(|e| WorkerError::Infer(format!("commit {}: {e}", path.display())))?;
+        Ok(self.store_session(session, spec))
+    }
+
+    fn store_session(&mut self, session: Session, spec: &ModelSpec) -> Loaded {
         let input_shape = session
             .inputs()
             .first()
@@ -138,21 +127,19 @@ impl OnnxCpu {
             .unwrap_or_default();
         let key = format!("{}:{:?}", spec.id, spec.quant);
         self.sessions.insert(key.clone(), RefCell::new(session));
-        Ok(Loaded {
+        Loaded {
             model_id: spec.id.clone(),
             quant: spec.quant,
             input_shape,
             output_shape,
-        })
+        }
     }
 }
 
 impl InferenceBackend for OnnxCpu {
     fn load(&mut self, spec: &ModelSpec) -> Result<Loaded, WorkerError> {
         let path = self.model_path(spec);
-        let bytes = std::fs::read(&path)
-            .map_err(|e| WorkerError::Infer(format!("read {}: {e}", path.display())))?;
-        self.load_bytes(&path, &bytes, spec)
+        self.load_file(&path, spec)
     }
 
     fn run(
@@ -281,12 +268,11 @@ mod tests {
             .join("identity.onnx")
     }
 
-    /// Stage the identity fixture as `<root>/identity/fp32.onnx` so the
-    /// `<root>/<id>/<quant>.onnx` path scheme resolves it.
+    /// Stage the identity fixture as `<root>/identity.onnx` so the
+    /// flat path scheme `<root>/<id>.onnx` resolves it.
     fn stage_identity(root: &std::path::Path) -> std::path::PathBuf {
-        let dir = root.join("identity");
-        fs::create_dir_all(&dir).unwrap();
-        let dest = dir.join("fp32.onnx");
+        std::fs::create_dir_all(root).unwrap();
+        let dest = root.join("identity.onnx");
         fs::copy(fixture_path(), &dest).unwrap();
         dest
     }
@@ -359,12 +345,6 @@ mod tests {
     }
 
     #[test]
-    fn quant_file_branch() {
-        assert_eq!(OnnxCpu::quant_file(Quant::Fp32), "fp32.onnx");
-        assert_eq!(OnnxCpu::quant_file(Quant::Int8), "int8.onnx");
-    }
-
-    #[test]
     fn run_without_load_errors() {
         let backend = OnnxCpu::new(1);
         let loaded = Loaded {
@@ -375,5 +355,71 @@ mod tests {
         };
         let err = backend.run(&loaded, &[0u8; 3], &frame_ref(3)).unwrap_err();
         assert!(matches!(err, WorkerError::Infer(_)), "got {err:?}");
+    }
+
+    fn bundled_models_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("var/lib/namtor/models")
+    }
+
+    #[test]
+    #[ignore = "requires the three bundled ONNX models; run with NAMTOR_HW_TEST=1"]
+    fn bundled_models_load_and_infer_round_trip() {
+        if std::env::var("NAMTOR_HW_TEST").as_deref() != Ok("1") {
+            eprintln!("skipping — set NAMTOR_HW_TEST=1 to run");
+            return;
+        }
+        let dir = bundled_models_dir();
+        let mut backend = OnnxCpu::new(1).with_root(dir.clone());
+
+        let yunet_spec = ModelSpec {
+            id: "yunet_2023mar".into(),
+            quant: Quant::Fp32,
+            sha256: [0; 32],
+        };
+        let yunet_loaded = backend.load(&yunet_spec).unwrap();
+        assert_eq!(yunet_loaded.model_id, "yunet_2023mar");
+        let yunet_input: Vec<u8> = vec![0.0_f32; 320 * 320 * 3]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let yunet_out = backend
+            .run(&yunet_loaded, &yunet_input, &frame_ref(320 * 320 * 3 * 4))
+            .unwrap();
+        assert!(!yunet_out.is_empty());
+
+        let sface_spec = ModelSpec {
+            id: "sface_2021dec".into(),
+            quant: Quant::Fp32,
+            sha256: [0; 32],
+        };
+        let sface_loaded = backend.load(&sface_spec).unwrap();
+        assert_eq!(sface_loaded.model_id, "sface_2021dec");
+        let sface_input: Vec<u8> = vec![0.0_f32; 112 * 112 * 3]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let sface_out = backend
+            .run(&sface_loaded, &sface_input, &frame_ref(112 * 112 * 3 * 4))
+            .unwrap();
+        assert_eq!(sface_out.len(), 128);
+
+        let pad_spec = ModelSpec {
+            id: "minifasnet_pad".into(),
+            quant: Quant::Fp32,
+            sha256: [0; 32],
+        };
+        let pad_loaded = backend.load(&pad_spec).unwrap();
+        assert_eq!(pad_loaded.model_id, "minifasnet_pad");
+        let pad_input: Vec<u8> = vec![0.0_f32; 3 * 96 * 96]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let pad_out = backend
+            .run(&pad_loaded, &pad_input, &frame_ref(3 * 96 * 96 * 4))
+            .unwrap();
+        assert_eq!(pad_out.len(), 2);
     }
 }

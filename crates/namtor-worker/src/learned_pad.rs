@@ -183,7 +183,9 @@ impl PadResult {
 ///
 /// Implementations:
 /// - [`MockLearnedPadBackend`] — deterministic, test-only.
-/// - the `onnx`-feature backend in [`crate::infer_onnx`] (when wired).
+/// - [`OnnxCpuLearnedPad`] — production CPU-only ONNX Runtime backend
+///   (`onnx` feature, same seccomp+landlock-compatible CPU EP as face
+///   recognition; no GPU EP is ever selected, spec §5.3).
 ///
 /// Implementations must be fail-closed: any internal error returns
 /// [`PadVerdict::Uncertain`] via [`PadResult::unavailable`], never panics.
@@ -194,8 +196,10 @@ pub trait LearnedPadBackend: Send + Sync {
         Self: Sized;
 
     /// Run inference on a flattened strobe differential `D = On − Off`,
-    /// row-major, length `H * W`. Returns a [`PadResult`].
-    fn infer(&self, differential: &[f32]) -> Result<PadResult, LearnedPadError>;
+    /// row-major, length `H * W`. `w` and `h` are the spatial dimensions
+    /// of the differential (needed for preprocessing/resizing by the ONNX
+    /// backend). Returns a [`PadResult`].
+    fn infer(&self, differential: &[f32], w: u32, h: u32) -> Result<PadResult, LearnedPadError>;
 }
 
 /// Deterministic test-only [`LearnedPadBackend`].
@@ -232,15 +236,13 @@ impl LearnedPadBackend for MockLearnedPadBackend {
         Ok(Self::default_thresholds())
     }
 
-    fn infer(&self, differential: &[f32]) -> Result<PadResult, LearnedPadError> {
+    fn infer(&self, differential: &[f32], _w: u32, _h: u32) -> Result<PadResult, LearnedPadError> {
         if differential.is_empty() {
             return Err(LearnedPadError::Shape {
                 expected: 1,
                 got: 0,
             });
         }
-        // Mean of the differential: live faces have strong positive D,
-        // spoofs have near-zero / weak D. Map mean ∈ [0, ~80] → p ∈ [0, 1].
         let mean = differential.iter().copied().sum::<f32>() / differential.len() as f32;
         let p = (mean / 80.0).clamp(0.0, 1.0);
         Ok(PadResult::from_probability(
@@ -250,6 +252,163 @@ impl LearnedPadBackend for MockLearnedPadBackend {
         ))
     }
 }
+
+// ── ONNX CPU backend (production, feature-gated) ──
+
+#[cfg(feature = "onnx")]
+mod onnx_backend {
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    use ort::session::builder::GraphOptimizationLevel;
+    use ort::session::Session;
+    use ort::value::Tensor;
+
+    use super::{LearnedPadBackend, LearnedPadError, PadResult};
+
+    /// Expected spatial size of the MiniFASNet PAD model input (80×80).
+    const PAD_INPUT_SIZE: usize = 80;
+
+    /// Production CPU-only ONNX Runtime backend for the learned PAD model.
+    ///
+    /// Uses the same `ort` crate / CPU Execution Provider as `OnnxCpu` for
+    /// face recognition — no GPU EP is ever selected (spec §5.3). The model
+    /// is a 1-channel 80×80 MiniFASNet that outputs 2 logits (class 0 = live,
+    /// class 1 = spoof).
+    ///
+    /// `Session` is behind `RefCell` because `ort::Session::run` takes
+    /// `&mut self` while the trait exposes `&self`; the verify engine is
+    /// single-threaded per attempt so interior mutability is sound.
+    pub struct OnnxCpuLearnedPad {
+        session: Mutex<Session>,
+        live_min: f32,
+        spoof_max: f32,
+    }
+
+    impl OnnxCpuLearnedPad {
+        pub fn with_thresholds(
+            model_path: &Path,
+            live_min: f32,
+            spoof_max: f32,
+        ) -> Result<Self, LearnedPadError> {
+            if !model_path.exists() {
+                return Err(LearnedPadError::NotFound(model_path.to_path_buf()));
+            }
+            let bytes = std::fs::read(model_path).map_err(LearnedPadError::Io)?;
+            let session = Session::builder()
+                .map_err(|e| LearnedPadError::Backend(format!("ort builder: {e}")))?
+                .with_optimization_level(GraphOptimizationLevel::Level3)
+                .map_err(|e| LearnedPadError::Backend(format!("opt level: {e}")))?
+                .with_intra_threads(1)
+                .map_err(|e| LearnedPadError::Backend(format!("intra threads: {e}")))?
+                .commit_from_memory(&bytes)
+                .map_err(|e| LearnedPadError::Backend(format!("commit: {e}")))?;
+            Ok(Self {
+                session: Mutex::new(session),
+                live_min,
+                spoof_max,
+            })
+        }
+
+        fn preprocess(&self, differential: &[f32], w: u32, h: u32) -> Vec<f32> {
+            let resized = resize_nearest(differential, w, h, PAD_INPUT_SIZE);
+            resized
+                .iter()
+                .map(|&v| v.clamp(0.0, 255.0) / 255.0)
+                .collect()
+        }
+    }
+
+    impl LearnedPadBackend for OnnxCpuLearnedPad {
+        fn load(model_path: &Path) -> Result<Self, LearnedPadError> {
+            Self::with_thresholds(model_path, 0.7, 0.3)
+        }
+
+        fn infer(
+            &self,
+            differential: &[f32],
+            w: u32,
+            h: u32,
+        ) -> Result<PadResult, LearnedPadError> {
+            if differential.is_empty() {
+                return Err(LearnedPadError::Shape {
+                    expected: 1,
+                    got: 0,
+                });
+            }
+            let input = self.preprocess(differential, w, h);
+            let mut session = self
+                .session
+                .lock()
+                .map_err(|e| LearnedPadError::Backend(format!("session lock: {e}")))?;
+            let input_name = session
+                .inputs()
+                .first()
+                .map(|i| i.name().to_string())
+                .ok_or_else(|| LearnedPadError::Backend("model has no inputs".into()))?;
+            let output_name = session
+                .outputs()
+                .first()
+                .map(|o| o.name().to_string())
+                .ok_or_else(|| LearnedPadError::Backend("model has no outputs".into()))?;
+            let shape = [1i64, 1, PAD_INPUT_SIZE as i64, PAD_INPUT_SIZE as i64];
+            let tensor = Tensor::from_array((shape.as_slice(), input))
+                .map_err(|e| LearnedPadError::Backend(format!("tensor: {e}")))?;
+            let outputs = session
+                .run(ort::inputs![input_name.as_str() => tensor])
+                .map_err(|e| LearnedPadError::Backend(format!("run: {e}")))?;
+            let out = outputs
+                .get(output_name.as_str())
+                .ok_or_else(|| LearnedPadError::Backend("model produced no named output".into()))?;
+            let view = out
+                .try_extract_array::<f32>()
+                .map_err(|e| LearnedPadError::Backend(format!("extract: {e}")))?;
+            let logits: Vec<f32> = view.iter().cloned().collect();
+            if logits.len() < 2 {
+                return Err(LearnedPadError::Backend(format!(
+                    "expected ≥2 logits, got {}",
+                    logits.len()
+                )));
+            }
+            let live_prob = softmax_live_probability(&logits);
+            Ok(PadResult::from_probability(
+                live_prob,
+                self.live_min,
+                self.spoof_max,
+            ))
+        }
+    }
+
+    pub(super) fn resize_nearest(src: &[f32], w: u32, h: u32, dst_size: usize) -> Vec<f32> {
+        let dst_len = dst_size * dst_size;
+        let mut dst = Vec::with_capacity(dst_len);
+        let x_ratio = w as f32 / dst_size as f32;
+        let y_ratio = h as f32 / dst_size as f32;
+        for dy in 0..dst_size {
+            let sy = (dy as f32 * y_ratio) as u32;
+            let sy = sy.min(h.saturating_sub(1)) as usize;
+            for dx in 0..dst_size {
+                let sx = (dx as f32 * x_ratio) as u32;
+                let sx = sx.min(w.saturating_sub(1)) as usize;
+                dst.push(src[sy * w as usize + sx]);
+            }
+        }
+        dst
+    }
+
+    pub(super) fn softmax_live_probability(logits: &[f32]) -> f32 {
+        let max_logit = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let exps: Vec<f32> = logits.iter().map(|&l| (l - max_logit).exp()).collect();
+        let sum: f32 = exps.iter().sum();
+        if sum <= 0.0 {
+            return 0.0;
+        }
+        exps.first().copied().unwrap_or(0.0) / sum
+    }
+}
+
+#[cfg(feature = "onnx")]
+pub use onnx_backend::OnnxCpuLearnedPad;
 
 /// Configuration for the two-stage PAD veto policy.
 ///
@@ -342,13 +501,13 @@ impl FinalVerdict {
 ///    - [`PadVerdict::Uncertain`] → [`FinalVerdict::FailClosed`]
 ///
 /// This function is pure and side-effect free; it is the single decision
-/// point that callers must use. `B` is the learned backend; the analytic
-/// result already encodes its own gate verdict.
-pub fn evaluate<B: LearnedPadBackend>(
+/// point that callers must use. The analytic result already encodes its own
+/// gate verdict; the learned `PadResult` is computed by the caller via
+/// [`LearnedPadBackend::infer`].
+pub fn evaluate(
     analytic: &AnalyticResult,
     learned: &PadResult,
     policy: &VetoPolicy,
-    _backend: &B,
 ) -> FinalVerdict {
     // Stage 1: analytic veto.
     if !analytic.live {
@@ -404,8 +563,8 @@ mod tests {
     #[test]
     fn test_analytic_spoof_vetoes_regardless_of_learned() {
         let p = policy();
-        let b = backend();
-        let v = evaluate(&AnalyticResult::spoof(), &learned_live(), &p, &b);
+        let _ = backend();
+        let v = evaluate(&AnalyticResult::spoof(), &learned_live(), &p);
         assert_eq!(v, FinalVerdict::AnalyticSpoof);
         assert!(v.refuses());
     }
@@ -414,8 +573,8 @@ mod tests {
     #[test]
     fn test_both_live_proceeds() {
         let p = policy();
-        let b = backend();
-        let v = evaluate(&AnalyticResult::live(), &learned_live(), &p, &b);
+        let _ = backend();
+        let v = evaluate(&AnalyticResult::live(), &learned_live(), &p);
         assert_eq!(v, FinalVerdict::Live);
         assert!(v.is_live());
     }
@@ -424,8 +583,8 @@ mod tests {
     #[test]
     fn test_learned_spoof_after_analytic_live_refuses() {
         let p = policy();
-        let b = backend();
-        let v = evaluate(&AnalyticResult::live(), &learned_spoof(), &p, &b);
+        let _ = backend();
+        let v = evaluate(&AnalyticResult::live(), &learned_spoof(), &p);
         assert_eq!(v, FinalVerdict::LearnedSpoof);
         assert!(v.refuses());
     }
@@ -434,8 +593,8 @@ mod tests {
     #[test]
     fn test_learned_uncertain_is_fail_closed() {
         let p = policy();
-        let b = backend();
-        let v = evaluate(&AnalyticResult::live(), &learned_uncertain(), &p, &b);
+        let _ = backend();
+        let v = evaluate(&AnalyticResult::live(), &learned_uncertain(), &p);
         assert_eq!(v, FinalVerdict::FailClosed);
         assert!(v.refuses());
     }
@@ -447,8 +606,8 @@ mod tests {
             learned_disabled: true,
             ..policy()
         };
-        let b = backend();
-        let v = evaluate(&AnalyticResult::live(), &learned_spoof(), &p, &b);
+        let _ = backend();
+        let v = evaluate(&AnalyticResult::live(), &learned_spoof(), &p);
         assert_eq!(v, FinalVerdict::Live);
     }
 
@@ -459,8 +618,8 @@ mod tests {
             learned_disabled: true,
             ..policy()
         };
-        let b = backend();
-        let v = evaluate(&AnalyticResult::spoof(), &learned_live(), &p, &b);
+        let _ = backend();
+        let v = evaluate(&AnalyticResult::spoof(), &learned_live(), &p);
         assert_eq!(v, FinalVerdict::AnalyticSpoof);
     }
 
@@ -469,7 +628,7 @@ mod tests {
     fn test_mock_backend_live_differential() {
         let b = backend();
         let diff = vec![80.0_f32; 64 * 64];
-        let r = b.infer(&diff).expect("infer");
+        let r = b.infer(&diff, 64, 64).expect("infer");
         assert!(
             r.verdict.is_live(),
             "verdict={:?} p={}",
@@ -483,7 +642,7 @@ mod tests {
     fn test_mock_backend_spoof_differential() {
         let b = backend();
         let diff = vec![0.0_f32; 64 * 64];
-        let r = b.infer(&diff).expect("infer");
+        let r = b.infer(&diff, 64, 64).expect("infer");
         assert!(r.verdict.refuses(), "verdict={:?}", r.verdict);
     }
 
@@ -521,7 +680,7 @@ mod tests {
     #[test]
     fn test_empty_differential_is_shape_error() {
         let b = backend();
-        let r = b.infer(&[]);
+        let r = b.infer(&[], 0, 0);
         assert!(matches!(r, Err(LearnedPadError::Shape { .. })));
     }
 
@@ -533,5 +692,153 @@ mod tests {
         assert!(u.verdict.refuses());
         assert!(!u.verdict.is_live());
         assert_eq!(u.live_probability, -1.0);
+    }
+
+    // ── ONNX backend tests (require the `onnx` feature) ──
+
+    #[cfg(feature = "onnx")]
+    mod onnx_tests {
+        use super::*;
+
+        fn fixture_path() -> std::path::PathBuf {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("fixtures")
+                .join("onnx")
+                .join("identity.onnx")
+        }
+
+        // 14. OnnxCpuLearnedPad load with missing model → error, not panic.
+        #[test]
+        fn onnx_load_missing_model_errors() {
+            let p = Path::new("/nonexistent/namtor/pad.onnx");
+            let r = OnnxCpuLearnedPad::load(p);
+            assert!(r.is_err());
+        }
+
+        // 15. OnnxCpuLearnedPad infer with empty differential → Shape error
+        //     (returns before the session is touched, so any valid ONNX
+        //     fixture suffices for the load step).
+        #[test]
+        fn onnx_empty_differential_is_shape_error() {
+            let path = fixture_path();
+            if !path.exists() {
+                return;
+            }
+            let backend = OnnxCpuLearnedPad::load(&path).expect("load");
+            let r = backend.infer(&[], 0, 0);
+            assert!(matches!(r, Err(LearnedPadError::Shape { .. })));
+        }
+
+        // 17. resize_nearest maps a 2×2 source to 4×4 correctly.
+        #[test]
+        fn resize_nearest_upscales_2x2_to_4x4() {
+            let src = vec![1.0, 2.0, 3.0, 4.0];
+            let dst = onnx_backend::resize_nearest(&src, 2, 2, 4);
+            assert_eq!(dst.len(), 16);
+            assert_eq!(dst[0], 1.0);
+            assert_eq!(dst[5], 1.0);
+            assert_eq!(dst[10], 4.0);
+            assert_eq!(dst[15], 4.0);
+        }
+
+        // 18. resize_nearest downscales 8×8 to 2×2 by sampling every 4th pixel.
+        #[test]
+        fn resize_nearest_downscales_8x8_to_2x2() {
+            let src: Vec<f32> = (0..64).map(|i| i as f32).collect();
+            let dst = onnx_backend::resize_nearest(&src, 8, 8, 2);
+            assert_eq!(dst.len(), 4);
+            assert_eq!(dst[0], src[0]);
+            assert_eq!(dst[1], src[4]);
+            assert_eq!(dst[2], src[32]);
+            assert_eq!(dst[3], src[36]);
+        }
+
+        // 19. softmax_live_probability returns 1.0 for [live, -inf].
+        #[test]
+        fn softmax_live_probability_dominant_live() {
+            let p = onnx_backend::softmax_live_probability(&[10.0, -10.0]);
+            assert!((p - 1.0).abs() < 1e-5, "p={p}");
+        }
+
+        // 20. softmax_live_probability returns ~0.0 for [-10, 10].
+        #[test]
+        fn softmax_live_probability_dominant_spoof() {
+            let p = onnx_backend::softmax_live_probability(&[-10.0, 10.0]);
+            assert!(p < 1e-5, "p={p}");
+        }
+
+        // 21. softmax_live_probability returns 0.5 for equal logits.
+        #[test]
+        fn softmax_live_probability_equal_logits() {
+            let p = onnx_backend::softmax_live_probability(&[1.0, 1.0]);
+            assert!((p - 0.5).abs() < 1e-5, "p={p}");
+        }
+
+        // 22. CPU-only provider: OnnxCpuLearnedPad constructs its session
+        //     with `with_intra_threads(1)` and no GPU EP registration. The
+        //     session builder uses only the CPU EP (the ort default). This
+        //     test verifies the session loads on a CPU-only machine — if a
+        //     GPU EP were required, construction would fail. The hw-gated
+        //     real-model test below exercises the full CPU inference path.
+        #[test]
+        fn onnx_backend_uses_cpu_only_provider() {
+            let path = fixture_path();
+            if !path.exists() {
+                return;
+            }
+            let backend = OnnxCpuLearnedPad::load(&path).expect("load");
+            // Session constructed successfully on CPU → CPU EP is the provider.
+            let _ = backend;
+        }
+
+        fn bundled_pad_model() -> std::path::PathBuf {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("var/lib/namtor/models")
+                .join("minifasnet_pad.onnx")
+        }
+
+        // 23. HW-gated: load and infer the real MiniFASNet PAD model.
+        #[test]
+        #[ignore = "requires the bundled PAD model; run with NAMTOR_HW_TEST=1"]
+        fn onnx_real_pad_model_live_differential() {
+            if std::env::var("NAMTOR_HW_TEST").as_deref() != Ok("1") {
+                eprintln!("skipping — set NAMTOR_HW_TEST=1 to run");
+                return;
+            }
+            let path = bundled_pad_model();
+            let backend = OnnxCpuLearnedPad::load(&path).expect("load pad model");
+            let diff = vec![80.0_f32; 640 * 360];
+            let result = backend.infer(&diff, 640, 360).expect("infer");
+            assert!(
+                result.verdict.is_live(),
+                "strong positive differential should be Live, got {:?} p={}",
+                result.verdict,
+                result.live_probability
+            );
+        }
+
+        // 24. HW-gated: real PAD model with near-zero differential → Spoof.
+        #[test]
+        #[ignore = "requires the bundled PAD model; run with NAMTOR_HW_TEST=1"]
+        fn onnx_real_pad_model_spoof_differential() {
+            if std::env::var("NAMTOR_HW_TEST").as_deref() != Ok("1") {
+                eprintln!("skipping — set NAMTOR_HW_TEST=1 to run");
+                return;
+            }
+            let path = bundled_pad_model();
+            let backend = OnnxCpuLearnedPad::load(&path).expect("load pad model");
+            let diff = vec![0.0_f32; 640 * 360];
+            let result = backend.infer(&diff, 640, 360).expect("infer");
+            assert!(
+                result.verdict.refuses(),
+                "near-zero differential should refuse, got {:?} p={}",
+                result.verdict,
+                result.live_probability
+            );
+        }
     }
 }

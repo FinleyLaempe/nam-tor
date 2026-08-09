@@ -149,14 +149,30 @@ enum TestResult {
 }
 
 fn test_open() -> TestResult {
+    test_open_path("/etc/passwd")
+}
+
+/// Attempt to `open(2)` an arbitrary filesystem path. Under the sandbox,
+/// seccomp denies `open`/`openat` with EPERM before the kernel checks
+/// whether the path exists — so this returns EPERM even for paths that
+/// do not exist on the test host. This is the proof that the worker
+/// cannot read templates, keys, or model files after the sandbox is
+/// applied, regardless of its UID.
+fn test_open_path(path: &str) -> TestResult {
     use std::os::raw::c_int;
     extern "C" {
         fn open(path: *const std::os::raw::c_char, flags: c_int) -> c_int;
     }
-    let path = cstr("/etc/passwd");
-    // SAFETY: open is a libc syscall; path is a valid NUL-terminated C string.
+    let cpath = match CString::new(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("test_open_path: NUL in path: {e}");
+            return TestResult::Errno(0);
+        }
+    };
+    // SAFETY: open is a libc syscall; cpath is a valid NUL-terminated C string.
     // O_RDONLY = 0 on Linux.
-    let fd = unsafe { open(path.as_ptr(), 0) };
+    let fd = unsafe { open(cpath.as_ptr(), 0) };
     if fd < 0 {
         TestResult::Errno(errno())
     } else {
@@ -272,6 +288,9 @@ fn combined_escape_test(kind: &str) -> ExitCode {
     }
     let result = match kind {
         "open_file" => test_open(),
+        "open_templates" => test_open_path("/var/lib/namtor/templates/0.bin"),
+        "open_keys" => test_open_path("/var/lib/namtor/templates.key/key.bin"),
+        "open_models" => test_open_path("/var/lib/namtor/models/yunet_2023mar/model.onnx"),
         "open_socket" => test_socket(),
         "connect" => test_connect(),
         "exec" => test_exec(),
