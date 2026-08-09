@@ -17,7 +17,8 @@ pub mod template;
 #[cfg(feature = "tpm2")]
 pub use crypto::Tpm2Backend;
 pub use crypto::{
-    BackendSelector, FileBackend, KeyBackend, KeySource, MockTpm, PcrSelection, SealedKey,
+    tpm2_device_present, BackendSelector, FileBackend, KeyBackend, KeySource, MockTpm,
+    PcrSelection, ProtectionState, SealedKey,
 };
 pub use store::{StoreError, TemplateStore};
 pub use template::{

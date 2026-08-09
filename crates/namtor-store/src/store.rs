@@ -79,6 +79,8 @@ pub enum StoreError {
         profile_uid: u32,
         container_uid: u32,
     },
+    #[error("refusing to downgrade TPM2-bound storage to software fallback: {0}")]
+    DowngradeRefused(String),
 }
 
 pub struct TemplateStore {
@@ -151,6 +153,10 @@ impl TemplateStore {
 
     pub fn key_source(&self) -> crate::crypto::KeySource {
         self.key.source()
+    }
+
+    pub fn protection_state(&self) -> crate::crypto::ProtectionState {
+        self.key.protection_state()
     }
 
     fn record_path(&self, uid: u32) -> PathBuf {

@@ -44,6 +44,22 @@ pub enum KeySource {
     File,
 }
 
+/// Typed protection state of the sealing key for status reporting (spec §7.3,
+/// task 8). Carries NO key material — only the sealing kind, TPM presence, and
+/// a human-readable warning. The daemon maps this to the v2 `ProtectionStatus`
+/// contract type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtectionState {
+    pub sealing: KeySource,
+    pub has_tpm: bool,
+    pub warning: String,
+}
+
+/// Whether a TPM2 device is present on this system (`/dev/tpmrm0`).
+pub fn tpm2_device_present() -> bool {
+    Path::new("/dev/tpmrm0").exists()
+}
+
 /// Which Platform Configuration Registers (PCRs) to bind a sealed key to.
 ///
 /// When a key is sealed with a [`PcrSelection`], it can only be unsealed
@@ -104,7 +120,16 @@ impl SealedKey {
         if key_path.exists() {
             let raw = std::fs::read(key_path)?;
             let blob = SealedBlob::decode(&raw)?;
-            let backend = selector.open(blob.backend_id())?;
+            let backend = match selector.open(blob.backend_id()) {
+                Ok(b) => b,
+                Err(e) if is_tpm2_type_backend(blob.backend_id()) => {
+                    return Err(StoreError::DowngradeRefused(format!(
+                        "cannot open backend '{}' sealed the existing storage: {e}",
+                        blob.backend_id()
+                    )));
+                }
+                Err(e) => return Err(e),
+            };
             let key = backend.unseal(&blob)?;
             let mut sk = Self::from_unsealed(key, backend.source());
             sk.lock_memory();
@@ -130,6 +155,27 @@ impl SealedKey {
 
     pub fn source(&self) -> KeySource {
         self.source
+    }
+
+    /// Typed protection state for status reporting. Carries no key material.
+    pub fn protection_state(&self) -> ProtectionState {
+        let has_tpm = tpm2_device_present();
+        let warning = match self.source {
+            KeySource::Tpm2 => String::new(),
+            KeySource::File if has_tpm => "TPM2 device present but unusable; \
+                 template storage uses a software fallback key (0600, \
+                 root/namtor-owned). Restore TPM2 access to re-seal."
+                .to_string(),
+            KeySource::File => "No TPM2 device; template storage uses a \
+                 software fallback key (0600, root/namtor-owned). Templates \
+                 are not hardware-bound."
+                .to_string(),
+        };
+        ProtectionState {
+            sealing: self.source,
+            has_tpm,
+            warning,
+        }
     }
 
     /// Best-effort `mlock` + `MADV_DONTDUMP` on the key material.
@@ -204,7 +250,7 @@ impl BackendSelector {
         #[cfg(feature = "tpm2")]
         {
             if Path::new("/dev/tpmrm0").exists() {
-                if let Ok(b) = self.open(Tpm2Backend::BACKEND_ID) {
+                if let Ok(b) = self.open(TPM2_BACKEND_ID) {
                     return Ok(b);
                 }
             }
@@ -222,7 +268,7 @@ impl BackendSelector {
             }
             FileBackend::BACKEND_ID => Ok(Box::new(FileBackend::new())),
             #[cfg(feature = "tpm2")]
-            Tpm2Backend::BACKEND_ID => Ok(Box::new(Tpm2Backend::new(self.pcr_selection.clone())?)),
+            TPM2_BACKEND_ID => Ok(Box::new(Tpm2Backend::new(self.pcr_selection.clone())?)),
             _ => Err(StoreError::Crypto(format!("unknown backend id: {id}"))),
         }
     }
@@ -572,6 +618,12 @@ mod tpm2_backend;
 #[cfg(feature = "tpm2")]
 pub use tpm2_backend::Tpm2Backend;
 
+const TPM2_BACKEND_ID: &str = "tpm2";
+
+fn is_tpm2_type_backend(backend_id: &str) -> bool {
+    backend_id == TPM2_BACKEND_ID || backend_id == MockTpm::BACKEND_ID
+}
+
 fn set_root_only(path: &Path) -> Result<(), StoreError> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
@@ -644,6 +696,7 @@ fn _unused_links() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::MetadataExt;
 
     fn two_seeds() -> ([u8; 32], [u8; 32]) {
         let mut a = [0u8; 32];
@@ -928,5 +981,135 @@ mod tests {
         let n3 = derive_nonce(2);
         assert_eq!(n1, n2);
         assert_ne!(n1, n3);
+    }
+
+    #[test]
+    fn protection_state_tpm2_has_no_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let mut selector = BackendSelector::mock([42u8; 32]);
+        let sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        let state = sk.protection_state();
+        assert_eq!(state.sealing, KeySource::Tpm2);
+        assert!(state.warning.is_empty(), "TPM2 warning must be empty");
+    }
+
+    #[test]
+    fn protection_state_software_has_visible_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let mut selector = BackendSelector::file();
+        let sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        let state = sk.protection_state();
+        assert_eq!(state.sealing, KeySource::File);
+        assert!(
+            !state.warning.is_empty(),
+            "software fallback must carry a visible warning"
+        );
+    }
+
+    #[test]
+    fn protection_state_has_tpm_reflects_device_presence() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let mut selector = BackendSelector::file();
+        let sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        let state = sk.protection_state();
+        assert_eq!(state.has_tpm, tpm2_device_present());
+    }
+
+    #[test]
+    fn protection_state_contains_no_key_material() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let mut selector = BackendSelector::mock([99u8; 32]);
+        let sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        let raw_key = sk.key();
+        let state = sk.protection_state();
+        let debug_str = format!("{state:?}");
+        for byte in raw_key.iter() {
+            let hex_lower = format!("{byte:02x}");
+            let hex_upper = format!("{byte:02X}");
+            assert!(
+                !debug_str.contains(&hex_lower) && !debug_str.contains(&hex_upper),
+                "protection state debug leaks key byte {byte:#x}"
+            );
+        }
+        assert!(
+            !debug_str.contains(key_path.to_str().unwrap()),
+            "protection state must not expose the key path"
+        );
+    }
+
+    #[test]
+    fn fallback_key_file_is_0600() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let mut selector = BackendSelector::file();
+        let _sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        let mode = std::fs::metadata(&key_path).unwrap().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "fallback key file must be 0600, got {:o}",
+            mode & 0o777
+        );
+    }
+
+    #[test]
+    fn downgrade_refused_when_tpm2_blob_cannot_be_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let mut tpm_selector = BackendSelector::mock([7u8; 32]);
+        let _sk = SealedKey::load_or_create_with(&key_path, &mut tpm_selector).unwrap();
+        assert_eq!(_sk.source(), KeySource::Tpm2);
+        let mut file_selector = BackendSelector::file();
+        let err = SealedKey::load_or_create_with(&key_path, &mut file_selector).unwrap_err();
+        assert!(
+            matches!(err, StoreError::DowngradeRefused(ref m) if !m.is_empty()),
+            "expected DowngradeRefused, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn downgrade_refused_for_real_tpm2_backend_id_without_tpm() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let fake_payload = vec![0u8; 32];
+        let blob = SealedBlob::new("tpm2".into(), fake_payload);
+        std::fs::write(&key_path, blob.encode()).unwrap();
+        let mut selector = BackendSelector::new();
+        let err = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap_err();
+        assert!(
+            matches!(err, StoreError::DowngradeRefused(_)),
+            "expected DowngradeRefused for tpm2 blob without tpm, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn file_blob_reloads_without_downgrade_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let mut file_selector = BackendSelector::file();
+        let k1 = SealedKey::load_or_create_with(&key_path, &mut file_selector).unwrap();
+        assert_eq!(k1.source(), KeySource::File);
+        let mut default_selector = BackendSelector::new();
+        let k2 = SealedKey::load_or_create_with(&key_path, &mut default_selector).unwrap();
+        assert_eq!(k2.source(), KeySource::File);
+        assert_eq!(k1.key(), k2.key());
+    }
+
+    #[test]
+    fn pcr_mismatch_denied_after_reboot() {
+        let seed = [55u8; 32];
+        let mut tpm = MockTpm::new(seed, Some(PcrSelection::boot_state()));
+        let key = round_trip_key();
+        let blob = tpm.seal(&key).unwrap();
+        tpm.reboot();
+        let err = tpm.unseal(&blob).unwrap_err();
+        assert!(
+            matches!(err, StoreError::Tpm2(ref m) if m.contains("PCR policy mismatch")),
+            "expected PCR mismatch denial, got {err:?}"
+        );
     }
 }
