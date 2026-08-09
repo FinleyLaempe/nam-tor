@@ -1,61 +1,51 @@
 # SPDX-License-Identifier: GPL-3.0-only
-# namtor.install — pacman pre/post install hooks for the namtor package.
+# namtor.install — pacman lifecycle hooks for the namtor package.
 #
-# Turnkey: models bundled (BSD-3 auto-accepted), sysusers/tmpfiles/DM
-# group/PAM/socket all handled automatically.
+# Delegates every phase to the shared, package-independent lifecycle helper
+# at /usr/share/namtor/lifecycle.sh (Task 19). The helper is typed:
+# pre-install, post-install, pre-upgrade, post-upgrade, pre-remove,
+# post-remove. It validates model layout/hashes, identities/dirs, socket and
+# D-Bus services, and drives `namtor-pam-edit` for snapshot/migrate/
+# disable-all/purge. PAM is default-off at install time: post-install never
+# edits /etc/pam.d.
+#
+# pacman deletes payload files BEFORE post_remove runs, so pre_remove caches
+# the helper to /var/tmp where post_remove can still invoke it.
+
+NAMTOR_LIFECYCLE_CACHE=/var/tmp/namtor-lifecycle.sh
 
 post_install() {
-    echo ":: namtor: registering system user + runtime dirs"
-    if command -v systemd-sysusers >/dev/null 2>&1; then
-        systemd-sysusers /usr/lib/sysusers.d/namtor.conf || true
+    if ! /usr/share/namtor/lifecycle.sh post-install --version "${pkgver:-}"; then
+        echo ":: namtor: post-install mandatory checks failed — see FATAL lines above." >&2
+        return 1
     fi
-    if command -v systemd-tmpfiles >/dev/null 2>&1; then
-        systemd-tmpfiles --create /usr/lib/tmpfiles.d/namtor.conf || true
-    fi
+    cat <<'EOF'
 
-    if [[ -f /usr/lib/namtor/namtor-worker-spawn ]]; then
-        chmod u+s /usr/lib/namtor/namtor-worker-spawn
-    fi
+:: namtor installed. PAM services are OFF by default.
+   To complete setup:
+     1. Open the Nam-tor Settings app.
+     2. Enroll your face.
+     3. Choose which PAM services to enable (e.g. gdm-password).
+   No CLI or root shell needed for setup.
+   Remove:  sudo pacman -Rns namtor
+EOF
+}
 
-    chown -R namtor:namtor /var/lib/namtor/ 2>/dev/null || true
-
-    for dm in gdm sddm lightdm lxdm; do
-        if id "$dm" >/dev/null 2>&1; then
-            gpasswd -a "$dm" namtor-auth 2>/dev/null || true
-        fi
-    done
-
-    if [[ -x /usr/share/namtor/pam-install.sh ]]; then
-        /usr/share/namtor/pam-install.sh || echo ":: namtor: PAM install skipped — run: sudo /usr/share/namtor/pam-install.sh"
-    fi
-
-    systemctl enable --now namtor-daemon.socket 2>/dev/null || true
-
-    echo ""
-    echo ":: namtor installed and running."
-    echo "   Enroll your face:  namtor-cli enroll <username>"
-    echo "   Test auth:         namtor-cli verify --user <username>"
-    echo ""
-    echo "   Remove:  sudo pacman -Rns namtor"
+pre_upgrade() {
+    /usr/share/namtor/lifecycle.sh pre-upgrade --version "${pkgver:-}" || true
 }
 
 post_upgrade() {
-    post_install
+    /usr/share/namtor/lifecycle.sh post-upgrade --version "${pkgver:-}" || true
 }
 
 pre_remove() {
-    echo ":: namtor: removing PAM integration (if installed)"
-    if [[ -x /usr/share/namtor/pam-uninstall.sh ]]; then
-        /usr/share/namtor/pam-uninstall.sh --restore-backup || true
-    fi
-    echo ":: namtor: stopping daemon"
-    systemctl --no-reload disable --now namtor-daemon.socket namtor-daemon.service 2>/dev/null || true
+    /usr/share/namtor/lifecycle.sh pre-remove || true
+    # Cache the helper so post_remove can run after pacman deletes the payload.
+    cp -f /usr/share/namtor/lifecycle.sh "$NAMTOR_LIFECYCLE_CACHE" 2>/dev/null || true
 }
 
 post_remove() {
-    echo ":: namtor: cleaning runtime dirs"
-    if command -v systemd-tmpfiles >/dev/null 2>&1; then
-        systemd-tmpfiles --remove /usr/lib/tmpfiles.d/namtor.conf || true
-    fi
-    rm -rf /var/lib/namtor /run/namtor
+    "$NAMTOR_LIFECYCLE_CACHE" post-remove || true
+    rm -f "$NAMTOR_LIFECYCLE_CACHE" 2>/dev/null || true
 }
