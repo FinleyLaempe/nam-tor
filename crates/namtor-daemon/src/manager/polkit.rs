@@ -148,7 +148,9 @@ impl PolkitAuthority for StubPolkit {
         match action {
             action::ENROLL_SELF if peer.uid == target_uid => AuthzDecision::Allowed,
             action::ENROLL_SELF if admin => AuthzDecision::Allowed,
-            action::ENROLL_OTHER | action::DELETE | action::CONFIGURE if admin => {
+            action::ENROLL_OTHER | action::DELETE | action::CONFIGURE | action::CONFIGURE_PAM
+                if admin =>
+            {
                 AuthzDecision::Allowed
             }
             _ => AuthzDecision::Denied,

@@ -42,8 +42,39 @@ use crate::dbus::{
     ReviewOutcome, StatusReport, SystemPolkit,
 };
 use crate::manager::contract;
+use crate::manager::dbus::{Manager2DBusError, Manager2Service, PamApi, PamSignal};
 
 type Svc = ManagerService<SystemPolkit>;
+type Svc2 = Manager2Service<SystemPolkit>;
+
+/// Resolve a D-Bus caller's UID/Pid from the bus daemon's
+/// `GetConnectionCredentials`. The `bus_name` (unique connection name
+/// from the message header) is set by the bus daemon and not forgeable
+/// by the peer — it is required as the polkit subject.
+async fn resolve_peer_identity(
+    conn: &Connection,
+    header: &Header<'_>,
+) -> Result<PeerIdentity, ManagerDBusError> {
+    let sender = match header.sender() {
+        Some(s) => s,
+        None => return Err(ManagerDBusError::State("no sender on message".into())),
+    };
+    let bus_name =
+        BusName::try_from(sender.as_str()).map_err(|e| ManagerDBusError::State(e.to_string()))?;
+    let dbus = DBusProxy::new(conn).await.map_err(ManagerDBusError::ZBus)?;
+    let creds = dbus
+        .get_connection_credentials(bus_name)
+        .await
+        .map_err(|e| ManagerDBusError::ZBus(e.into()))?;
+    let uid = creds.unix_user_id().unwrap_or(0);
+    let pid = creds.process_id().unwrap_or(0) as i32;
+    Ok(PeerIdentity {
+        uid,
+        pid,
+        cmdline: String::new(),
+        bus_name: sender.as_str().to_string(),
+    })
+}
 
 /// zbus interface wrapper around [`ManagerService`].
 ///
@@ -62,25 +93,7 @@ impl ManagerIface {
         conn: &Connection,
         header: &Header<'_>,
     ) -> Result<PeerIdentity, ManagerDBusError> {
-        let sender = match header.sender() {
-            Some(s) => s,
-            None => return Err(ManagerDBusError::State("no sender on message".into())),
-        };
-        let bus_name = BusName::try_from(sender.as_str())
-            .map_err(|e| ManagerDBusError::State(e.to_string()))?;
-        let dbus = DBusProxy::new(conn).await.map_err(ManagerDBusError::ZBus)?;
-        let creds = dbus
-            .get_connection_credentials(bus_name)
-            .await
-            .map_err(|e| ManagerDBusError::ZBus(e.into()))?;
-        let uid = creds.unix_user_id().unwrap_or(0);
-        let pid = creds.process_id().unwrap_or(0) as i32;
-        Ok(PeerIdentity {
-            uid,
-            pid,
-            cmdline: String::new(),
-            bus_name: sender.as_str().to_string(),
-        })
+        resolve_peer_identity(conn, header).await
     }
 
     async fn emit_drained(emitter: &SignalEmitter<'_>, svc: &Svc) -> Result<(), ManagerDBusError> {
@@ -330,6 +343,105 @@ impl ManagerIface {
         -> zbus::Result<()>;
 }
 
+// ---------------------------------------------------------------------------
+// v2 interface: org.namtor.Manager2
+// ---------------------------------------------------------------------------
+
+struct Manager2Iface {
+    svc: Arc<Svc2>,
+}
+
+impl Manager2Iface {
+    fn new(svc: Arc<Svc2>) -> Self {
+        Self { svc }
+    }
+
+    async fn emit_drained_v2(
+        emitter: &SignalEmitter<'_>,
+        svc: &Svc2,
+    ) -> Result<(), Manager2DBusError> {
+        for sig in svc.drain_signals() {
+            match sig {
+                PamSignal::PamServicesChanged(services) => {
+                    emitter
+                        .pam_services_changed(&services)
+                        .await
+                        .map_err(Manager2DBusError::ZBus)?;
+                }
+                PamSignal::ProtectionStatusChanged(status) => {
+                    emitter
+                        .protection_status_changed(&status)
+                        .await
+                        .map_err(Manager2DBusError::ZBus)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[interface(name = "org.namtor.Manager2")]
+impl Manager2Iface {
+    #[zbus(name = "ListPamServices")]
+    async fn list_pam_services(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> Result<Vec<contract::PamServiceInfo>, Manager2DBusError> {
+        let peer = resolve_peer_identity(conn, &header).await?;
+        self.svc
+            .list_pam_services(&peer)
+            .map_err(Manager2DBusError::from)
+    }
+
+    #[zbus(name = "SetPamServiceEnabled")]
+    async fn set_pam_service_enabled(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        service_id: &str,
+        enabled: bool,
+    ) -> Result<bool, Manager2DBusError> {
+        let peer = resolve_peer_identity(conn, &header).await?;
+        let ok = self
+            .svc
+            .set_pam_service_enabled(&peer, service_id, enabled)
+            .map_err(Manager2DBusError::from)?;
+        Self::emit_drained_v2(&emitter, &self.svc).await?;
+        Ok(ok)
+    }
+
+    #[zbus(name = "GetProtectionStatus")]
+    async fn get_protection_status(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> Result<contract::ProtectionStatus, Manager2DBusError> {
+        let peer = resolve_peer_identity(conn, &header).await?;
+        self.svc
+            .get_protection_status(&peer)
+            .map_err(Manager2DBusError::from)
+    }
+
+    #[zbus(property, name = "ApiVersion")]
+    fn api_version(&self) -> u32 {
+        contract::API_VERSION_V2
+    }
+
+    #[zbus(signal)]
+    async fn pam_services_changed(
+        emitter: &SignalEmitter<'_>,
+        services: &[contract::PamServiceInfo],
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn protection_status_changed(
+        emitter: &SignalEmitter<'_>,
+        status: &contract::ProtectionStatus,
+    ) -> zbus::Result<()>;
+}
+
 fn emit_drained_blocking(conn: &zbus::blocking::Connection, svc: &Svc) {
     for sig in svc.drain_signals() {
         let res = match sig {
@@ -387,13 +499,16 @@ pub struct ManagerBusService {
 }
 
 impl ManagerBusService {
-    /// Connect to the system bus, serve `/org/namtor/Manager`, and own
+    /// Connect to the system bus, serve `/org/namtor/Manager` (v1) and
+    /// `/org/namtor/Manager2` (v2) at the same object path, and own
     /// `org.namtor.Manager`. Returns `Err(NameTaken)` if another process
     /// already owns the name — the caller logs and exits cleanly.
-    pub fn start_system(svc: Arc<Svc>) -> Result<Self, BusServiceError> {
+    pub fn start_system(svc: Arc<Svc>, svc2: Arc<Svc2>) -> Result<Self, BusServiceError> {
         let iface = ManagerIface::new(svc);
+        let iface2 = Manager2Iface::new(svc2);
         let conn = connection::Builder::system()?
             .serve_at(contract::OBJECT_PATH, iface)?
+            .serve_at(contract::OBJECT_PATH, iface2)?
             .allow_name_replacements(false)
             .name(contract::BUS_NAME)?
             .build()
@@ -404,7 +519,7 @@ impl ManagerBusService {
         tracing::info!(
             bus = contract::BUS_NAME,
             path = contract::OBJECT_PATH,
-            "manager d-bus service registered on system bus"
+            "manager d-bus service registered on system bus (v1 + v2)"
         );
         Ok(Self { conn })
     }
@@ -421,10 +536,12 @@ impl ManagerBusService {
 
     /// Connect to the session bus (for tests).
     #[cfg(test)]
-    fn start_session(svc: Arc<Svc>) -> Result<Self, BusServiceError> {
+    fn start_session(svc: Arc<Svc>, svc2: Arc<Svc2>) -> Result<Self, BusServiceError> {
         let iface = ManagerIface::new(svc);
+        let iface2 = Manager2Iface::new(svc2);
         let conn = connection::Builder::session()?
             .serve_at(contract::OBJECT_PATH, iface)?
+            .serve_at(contract::OBJECT_PATH, iface2)?
             .allow_name_replacements(false)
             .name(contract::BUS_NAME)?
             .build()
@@ -436,16 +553,21 @@ impl ManagerBusService {
     }
 
     /// Build a p2p pair for testing: returns (service, client). The service
-    /// side serves the interface; the client side can call methods and
-    /// introspect.
+    /// side serves both v1 and v2 interfaces; the client side can call
+    /// methods and introspect.
     #[cfg(test)]
-    fn start_p2p(svc: Arc<Svc>) -> Result<(Self, zbus::blocking::Connection), BusServiceError> {
+    fn start_p2p(
+        svc: Arc<Svc>,
+        svc2: Arc<Svc2>,
+    ) -> Result<(Self, zbus::blocking::Connection), BusServiceError> {
         let (s0, s1) = zbus::connection::socket::Channel::pair();
         let guid = zbus::Guid::generate();
         let iface = ManagerIface::new(svc);
+        let iface2 = Manager2Iface::new(svc2);
         let conn = zbus::blocking::connection::Builder::authenticated_socket(s0, guid.clone())?
             .p2p()
             .serve_at(contract::OBJECT_PATH, iface)?
+            .serve_at(contract::OBJECT_PATH, iface2)?
             .build()?;
         let client = zbus::blocking::connection::Builder::authenticated_socket(s1, guid)?
             .p2p()
@@ -497,17 +619,31 @@ mod tests {
     use super::*;
     use crate::dbus::ApiError;
     use crate::manager::contract;
+    use crate::manager::store::NullProfileStore;
+    use tempfile::TempDir;
     use zbus::blocking::fdo::IntrospectableProxy;
 
     fn new_svc() -> Arc<Svc> {
         Arc::new(ManagerService::new(SystemPolkit::for_testing()))
     }
 
+    fn new_svc2() -> Arc<Svc2> {
+        let tmp = TempDir::new().expect("tempdir");
+        let store: Arc<dyn crate::manager::store::ProfileStore> = Arc::new(NullProfileStore);
+        Arc::new(Manager2Service::new(
+            SystemPolkit::for_testing(),
+            store,
+            tmp.path().join("pam.d"),
+            tmp.path().join("registry"),
+        ))
+    }
+
     /// p2p introspection must declare the frozen method/signal/property set.
     #[test]
     fn p2p_introspection_matches_frozen_contract() {
         let svc = new_svc();
-        let (service, client) = ManagerBusService::start_p2p(svc).expect("p2p build");
+        let svc2 = new_svc2();
+        let (service, client) = ManagerBusService::start_p2p(svc, svc2).expect("p2p build");
         let _service = service;
 
         let proxy = IntrospectableProxy::builder(&client)
@@ -552,7 +688,8 @@ mod tests {
     #[test]
     fn p2p_introspection_contains_manager_interface() {
         let svc = new_svc();
-        let (service, client) = ManagerBusService::start_p2p(svc).expect("p2p build");
+        let svc2 = new_svc2();
+        let (service, client) = ManagerBusService::start_p2p(svc, svc2).expect("p2p build");
         let _service = service;
 
         let proxy = IntrospectableProxy::builder(&client)
@@ -595,14 +732,16 @@ mod tests {
             return;
         }
         let svc1 = new_svc();
-        let first = ManagerBusService::start_session(svc1);
+        let svc1v2 = new_svc2();
+        let first = ManagerBusService::start_session(svc1, svc1v2);
         if first.is_err() {
             return;
         }
         let first = first.expect("first session owner");
 
         let svc2 = new_svc();
-        let second = ManagerBusService::start_session(svc2);
+        let svc2v2 = new_svc2();
+        let second = ManagerBusService::start_session(svc2, svc2v2);
 
         match second {
             Err(BusServiceError::NameTaken(name)) => {
@@ -629,7 +768,8 @@ mod tests {
             return;
         }
         let svc = new_svc();
-        let service = ManagerBusService::start_session(svc);
+        let svc2 = new_svc2();
+        let service = ManagerBusService::start_session(svc, svc2);
         if service.is_err() {
             return;
         }
@@ -686,5 +826,36 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn p2p_introspection_contains_v2_interface() {
+        let svc = new_svc();
+        let svc2 = new_svc2();
+        let (service, client) = ManagerBusService::start_p2p(svc, svc2).expect("p2p build");
+        let _service = service;
+
+        let proxy = IntrospectableProxy::builder(&client)
+            .destination(contract::BUS_NAME)
+            .expect("dest")
+            .path(contract::OBJECT_PATH)
+            .expect("path")
+            .build()
+            .expect("proxy");
+        let xml = proxy.introspect().expect("introspect");
+        assert!(xml.contains("org.namtor.Manager2"), "missing v2 interface");
+        assert!(xml.contains("ListPamServices"));
+        assert!(xml.contains("SetPamServiceEnabled"));
+        assert!(xml.contains("GetProtectionStatus"));
+        assert!(xml.contains("PamServicesChanged"));
+        assert!(xml.contains("ProtectionStatusChanged"));
+    }
+
+    #[test]
+    fn v2_api_version_property_is_frozen() {
+        assert_eq!(contract::API_VERSION_V2, 2);
+        let svc2 = new_svc2();
+        let iface = Manager2Iface::new(svc2);
+        assert_eq!(iface.api_version(), contract::API_VERSION_V2);
     }
 }

@@ -3,6 +3,7 @@
 
 pub mod bus;
 pub mod contract;
+pub mod dbus;
 pub mod polkit;
 pub mod session;
 pub mod store;

@@ -15,9 +15,10 @@ use std::sync::Arc;
 
 use namtor_store::store::StoreError;
 use namtor_store::template::{ProfileEntry, ProfileId, ProfileRecord, Template};
-use namtor_store::TemplateStore;
+use namtor_store::{KeySource, TemplateStore};
 
 use crate::dbus::ApiError;
+use crate::manager::contract::{ProtectionKeyKind, ProtectionStatus};
 
 /// Durable, encrypted profile storage backing the manager API. All methods
 /// are atomic at the container level — a partial mutation (e.g. merge with a
@@ -62,6 +63,7 @@ pub trait ProfileStore: Send + Sync {
         profile_id: &ProfileId,
         last_used_us: u64,
     ) -> Result<(), StoreError>;
+    fn protection_status(&self) -> ProtectionStatus;
 }
 
 /// Real store adapter. Wraps an [`Arc<TemplateStore>`] so the manager can
@@ -146,6 +148,19 @@ impl ProfileStore for TemplateProfileStore {
     ) -> Result<(), StoreError> {
         self.inner.touch_last_used(uid, profile_id, last_used_us)
     }
+
+    fn protection_status(&self) -> ProtectionStatus {
+        let state = self.inner.protection_state();
+        let sealing = match state.sealing {
+            KeySource::Tpm2 => ProtectionKeyKind::Tpm2,
+            KeySource::File => ProtectionKeyKind::Software,
+        };
+        ProtectionStatus {
+            sealing,
+            has_tpm: state.has_tpm,
+            warning: state.warning,
+        }
+    }
 }
 
 /// No-op store for bus-service tests that exercise D-Bus mechanics, not
@@ -213,6 +228,14 @@ impl ProfileStore for NullProfileStore {
     ) -> Result<(), StoreError> {
         Err(StoreError::ProfileNotFound(id.0.clone()))
     }
+
+    fn protection_status(&self) -> ProtectionStatus {
+        ProtectionStatus {
+            sealing: ProtectionKeyKind::Software,
+            has_tpm: false,
+            warning: "no store loaded".into(),
+        }
+    }
 }
 
 /// Map a [`StoreError`] to an [`ApiError`] for the D-Bus surface. Profile-
@@ -239,6 +262,7 @@ pub fn map_store_error(e: StoreError) -> ApiError {
             expected, actual, ..
         } => ApiError::State(format!("owner mismatch {expected} != {actual}")),
         StoreError::Lock(s) => ApiError::State(format!("lock: {s}")),
+        StoreError::DowngradeRefused(s) => ApiError::State(format!("downgrade refused: {s}")),
     }
 }
 
@@ -333,5 +357,46 @@ mod tests {
             map_store_error(StoreError::Io(std::io::Error::other("x"))),
             ApiError::Io(_)
         ));
+    }
+
+    #[test]
+    fn template_store_protection_status_software_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_test_store(dir.path());
+        let adapter = TemplateProfileStore::new(store);
+        let status = adapter.protection_status();
+        assert_eq!(status.sealing, ProtectionKeyKind::Software);
+        assert!(!status.warning.is_empty());
+    }
+
+    #[test]
+    fn null_store_protection_status_reports_no_store() {
+        let null = NullProfileStore;
+        let status = null.protection_status();
+        assert_eq!(status.sealing, ProtectionKeyKind::Software);
+        assert!(!status.warning.is_empty());
+    }
+
+    #[test]
+    fn protection_status_contains_no_key_material() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_test_store(dir.path());
+        let adapter = TemplateProfileStore::new(store);
+        let status = adapter.protection_status();
+        let debug_str = format!("{status:?}");
+        assert!(
+            !debug_str.contains(dir.path().to_str().unwrap()),
+            "protection status must not leak the store path"
+        );
+        assert!(
+            !debug_str.contains("/var/lib/namtor"),
+            "protection status must not leak runtime paths"
+        );
+    }
+
+    #[test]
+    fn map_store_error_downgrade_refused() {
+        let err = map_store_error(StoreError::DowngradeRefused("tpm gone".into()));
+        assert!(matches!(err, ApiError::State(ref s) if s.contains("downgrade refused")));
     }
 }

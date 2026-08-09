@@ -2,10 +2,11 @@
 //! Worker supervisor: spawns `namtor-worker` as a child process, establishes
 //! the pipe + memfd frame channel, and forwards Load/Infer requests.
 //!
-//! The daemon (non-root, user `namtor`) spawns the worker via a setuid helper
-//! (`namtor-worker-spawn`, Task 23) or directly if running in test/dev mode.
-//! In production the worker drops to `nobody` and self-applies its sandbox;
-//! in tests it runs with `--features mock-infer` and no sandbox.
+//! The daemon (non-root, user `namtor`) spawns the worker directly as a
+//! child process — the worker inherits the daemon's UID (`namtor`). The
+//! worker self-applies seccomp + landlock (`--apply-sandbox`); the sandbox
+//! is the privilege boundary, not a UID drop. In tests the worker runs
+//! with `--features mock-infer` and no sandbox.
 
 use std::io::{Seek, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
