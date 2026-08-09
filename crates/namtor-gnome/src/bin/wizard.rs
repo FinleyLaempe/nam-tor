@@ -16,7 +16,9 @@ use std::rc::Rc;
 
 use gio::ApplicationFlags;
 use gtk4::prelude::*;
-use gtk4::{AccessibleRole, Align, Box as GtkBox, Label, Orientation, ScrolledWindow};
+use gtk4::{
+    AccessibleRole, Align, Box as GtkBox, Button, Entry, Label, Orientation, ScrolledWindow,
+};
 use libadwaita as adw;
 use libadwaita::prelude::AdwApplicationWindowExt;
 
@@ -84,9 +86,33 @@ fn build_ui(app: &adw::Application) {
 
     let enrollment_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(4)
+        .spacing(8)
         .build();
     content.append(&enrollment_box);
+
+    let enroll_btn = Button::builder()
+        .label("Enroll face")
+        .halign(Align::Center)
+        .build();
+
+    let name_entry = Entry::builder()
+        .placeholder_text("Enter profile name...")
+        .accessible_role(AccessibleRole::TextBox)
+        .build();
+
+    let enroll_input_box = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    enroll_input_box.append(&name_entry);
+    enroll_input_box.append(&enroll_btn);
+
+    let enroll_container = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(8)
+        .build();
+    enroll_container.append(&enroll_input_box);
+    enrollment_box.append(&enroll_container);
 
     let pam_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -140,6 +166,66 @@ fn build_ui(app: &adw::Application) {
         p.refresh();
     }
 
+    let name_entry_c1 = name_entry.clone();
+    let enroll_btn_c1 = enroll_btn.clone();
+    let presenter_c1 = Rc::clone(&presenter_rc);
+    let profiles_box_c1 = profiles_box.clone();
+    let enroll_box_c1 = enrollment_box.clone();
+    let protection_c1 = protection_box.clone();
+    let status_c1 = status_label.clone();
+    let error_c1 = error_label.clone();
+    let message_c1 = message_label.clone();
+
+    enroll_btn.connect_clicked(move |_| {
+        let name = name_entry_c1.text().to_string();
+        {
+            let mut p = presenter_c1.borrow_mut();
+            p.start_enrollment(&name);
+        }
+        let m = presenter_c1.borrow().model().clone();
+        render(
+            &profiles_box_c1,
+            &enroll_box_c1,
+            &protection_c1,
+            &status_c1,
+            &error_c1,
+            &message_c1,
+            &m,
+            &name_entry_c1,
+            &enroll_btn_c1,
+        );
+    });
+
+    let name_entry_c2 = name_entry.clone();
+    let enroll_btn_c2 = enroll_btn.clone();
+    let presenter_c2 = Rc::clone(&presenter_rc);
+    let profiles_box_c2 = profiles_box.clone();
+    let enroll_box_c2 = enrollment_box.clone();
+    let protection_c2 = protection_box.clone();
+    let status_c2 = status_label.clone();
+    let error_c2 = error_label.clone();
+    let message_c2 = message_label.clone();
+
+    name_entry.connect_activate(move |_| {
+        let name = name_entry_c2.text().to_string();
+        {
+            let mut p = presenter_c2.borrow_mut();
+            p.start_enrollment(&name);
+        }
+        let m = presenter_c2.borrow().model().clone();
+        render(
+            &profiles_box_c2,
+            &enroll_box_c2,
+            &protection_c2,
+            &status_c2,
+            &error_c2,
+            &message_c2,
+            &m,
+            &name_entry_c2,
+            &enroll_btn_c2,
+        );
+    });
+
     render(
         &profiles_box,
         &enrollment_box,
@@ -148,6 +234,8 @@ fn build_ui(app: &adw::Application) {
         &error_label,
         &message_label,
         &presenter_rc.borrow().model().clone(),
+        &name_entry,
+        &enroll_btn,
     );
     render_pam_services(&pam_box, &presenter_rc);
 
@@ -157,6 +245,8 @@ fn build_ui(app: &adw::Application) {
     let status_clone = status_label.clone();
     let error_clone = error_label.clone();
     let message_clone = message_label.clone();
+    let name_entry_clone = name_entry.clone();
+    let enroll_btn_clone = enroll_btn.clone();
     let rc_for_timer = Rc::clone(&presenter_rc);
     glib::source::timeout_add_local(std::time::Duration::from_millis(500), move || {
         let mut p = rc_for_timer.borrow_mut();
@@ -172,6 +262,8 @@ fn build_ui(app: &adw::Application) {
                 &error_clone,
                 &message_clone,
                 &m,
+                &name_entry_clone,
+                &enroll_btn_clone,
             );
         }
         glib::ControlFlow::Continue
@@ -189,6 +281,8 @@ fn render(
     error_label: &Label,
     message_label: &Label,
     model: &namtor_gnome::PresenterModel,
+    name_entry: &Entry,
+    enroll_btn: &Button,
 ) {
     while let Some(child) = profiles_box.first_child() {
         profiles_box.remove(&child);
@@ -271,6 +365,20 @@ fn render(
         inner.append(&bar);
         frame.set_child(Some(&inner));
         enrollment_box.append(&frame);
+
+        name_entry.set_visible(false);
+        enroll_btn.set_visible(false);
+    } else {
+        name_entry.set_visible(true);
+        enroll_btn.set_visible(true);
+
+        let enroll_input_box = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(8)
+            .build();
+        enroll_input_box.append(name_entry);
+        enroll_input_box.append(enroll_btn);
+        enrollment_box.append(&enroll_input_box);
     }
 
     while let Some(child) = protection_box.first_child() {
