@@ -12,60 +12,183 @@
 #                           The daemon's model-manifest loader is independent;
 #                           this version governs packaging migrations only.
 #
-#   [[dirs]]        path, mode, owner, group
-#                   A directory to create. No source.
+#   [retention]
+#     purge_owner        string   — which package (core|gnome|kde) owns the
+#                                   purge of biometric state (templates,
+#                                   models cache, backoff).
 #
-#   [[files]]       dest, src, mode, owner, group, symlink
+#   [[generated_state]]
+#     path               string   — a runtime-generated state path (not an
+#                                   installed file). Created by the daemon at
+#                                   runtime; lifecycle declared here.
+#     package            string   — core|gnome|kde
+#     on_upgrade         string   — "preserve" | "remove"
+#     on_purge           string   — "preserve" | "remove"
+#
+#   [[dirs]]        path, mode, owner, group, package
+#                   A directory to create. No source. `package` declares
+#                   which split package owns this directory.
+#
+#   [[files]]       dest, src, mode, owner, group, symlink, package
 #                   A regular file copied from `src` (relative to the repo
 #                   root / SRCDIR) to `dest`. `symlink = true` creates a
 #                   symlink dest -> src instead of copying (src is the link
-#                   target as stored on the installed system).
+#                   target as stored on the installed system). `package`
+#                   declares which split package owns this file.
 #
-# Modes are octal strings ("0755", "0644", "4755"). Owners/groups are
+# Split packages:
+#   core  — namtor (daemon, worker, PAM, CLI, models, services, SBOM, notice)
+#   gnome — namtor-gnome (GTK4/libadwaita wizard + settings)
+#   kde   — namtor-kde (Plasma 6 KCM desktop integration files)
+#
+# Shared directories (e.g. /usr/share/applications) are owned by core; GNOME
+# and KDE each own only their own files dropped into them.
+#
+# Modes are octal strings ("0755", "0644"). Owners/groups are
 # resolved by name at install time (root must run staging to chown; non-root
 # staging leaves ownership as the invoking user and emits a warning — modes
 # and content are still deterministic, which is what the evidence gate checks).
 
-schema_version = 1
+schema_version = 2
 
 # ---------------------------------------------------------------------------
-# Directories
+# Retention — core owns biometric state purge
+# ---------------------------------------------------------------------------
+[retention]
+purge_owner = "core"
+
+# ---------------------------------------------------------------------------
+# Generated state — runtime paths created by the daemon, not installed files.
+# Lifecycle: preserve on upgrade (keep biometric templates across versions),
+# remove on purge (biometric data is destroyed when the package is removed).
+# ---------------------------------------------------------------------------
+[[generated_state]]
+path = "/var/lib/namtor/templates"
+package = "core"
+on_upgrade = "preserve"
+on_purge = "remove"
+
+[[generated_state]]
+path = "/var/lib/namtor/templates.key"
+package = "core"
+on_upgrade = "preserve"
+on_purge = "remove"
+
+[[generated_state]]
+path = "/var/lib/namtor/models"
+package = "core"
+on_upgrade = "preserve"
+on_purge = "remove"
+
+[[generated_state]]
+path = "/var/lib/namtor/backoff.json"
+package = "core"
+on_upgrade = "preserve"
+on_purge = "remove"
+
+# ---------------------------------------------------------------------------
+# Directories — core
 # ---------------------------------------------------------------------------
 [[dirs]]
 path = "/usr/lib/namtor"
 mode = "0755"
 owner = "root"
 group = "root"
+package = "core"
 
 [[dirs]]
 path = "/usr/lib/security"
 mode = "0755"
 owner = "root"
 group = "root"
+package = "core"
 
 [[dirs]]
 path = "/usr/share/namtor"
 mode = "0755"
 owner = "root"
 group = "root"
+package = "core"
 
 [[dirs]]
 path = "/var/lib/namtor"
 mode = "0750"
 owner = "namtor"
 group = "namtor"
+package = "core"
 
 [[dirs]]
 path = "/var/lib/namtor/models"
 mode = "0750"
 owner = "namtor"
 group = "namtor"
+package = "core"
 
 [[dirs]]
 path = "/var/lib/namtor/templates"
 mode = "0700"
 owner = "namtor"
 group = "namtor"
+package = "core"
+
+[[dirs]]
+path = "/usr/share/dbus-1/system-services"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
+[[dirs]]
+path = "/usr/share/dbus-1/system.d"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
+[[dirs]]
+path = "/usr/share/polkit-1/actions"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
+[[dirs]]
+path = "/usr/share/applications"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
+[[dirs]]
+path = "/usr/share/metainfo"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
+[[dirs]]
+path = "/usr/share/icons/hicolor/scalable/apps"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
+[[dirs]]
+path = "/usr/share/doc/namtor"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
+# Optional core-owned udev rules slot for a narrowly matched reference-camera
+# rule. Only populated if clean-system camera QA proves group ACLs
+# insufficient. Left as a directory slot for now — no rules file installed.
+[[dirs]]
+path = "/usr/lib/udev/rules.d"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
 
 # ---------------------------------------------------------------------------
 # Binaries (built artifacts — src is relative to the repo root / SRCDIR)
@@ -77,6 +200,7 @@ mode = "0755"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 [[files]]
 dest = "/usr/lib/namtor/namtor-worker"
@@ -85,14 +209,7 @@ mode = "0755"
 owner = "root"
 group = "root"
 symlink = false
-
-[[files]]
-dest = "/usr/lib/namtor/namtor-worker-spawn"
-src = "target/release/namtor-worker-spawn"
-mode = "4755"
-owner = "root"
-group = "root"
-symlink = false
+package = "core"
 
 [[files]]
 dest = "/usr/lib/namtor/namtor-camera-emitter-off"
@@ -101,6 +218,7 @@ mode = "0755"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 [[files]]
 dest = "/usr/bin/namtor-cli"
@@ -109,6 +227,7 @@ mode = "0755"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 # GNOME management UI binary (GTK4 + libadwaita enrollment wizard).
 [[files]]
@@ -118,6 +237,7 @@ mode = "0755"
 owner = "root"
 group = "root"
 symlink = false
+package = "gnome"
 
 # PAM module (cdylib). The crate `namtor-pam` produces `libnamtor_pam.so`;
 # it is installed under its canonical PAM path `pam_namtor.so` (no `lib`
@@ -129,6 +249,7 @@ mode = "0755"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 # ---------------------------------------------------------------------------
 # systemd units
@@ -140,6 +261,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 [[files]]
 dest = "/usr/lib/systemd/system/namtor-daemon.socket"
@@ -148,6 +270,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 # ---------------------------------------------------------------------------
 # sysusers / tmpfiles drop-ins
@@ -159,6 +282,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 [[files]]
 dest = "/usr/lib/tmpfiles.d/namtor.conf"
@@ -167,16 +291,11 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 # ---------------------------------------------------------------------------
 # D-Bus system-bus service activation
 # ---------------------------------------------------------------------------
-[[dirs]]
-path = "/usr/share/dbus-1/system-services"
-mode = "0755"
-owner = "root"
-group = "root"
-
 [[files]]
 dest = "/usr/share/dbus-1/system-services/org.namtor.Manager.service"
 src = "packaging/dbus-1/org.namtor.Manager.service"
@@ -184,16 +303,20 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
+
+[[files]]
+dest = "/usr/share/dbus-1/system.d/org.namtor.Manager.conf"
+src = "packaging/dbus-1/org.namtor.Manager.conf"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+package = "core"
 
 # ---------------------------------------------------------------------------
 # Polkit policy definitions
 # ---------------------------------------------------------------------------
-[[dirs]]
-path = "/usr/share/polkit-1/actions"
-mode = "0755"
-owner = "root"
-group = "root"
-
 [[files]]
 dest = "/usr/share/polkit-1/actions/org.namtor.policy"
 src = "packaging/polkit-1/actions/org.namtor.policy"
@@ -201,28 +324,11 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 # ---------------------------------------------------------------------------
 # GNOME desktop integration (applications, metainfo, icons)
 # ---------------------------------------------------------------------------
-[[dirs]]
-path = "/usr/share/applications"
-mode = "0755"
-owner = "root"
-group = "root"
-
-[[dirs]]
-path = "/usr/share/metainfo"
-mode = "0755"
-owner = "root"
-group = "root"
-
-[[dirs]]
-path = "/usr/share/icons/hicolor/scalable/apps"
-mode = "0755"
-owner = "root"
-group = "root"
-
 [[files]]
 dest = "/usr/share/applications/org.namtor.Wizard.desktop"
 src = "packaging/applications/org.namtor.Wizard.desktop"
@@ -230,6 +336,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "gnome"
 
 [[files]]
 dest = "/usr/share/metainfo/org.namtor.Wizard.metainfo.xml"
@@ -238,6 +345,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "gnome"
 
 [[files]]
 dest = "/usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg"
@@ -246,6 +354,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "gnome"
 
 # ---------------------------------------------------------------------------
 # KDE Plasma 6 desktop integration (KCM desktop entry, metainfo, icon)
@@ -262,6 +371,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "kde"
 
 [[files]]
 dest = "/usr/share/metainfo/org.namtor.kcm.metainfo.xml"
@@ -270,6 +380,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "kde"
 
 [[files]]
 dest = "/usr/share/icons/hicolor/scalable/apps/org.namtor.kcm.svg"
@@ -278,6 +389,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "kde"
 
 # ---------------------------------------------------------------------------
 # Manifests themselves (installed for the daemon to consult at startup)
@@ -289,6 +401,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 [[files]]
 dest = "/usr/share/namtor/install-manifest.toml"
@@ -297,6 +410,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 # ---------------------------------------------------------------------------
 # Transactional PAM integration scripts (admin runs explicitly — never
@@ -309,6 +423,7 @@ mode = "0755"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 [[files]]
 dest = "/usr/share/namtor/pam-uninstall.sh"
@@ -317,6 +432,7 @@ mode = "0755"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
 
 [[files]]
 dest = "/usr/share/namtor/pam-preflight.sh"
@@ -325,16 +441,28 @@ mode = "0755"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
+
+# ---------------------------------------------------------------------------
+# Shared lifecycle helper (Task 19). Every distro install hook (Arch
+# .install, Fedora .spec, Debian maintainer scripts) delegates its typed
+# phases (pre/post install/upgrade/remove) to this script. It validates
+# model layout/hashes, identities/dirs, socket + D-Bus services, drives
+# `namtor-pam-edit` for snapshot/migrate/disable-all/purge, and emits a
+# receipt per phase. PAM is default-off: post-install never edits /etc/pam.d.
+# ---------------------------------------------------------------------------
+[[files]]
+dest = "/usr/share/namtor/lifecycle.sh"
+src = "packaging/lifecycle.sh"
+mode = "0755"
+owner = "root"
+group = "root"
+symlink = false
+package = "core"
 
 # ---------------------------------------------------------------------------
 # Packaging README (documents the install flow for operators)
 # ---------------------------------------------------------------------------
-[[dirs]]
-path = "/usr/share/doc/namtor"
-mode = "0755"
-owner = "root"
-group = "root"
-
 [[files]]
 dest = "/usr/share/doc/namtor/README.md"
 src = "packaging/README.md"
@@ -342,3 +470,39 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
+package = "core"
+
+# ---------------------------------------------------------------------------
+# Licence notice (COPYING.md installed for operators to review)
+# ---------------------------------------------------------------------------
+[[files]]
+dest = "/usr/share/doc/namtor/COPYING.md"
+src = "COPYING.md"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+package = "core"
+
+# ---------------------------------------------------------------------------
+# SBOM (SPDX 2.3 + CycloneDX 1.5) — generated from Cargo.lock, committed
+# under docs/evidence/packaging/. Installed so operators can audit the
+# full dependency tree without the source checkout.
+# ---------------------------------------------------------------------------
+[[files]]
+dest = "/usr/share/doc/namtor/namtor.spdx.json"
+src = "docs/evidence/packaging/namtor.spdx.json"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+package = "core"
+
+[[files]]
+dest = "/usr/share/doc/namtor/namtor.cyclonedx.json"
+src = "docs/evidence/packaging/namtor.cyclonedx.json"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+package = "core"

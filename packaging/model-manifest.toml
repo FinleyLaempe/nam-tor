@@ -44,25 +44,37 @@
 #         dtype           string
 #     [[models.variants]]
 #       quant             string   — "fp32" | "int8"
-#       source_url        string   — download URL (http(s):// or file://)
+#       source_url        string   — offline source for the bundled package
+#                                    (file:// path to the installed model
+#                                    store). Network fetch is never used at
+#                                    install time — distro recipes bundle the
+#                                    deterministic model archive produced by
+#                                    packaging/build-model-archive.sh. The
+#                                    upstream URL is recorded in the comment
+#                                    above each variant for provenance only.
 #       sha256            string   — hex sha256 of the variant's onnx file
 #                                    (multiple variants per model_id supported;
 #                                     INT8 quantisation may differ per arch —
 #                                     add a separate variant when it does)
 #
-# Licence hashes below are the SPDX-canonical licence text sha256s, recorded
-# so the acceptance record is reproducible. Task 6 (signed packages) pins the
-# exact upstream licence file shipped with each model.
+# Licence hashes below are the sha256 of the canonical licence text each model
+# is distributed under, recorded so the acceptance record is reproducible.
+# Canonical licence texts are installed in packaging/licences/ and their
+# hashes are verified against this manifest at package build time.
+# Task 6 (signed packages) pins the exact upstream licence file shipped with
+# each model.
 
 manifest_version = 1
 
 # ---------------------------------------------------------------------------
-# YuNet 2023mar — face detector (OpenCV Zoo, BSD-3-Clause)
+# YuNet 2023mar — face detector (OpenCV Zoo, MIT)
+# Licence text: packaging/licences/yunet_2023mar.LICENSE
+# Upstream: https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
 # ---------------------------------------------------------------------------
 [[models]]
 id = "yunet_2023mar"
-licence_url = "https://opensource.org/license/BSD-3-Clause"
-licence_sha256 = "91f6f2043c607e9db392ca6b4fafd56825a2d5ca741cb3a56d8f817d8d9a9753"
+licence_url = "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/face_detection_yunet/LICENSE"
+licence_sha256 = "c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958"
 redistribution_policy = "redistributable"
 target_arch = "both"
 
@@ -77,16 +89,18 @@ target_arch = "both"
 
   [[models.variants]]
   quant = "fp32"
-  source_url = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+  source_url = "file:///var/lib/namtor/models/yunet_2023mar.onnx"
   sha256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 
 # ---------------------------------------------------------------------------
-# SFace 2021dec — face embedding (OpenCV Zoo, BSD-3-Clause)
+# SFace 2021dec — face embedding (OpenCV Zoo, Apache-2.0)
+# Licence text: packaging/licences/sface_2021dec.LICENSE (= canonical Apache-2.0)
+# Upstream: https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
 # ---------------------------------------------------------------------------
 [[models]]
 id = "sface_2021dec"
-licence_url = "https://opensource.org/license/BSD-3-Clause"
-licence_sha256 = "91f6f2043c607e9db392ca6b4fafd56825a2d5ca741cb3a56d8f817d8d9a9753"
+licence_url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
+licence_sha256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 redistribution_policy = "redistributable"
 target_arch = "both"
 
@@ -101,19 +115,22 @@ target_arch = "both"
 
   [[models.variants]]
   quant = "fp32"
-  source_url = "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+  source_url = "file:///var/lib/namtor/models/sface_2021dec.onnx"
   sha256 = "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"
 
 # ---------------------------------------------------------------------------
-# MiniFASNet PAD — strobe-differential liveness (self-trained, Apache-2.0 ref)
+# MiniFASNet PAD — strobe-differential liveness (self-trained, Apache-2.0)
 # Trained on physics-based synthetic strobe-differential data (AGENTS.md §M9).
 # Code reference: Silent-Face (Apache-2.0); weights self-trained on synthetic
 # differentials, no licence-restricted dataset derived.
+# Licence text: packaging/licences/APACHE-2.0.txt
+# Provenance notice: packaging/licences/minifasnet_pad.NOTICE
+# Upstream: self-trained (no network source); bundled from the model store.
 # ---------------------------------------------------------------------------
 [[models]]
 id = "minifasnet_pad"
 licence_url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
-licence_sha256 = "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+licence_sha256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 redistribution_policy = "redistributable"
 target_arch = "both"
 
@@ -129,4 +146,4 @@ target_arch = "both"
   [[models.variants]]
   quant = "fp32"
   source_url = "file:///var/lib/namtor/models/minifasnet_pad.onnx"
-  sha256 = "3f86c8e4bb1138098ed2f8dc1682c6e1e1d6c5fffcf65dd6955c0cd60579a155"
+  sha256 = "686b6671578a1f6b7b8e018bf12136dfb4fd41671f5a377b96ce15c650306cf6"
