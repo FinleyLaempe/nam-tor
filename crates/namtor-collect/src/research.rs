@@ -85,9 +85,14 @@ pub fn raw_pair_count(session_dir: &Path) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::raw_pair_count;
     use crate::session::{SessionKind, SessionMeta};
-    use crate::store::CollectionStore;
+    use crate::CollectionStore;
+    use crate::ResearchCapture;
+    use crate::RESEARCH_ENV_VAR;
+    use std::env;
+    use std::sync::Mutex;
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn test_meta(id: &str, contributor: &str) -> SessionMeta {
         SessionMeta {
@@ -104,6 +109,7 @@ mod tests {
 
     #[test]
     fn authorize_fails_without_env_var() {
+        let _guard = TEST_LOCK.lock().unwrap();
         // SAFETY of test: env var is project-scoped and tests run single-threaded.
         env::remove_var(RESEARCH_ENV_VAR);
         assert!(ResearchCapture::authorize().is_err());
@@ -111,6 +117,7 @@ mod tests {
 
     #[test]
     fn authorize_succeeds_with_env_var() {
+        let _guard = TEST_LOCK.lock().unwrap();
         env::set_var(RESEARCH_ENV_VAR, "1");
         assert!(ResearchCapture::authorize().is_ok());
         env::remove_var(RESEARCH_ENV_VAR);
@@ -118,6 +125,7 @@ mod tests {
 
     #[test]
     fn write_raw_pair_writes_files_under_raw_subdir() {
+        let _guard = TEST_LOCK.lock().unwrap();
         env::set_var(RESEARCH_ENV_VAR, "1");
         let dir = tempfile::tempdir().unwrap();
         let store = CollectionStore::open(dir.path()).unwrap();
@@ -133,6 +141,7 @@ mod tests {
 
     #[test]
     fn product_store_writes_no_raw_files() {
+        let _guard = TEST_LOCK.lock().unwrap();
         env::remove_var(RESEARCH_ENV_VAR);
         let dir = tempfile::tempdir().unwrap();
         let store = CollectionStore::open(dir.path()).unwrap();
