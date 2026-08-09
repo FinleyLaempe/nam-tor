@@ -1,0 +1,118 @@
+{
+  "task": "20",
+  "title": "Convert Arch to namtor, namtor-gnome, and namtor-kde split packages",
+  "gate": "arch-split-matrix",
+  "status": "PASS",
+  "timestamp": "2026-08-09T02:30:00Z",
+  "summary": "The Arch PKGBUILD has been converted from a monolithic package to a split-package build using pkgbase=namtor with three pkgname entries: namtor (core), namtor-gnome, and namtor-kde. makepkg --printsrcinfo confirms the three-package structure with correct per-package metadata. The core package owns the daemon, worker, CLI, PAM module, systemd units, sysusers, tmpfiles, D-Bus, polkit, manifests, models, licences, lifecycle helper, and SBOM — it is headless-safe with no desktop runtime deps. The GNOME package owns the enroll-wizard binary, .desktop, .metainfo.xml, and .svg, depending on namtor (exact version) + gtk4 + libadwaita. The KDE package owns the KCM QML module (CMake-installed) plus .desktop, .metainfo.xml, and .svg, depending on namtor (exact version) + qt6-base + kirigami + kcoreaddons. All sha256sums are pinned (no SKIP). The core package's install hook (namtor.install) delegates to the shared lifecycle helper. Desktop packages have no install hooks — pacman's alpm hooks (desktop-database.hook, gtk-icon-cache.hook) handle .desktop/icon cache updates automatically after the transaction. No file conflicts exist between the three packages (verified by staging each into separate DESTDIRs and checking for overlapping paths).",
+  "pkgbase": "namtor",
+  "packages": {
+    "namtor": {
+      "pkgdesc": "IR face authentication — daemon, PAM module, CLI, models (headless-safe)",
+      "depends": ["onnxruntime", "pam", "systemd", "gcc-libs"],
+      "provides": ["pam_namtor"],
+      "install": "namtor.install",
+      "owns": [
+        "daemon binary", "worker binary", "camera-emitter-off binary", "CLI binary",
+        "PAM module (pam_namtor.so)", "systemd units (socket + service)",
+        "sysusers.d/namtor.conf", "tmpfiles.d/namtor.conf",
+        "D-Bus service (org.namtor.Manager)", "polkit policy (org.namtor.policy)",
+        "model-manifest.toml", "install-manifest.toml",
+        "pam-install.sh", "pam-uninstall.sh", "pam-preflight.sh",
+        "lifecycle.sh", "README.md", "COPYING.md",
+        "SBOM (namtor.spdx.json + namtor.cyclonedx.json)",
+        "bundled models (yunet, sface, minifasnet_pad)",
+        "licence acceptance records (yunet, sface)",
+        "model dir symlinks (yunet/fp32.onnx, sface/fp32.onnx)"
+      ],
+      "desktop_deps": "none — headless-safe",
+      "staging": "stage.sh --package core + model archive extraction + licence pre-write"
+    },
+    "namtor-gnome": {
+      "pkgdesc": "Nam-tor GNOME enrollment wizard and settings (GTK4/libadwaita)",
+      "depends": ["namtor=$pkgver", "gtk4", "libadwaita"],
+      "install": "none (no hook — alpm hooks handle desktop/icon caches)",
+      "owns": [
+        "enroll-wizard binary",
+        "org.namtor.Wizard.desktop",
+        "org.namtor.Wizard.metainfo.xml",
+        "org.namtor.Wizard.svg"
+      ],
+      "qt_kde_deps": "none",
+      "staging": "stage.sh --package gnome"
+    },
+    "namtor-kde": {
+      "pkgdesc": "Nam-tor KDE Plasma 6 KCM — system settings module (Qt6/KF6)",
+      "depends": ["namtor=$pkgver", "qt6-base", "kirigami", "kcoreaddons"],
+      "install": "none (no hook — alpm hooks handle desktop/icon caches)",
+      "owns": [
+        "QML module (libnamtorqml.so — CMake-installed)",
+        "main.qml (CMake-installed)",
+        "metadata.json (CMake-installed, kpackage/kcms/kcm_namtor)",
+        "org.namtor.kcm.desktop",
+        "org.namtor.kcm.metainfo.xml",
+        "org.namtor.kcm.svg"
+      ],
+      "gtk_libadwaita_deps": "none",
+      "staging": "cmake --install build-kde + stage.sh --package kde"
+    }
+  },
+  "dep_isolation": {
+    "gnome_no_qt_kde": "PASS — namtor-gnome depends array contains no qt6-base, kirigami, or kcoreaddons",
+    "kde_no_gtk_libadwaita": "PASS — namtor-kde depends array contains no gtk4 or libadwaita",
+    "core_no_desktop": "PASS — namtor depends array contains no gtk4, libadwaita, qt6-base, kirigami, or kcoreaddons",
+    "exact_version_pin": "PASS — both desktop packages depend on 'namtor=$pkgver' (exact version, not >= or unbounded)"
+  },
+  "file_conflict_check": {
+    "method": "stage.sh --package core|gnome|kde into three separate DESTDIRs, collect file paths, check for intersections via comm",
+    "core_vs_gnome": "PASS — no overlapping paths",
+    "core_vs_kde": "PASS — no overlapping paths",
+    "gnome_vs_kde": "PASS — no overlapping paths",
+    "note": "Shared directories (/usr/share/applications, /usr/share/metainfo, /usr/share/icons) are owned by core in the manifest; GNOME and KDE each own only their own files dropped into them. The KDE CMake install also writes desktop/metainfo/icon files, but stage.sh --package kde overwrites them with identical content from the manifest (same source files)."
+  },
+  "hash_pinning": {
+    "source_tarball": "6a96ffe87938579aee2045cca1f0dd92d6b58b3bbff5f7b6349e54fd919b6bb0",
+    "model_archive": "c09bfa9840cf5b3b8f6a03d0a044489adc8223e9e588022fc4eede988890d9d5",
+    "skip_count": 0,
+    "all_64_hex": true
+  },
+  "lifecycle_helper": {
+    "core_install_hook": "namtor.install delegates all phases (post_install, pre_upgrade, post_upgrade, pre_remove, post_remove) to /usr/share/namtor/lifecycle.sh",
+    "desktop_hooks": "none — namtor-gnome and namtor-kde have no install hooks. pacman's alpm hooks (desktop-database.hook, gtk-update-icon-cache.hook) run after the full transaction, covering .desktop and icon files installed by the desktop packages.",
+    "pam_default_off": "PASS — core post_install never edits /etc/pam.d (lifecycle.sh post-install does not call namtor-pam-edit)"
+  },
+  "makepkg_printsrcinfo": {
+    "pkgbase": "namtor",
+    "pkgname_count": 3,
+    "pkgnames": ["namtor", "namtor-gnome", "namtor-kde"],
+    "per_package_depends_extracted": true,
+    "per_package_install_extracted": true,
+    "core_has_install": true,
+    "gnome_has_install": false,
+    "kde_has_install": false
+  },
+  "test_suite": {
+    "script": "packaging/tests/test_arch_split.sh",
+    "passed": 59,
+    "failed": 0,
+    "exit_code": 0
+  },
+  "regression_checks": {
+    "test_install_default_off_sh": "PASS — 19/19 (namtor.install unchanged; still delegates to lifecycle.sh)",
+    "test_lifecycle_sh": "PASS — 38/38 (namtor.install arch hook delegation still verified)",
+    "test_model_archive_sh": "PASS — 17/17 (unaffected; sha256sums unchanged)"
+  },
+  "files_created": [
+    "packaging/tests/test_arch_split.sh"
+  ],
+  "files_modified": [
+    "packaging/arch/PKGBUILD"
+  ],
+  "files_not_modified": [
+    "packaging/arch/namtor.install — already correct for core-only (delegates to lifecycle.sh, no desktop-specific content); no changes needed for split packages"
+  ],
+  "files_not_created": [
+    "packaging/arch/namtor-gnome.install — not needed; desktop packages have no hooks (alpm handles .desktop/icon caches)",
+    "packaging/arch/namtor-kde.install — not needed; same rationale"
+  ]
+}

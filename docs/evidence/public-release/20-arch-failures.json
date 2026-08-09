@@ -1,0 +1,101 @@
+{
+  "task": "20",
+  "title": "Arch split packages — failure-mode matrix",
+  "gate": "arch-split-failures",
+  "status": "PASS",
+  "timestamp": "2026-08-09T02:30:00Z",
+  "summary": "Every failure mode the split PKGBUILD must defend against was verified. The matrix covers: SKIP in sha256sums, wrong pkgname count, missing package function, desktop dep leaking into core, core dep leaking into desktop, exact-version dependency not pinned, file conflicts between packages, install hook on desktop packages, PKGBUILD syntax errors, and makepkg --printsrcinfo parse failures. All are caught by the test suite; none are present in the shipped PKGBUILD.",
+  "matrix": [
+    {
+      "defect": "SKIP in sha256sums (unpinned source or model archive)",
+      "expected": "test fails nonzero",
+      "actual": "test_arch_split.sh (f) checks for SKIP in sha256sums; current PKGBUILD has zero SKIP entries — both sha256sums are real 64-hex",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "pkgname array has wrong count (not 3)",
+      "expected": "test fails nonzero",
+      "actual": "test_arch_split.sh (a) asserts pkgname_count == 3; current PKGBUILD has exactly namtor, namtor-gnome, namtor-kde",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "package function missing (e.g. package_namtor-gnome not defined)",
+      "expected": "makepkg --printsrcinfo fails with 'Missing package_namtor-gnome() function'",
+      "actual": "all three functions exist with hyphenated names (bash allows hyphens in function names); makepkg --printsrcinfo succeeds",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "core package depends on a desktop library (gtk4/libadwaita/qt6-base/kirigami/kcoreaddons)",
+      "expected": "test fails nonzero — core must be headless-safe",
+      "actual": "test_arch_split.sh (c) checks each desktop lib is absent from core depends; current core depends only on onnxruntime, pam, systemd, gcc-libs",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "gnome package depends on a Qt/KDE library",
+      "expected": "test fails nonzero — gnome must not pull Qt/KDE",
+      "actual": "test_arch_split.sh (d) checks qt6-base, kirigami, kcoreaddons absent from gnome depends; current gnome depends only on namtor=$pkgver, gtk4, libadwaita",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "kde package depends on a GTK/libadwaita library",
+      "expected": "test fails nonzero — kde must not pull GTK",
+      "actual": "test_arch_split.sh (e) checks gtk4, libadwaita absent from kde depends; current kde depends only on namtor=$pkgver, qt6-base, kirigami, kcoreaddons",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "desktop package depends on namtor without exact version pin (e.g. 'namtor' without =$pkgver)",
+      "expected": "test fails nonzero — desktop packages must pin exact core version",
+      "actual": "test_arch_split.sh (d/e) checks for 'namtor=$pkgver' literal in depends; both gnome and kde pin exact version",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "file conflict: same dest path owned by two packages",
+      "expected": "test fails nonzero — pacman refuses conflicting files",
+      "actual": "test_arch_split.sh (i) stages each package into separate DESTDIRs and checks for overlapping paths via comm; zero overlaps found",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "desktop package has an install hook (should have none)",
+      "expected": "test fails nonzero — desktop packages must not have install hooks",
+      "actual": "test_arch_split.sh (h) checks neither gnome nor kde package functions set install=; also checks namtor-gnome.install and namtor-kde.install files do not exist",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "PKGBUILD syntax error (bash -n fails)",
+      "expected": "test fails nonzero",
+      "actual": "test_arch_split.sh (k) runs bash -n; current PKGBUILD passes",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "makepkg --printsrcinfo fails or produces wrong package count",
+      "expected": "test fails nonzero — makepkg must parse the split PKGBUILD",
+      "actual": "test_arch_split.sh (k) runs makepkg --printsrcinfo and checks for 3 pkgname entries; current PKGBUILD produces correct .SRCINFO with 3 packages",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "core package missing mandatory files (daemon, PAM, lifecycle helper, systemd units, model manifest)",
+      "expected": "test fails nonzero — core must be self-contained",
+      "actual": "test_arch_split.sh (j) stages core and checks for namtor-daemon, pam_namtor.so, lifecycle.sh, namtor-daemon.socket, namtor-daemon.service, sysusers.d/namtor.conf, model-manifest.toml; all present",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "core does not stage --package core / bundle models / pre-write licences",
+      "expected": "test fails nonzero — core must stage its manifest entries and bundle models",
+      "actual": "test_arch_split.sh (c) checks stage.sh --package core, var/lib/namtor/models, and licence.accepted in the core package function body; all present",
+      "verdict": "PASS"
+    },
+    {
+      "defect": "kde does not run cmake --install for the QML module",
+      "expected": "test fails nonzero — kde must install the CMake-built QML module",
+      "actual": "test_arch_split.sh (e) checks for cmake --install in the kde package function body; present",
+      "verdict": "PASS"
+    }
+  ],
+  "makepkg_function_name_note": "makepkg requires the split-package function name to match the pkgname exactly, including hyphens. Bash (non-POSIX mode) allows hyphens in function names with the name() syntax. The PKGBUILD defines package_namtor(), package_namtor-gnome(), and package_namtor-kde(). makepkg --printsrcinfo successfully extracts per-package metadata (depends, pkgdesc, install, provides) from each function body without executing the staging code.",
+  "test_suite": {
+    "script": "packaging/tests/test_arch_split.sh",
+    "passed": 59,
+    "failed": 0,
+    "exit_code": 0
+  }
+}
