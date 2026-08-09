@@ -6,6 +6,20 @@
 # then stages via packaging/stage.sh for a deterministic DESTDIR layout.
 # The transactional PAM install scripts are shipped for the admin to run
 # explicitly — they are NOT invoked automatically by the package.
+#
+# Models are BUNDLED from the deterministic, signed model archive
+# (namtor-models-<version>.tar.gz, produced by
+# packaging/build-model-archive.sh). The archive is MANDATORY:
+# override_dh_auto_configure verifies its MANIFEST.json + sha256 sidecar +
+# per-model hashes against model-manifest.toml before any compilation. No
+# network fetch occurs at build or install time.
+#
+# Split into namtor (core), namtor-gnome, namtor-kde binary packages.
+# The install manifest (schema v2) carries per-entry `package` ownership
+# (core|gnome|kde); override_dh_auto_install calls
+# `stage.sh debian/<pkg> . --package core|gnome|kde` to stage only the
+# entries owned by each binary package, producing a deterministic DESTDIR
+# layout with no file conflicts between packages.
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 # Cargo needs the C compiler and linker from the environment; dh-cargo
@@ -13,16 +27,27 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 # build logs.
 export RUST_BACKTRACE = 0
 
+# Debian multiarch: the PAM module goes to
+# /usr/lib/<triplet>/security/pam_namtor.so (e.g. x86_64-linux-gnu or
+# aarch64-linux-gnu). stage.sh installs it to /usr/lib/security/; we
+# relocate it to the multiarch path after core staging.
+DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+
 # dh-cargo integration. The crate is a virtual workspace; we drive cargo
 # directly rather than letting dh-cargo try to build a single crate.
 %:
 	dh $@ --buildsystem=cargo
 
 # ---------------------------------------------------------------------------
-# override_auto_configure: skip — we have no configure step (cargo is the
-# build system).
+# override_auto_configure: verify the mandatory model archive before any
+# build step. The archive (namtor-models-<ver>.tar.gz) must be present in
+# the source tree; build-model-archive.sh --verify checks its MANIFEST.json
+# + sha256 sidecar + per-model hashes against packaging/model-manifest.toml.
+# Fails closed if absent or tampered — no build proceeds without a verified
+# model source.
 # ---------------------------------------------------------------------------
 override_dh_auto_configure:
+	./packaging/build-model-archive.sh --verify $(CURDIR)/namtor-models-0.1.0.tar.gz $(CURDIR)
 	@echo "namtor: skipping configure (cargo build system)"
 
 # ---------------------------------------------------------------------------
@@ -57,23 +82,65 @@ override_dh_auto_test:
 	cargo test --workspace -- --skip concurrent_connections_serialise --test-threads=1 || true
 
 # ---------------------------------------------------------------------------
-# override_dh_auto_install: deterministic staging from
-# packaging/install-manifest.toml into debian/namtor.
+# override_dh_auto_install: deterministic split staging from
+# packaging/install-manifest.toml into per-package DESTDIRs.
 # ---------------------------------------------------------------------------
 override_dh_auto_install:
 	# KDE KCM: install the CMake-built QML module + metadata.json into
-	# debian/namtor. stage.sh will overwrite the overlapping
-	# desktop/metainfo/icon files with identical content from the manifest.
-	DESTDIR=debian/namtor cmake --install build-kde
+	# debian/namtor-kde. stage.sh --package kde will overwrite the
+	# overlapping desktop/metainfo/icon files with identical content
+	# from the manifest.
+	DESTDIR=debian/namtor-kde cmake --install build-kde
 
-	# Deterministic staging from packaging/install-manifest.toml — installs
-	# all static files (binaries, PAM, systemd, D-Bus, polkit, GNOME/KDE
-	# desktop entries, metainfo, icons, manifests, PAM scripts, README).
-	./packaging/stage.sh debian/namtor .
+	# Deterministic staging from packaging/install-manifest.toml — core
+	# entries only (daemon, worker, CLI, PAM, systemd, sysusers, tmpfiles,
+	# D-Bus, polkit, manifests, PAM scripts, README, COPYING, SBOM,
+	# lifecycle helper).
+	./packaging/stage.sh debian/namtor . --package core
+
+	# Relocate PAM module to Debian multiarch path
+	# (/usr/lib/<triplet>/security/pam_namtor.so). stage.sh installs it
+	# to /usr/lib/security/; Debian policy wants the multiarch triplet.
+	mkdir -p debian/namtor/usr/lib/$(DEB_HOST_MULTIARCH)/security
+	mv debian/namtor/usr/lib/security/pam_namtor.so \
+	    debian/namtor/usr/lib/$(DEB_HOST_MULTIARCH)/security/pam_namtor.so
+	rmdir --ignore-fail-on-non-empty debian/namtor/usr/lib/security 2>/dev/null || true
+
+	# GNOME entries only (enroll-wizard binary, .desktop, .metainfo.xml,
+	# .svg).
+	./packaging/stage.sh debian/namtor-gnome . --package gnome
+
+	# KDE entries only (kcm .desktop, .metainfo.xml, .svg).
+	./packaging/stage.sh debian/namtor-kde . --package kde
+
+	# Bundle models from the verified archive (no network fetch).
+	mkdir -p debian/namtor/var/lib/namtor/models
+	tar -xzf $(CURDIR)/namtor-models-0.1.0.tar.gz \
+	    -C debian/namtor/var/lib/namtor/models --strip-components=1 \
+	    models/yunet_2023mar.onnx models/sface_2021dec.onnx \
+	    models/minifasnet_pad.onnx
+	# Worker expects <root>/<id>/<quant>.onnx
+	mkdir -p debian/namtor/var/lib/namtor/models/yunet_2023mar
+	ln -s ../yunet_2023mar.onnx debian/namtor/var/lib/namtor/models/yunet_2023mar/fp32.onnx
+	mkdir -p debian/namtor/var/lib/namtor/models/sface_2021dec
+	ln -s ../sface_2021dec.onnx debian/namtor/var/lib/namtor/models/sface_2021dec/fp32.onnx
+	# Pre-write licence acceptance records (permissive, auto-accepted).
+	echo '{"model_id":"yunet_2023mar","licence_url":"https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/face_detection_yunet/LICENSE","licence_sha256":[200,59,129,32,197,12,203,212,196,249,110,223,83,20,27,221,86,110,187,143,142,146,39,228,21,50,106,161,177,171,169,88],"accepted_at_us":0,"accepted_by":"package"}' \
+	    > debian/namtor/var/lib/namtor/models/yunet_2023mar/licence.accepted
+	echo '{"model_id":"sface_2021dec","licence_url":"https://www.apache.org/licenses/LICENSE-2.0.txt","licence_sha256":[207,199,116,155,150,246,59,211,28,60,66,181,196,113,191,117,104,20,5,62,132,124,16,243,235,0,52,23,188,82,61,48],"accepted_at_us":0,"accepted_by":"package"}' \
+	    > debian/namtor/var/lib/namtor/models/sface_2021dec/licence.accepted
+
+# ---------------------------------------------------------------------------
+# override_dh_install: we stage directly into per-package dirs via
+# stage.sh; dh_install is not needed (the .install lists are informational
+# and match the already-staged trees).
+# ---------------------------------------------------------------------------
+override_dh_install:
+	@echo "namtor: staging directly into per-package dirs; skipping dh_install"
 
 # ---------------------------------------------------------------------------
 # override_dh_missing: the manifest handles every file; do not let
-# dh_missing warn about setuid binaries or the PAM module path.
+# dh_missing warn about the PAM module path.
 # ---------------------------------------------------------------------------
 override_dh_missing:
 	@echo "namtor: install-manifest.toml is the source of truth; skipping dh_missing"

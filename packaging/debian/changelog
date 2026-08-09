@@ -1,9 +1,14 @@
 namtor (0.1.0-1) unstable; urgency=medium
 
-  * Initial Debian packaging.
-  * Daemon, worker, setuid spawn helper, CLI, PAM module, systemd units.
-  * Transactional PAM install/uninstall scripts under /usr/share/namtor.
-  * Models fetched at runtime per model-manifest.toml after licence
-    acceptance (NAMTOR_ACCEPT_LICENCE=1).
+  * Split into namtor (core), namtor-gnome, namtor-kde binary packages.
+  * Core: daemon, worker, CLI, PAM module, systemd units, sysusers,
+    tmpfiles, D-Bus, polkit, manifests, bundled models + licence
+    notices, lifecycle helper, SBOM. No GTK/Qt runtime deps.
+  * namtor-gnome: GTK4/libadwaita wizard; Depends: namtor (= 0.1.0-1).
+  * namtor-kde: Plasma 6 KCM (Kirigami/Qt6); Depends: namtor (= 0.1.0-1).
+  * PAM module at Debian multiarch path
+    (/usr/lib/<triplet>/security/pam_namtor.so).
+  * PAM remains OFF by default; remove keeps state, purge cleans all.
+  * Models bundled from deterministic signed archive (no network fetch).
 
- -- Nam-tor Project <namtor@example.invalid>  Thu, 06 Aug 2026 00:00:00 +0000
+ -- Nam-tor Project <namtor@example.invalid>  Sun, 09 Aug 2026 00:00:00 +0000

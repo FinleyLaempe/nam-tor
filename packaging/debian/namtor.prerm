@@ -2,22 +2,21 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # namtor.prerm — Debian pre-removal hook (debhelper compat 13).
 #
-# Stops the daemon and removes the transactional PAM integration (restoring
-# the checksum-verified backup) before the binaries go away.
+# Delegates to the shared lifecycle helper (Task 19). On removal: pre-remove
+# (disable-all PAM + stop daemon) and cache the helper so postrm can still
+# run after dpkg deletes the payload. On upgrade: pre-upgrade (snapshot PAM).
 
 set -e
 
+NAMTOR_LIFECYCLE_CACHE=/var/tmp/namtor-lifecycle.sh
+
 case "$1" in
     remove)
-        if [ -x /usr/share/namtor/pam-uninstall.sh ]; then
-            /usr/share/namtor/pam-uninstall.sh --restore-backup || true
-        fi
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl --no-reload disable --now namtor-daemon.socket \
-                namtor-daemon.service 2>/dev/null || true
-        fi
+        /usr/share/namtor/lifecycle.sh pre-remove || true
+        cp -f /usr/share/namtor/lifecycle.sh "$NAMTOR_LIFECYCLE_CACHE" 2>/dev/null || true
         ;;
-    deconfigure|upgrade|failed-upgrade)
+    upgrade|deconfigure|failed-upgrade)
+        /usr/share/namtor/lifecycle.sh pre-upgrade || true
         ;;
     *)
         echo "namtor.prerm called with unknown argument \`$1'" >&2
