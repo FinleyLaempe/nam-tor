@@ -1,0 +1,21 @@
+[package]
+name = "namtor-pam-config"
+version = "0.1.0"
+edition.workspace = true
+license = "GPL-3.0-only"
+description = "Typed PAM service inventory, classifier, and transactional editor"
+
+[[bin]]
+name = "namtor-pam-edit"
+path = "src/bin/namtor-pam-edit.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
