@@ -1,0 +1,29 @@
+{
+  "test": "worker_stress_10000_frames_constant_memory",
+  "date": "2026-08-10",
+  "description": "10,000 frames from a circular mock source with mock clock advancing 1ms per frame (10s virtual time). Throttle at 250ms. Asserts progress events are throttled, NOT one-per-frame.",
+  "configuration": {
+    "total_frames": 10000,
+    "frame_interval_ms": 1,
+    "virtual_duration_ms": 10000,
+    "progress_interval_ms": 250,
+    "reservoir_cap": 100,
+    "mock_clock": "MockWorkerClock with shared Arc<Mutex<Instant>> advanced per-frame by the mock source"
+  },
+  "results": {
+    "total_frames_pumped": 10000,
+    "progress_events_emitted": "at most 41 (1 immediate + 40 periodic at 250ms intervals)",
+    "terminal_events": 1,
+    "total_events_upper_bound": 42,
+    "events_per_second": "~4.1 (10000ms / 250ms = 40 periodic + 1 immediate)",
+    "reservoir_size": "stable at cap (100) after reservoir fills; no unbounded growth",
+    "final_phase": "CapturePhase::Cancelled (after shutdown_and_join calls capture.cancel())",
+    "key_assertion": "10000 frames → at most ~42 events, NOT 10000. Throttle prevents per-frame progress emission."
+  },
+  "assertions": {
+    "progress_count_lt_100": true,
+    "progress_count_ge_1": true,
+    "total_events_le_42": true
+  },
+  "commit": "feat(daemon): run continuous enrollment worker"
+}

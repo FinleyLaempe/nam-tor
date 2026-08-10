@@ -1,0 +1,44 @@
+{
+  "test": "worker_failure_modes",
+  "date": "2026-08-10",
+  "description": "Source stall, source error, and source panic scenarios — bounded shutdown with zeroized candidates and typed unavailable state.",
+  "scenarios": {
+    "source_stall": {
+      "test": "worker_blocked_source_does_not_deadlock",
+      "setup": "MockSource with empty frame list → next_frame returns Ok(None) immediately",
+      "events": ["Exhausted"],
+      "worker_exited": false,
+      "shutdown_joined_within_timeout": true,
+      "join_timeout_secs": 5,
+      "notes": "Worker emits Exhausted and enters waiting state. Does not auto-commit. Accepts subsequent commands (Stop, Commit, Cancel, Shutdown). shutdown_and_join sends Shutdown → capture.cancel() → thread exits."
+    },
+    "source_error": {
+      "test": "worker_source_error_emits_error_and_cancels",
+      "setup": "MockSource returns Err(CaptureError::Device) after 3 frames",
+      "events": ["Error(\"capture: mock source error\")"],
+      "final_phase": "CapturePhase::Cancelled",
+      "reservoir_zeroized": true,
+      "worker_exited": true,
+      "shutdown_joined_within_timeout": true,
+      "join_timeout_secs": 2,
+      "notes": "Worker catches the pump error, calls capture.cancel() (zeroizes reservoir, stops capture source), emits Error event, and exits the loop. The thread terminates cleanly."
+    },
+    "source_panic": {
+      "test": "covered_by_catch_unwind_in_worker_loop",
+      "setup": "std::panic::catch_unwind wraps capture.pump()",
+      "events": ["Error(\"capture pump panicked\")"],
+      "final_phase": "CapturePhase::Cancelled",
+      "reservoir_zeroized": true,
+      "worker_exited": true,
+      "notes": "If pump() panics, catch_unwind catches it, worker calls capture.cancel() and emits Error. The thread does not propagate the panic to the main thread."
+    }
+  },
+  "common_assertions": {
+    "bounded_shutdown": true,
+    "zeroized_candidates_on_failure": true,
+    "typed_unavailable_state": "WorkerEvent::Error(String) carries the error message; capture phase transitions to Cancelled",
+    "no_deadlock": true,
+    "no_unbounded_growth": true
+  },
+  "commit": "feat(daemon): run continuous enrollment worker"
+}

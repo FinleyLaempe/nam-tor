@@ -8,3 +8,4 @@ pub mod observation;
 pub mod polkit;
 pub mod session;
 pub mod store;
+pub mod worker;
