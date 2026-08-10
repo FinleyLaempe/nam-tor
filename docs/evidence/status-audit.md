@@ -22,14 +22,17 @@ than claiming success.
 code state, not a readiness claim. Anything not evidenced is `unmeasured` or
 `WITHHELD`.
 
-Audit date: 2026-08-08. Baseline commits: `98da82e` (Task 1, live-auth
-baseline), `c0ebc9c` (Task 2, CI security gates), `4d8af1b` (release
-candidate evidence). Inputs:
+Audit date: 2026-08-10 (updated for enrollment redesign certification, task 16).
+Baseline commits: `98da82e` (Task 1, live-auth baseline), `c0ebc9c` (Task 2, CI
+security gates), `4d8af1b` (release candidate evidence), `9630ee1` (enrollment
+redesign packaging certification, task 14). Inputs:
 [`w1-auth.txt`](w1-auth.txt), [`ci-baseline.md`](ci-baseline.md),
 [`AGENTS.md`](../../AGENTS.md),
 [`../superpowers/plans/2026-08-04-nam-tor-roadmap.md`](../superpowers/plans/2026-08-04-nam-tor-roadmap.md),
 [`.omo/plans/namtor-complete-product.md`](../../.omo/plans/namtor-complete-product.md)
-(the 49-task plus 4-final-wave production plan).
+(the 49-task plus 4-final-wave production plan),
+[`.omo/plans/namtor-usable-intuitive-enrollment.md`](../../.omo/plans/namtor-usable-intuitive-enrollment.md)
+(the 16-task enrollment redesign plan).
 
 ---
 
@@ -44,13 +47,13 @@ candidate evidence). Inputs:
 | **M4** — enrollment + template storage | `implemented` (complete) | `namtor_store` (AES-256-GCM, per-uid, AAD binds uid+model_id, Zeroize) and `namtor_recog` (YuNet + SFace + alignment + cosine) shipped; CLI enroll/list/remove shipped; named profiles, ranked enrollment, temporal consensus shipped (tasks 14-15, 18). **TPM2 sealing complete** (task 26; software/reference TPM tested, cross-hardware WITHHELD). **Per-user z-norm/t-norm WITHHELD** (task 16; no lawful cohort). **RGB-IR fusion WITHHELD** (task 17; extrinsics unmeasured). |
 | **M5** — PAM module | `implemented` (complete) | `namtor_pam` ships `pam_namtor.so` 457920 bytes < 500 KB budget, fail-closed, no ML deps, stdin keypress fallback, socket client drives Prepare→Verify→Release. G5.1 structural test green (`g5_structural.rs`). Production PAM-stack installation is owner-gated (WITHHELD, see §4). |
 | **M6** — analytic PAD | `implemented` (complete, uncalibrated) | `namtor_pad` ships four analytic gates on `D = On − Off` (differential energy, gradient consistency, specular highlight, radial falloff). PAD is a veto, not a weighted term. 37+ tests green. **All gates UNCALIBRATED**: thresholds are conservative defaults, not tuned against a real attack corpus. Calibration WITHHELD (task 21; no attack corpus). G4 production claim WITHHELD. |
-| **M7** — desktop integration (GNOME) | `implemented` (complete) | `namtor_gnome` GTK4/libadwaita enrollment wizard + settings app shipped. Talks to the manager via D-Bus (task 26 moved it behind the bus). GNOME QA evidence under `docs/evidence/ui/gnome/`. Runtime HIL in a real GNOME session WITHHELD. |
+| **M7** — desktop integration (GNOME) | `implemented` (complete, redesigned) | `namtor_gnome` GTK4/libadwaita enrollment wizard + settings app shipped. Talks to the manager via D-Bus (task 26 moved it behind the bus). GNOME QA evidence under `docs/evidence/ui/gnome/`. **Enrollment redesign complete** (tasks 1-14): adaptive three-destination shell (Profiles, Authentication, System), continuous-enrollment NavigationView (Setup, Capture, Review, Stop, Resume, Save, Discard), Manager3 D-Bus contract, 83-test accessibility and privacy suite, desktop certification harness. Evidence under `docs/evidence/enrollment-redesign/`. Runtime HIL in a real GNOME session WITHHELD (task 15; no root, no camera, no AT-SPI). Screenshots WITHHELD (no installed app and running daemon; see `enrollment-redesign/16-visual-review.md`). |
 | **M8** — namtor-collect | `implemented` (complete) | `namtor_collect` consent-gated PAD data collection shipped. ConsentRecord grant/revoke, per-session IDs for withdrawal, CollectionStore writes raw pairs + derived differential stats. 15+ tests green. Production collection campaign (consented subjects, attack props) is owner-gated and has not run. |
 | **M9** — trained PAD model | `implemented` (complete, synthetic-only) | MiniFASNet PAD model trained on physics-based synthetic strobe-differential data, 49 KB ONNX, ~80K params, 100% val accuracy on synthetic data. Deployed to `var/lib/namtor/models/minifasnet_pad.onnx`. **Synthetic training data is explicitly non-production**; the model cannot be production-selected (requires consented subject/device-disjoint real data). G3/G4 at full strength WITHHELD. |
 | **M10** — remaining scope | `implemented` | M10 presence + depth + backend ablation implemented (tasks 29-31). Presence mode, `DepthUvc` depth path, backend ablation. |
 | **KDE KCM** | `implemented` (complete) | `namtor_kde` Rust bridge + QML KCM + C++ KCModule shim shipped (tasks 21-25). Async D-Bus bridge with generation-based stale-response handling, QAbstractListModel profile model, accessibility/i18n audit, desktop entry + AppStream metainfo. Runtime load in a real Plasma 6 session WITHHELD (no kcmshell6 / plasma-systemsettings on this host). Evidence: `docs/evidence/ui/kde/`. |
-| **D-Bus `org.namtor.Manager`** | `implemented` (complete) | System-bus zbus service shipped (tasks 8-13). Methods, signals, polkit integration, peer identity, enrollment sessions, profile lifecycle backed by encrypted TemplateStore. Installed `gdbus introspect --system` WITHHELD (owner-run). Evidence: `docs/evidence/manager-*.md`, `docs/evidence/dbus-contract.xml`. |
-| **Packaging** | `implemented` (complete, unsigned) | Packaging infrastructure complete (task 6): install manifest, distro packages (Arch/Fedora/Debian), systemd hardening, model acquisition, PAM install lifecycle, SBOM (CycloneDX + SPDX), provenance, reproducible build, signatures. Signed packages WITHHELD (no signing keys). Evidence: `docs/evidence/packaging/`. |
+| **D-Bus `org.namtor.Manager`** | `implemented` (complete) | System-bus zbus service shipped (tasks 8-13). Methods, signals, polkit integration, peer identity, enrollment sessions, profile lifecycle backed by encrypted TemplateStore. **Manager3 continuous-enrollment contract** shipped (enrollment redesign tasks 2, 5, 6): Start, Stop, Resume, Save, Discard lifecycle on the system bus; Manager1 and Manager2 remain byte-for-byte stable. Evidence: `docs/evidence/manager-*.md`, `docs/evidence/dbus-contract.xml`, `docs/evidence/dbus-contract-v3.xml`, `enrollment-redesign/02-contract-pass.txt`, `enrollment-redesign/06-manager3-flow.jsonl`. Installed `gdbus introspect --system` WITHHELD (owner-run). |
+| **Packaging** | `implemented` (complete, unsigned) | Packaging infrastructure complete (task 6): install manifest, distro packages (Arch/Fedora/Debian), systemd hardening, model acquisition, PAM install lifecycle, SBOM (CycloneDX + SPDX), provenance, reproducible build, signatures. **Desktop certification harness extended** (enrollment redesign task 14): 47 certification checks covering GNOME redesigned resources, Manager3 introspection, translation seam, executable linkage, build-output hygiene, core GTK-free invariant, exact-version dependency, and a round-trip mutation test. Evidence: `docs/evidence/packaging/`, `enrollment-redesign/14-package-matrix.json`, `enrollment-redesign/14-package-mutation.txt`. Signed packages WITHHELD (no signing keys). |
 
 ---
 
@@ -95,7 +98,7 @@ production-level G5) are `WITHHELD` pending hardware or consented data.
 | **PAD (analytic)** | `implemented` / `uncalibrated` | Four analytic gates on `D = On − Off` shipped as a veto. Thresholds are conservative defaults, not tuned against a real attack corpus. Calibration WITHHELD (task 21; no attack corpus). See `docs/evidence/trust/pad-calibration.md`. |
 | **PAD (learned, MiniFASNet)** | `implemented` (synthetic-only) | 49 KB ONNX trained on physics-based synthetic strobe differentials, 100% val on synthetic. Cannot be production-selected: requires consented subject/device-disjoint real data. Deployed but not bound to a production operating point. See `docs/evidence/trust/learned-pad.md`. |
 | **S3 / suspend-resume** | `WITHHELD` | R10 (emitter survives suspend) untested, needs a real S3 cycle. Resume reconciler + `ResumeMachine` code exists; the 20x S3 first-auth HIL run (G1.6) has not been executed. |
-| **UI (GNOME)** | `implemented` | `namtor_gnome` enrollment wizard + settings app shipped (M7). Talks to the manager via D-Bus (task 26). GNOME QA evidence under `docs/evidence/ui/gnome/`. Runtime HIL WITHHELD. |
+| **UI (GNOME)** | `implemented` (redesigned) | `namtor_gnome` enrollment wizard + settings app shipped (M7). Talks to the manager via D-Bus (task 26). **Enrollment redesign complete** (tasks 1-14): adaptive three-destination shell, continuous-enrollment flow (Setup, Capture, Review, Stop, Resume, Save, Discard), accessible names and mnemonics on every actionable widget, rate-limited progress announcements, translatable strings via `tr()`, RTL and 200 percent text support, privacy scan across all view types (83 tests total). Visual review and mutation evidence: `enrollment-redesign/16-visual-review.md`, `enrollment-redesign/16-screenshots.json`, `enrollment-redesign/16-visual-mutation.md`. GNOME QA evidence under `docs/evidence/ui/gnome/`. Runtime HIL WITHHELD (task 15; no root, no camera, no AT-SPI). Screenshots WITHHELD (no installed app and running daemon). |
 | **UI (KDE)** | `implemented` | Rust bridge + QML KCM + C++ KCModule shim shipped (tasks 21-25). Async D-Bus bridge, profile model, a11y/i18n audit. Runtime load in real Plasma 6 session WITHHELD (no kcmshell6). Evidence: `docs/evidence/ui/kde/`. |
 | **D-Bus `org.namtor.Manager`** | `implemented` | System-bus zbus service shipped (tasks 8-13). Methods, signals, polkit, peer identity, enrollment sessions, profile lifecycle. Installed introspection WITHHELD (owner-run). |
 | **Packages (Arch/Fedora/Debian, signed)** | `implemented` (unsigned) | Packaging infrastructure complete (task 6): install manifest, distro packages, systemd hardening, SBOM, provenance, reproducible build. Signed packages WITHHELD (no signing keys). Evidence: `docs/evidence/packaging/`. |
@@ -131,8 +134,9 @@ gates and is recorded as `WITHHELD: <reason>` rather than fake-success.
 
 | Item | Status | Evidence |
 |---|---|---|
-| Workspace lib tests | 989 passed, 0 failed, 9 ignored (HW-gated) | workspace `cargo test` |
+| Workspace lib tests | 1404 passed, 0 failed, 12 ignored (HW-gated) | workspace `cargo test -- --test-threads=1` |
 | Integration tests (pam e2e + g5_structural) | 19 + 2 passed | `w1-auth.txt` |
+| GNOME test suite (enrollment redesign) | 83 passed (21 shell + 33 presenter + 29 privacy) | `cargo test -p namtor-gnome` |
 | `cargo fmt --all -- --check` | clean | workspace fmt check |
 | `cargo clippy --workspace --all-targets -- -D warnings` | no warnings | workspace clippy |
 | SPDX headers | enforced by `scripts/check-spdx.sh` | `ci-baseline.md` gate 6 |
@@ -161,15 +165,31 @@ state, not a gate pass.
 - No claim that fusion is measured. Code shipped, HIL unmeasured.
 - No claim that PAD is calibrated. Analytic gates run on conservative
   defaults; the learned PAD model is synthetic-only.
+- No claim that the enrollment redesign is a production readiness pass. The
+  redesign (tasks 1-14) is certified as complete software: the UI ships, 83
+  tests pass, the design contract is followed, accessibility and privacy gates
+  are closed, and packages certify. Screenshots are WITHHELD (no installed app
+  and running daemon). The biometric accuracy gates (FAR, FRR, APCER, BPCER),
+  TPM2 cross-hardware sealing, S3 reliability, z-norm calibration, and R4 INT8
+  evaluation remain WITHHELD and are unchanged by the redesign. See
+  `enrollment-redesign/16-visual-review.md` for the visual review.
 
 The production plan
 ([`.omo/plans/namtor-complete-product.md`](../../.omo/plans/namtor-complete-product.md))
 is the path to closing these gaps. It comprises 49 tasks plus a 4-task final
 verification wave (F1-F4). As of this audit, all 49 implementation tasks are
 complete. The Final Verification Wave (F1-F4) is in progress; this ledger
-was updated as part of F1 (plan compliance and evidence audit). Owner-gated
-inputs (signing keys, hardware access, consented data, S3 cycles, second
-TPM) remain WITHHELD and block the corresponding production gates.
+was updated as part of F1 (plan compliance and evidence audit) and the
+enrollment redesign certification (task 16). Owner-gated inputs (signing
+keys, hardware access, consented data, S3 cycles, second TPM) remain
+WITHHELD and block the corresponding production gates.
+
+The enrollment redesign plan
+([`.omo/plans/namtor-usable-intuitive-enrollment.md`](../../.omo/plans/namtor-usable-intuitive-enrollment.md))
+comprises 16 tasks. Tasks 1-14 are complete and committed. Task 15 (installed
+HIL) is WITHHELD (no root, no camera, no AT-SPI). Task 16 (screenshot review
+and evidence reconciliation) is certified by this update. The enrollment
+redesign is UI and software completion, not a biometric accuracy gate pass.
 
 For the current RC gate snapshot, see `docs/evidence/rc-g2-g5.md`.
 

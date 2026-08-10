@@ -1,0 +1,122 @@
+[
+  {
+    "state": "profiles_empty",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + running daemon (root install)",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 6.4 empty state; shell_starts_with_profiles_active test"
+  },
+  {
+    "state": "profiles_populated",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + running daemon + enrolled profile",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 2.3 profile row; presenter_flow tests (10-profiles-flow.json)"
+  },
+  {
+    "state": "setup_name_entry",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + running daemon",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 2.3 setup page; enrollment tests (11-enrollment-flow.json)"
+  },
+  {
+    "state": "capture_low_quality",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + running daemon + reference camera",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 2.3 capture page; quality matrix (03-quality-matrix.json)"
+  },
+  {
+    "state": "capture_medium_quality",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + running daemon + reference camera",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 2.3 capture page; quality matrix (03-quality-matrix.json)"
+  },
+  {
+    "state": "capture_high_quality",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + running daemon + reference camera",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 2.3 capture page; quality matrix (03-quality-matrix.json)"
+  },
+  {
+    "state": "stopped_review",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + running daemon + completed capture",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 2.3 review page; state machine tests (04-state-machine.txt)"
+  },
+  {
+    "state": "authentication_collapsed",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + running daemon",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 3.1 authentication destination; settings tests (12-settings-pages.json)"
+  },
+  {
+    "state": "authentication_expanded",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + running daemon",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 3.1; settings error tests (12-settings-errors.json)"
+  },
+  {
+    "state": "system_healthy",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + running daemon (daemon up)",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 3.1 system destination; presenter_flow tests"
+  },
+  {
+    "state": "system_degraded",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + running daemon (software-key fallback)",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 3.1; settings error tests (12-settings-errors.json)"
+  },
+  {
+    "state": "offline_error",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app (daemon stopped)",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 6.2 offline state; shell offline test (09-shell-offline.txt)"
+  },
+  {
+    "state": "rtl",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + RTL locale",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 8 no custom CSS; rtl_layout_works test"
+  },
+  {
+    "state": "high_contrast",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + GNOME high-contrast setting",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 8 libadwaita palette meets WCAG AA; no custom CSS"
+  },
+  {
+    "state": "text_200_percent",
+    "screenshot": "WITHHELD",
+    "prerequisite": "requires installed GNOME app + 200 percent text scaling",
+    "verdict": "WITHHELD",
+    "design_verdict": "PASS",
+    "design_basis": "DESIGN.md section 2.2 wrap(true); text_scaling_200_no_clip test"
+  }
+]
