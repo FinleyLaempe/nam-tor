@@ -110,6 +110,23 @@ owner = "root"
 group = "root"
 package = "core"
 
+# Quirks database — runtime device quirks read by the daemon and
+# namtor-camera-emitter-off (e.g. /usr/share/namtor/quirks/devices/3277-0018.toml
+# for the ASUS ROG Flow X16 reference camera). Apache-2.0.
+[[dirs]]
+path = "/usr/share/namtor/quirks"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
+[[dirs]]
+path = "/usr/share/namtor/quirks/devices"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
 [[dirs]]
 path = "/var/lib/namtor"
 mode = "0750"
@@ -390,6 +407,20 @@ owner = "root"
 group = "root"
 symlink = false
 package = "kde"
+
+# ---------------------------------------------------------------------------
+# Quirks database — per-device quirks TOML files read by the daemon and
+# namtor-camera-emitter-off at runtime. Apache-2.0 (quirks/ is Apache-2.0,
+# separate from the GPL-3.0 core).
+# ---------------------------------------------------------------------------
+[[files]]
+dest = "/usr/share/namtor/quirks/devices/3277-0018.toml"
+src = "quirks/devices/3277-0018.toml"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+package = "core"
 
 # ---------------------------------------------------------------------------
 # Manifests themselves (installed for the daemon to consult at startup)
