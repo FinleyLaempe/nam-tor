@@ -42,14 +42,16 @@ pub mod dbus_client;
 pub use dbus_client::DbusManagerClient;
 
 pub use client::{
-    EnrollmentProgress, ManagerClient, ManagerError, ManagerResult, PamServiceCompatibility,
-    PamServiceInfo, ProfileId, ProfileInfo, ProtectionKeyKind, ProtectionStatus, QualityLabel,
-    ReviewOutcome, SessionId, StatusReport,
+    EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, Guidance, ManagerClient,
+    ManagerError, ManagerResult, PamServiceCompatibility, PamServiceInfo, ProfileId, ProfileInfo,
+    ProtectionKeyKind, ProtectionStatus, QualityLabel, ReviewOutcome, SessionId, StatusReport,
+    API_VERSION_V3,
 };
 pub use fake::{FakeManagerClient, Mode as FakeMode};
 pub use presenter::ProfilePresenter;
 pub use view_model::{
-    compatibility_label, sealing_label, EnrollmentView, ErrorView, PamServiceRowView, PendingMerge,
-    PendingReplace, PresenterModel, ProfileRowView, ProtectionStatusView, ProtectionView,
-    QualityView, ReadinessLevel, ReadinessView, RecoveryHint, ReviewView,
+    compatibility_label, sealing_label, EnrollmentState, EnrollmentView, EnrollmentViewV3,
+    ErrorView, PamServiceRowView, PendingMerge, PendingReplace, PresenterModel, ProfileRowView,
+    ProtectionStatusView, ProtectionView, QualityView, ReadinessLevel, ReadinessView, RecoveryHint,
+    ReviewView, ReviewViewV3,
 };

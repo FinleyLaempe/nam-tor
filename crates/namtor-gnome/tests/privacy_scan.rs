@@ -10,7 +10,8 @@
 use namtor_gnome::privacy::{forbidden_fields, FORBIDDEN_SUBSTRINGS};
 use namtor_gnome::{
     client::{PamServiceCompatibility, PamServiceInfo, ProtectionKeyKind, ProtectionStatus},
-    EnrollmentProgress, ProfileInfo, QualityLabel, ReviewOutcome, StatusReport,
+    EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, ProfileInfo, QualityLabel,
+    ReviewOutcome, StatusReport,
 };
 
 #[test]
@@ -95,6 +96,82 @@ fn protection_status_carries_no_biometrics() {
 }
 
 #[test]
+fn enrollment_progress_v3_carries_no_biometrics() {
+    let sample = EnrollmentProgressV3 {
+        session: "sess-1".into(),
+        phase: "capturing".into(),
+        quality_percent: 80,
+        diversity_percent: 70,
+        frames_seen: 12,
+        frames_accepted: 10,
+        frames_rejected: 2,
+        quality_bucket: 2,
+        guidance: "looking_good".into(),
+    };
+    let hits = forbidden_fields(&sample);
+    assert!(
+        hits.is_empty(),
+        "EnrollmentProgressV3 leaked fields: {hits:?} (note: 'frames_seen'/'frames_accepted'/'frames_rejected' are approved coarse counts, not raw frames)"
+    );
+}
+
+#[test]
+fn enrollment_review_v3_carries_no_biometrics() {
+    let sample = EnrollmentReviewV3 {
+        session: "sess-1".into(),
+        ready_to_save: true,
+        quality_percent: 85,
+        diversity_percent: 75,
+        frames_accepted: 10,
+        guidance: "looking_good".into(),
+    };
+    let hits = forbidden_fields(&sample);
+    assert!(
+        hits.is_empty(),
+        "EnrollmentReviewV3 leaked fields: {hits:?} (note: 'frames_accepted' is an approved coarse count)"
+    );
+}
+
+#[test]
+fn enrollment_view_v3_carries_no_biometrics() {
+    use namtor_gnome::view_model::EnrollmentViewV3;
+    let sample = EnrollmentViewV3 {
+        phase: "capturing".into(),
+        quality_percent: 80,
+        diversity_percent: 70,
+        frames_seen: 12,
+        frames_accepted: 10,
+        frames_rejected: 2,
+        quality_bucket: 2,
+        guidance: "Looking good — keep going".into(),
+    };
+    let hits = forbidden_fields(&sample);
+    assert!(hits.is_empty(), "EnrollmentViewV3 leaked fields: {hits:?}");
+}
+
+#[test]
+fn review_view_v3_carries_no_biometrics() {
+    use namtor_gnome::view_model::ReviewViewV3;
+    let sample = ReviewViewV3 {
+        ready_to_save: true,
+        quality_percent: 85,
+        diversity_percent: 75,
+        frames_accepted: 10,
+        guidance: "Looking good — keep going".into(),
+    };
+    let hits = forbidden_fields(&sample);
+    assert!(hits.is_empty(), "ReviewViewV3 leaked fields: {hits:?}");
+}
+
+#[test]
+fn enrollment_state_carries_no_biometrics() {
+    use namtor_gnome::view_model::EnrollmentState;
+    let sample = EnrollmentState::Error("something went wrong".into());
+    let hits = forbidden_fields(&sample);
+    assert!(hits.is_empty(), "EnrollmentState leaked fields: {hits:?}");
+}
+
+#[test]
 fn presenter_model_carries_no_biometrics() {
     use namtor_gnome::view_model::PresenterModel;
     let sample = PresenterModel::default();
@@ -110,6 +187,12 @@ fn forbidden_substrings_list_is_nonempty() {
     );
     assert!(FORBIDDEN_SUBSTRINGS.contains(&"embedding"));
     assert!(FORBIDDEN_SUBSTRINGS.contains(&"threshold"));
+    assert!(FORBIDDEN_SUBSTRINGS.contains(&"score"));
+    assert!(FORBIDDEN_SUBSTRINGS.contains(&"template"));
+    assert!(FORBIDDEN_SUBSTRINGS.contains(&"biometric"));
+    assert!(FORBIDDEN_SUBSTRINGS.contains(&"key"));
+    assert!(FORBIDDEN_SUBSTRINGS.contains(&"nonce"));
+    assert!(FORBIDDEN_SUBSTRINGS.contains(&"pixel"));
 }
 
 /// A negative control: a struct that *does* carry an embedding must be
@@ -207,6 +290,80 @@ fn mutation_test_forbidden_fields_in_readiness_view() {
     }
 }
 
+#[test]
+fn mutation_test_forbidden_fields_in_enrollment_view_v3() {
+    let clean = namtor_gnome::view_model::EnrollmentViewV3 {
+        phase: "capturing".into(),
+        quality_percent: 80,
+        diversity_percent: 70,
+        frames_seen: 12,
+        frames_accepted: 10,
+        frames_rejected: 2,
+        quality_bucket: 2,
+        guidance: "Looking good".into(),
+    };
+    assert!(
+        forbidden_fields(&clean).is_empty(),
+        "clean EnrollmentViewV3 must pass scan"
+    );
+
+    for forbidden in FORBIDDEN_SUBSTRINGS {
+        let key = (*forbidden).to_string();
+        let json = serde_json::json!({
+            "phase": "capturing",
+            "quality_percent": 80,
+            "diversity_percent": 70,
+            "frames_seen": 12,
+            "frames_accepted": 10,
+            "frames_rejected": 2,
+            "quality_bucket": 2,
+            "guidance": "Looking good",
+            key: "injected",
+        });
+        let mut hits = Vec::new();
+        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        assert!(
+            hits.iter()
+                .any(|h: &String| h.to_lowercase().contains(forbidden)),
+            "forbidden field '{forbidden}' was NOT flagged by the scan"
+        );
+    }
+}
+
+#[test]
+fn mutation_test_forbidden_fields_in_review_view_v3() {
+    let clean = namtor_gnome::view_model::ReviewViewV3 {
+        ready_to_save: true,
+        quality_percent: 85,
+        diversity_percent: 75,
+        frames_accepted: 10,
+        guidance: "Looking good".into(),
+    };
+    assert!(
+        forbidden_fields(&clean).is_empty(),
+        "clean ReviewViewV3 must pass scan"
+    );
+
+    for forbidden in FORBIDDEN_SUBSTRINGS {
+        let key = (*forbidden).to_string();
+        let json = serde_json::json!({
+            "ready_to_save": true,
+            "quality_percent": 85,
+            "diversity_percent": 75,
+            "frames_accepted": 10,
+            "guidance": "Looking good",
+            key: "injected",
+        });
+        let mut hits = Vec::new();
+        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        assert!(
+            hits.iter()
+                .any(|h: &String| h.to_lowercase().contains(forbidden)),
+            "forbidden field '{forbidden}' was NOT flagged by the scan"
+        );
+    }
+}
+
 /// The full `PresenterModel` (with all nested views populated) must pass the
 /// privacy scan. This is the integration-level assertion that the complete
 /// view model — including the new readiness and protection fields — carries
@@ -214,8 +371,9 @@ fn mutation_test_forbidden_fields_in_readiness_view() {
 #[test]
 fn populated_presenter_model_carries_no_biometrics() {
     use namtor_gnome::view_model::{
-        EnrollmentView, ErrorView, PendingMerge, PendingPamToggle, PendingReplace, PresenterModel,
-        ProtectionView, QualityView, ReadinessLevel, ReadinessView, ReviewView,
+        EnrollmentState, EnrollmentView, EnrollmentViewV3, ErrorView, PendingMerge,
+        PendingPamToggle, PendingReplace, PresenterModel, ProtectionView, QualityView,
+        ReadinessLevel, ReadinessView, ReviewView, ReviewViewV3,
     };
 
     let model = PresenterModel {
@@ -277,6 +435,25 @@ fn populated_presenter_model_carries_no_biometrics() {
             display_name: "SDDM".into(),
             enabled: true,
             high_impact: true,
+        }),
+        enrollment_state: EnrollmentState::Capturing,
+        enrollment_session_v3: Some("sess-v3-1".into()),
+        enrollment_view_v3: Some(EnrollmentViewV3 {
+            phase: "capturing".into(),
+            quality_percent: 80,
+            diversity_percent: 70,
+            frames_seen: 12,
+            frames_accepted: 10,
+            frames_rejected: 2,
+            quality_bucket: 2,
+            guidance: "Looking good — keep going".into(),
+        }),
+        review_view_v3: Some(ReviewViewV3 {
+            ready_to_save: true,
+            quality_percent: 85,
+            diversity_percent: 75,
+            frames_accepted: 10,
+            guidance: "Looking good — keep going".into(),
         }),
         error: Some(ErrorView {
             title: "Test".into(),

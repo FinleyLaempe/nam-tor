@@ -1,0 +1,11 @@
+[
+  {"test": "start_capturing_reaches_capturing_state", "pass": true},
+  {"test": "progress_updates_view", "pass": true},
+  {"test": "stop_reaches_stopped_state", "pass": true},
+  {"test": "review_shows_summary", "pass": true},
+  {"test": "resume_returns_to_capturing", "pass": true},
+  {"test": "save_persists_and_returns_to_profiles", "pass": true},
+  {"test": "discard_clears_and_returns", "pass": true},
+  {"test": "duplicate_start_ignored", "pass": true},
+  {"test": "stale_signal_ignored", "pass": true}
+]

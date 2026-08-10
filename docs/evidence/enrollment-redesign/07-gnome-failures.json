@@ -1,0 +1,5 @@
+[
+  {"test": "daemon_loss_restores_retry", "pass": true},
+  {"test": "save_failure_recoverable", "pass": true},
+  {"test": "restart_after_error", "pass": true}
+]

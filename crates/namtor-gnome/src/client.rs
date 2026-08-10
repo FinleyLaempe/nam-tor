@@ -203,6 +203,129 @@ pub struct ProtectionStatus {
 }
 
 // ---------------------------------------------------------------------------
+// v3 types — org.namtor.Manager3
+// ---------------------------------------------------------------------------
+
+/// v3 interface version. Mirrors `namtor_daemon::manager::contract::API_VERSION_V3`.
+pub const API_VERSION_V3: u32 = 3;
+
+/// Closed live-guidance enum (wire `s`, snake_case). Mirrors the daemon's
+/// `observation::Guidance` enum. The UI maps each variant to a human-readable
+/// string client-side; no biometric data crosses this surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "dbus", derive(zbus::zvariant::Type))]
+#[cfg_attr(feature = "dbus", zvariant(signature = "s", rename_all = "snake_case"))]
+#[serde(rename_all = "snake_case")]
+pub enum Guidance {
+    Centering,
+    BetterLighting,
+    MoveCloser,
+    MoveBack,
+    HoldStill,
+    FaceFront,
+    InsufficientPose,
+    LookingGood,
+    Capturing,
+}
+
+impl Guidance {
+    /// Human-readable label for the UI. These are plain English strings,
+    /// translatable later via gettext.
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Self::Centering => "Center your face",
+            Self::BetterLighting => "Find better lighting",
+            Self::MoveCloser => "Move closer",
+            Self::MoveBack => "Move back a little",
+            Self::HoldStill => "Hold still",
+            Self::FaceFront => "Face the camera directly",
+            Self::InsufficientPose => "Adjust your pose",
+            Self::LookingGood => "Looking good — keep going",
+            Self::Capturing => "Capturing...",
+        }
+    }
+
+    /// Snake_case wire string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Centering => "centering",
+            Self::BetterLighting => "better_lighting",
+            Self::MoveCloser => "move_closer",
+            Self::MoveBack => "move_back",
+            Self::HoldStill => "hold_still",
+            Self::FaceFront => "face_front",
+            Self::InsufficientPose => "insufficient_pose",
+            Self::LookingGood => "looking_good",
+            Self::Capturing => "capturing",
+        }
+    }
+
+    /// Parse a snake_case wire string back to the enum. Returns `None` for
+    /// unknown values (the UI treats unknown guidance as no guidance).
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "centering" => Some(Self::Centering),
+            "better_lighting" => Some(Self::BetterLighting),
+            "move_closer" => Some(Self::MoveCloser),
+            "move_back" => Some(Self::MoveBack),
+            "hold_still" => Some(Self::HoldStill),
+            "face_front" => Some(Self::FaceFront),
+            "insufficient_pose" => Some(Self::InsufficientPose),
+            "looking_good" => Some(Self::LookingGood),
+            "capturing" => Some(Self::Capturing),
+            _ => None,
+        }
+    }
+}
+
+/// v3 enrollment progress emitted by the `EnrollmentProgress` signal (wire
+/// `(ssuuuuuys)`). `quality_percent` is capture suitability, NOT
+/// authentication accuracy. `quality_bucket` is a coarse byte label
+/// (0=low, 1=medium, 2=high). `guidance` is a closed enum string mapped
+/// client-side. No biometric material crosses this surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "dbus", derive(zbus::zvariant::Type))]
+pub struct EnrollmentProgressV3 {
+    /// Enrollment session id.
+    pub session: String,
+    /// Current lifecycle phase (e.g. "capturing", "stopped").
+    pub phase: String,
+    /// Capture suitability percentage (0-100), NOT authentication accuracy.
+    pub quality_percent: u32,
+    /// Pose/angle diversity percentage (0-100).
+    pub diversity_percent: u32,
+    /// Total captures observed by the daemon.
+    pub frames_seen: u32,
+    /// Captures accepted into the reservoir.
+    pub frames_accepted: u32,
+    /// Captures rejected by quality filtering.
+    pub frames_rejected: u32,
+    /// Coarse quality bucket: 0=low, 1=medium, 2=high.
+    pub quality_bucket: u8,
+    /// Human-readable guidance enum value mapped client-side.
+    pub guidance: String,
+}
+
+/// v3 review snapshot returned by `ReviewEnrollment` (wire `(sbuuus)`).
+/// Session-scoped summary of a stopped enrollment. No biometric material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "dbus", derive(zbus::zvariant::Type))]
+pub struct EnrollmentReviewV3 {
+    /// Enrollment session id.
+    pub session: String,
+    /// Whether the reservoir is ready to commit.
+    pub ready_to_save: bool,
+    /// Capture suitability percentage (0-100), NOT authentication accuracy.
+    pub quality_percent: u32,
+    /// Pose/angle diversity percentage (0-100).
+    pub diversity_percent: u32,
+    /// Captures accepted into the reservoir.
+    pub frames_accepted: u32,
+    /// Human-readable guidance enum value mapped client-side.
+    pub guidance: String,
+}
+
+// ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
@@ -332,4 +455,61 @@ pub trait ManagerClient {
 
     /// `GetProtectionStatus` → `(sbs)`. Template storage protection status.
     fn get_protection_status(&self) -> ManagerResult<ProtectionStatus>;
+
+    // v3 methods — org.namtor.Manager3
+
+    /// v3: `StartEnrollment(uid, name) → session`. Creates and arms a v3
+    /// enrollment session with the worker lifecycle.
+    fn start_enrollment_v3(&self, _uid: u32, _name: &str) -> ManagerResult<SessionId> {
+        Err(ManagerError::Unsupported(
+            "v3 start_enrollment not implemented".into(),
+        ))
+    }
+
+    /// v3: `StopEnrollment(session)`. Stops capture, retains reservoir,
+    /// transitions to the stopped review state.
+    fn stop_enrollment_v3(&self, _session: &str) -> ManagerResult<()> {
+        Err(ManagerError::Unsupported(
+            "v3 stop_enrollment not implemented".into(),
+        ))
+    }
+
+    /// v3: `ResumeEnrollment(session)`. Resumes capture from the stopped
+    /// state, preserving the existing reservoir.
+    fn resume_enrollment_v3(&self, _session: &str) -> ManagerResult<()> {
+        Err(ManagerError::Unsupported(
+            "v3 resume_enrollment not implemented".into(),
+        ))
+    }
+
+    /// v3: `ReviewEnrollment(session) → (sbuuus)`. Returns a review snapshot
+    /// of the stopped enrollment.
+    fn review_enrollment_v3(&self, _session: &str) -> ManagerResult<EnrollmentReviewV3> {
+        Err(ManagerError::Unsupported(
+            "v3 review_enrollment not implemented".into(),
+        ))
+    }
+
+    /// v3: `CommitProfile(session) → profile`. Finalises a v3 session into a
+    /// persistent profile. Returns the new profile id.
+    fn commit_profile_v3(&self, _session: &str) -> ManagerResult<ProfileId> {
+        Err(ManagerError::Unsupported(
+            "v3 commit_profile not implemented".into(),
+        ))
+    }
+
+    /// v3: `CancelEnrollment(session)`. Disarms; no profile is written.
+    fn cancel_enrollment_v3(&self, _session: &str) -> ManagerResult<()> {
+        Err(ManagerError::Unsupported(
+            "v3 cancel_enrollment not implemented".into(),
+        ))
+    }
+
+    /// v3: `NegotiateVersion(version) → agreed_version`. Handshake for the
+    /// v3 interface.
+    fn negotiate_v3(&self, _version: u32) -> ManagerResult<u32> {
+        Err(ManagerError::Unsupported(
+            "v3 negotiate not implemented".into(),
+        ))
+    }
 }

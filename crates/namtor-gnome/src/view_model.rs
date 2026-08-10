@@ -130,6 +130,14 @@ pub struct PresenterModel {
     pub pending_replace: Option<PendingReplace>,
     /// v2: staged PAM toggle awaiting high-impact confirmation.
     pub pending_pam_toggle: Option<PendingPamToggle>,
+    /// v3: enrollment lifecycle state.
+    pub enrollment_state: EnrollmentState,
+    /// v3: current enrollment session id (for staleness checks).
+    pub enrollment_session_v3: Option<String>,
+    /// v3: live capture-page view.
+    pub enrollment_view_v3: Option<EnrollmentViewV3>,
+    /// v3: review-page view.
+    pub review_view_v3: Option<ReviewViewV3>,
     pub error: Option<ErrorView>,
     pub message: Option<String>,
     pub is_loading: bool,
@@ -306,5 +314,98 @@ pub fn compatibility_label(c: PamServiceCompatibility) -> &'static str {
         PamServiceCompatibility::Safe => "Safe",
         PamServiceCompatibility::Unsupported => "Unsupported",
         PamServiceCompatibility::Risky => "Risky (high-impact)",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v3 enrollment view types — org.namtor.Manager3
+// ---------------------------------------------------------------------------
+
+/// v3 enrollment lifecycle state. The presenter transitions through these
+/// states as the user moves through the capture → stop → review → save flow.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub enum EnrollmentState {
+    /// Initial state: user enters a profile name.
+    #[default]
+    Setup,
+    /// Worker running, progress updates flowing.
+    Capturing,
+    /// User pressed Stop, waiting for review.
+    Stopped,
+    /// Review snapshot displayed, user decides save/resume/discard.
+    Reviewing,
+    /// Commit in flight.
+    Saving,
+    /// Recoverable error with a message.
+    Error(String),
+}
+
+impl EnrollmentState {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Setup => "setup",
+            Self::Capturing => "capturing",
+            Self::Stopped => "stopped",
+            Self::Reviewing => "reviewing",
+            Self::Saving => "saving",
+            Self::Error(_) => "error",
+        }
+    }
+}
+
+/// v3 capture-page view. Renders live progress during enrollment.
+/// No biometric data — only bounded percentages, counts, and a guidance label.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub struct EnrollmentViewV3 {
+    pub phase: String,
+    pub quality_percent: u32,
+    pub diversity_percent: u32,
+    pub frames_seen: u32,
+    pub frames_accepted: u32,
+    pub frames_rejected: u32,
+    pub quality_bucket: u8,
+    pub guidance: String,
+}
+
+impl EnrollmentViewV3 {
+    pub fn from_progress(p: &crate::client::EnrollmentProgressV3) -> Self {
+        let guidance_label = crate::client::Guidance::from_wire(&p.guidance)
+            .map(|g| g.as_label().to_string())
+            .unwrap_or_else(|| p.guidance.clone());
+        Self {
+            phase: p.phase.clone(),
+            quality_percent: p.quality_percent,
+            diversity_percent: p.diversity_percent,
+            frames_seen: p.frames_seen,
+            frames_accepted: p.frames_accepted,
+            frames_rejected: p.frames_rejected,
+            quality_bucket: p.quality_bucket,
+            guidance: guidance_label,
+        }
+    }
+}
+
+/// v3 review-page view. Renders the stopped enrollment summary.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub struct ReviewViewV3 {
+    pub ready_to_save: bool,
+    pub quality_percent: u32,
+    pub diversity_percent: u32,
+    pub frames_accepted: u32,
+    pub guidance: String,
+}
+
+impl ReviewViewV3 {
+    pub fn from_review(r: &crate::client::EnrollmentReviewV3) -> Self {
+        let guidance_label = crate::client::Guidance::from_wire(&r.guidance)
+            .map(|g| g.as_label().to_string())
+            .unwrap_or_else(|| r.guidance.clone());
+        Self {
+            ready_to_save: r.ready_to_save,
+            quality_percent: r.quality_percent,
+            diversity_percent: r.diversity_percent,
+            frames_accepted: r.frames_accepted,
+            guidance: guidance_label,
+        }
     }
 }

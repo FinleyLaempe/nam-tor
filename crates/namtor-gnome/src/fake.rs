@@ -16,9 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::client::{
-    EnrollmentProgress, ManagerClient, ManagerError, ManagerResult, PamServiceCompatibility,
-    PamServiceInfo, ProfileId, ProfileInfo, ProtectionKeyKind, ProtectionStatus, QualityLabel,
-    ReviewOutcome, SessionId, StatusReport,
+    EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, Guidance, ManagerClient,
+    ManagerError, ManagerResult, PamServiceCompatibility, PamServiceInfo, ProfileId, ProfileInfo,
+    ProtectionKeyKind, ProtectionStatus, QualityLabel, ReviewOutcome, SessionId, StatusReport,
 };
 
 /// Behavioural mode the fake honours until reset. Tests prime this before
@@ -63,6 +63,28 @@ struct PamServiceRow {
     description: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum V3Phase {
+    Capturing,
+    Stopped,
+    Committed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct V3Session {
+    uid: u32,
+    profile_name: String,
+    phase: V3Phase,
+    frames_seen: u32,
+    frames_accepted: u32,
+    frames_rejected: u32,
+    quality_percent: u32,
+    diversity_percent: u32,
+    guidance: Guidance,
+}
+
 /// Test double. Interior-mutable so a single instance can be shared across
 /// presenter turns without `&mut` gymnastics in test assertions.
 pub struct FakeManagerClient {
@@ -72,6 +94,8 @@ pub struct FakeManagerClient {
     pam_services: Mutex<HashMap<String, PamServiceRow>>,
     protection: Mutex<ProtectionStatus>,
     progress_signals: Mutex<HashMap<String, EnrollmentProgress>>,
+    v3_sessions: Mutex<HashMap<String, V3Session>>,
+    v3_progress: Mutex<HashMap<String, EnrollmentProgressV3>>,
     seq: AtomicU64,
     clock: AtomicU64,
 }
@@ -160,6 +184,8 @@ impl FakeManagerClient {
                 warning: "TPM2 not available; using software fallback".into(),
             }),
             progress_signals: Mutex::new(HashMap::new()),
+            v3_sessions: Mutex::new(HashMap::new()),
+            v3_progress: Mutex::new(HashMap::new()),
             seq: AtomicU64::new(1),
             clock: AtomicU64::new(1_700_000_000),
         }
@@ -217,6 +243,36 @@ impl FakeManagerClient {
             .get(service_id)
             .map(|r| r.enabled)
             .unwrap_or(false)
+    }
+
+    /// Test helper: inject a v3 progress signal as if the daemon emitted it.
+    pub fn emit_progress_v3(&self, progress: EnrollmentProgressV3) {
+        self.v3_progress
+            .lock()
+            .expect("v3 progress poisoned")
+            .insert(progress.session.clone(), progress);
+    }
+
+    /// Test helper: does a v3 session exist with the given id?
+    pub fn has_v3_session(&self, session: &str) -> bool {
+        self.v3_sessions
+            .lock()
+            .expect("v3 sessions poisoned")
+            .contains_key(session)
+    }
+
+    /// Test helper: what phase is the v3 session in?
+    pub fn v3_session_phase(&self, session: &str) -> Option<String> {
+        let sessions = self.v3_sessions.lock().expect("v3 sessions poisoned");
+        sessions
+            .get(session)
+            .map(|s| match s.phase {
+                V3Phase::Capturing => "capturing",
+                V3Phase::Stopped => "stopped",
+                V3Phase::Committed => "committed",
+                V3Phase::Cancelled => "cancelled",
+            })
+            .map(String::from)
     }
 
     fn check_mut(&self) -> ManagerResult<()> {
@@ -510,5 +566,184 @@ impl ManagerClient for FakeManagerClient {
     fn get_protection_status(&self) -> ManagerResult<ProtectionStatus> {
         self.check_read()?;
         Ok(self.protection.lock().expect("protection poisoned").clone())
+    }
+
+    // v3 methods — org.namtor.Manager3
+
+    fn start_enrollment_v3(&self, uid: u32, name: &str) -> ManagerResult<SessionId> {
+        self.check_mut()?;
+        let profiles = self.profiles.lock().expect("profiles poisoned");
+        if profiles.values().any(|p| p.name == name) {
+            return Err(ManagerError::Exists(format!(
+                "profile named {name:?} already exists"
+            )));
+        }
+        drop(profiles);
+        let session = self.next_session();
+        let guidance = match self.mode() {
+            Mode::LowDiversity => Guidance::InsufficientPose,
+            _ => Guidance::Capturing,
+        };
+        let quality = match self.mode() {
+            Mode::LowDiversity => 20,
+            _ => 60,
+        };
+        let diversity = match self.mode() {
+            Mode::LowDiversity => 10,
+            _ => 30,
+        };
+        let row = V3Session {
+            uid,
+            profile_name: name.to_string(),
+            phase: V3Phase::Capturing,
+            frames_seen: 1,
+            frames_accepted: 1,
+            frames_rejected: 0,
+            quality_percent: quality,
+            diversity_percent: diversity,
+            guidance,
+        };
+        self.emit_progress_v3(EnrollmentProgressV3 {
+            session: session.clone(),
+            phase: "capturing".into(),
+            quality_percent: quality,
+            diversity_percent: diversity,
+            frames_seen: 1,
+            frames_accepted: 1,
+            frames_rejected: 0,
+            quality_bucket: 1,
+            guidance: guidance.as_str().into(),
+        });
+        self.v3_sessions
+            .lock()
+            .expect("v3 sessions poisoned")
+            .insert(session.clone(), row);
+        Ok(SessionId(session))
+    }
+
+    fn stop_enrollment_v3(&self, session: &str) -> ManagerResult<()> {
+        self.check_mut()?;
+        let mut sessions = self.v3_sessions.lock().expect("v3 sessions poisoned");
+        let row = sessions
+            .get_mut(session)
+            .ok_or_else(|| ManagerError::SessionNotFound(session.to_string()))?;
+        if row.phase != V3Phase::Capturing {
+            return Err(ManagerError::State(format!(
+                "session {session} not in capturing phase"
+            )));
+        }
+        row.phase = V3Phase::Stopped;
+        let low = matches!(self.mode(), Mode::LowDiversity);
+        row.guidance = if low {
+            Guidance::InsufficientPose
+        } else {
+            Guidance::LookingGood
+        };
+        row.quality_percent = if low { 40 } else { 85 };
+        row.diversity_percent = if low { 20 } else { 75 };
+        Ok(())
+    }
+
+    fn resume_enrollment_v3(&self, session: &str) -> ManagerResult<()> {
+        self.check_mut()?;
+        let mut sessions = self.v3_sessions.lock().expect("v3 sessions poisoned");
+        let row = sessions
+            .get_mut(session)
+            .ok_or_else(|| ManagerError::SessionNotFound(session.to_string()))?;
+        if row.phase != V3Phase::Stopped {
+            return Err(ManagerError::State(format!(
+                "session {session} not in stopped phase"
+            )));
+        }
+        row.phase = V3Phase::Capturing;
+        row.guidance = Guidance::Capturing;
+        Ok(())
+    }
+
+    fn review_enrollment_v3(&self, session: &str) -> ManagerResult<EnrollmentReviewV3> {
+        self.check_read()?;
+        let sessions = self.v3_sessions.lock().expect("v3 sessions poisoned");
+        let row = sessions
+            .get(session)
+            .ok_or_else(|| ManagerError::SessionNotFound(session.to_string()))?;
+        if row.phase != V3Phase::Stopped {
+            return Err(ManagerError::State(format!(
+                "session {session} not in stopped phase"
+            )));
+        }
+        Ok(EnrollmentReviewV3 {
+            session: session.to_string(),
+            ready_to_save: row.quality_percent >= 70 && row.diversity_percent >= 60,
+            quality_percent: row.quality_percent,
+            diversity_percent: row.diversity_percent,
+            frames_accepted: row.frames_accepted,
+            guidance: row.guidance.as_str().into(),
+        })
+    }
+
+    fn commit_profile_v3(&self, session: &str) -> ManagerResult<ProfileId> {
+        self.check_mut()?;
+        let mut sessions = self.v3_sessions.lock().expect("v3 sessions poisoned");
+        let row = sessions
+            .get_mut(session)
+            .ok_or_else(|| ManagerError::SessionNotFound(session.to_string()))?;
+        if row.phase == V3Phase::Committed {
+            return Err(ManagerError::State(format!(
+                "session {session} already committed"
+            )));
+        }
+        if row.phase == V3Phase::Cancelled {
+            return Err(ManagerError::State(format!(
+                "session {session} was cancelled"
+            )));
+        }
+        let (success, profile_id) = match self.mode() {
+            Mode::LowDiversity if row.quality_percent < 70 => (false, None),
+            _ => {
+                let id = self.next_id();
+                let created = self.tick();
+                self.profiles.lock().expect("profiles poisoned").insert(
+                    id.clone(),
+                    ProfileRow {
+                        name: row.profile_name.clone(),
+                        enabled: true,
+                        created,
+                        last_used: 0,
+                    },
+                );
+                (true, Some(id))
+            }
+        };
+        row.phase = V3Phase::Committed;
+        let name = row.profile_name.clone();
+        drop(sessions);
+        if success {
+            Ok(ProfileId(profile_id.expect("profile id on success")))
+        } else {
+            Err(ManagerError::State(format!(
+                "insufficient diversity for {name}"
+            )))
+        }
+    }
+
+    fn cancel_enrollment_v3(&self, session: &str) -> ManagerResult<()> {
+        self.check_read()?;
+        let mut sessions = self.v3_sessions.lock().expect("v3 sessions poisoned");
+        let row = sessions
+            .get_mut(session)
+            .ok_or_else(|| ManagerError::SessionNotFound(session.to_string()))?;
+        row.phase = V3Phase::Cancelled;
+        Ok(())
+    }
+
+    fn negotiate_v3(&self, version: u32) -> ManagerResult<u32> {
+        self.check_read()?;
+        if version == crate::client::API_VERSION_V3 {
+            Ok(crate::client::API_VERSION_V3)
+        } else {
+            Err(ManagerError::IncompatibleVersion(format!(
+                "client requested v{version}, supported is v3"
+            )))
+        }
     }
 }

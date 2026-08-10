@@ -12,10 +12,11 @@ use serde::Serialize;
 /// Substrings that, if they appear in a UI struct field name, would leak
 /// matcher internals the user must never see.
 ///
-/// Note: `frames_captured` (an approved coarse count, spec §6.5) is
+/// Note: `frames_captured` and `frames_seen`/`frames_accepted`/
+/// `frames_rejected` (approved coarse counts, spec §6.5 and Manager3) are
 /// intentionally NOT matched — we forbid compound raw-frame field names
-/// (`raw_frame`, `frame_data`, `frame_buf`, `frame_pixel`) instead of the
-/// bare `frame` substring so the count is allowed through.
+/// (`raw_frame`, `frame_data`, `frame_buf`, `frame_pixel`, `frame_raw`)
+/// instead of the bare `frame` substring so the counts are allowed through.
 pub const FORBIDDEN_SUBSTRINGS: &[&str] = &[
     "vector",
     "embedding",
@@ -30,6 +31,9 @@ pub const FORBIDDEN_SUBSTRINGS: &[&str] = &[
     "score",
     "threshold",
     "biometric",
+    "key",
+    "nonce",
+    "pixel",
 ];
 
 /// Walk the serialized JSON of `value` and collect every key (recursively)

@@ -13,8 +13,8 @@ use std::sync::Arc;
 use common::after;
 use namtor_gnome::{
     fake::{FakeManagerClient, Mode},
-    ManagerClient, ManagerError, PamServiceRowView, ProtectionKeyKind, ProtectionStatus,
-    RecoveryHint,
+    EnrollmentProgressV3, EnrollmentState, ManagerClient, ManagerError, PamServiceRowView,
+    ProtectionKeyKind, ProtectionStatus, RecoveryHint,
 };
 
 const TEST_UID: u32 = 1000;
@@ -820,4 +820,346 @@ fn set_pam_service_enabled_refuses_unsupported() {
         p.set_pam_service_enabled(&unsupported_id, true);
     });
     assert!(model.error.is_some(), "raw method also refuses unsupported");
+}
+
+// ===========================================================================
+// v3 enrollment lifecycle tests (org.namtor.Manager3)
+// ===========================================================================
+
+#[test]
+fn start_capturing_reaches_capturing_state() {
+    let mut presenter = new_presenter();
+    let model = after(&mut presenter, |p| {
+        p.start_enrollment_v3("Alice V3");
+    });
+    assert_eq!(
+        model.enrollment_state,
+        EnrollmentState::Capturing,
+        "start transitions to Capturing"
+    );
+    assert!(model.enrollment_session_v3.is_some(), "session id stored");
+    let view = model
+        .enrollment_view_v3
+        .as_ref()
+        .expect("enrollment view active");
+    assert_eq!(view.phase, "capturing", "view phase is capturing");
+    assert!(model.error.is_none(), "no error on success");
+}
+
+#[test]
+fn progress_updates_view() {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Bob V3");
+    });
+    let session = presenter
+        .model()
+        .enrollment_session_v3
+        .clone()
+        .expect("session");
+    let progress = EnrollmentProgressV3 {
+        session: session.clone(),
+        phase: "capturing".into(),
+        quality_percent: 75,
+        diversity_percent: 60,
+        frames_seen: 20,
+        frames_accepted: 15,
+        frames_rejected: 5,
+        quality_bucket: 2,
+        guidance: "looking_good".into(),
+    };
+    let model = after(&mut presenter, |p| {
+        p.on_progress_v3(&progress);
+    });
+    let view = model.enrollment_view_v3.as_ref().expect("enrollment view");
+    assert_eq!(view.quality_percent, 75, "quality updated");
+    assert_eq!(view.diversity_percent, 60, "diversity updated");
+    assert_eq!(view.frames_seen, 20, "frames_seen updated");
+    assert_eq!(view.frames_accepted, 15, "frames_accepted updated");
+    assert_eq!(view.frames_rejected, 5, "frames_rejected updated");
+    assert!(
+        view.guidance.contains("Looking good"),
+        "guidance localized to human-readable label"
+    );
+}
+
+#[test]
+fn stop_reaches_stopped_state() {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Carol V3");
+    });
+    let model = after(&mut presenter, |p| {
+        p.stop_enrollment_v3();
+    });
+    assert_eq!(
+        model.enrollment_state,
+        EnrollmentState::Stopped,
+        "stop transitions to Stopped"
+    );
+    let view = model
+        .enrollment_view_v3
+        .as_ref()
+        .expect("enrollment view still active");
+    assert_eq!(view.phase, "stopped", "view phase is stopped");
+}
+
+#[test]
+fn review_shows_summary() {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Dave V3");
+    });
+    after(&mut presenter, |p| {
+        p.stop_enrollment_v3();
+    });
+    let model = after(&mut presenter, |p| {
+        p.review_enrollment_v3();
+    });
+    assert_eq!(
+        model.enrollment_state,
+        EnrollmentState::Reviewing,
+        "review transitions to Reviewing"
+    );
+    let review = model.review_view_v3.as_ref().expect("review view staged");
+    assert!(review.ready_to_save, "ready_to_save is set");
+    assert!(review.quality_percent > 0, "quality percent shown");
+    assert!(review.diversity_percent > 0, "diversity percent shown");
+    assert!(review.frames_accepted > 0, "frames_accepted shown");
+}
+
+#[test]
+fn resume_returns_to_capturing() {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Eve V3");
+    });
+    after(&mut presenter, |p| {
+        p.stop_enrollment_v3();
+    });
+    let model = after(&mut presenter, |p| {
+        p.resume_enrollment_v3();
+    });
+    assert_eq!(
+        model.enrollment_state,
+        EnrollmentState::Capturing,
+        "resume transitions back to Capturing"
+    );
+    assert!(model.review_view_v3.is_none(), "review cleared on resume");
+    let view = model
+        .enrollment_view_v3
+        .as_ref()
+        .expect("enrollment view active");
+    assert_eq!(view.phase, "capturing", "view phase back to capturing");
+}
+
+#[test]
+fn save_persists_and_returns_to_profiles() {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Frank V3");
+    });
+    after(&mut presenter, |p| {
+        p.stop_enrollment_v3();
+    });
+    after(&mut presenter, |p| {
+        p.review_enrollment_v3();
+    });
+    let model = after(&mut presenter, |p| {
+        p.save_profile_v3();
+    });
+    assert_eq!(
+        model.enrollment_state,
+        EnrollmentState::Setup,
+        "save returns to Setup"
+    );
+    assert!(model.enrollment_session_v3.is_none(), "session cleared");
+    assert!(
+        model.enrollment_view_v3.is_none(),
+        "enrollment view cleared"
+    );
+    assert!(model.review_view_v3.is_none(), "review view cleared");
+    assert!(
+        model.message.as_deref().unwrap_or("").contains("complete"),
+        "success message shown"
+    );
+    assert_eq!(model.profiles.len(), 1, "one profile persisted");
+    assert_eq!(model.profiles[0].name, "Frank V3");
+}
+
+#[test]
+fn discard_clears_and_returns() {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Grace V3");
+    });
+    after(&mut presenter, |p| {
+        p.stop_enrollment_v3();
+    });
+    let model = after(&mut presenter, |p| {
+        p.discard_enrollment_v3();
+    });
+    assert_eq!(
+        model.enrollment_state,
+        EnrollmentState::Setup,
+        "discard returns to Setup"
+    );
+    assert!(model.enrollment_session_v3.is_none(), "session cleared");
+    assert!(
+        model.enrollment_view_v3.is_none(),
+        "enrollment view cleared"
+    );
+    assert!(
+        model.message.as_deref().unwrap_or("").contains("discarded"),
+        "discard message shown"
+    );
+    assert!(
+        presenter.client().list_profiles().expect("list").is_empty(),
+        "no profile persisted after discard"
+    );
+}
+
+#[test]
+fn duplicate_start_ignored() {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Henry V3");
+    });
+    let model = after(&mut presenter, |p| {
+        p.start_enrollment_v3("Iris V3");
+    });
+    assert_eq!(
+        model.enrollment_state,
+        EnrollmentState::Capturing,
+        "still in Capturing from first start"
+    );
+    assert!(model.error.is_some(), "duplicate start surfaces an error");
+    let err = model.error.as_ref().expect("error");
+    assert!(
+        err.detail.contains("already"),
+        "error explains enrollment is in progress"
+    );
+}
+
+#[test]
+fn stale_signal_ignored() {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Jack V3");
+    });
+    let active_session = presenter
+        .model()
+        .enrollment_session_v3
+        .clone()
+        .expect("active session");
+    let stale_progress = EnrollmentProgressV3 {
+        session: "stale-session-id".into(),
+        phase: "capturing".into(),
+        quality_percent: 99,
+        diversity_percent: 99,
+        frames_seen: 999,
+        frames_accepted: 999,
+        frames_rejected: 0,
+        quality_bucket: 2,
+        guidance: "looking_good".into(),
+    };
+    let model = after(&mut presenter, |p| {
+        p.on_progress_v3(&stale_progress);
+    });
+    let view = model.enrollment_view_v3.as_ref().expect("enrollment view");
+    assert_ne!(
+        view.frames_seen, 999,
+        "stale signal ignored — frames_seen not updated"
+    );
+    assert_ne!(
+        view.quality_percent, 99,
+        "stale signal ignored — quality not updated"
+    );
+    assert_eq!(
+        model.enrollment_session_v3.as_deref(),
+        Some(active_session.as_str()),
+        "active session unchanged"
+    );
+}
+
+#[test]
+fn daemon_loss_restores_retry() {
+    let fake = FakeManagerClient::new();
+    fake.set_mode(Mode::DaemonDown("daemon stopped".into()));
+    let mut presenter = namtor_gnome::ProfilePresenter::new(fake, TEST_UID);
+    let model = after(&mut presenter, |p| {
+        p.start_enrollment_v3("Karl V3");
+    });
+    assert!(
+        matches!(model.enrollment_state, EnrollmentState::Error(_)),
+        "daemon loss transitions to Error state"
+    );
+    assert!(model.error.is_some(), "error surfaced");
+    let err = model.error.as_ref().expect("error");
+    assert!(
+        err.title.to_lowercase().contains("daemon")
+            || err.title.to_lowercase().contains("unavailable"),
+        "error title names the daemon issue"
+    );
+}
+
+#[test]
+fn save_failure_recoverable() {
+    let fake = FakeManagerClient::new();
+    fake.set_mode(Mode::LowDiversity);
+    let mut presenter = namtor_gnome::ProfilePresenter::new(fake, TEST_UID);
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Lena V3");
+    });
+    after(&mut presenter, |p| {
+        p.stop_enrollment_v3();
+    });
+    let model = after(&mut presenter, |p| {
+        p.save_profile_v3();
+    });
+    assert_eq!(
+        model.enrollment_state,
+        EnrollmentState::Stopped,
+        "save failure stays in Stopped (recoverable)"
+    );
+    assert!(model.error.is_some(), "failure surfaced as error");
+    assert!(
+        model.enrollment_session_v3.is_some(),
+        "session retained for retry"
+    );
+}
+
+#[test]
+fn restart_after_error() {
+    let fake = FakeManagerClient::new();
+    fake.set_mode(Mode::DaemonDown("daemon stopped".into()));
+    let mut presenter = namtor_gnome::ProfilePresenter::new(fake, TEST_UID);
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Mona V3");
+    });
+    assert!(
+        matches!(
+            presenter.model().enrollment_state,
+            EnrollmentState::Error(_)
+        ),
+        "first start failed with error"
+    );
+    presenter.client().set_mode(Mode::Normal);
+    let model = after(&mut presenter, |p| {
+        p.dismiss_v3_error();
+    });
+    assert_eq!(
+        model.enrollment_state,
+        EnrollmentState::Setup,
+        "dismiss returns to Setup"
+    );
+    let model = after(&mut presenter, |p| {
+        p.start_enrollment_v3("Mona V3");
+    });
+    assert_eq!(
+        model.enrollment_state,
+        EnrollmentState::Capturing,
+        "restart after error reaches Capturing"
+    );
+    assert!(model.error.is_none(), "no error on restart");
 }

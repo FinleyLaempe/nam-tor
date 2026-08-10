@@ -20,17 +20,20 @@ use std::sync::Mutex;
 use zbus::blocking::Connection;
 
 use crate::client::{
-    EnrollmentProgress, ManagerClient, ManagerError, ManagerResult, PamServiceInfo, ProfileId,
-    ProfileInfo, ProtectionStatus, ReviewOutcome, SessionId, StatusReport,
+    EnrollmentProgress, EnrollmentReviewV3, ManagerClient, ManagerError, ManagerResult,
+    PamServiceInfo, ProfileId, ProfileInfo, ProtectionStatus, ReviewOutcome, SessionId,
+    StatusReport,
 };
 
 /// v1 interface name.
 const INTERFACE_V1: &str = "org.namtor.Manager";
 /// v2 interface name.
 const INTERFACE_V2: &str = "org.namtor.Manager2";
-/// Well-known bus name (same for v1 and v2).
+/// v3 interface name.
+const INTERFACE_V3: &str = "org.namtor.Manager3";
+/// Well-known bus name (same for v1, v2, and v3).
 const BUS_NAME: &str = "org.namtor.Manager";
-/// Object path (same for v1 and v2).
+/// Object path (same for v1, v2, and v3).
 const OBJECT_PATH: &str = "/org/namtor/Manager";
 
 /// Live system-bus client. Construct via [`DbusManagerClient::connect`].
@@ -103,6 +106,26 @@ impl DbusManagerClient {
                 Some(BUS_NAME),
                 OBJECT_PATH,
                 Some(INTERFACE_V2),
+                method,
+                body,
+            )
+            .map_err(map_zbus_error)?;
+        msg.body()
+            .deserialize::<R>()
+            .map_err(|e| ManagerError::Transport(format!("{method} body: {e}")))
+    }
+
+    fn call_v3<R, B>(&self, method: &str, body: &B) -> ManagerResult<R>
+    where
+        R: for<'de> serde::Deserialize<'de> + zbus::zvariant::Type + 'static,
+        B: serde::Serialize + zbus::zvariant::DynamicType,
+    {
+        let msg = self
+            .conn
+            .call_method(
+                Some(BUS_NAME),
+                OBJECT_PATH,
+                Some(INTERFACE_V3),
                 method,
                 body,
             )
@@ -214,5 +237,40 @@ impl ManagerClient for DbusManagerClient {
 
     fn get_protection_status(&self) -> ManagerResult<ProtectionStatus> {
         self.call_v2::<ProtectionStatus, _>("GetProtectionStatus", &())
+    }
+
+    // v3 methods — org.namtor.Manager3
+
+    fn start_enrollment_v3(&self, uid: u32, name: &str) -> ManagerResult<SessionId> {
+        let raw: String = self.call_v3::<String, _>("StartEnrollment", &(uid, name))?;
+        Ok(SessionId(raw))
+    }
+
+    fn stop_enrollment_v3(&self, session: &str) -> ManagerResult<()> {
+        let _body: () = self.call_v3::<(), _>("StopEnrollment", &session.to_string())?;
+        Ok(())
+    }
+
+    fn resume_enrollment_v3(&self, session: &str) -> ManagerResult<()> {
+        let _body: () = self.call_v3::<(), _>("ResumeEnrollment", &session.to_string())?;
+        Ok(())
+    }
+
+    fn review_enrollment_v3(&self, session: &str) -> ManagerResult<EnrollmentReviewV3> {
+        self.call_v3::<EnrollmentReviewV3, _>("ReviewEnrollment", &session.to_string())
+    }
+
+    fn commit_profile_v3(&self, session: &str) -> ManagerResult<ProfileId> {
+        let raw: String = self.call_v3::<String, _>("CommitProfile", &session.to_string())?;
+        Ok(ProfileId(raw))
+    }
+
+    fn cancel_enrollment_v3(&self, session: &str) -> ManagerResult<()> {
+        let _body: () = self.call_v3::<(), _>("CancelEnrollment", &session.to_string())?;
+        Ok(())
+    }
+
+    fn negotiate_v3(&self, version: u32) -> ManagerResult<u32> {
+        self.call_v3::<u32, _>("NegotiateVersion", &version)
     }
 }

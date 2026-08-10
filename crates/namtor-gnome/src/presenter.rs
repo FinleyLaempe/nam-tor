@@ -23,7 +23,8 @@
 use std::sync::Arc;
 
 use crate::client::{
-    EnrollmentProgress, ManagerClient, ManagerError, ProfileId, SessionId, StatusReport,
+    EnrollmentProgress, EnrollmentProgressV3, ManagerClient, ManagerError, ProfileId, SessionId,
+    StatusReport,
 };
 use crate::view_model::*;
 
@@ -352,6 +353,233 @@ impl<C: ManagerClient> ProfilePresenter<C> {
                 self.model.message = Some("Enrollment cancelled".into());
             }
             Err(err) => self.set_error(&err),
+        }
+        &self.model
+    }
+
+    // -----------------------------------------------------------------------
+    // v3 enrollment lifecycle (org.namtor.Manager3)
+    // -----------------------------------------------------------------------
+
+    /// v3: Start a new enrollment session. Transitions to Capturing on
+    /// success. Validates the profile name before calling the daemon.
+    pub fn start_enrollment_v3(&mut self, name: &str) -> &PresenterModel {
+        self.model.error = None;
+        self.model.message = None;
+
+        if self.model.enrollment_state == EnrollmentState::Capturing
+            || self.model.enrollment_state == EnrollmentState::Saving
+        {
+            self.model.error = Some(ErrorView {
+                title: "Enrollment in progress".into(),
+                detail: "An enrollment is already active".into(),
+                recovery: None,
+            });
+            return &self.model;
+        }
+
+        if name.trim().is_empty() {
+            self.model.enrollment_state = EnrollmentState::Error("Name cannot be empty".into());
+            self.model.error = Some(ErrorView {
+                title: "Invalid name".into(),
+                detail: "Profile name cannot be empty".into(),
+                recovery: None,
+            });
+            return &self.model;
+        }
+
+        if name.len() > 64 {
+            self.model.enrollment_state = EnrollmentState::Error("Name too long".into());
+            self.model.error = Some(ErrorView {
+                title: "Invalid name".into(),
+                detail: "Profile name is too long (max 64 characters)".into(),
+                recovery: None,
+            });
+            return &self.model;
+        }
+
+        match self.client.start_enrollment_v3(self.uid, name) {
+            Ok(session) => {
+                self.model.enrollment_state = EnrollmentState::Capturing;
+                self.model.enrollment_session_v3 = Some(session.0.clone());
+                self.model.review_view_v3 = None;
+                self.model.enrollment_view_v3 = Some(EnrollmentViewV3 {
+                    phase: "capturing".into(),
+                    quality_percent: 0,
+                    diversity_percent: 0,
+                    frames_seen: 0,
+                    frames_accepted: 0,
+                    frames_rejected: 0,
+                    quality_bucket: 0,
+                    guidance: crate::client::Guidance::Capturing.as_label().into(),
+                });
+            }
+            Err(err) => {
+                self.model.enrollment_state = EnrollmentState::Error(err.to_string());
+                self.set_error(&err);
+            }
+        }
+        &self.model
+    }
+
+    /// v3: Handle a progress signal from the daemon. Ignores stale signals
+    /// (session id does not match the active session). The view calls this
+    /// from a glib idle callback after receiving the D-Bus signal.
+    pub fn on_progress_v3(&mut self, progress: &EnrollmentProgressV3) -> &PresenterModel {
+        let Some(active) = &self.model.enrollment_session_v3 else {
+            return &self.model;
+        };
+        if progress.session != *active {
+            return &self.model;
+        }
+        if self.model.enrollment_state != EnrollmentState::Capturing {
+            return &self.model;
+        }
+        self.model.enrollment_view_v3 = Some(EnrollmentViewV3::from_progress(progress));
+        &self.model
+    }
+
+    /// v3: Stop the active enrollment. Transitions to Stopped.
+    pub fn stop_enrollment_v3(&mut self) -> &PresenterModel {
+        let Some(session) = self.model.enrollment_session_v3.clone() else {
+            return &self.model;
+        };
+        if self.model.enrollment_state != EnrollmentState::Capturing {
+            return &self.model;
+        }
+        match self.client.stop_enrollment_v3(&session) {
+            Ok(()) => {
+                self.model.enrollment_state = EnrollmentState::Stopped;
+                if let Some(view) = &mut self.model.enrollment_view_v3 {
+                    view.phase = "stopped".into();
+                }
+            }
+            Err(err) => {
+                self.model.enrollment_state = EnrollmentState::Error(err.to_string());
+                self.set_error(&err);
+            }
+        }
+        &self.model
+    }
+
+    /// v3: Fetch a review snapshot for the stopped enrollment. Transitions
+    /// to Reviewing.
+    pub fn review_enrollment_v3(&mut self) -> &PresenterModel {
+        let Some(session) = self.model.enrollment_session_v3.clone() else {
+            return &self.model;
+        };
+        if self.model.enrollment_state != EnrollmentState::Stopped {
+            return &self.model;
+        }
+        match self.client.review_enrollment_v3(&session) {
+            Ok(review) => {
+                self.model.review_view_v3 = Some(ReviewViewV3::from_review(&review));
+                self.model.enrollment_state = EnrollmentState::Reviewing;
+            }
+            Err(err) => {
+                self.model.enrollment_state = EnrollmentState::Error(err.to_string());
+                self.set_error(&err);
+            }
+        }
+        &self.model
+    }
+
+    /// v3: Resume capture from the stopped state. Transitions back to
+    /// Capturing.
+    pub fn resume_enrollment_v3(&mut self) -> &PresenterModel {
+        let Some(session) = self.model.enrollment_session_v3.clone() else {
+            return &self.model;
+        };
+        if self.model.enrollment_state != EnrollmentState::Stopped
+            && self.model.enrollment_state != EnrollmentState::Reviewing
+        {
+            return &self.model;
+        }
+        match self.client.resume_enrollment_v3(&session) {
+            Ok(()) => {
+                self.model.enrollment_state = EnrollmentState::Capturing;
+                self.model.review_view_v3 = None;
+                if let Some(view) = &mut self.model.enrollment_view_v3 {
+                    view.phase = "capturing".into();
+                }
+            }
+            Err(err) => {
+                self.model.enrollment_state = EnrollmentState::Error(err.to_string());
+                self.set_error(&err);
+            }
+        }
+        &self.model
+    }
+
+    /// v3: Commit the enrollment to a persistent profile. Transitions to
+    /// Saving, then back to Setup (profile list) on success. On failure,
+    /// stays in Stopped with an error message.
+    pub fn save_profile_v3(&mut self) -> &PresenterModel {
+        let Some(session) = self.model.enrollment_session_v3.clone() else {
+            return &self.model;
+        };
+        if self.model.enrollment_state != EnrollmentState::Reviewing
+            && self.model.enrollment_state != EnrollmentState::Stopped
+        {
+            return &self.model;
+        }
+        self.model.enrollment_state = EnrollmentState::Saving;
+        match self.client.commit_profile_v3(&session) {
+            Ok(profile_id) => {
+                self.model.enrollment_state = EnrollmentState::Setup;
+                self.model.enrollment_session_v3 = None;
+                self.model.enrollment_view_v3 = None;
+                self.model.review_view_v3 = None;
+                self.model.message = Some(format!("Enrollment complete — profile {profile_id}"));
+                self.refresh();
+            }
+            Err(err) => {
+                self.model.enrollment_state = EnrollmentState::Stopped;
+                self.set_error(&err);
+            }
+        }
+        &self.model
+    }
+
+    /// v3: Discard the enrollment. Cancels on the daemon side and returns
+    /// to the profile list.
+    pub fn discard_enrollment_v3(&mut self) -> &PresenterModel {
+        let Some(session) = self.model.enrollment_session_v3.clone() else {
+            self.model.enrollment_state = EnrollmentState::Setup;
+            return &self.model;
+        };
+        let _ = self.client.cancel_enrollment_v3(&session);
+        self.model.enrollment_state = EnrollmentState::Setup;
+        self.model.enrollment_session_v3 = None;
+        self.model.enrollment_view_v3 = None;
+        self.model.review_view_v3 = None;
+        self.model.message = Some("Enrollment discarded".into());
+        &self.model
+    }
+
+    /// v3: Cancel from any state. Same as discard but may be called from
+    /// any enrollment state (including Error).
+    pub fn cancel_enrollment_v3(&mut self) -> &PresenterModel {
+        if let Some(session) = self.model.enrollment_session_v3.clone() {
+            let _ = self.client.cancel_enrollment_v3(&session);
+        }
+        self.model.enrollment_state = EnrollmentState::Setup;
+        self.model.enrollment_session_v3 = None;
+        self.model.enrollment_view_v3 = None;
+        self.model.review_view_v3 = None;
+        self.model.error = None;
+        &self.model
+    }
+
+    /// v3: Dismiss the error state and return to Setup so the user can
+    /// start again.
+    pub fn dismiss_v3_error(&mut self) -> &PresenterModel {
+        if matches!(self.model.enrollment_state, EnrollmentState::Error(_)) {
+            self.model.enrollment_state = EnrollmentState::Setup;
+            self.model.enrollment_session_v3 = None;
+            self.model.enrollment_view_v3 = None;
+            self.model.review_view_v3 = None;
+            self.model.error = None;
         }
         &self.model
     }
