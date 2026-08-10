@@ -1,0 +1,5 @@
+{"timestamp":"2026-08-10T09:55:03Z","step":"kill_daemon_mid_capture","prerequisite":"root,requires pyatspi","command":"","exit":1,"result":"WITHHELD","ok":false}
+{"timestamp":"2026-08-10T09:55:03Z","step":"review_while_capturing","prerequisite":"root,requires pyatspi","command":"","exit":1,"result":"WITHHELD","ok":false}
+{"timestamp":"2026-08-10T09:55:03Z","step":"cancel_unknown_session","prerequisite":"root,requires pyatspi","command":"","exit":1,"result":"WITHHELD","ok":false}
+{"timestamp":"2026-08-10T09:55:03Z","step":"commit_without_stop","prerequisite":"root,requires pyatspi","command":"","exit":1,"result":"WITHHELD","ok":false}
+{"timestamp":"2026-08-10T09:55:03Z","step":"unplug_camera","prerequisite":"root,requires pyatspi","command":"","exit":1,"result":"WITHHELD","ok":false}
