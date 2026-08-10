@@ -1,0 +1,18 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
+# namtor-gnome.postinst — desktop cache refresh only.
+set -e
+case "$1" in
+    configure|triggered)
+        update-desktop-database -q /usr/share/applications 2>/dev/null || true
+        gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "namtor-gnome.postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+#DEBHELPER#
+exit 0

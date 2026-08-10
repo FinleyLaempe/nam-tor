@@ -1,0 +1,4 @@
+usr/bin/namtor-enroll-wizard
+usr/share/applications/org.namtor.Wizard.desktop
+usr/share/metainfo/org.namtor.Wizard.metainfo.xml
+usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg

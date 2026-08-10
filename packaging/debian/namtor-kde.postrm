@@ -1,0 +1,14 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
+# namtor-kde.postrm — desktop cache refresh only.
+set -e
+case "$1" in
+    remove|purge)
+        update-desktop-database -q /usr/share/applications 2>/dev/null || true
+        gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
+        ;;
+    *)
+        ;;
+esac
+#DEBHELPER#
+exit 0

@@ -1,0 +1,6 @@
+usr/share/applications/org.namtor.kcm.desktop
+usr/share/metainfo/org.namtor.kcm.metainfo.xml
+usr/share/icons/hicolor/scalable/apps/org.namtor.kcm.svg
+usr/lib/qt6/qml/org/namtor/libnamtorqml.so
+usr/share/qt6/qml/org/namtor/main.qml
+usr/share/kpackage/kcms/kcm_namtor/metadata.json

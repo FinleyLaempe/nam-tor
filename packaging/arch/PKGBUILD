@@ -81,7 +81,7 @@ noextract=()
 # (build-model-archive.sh yields a byte-identical tarball every build). The
 # source tarball hash is pinned at release time by the release workflow.
 sha256sums=(
-    'ac8c189e83fc4441f8220743cb856df666ddb39ac26d95a4505a46838200d236'
+    '526e919c51dcc2ae4485ee455a1b140e58fa40d59015cafe08107e132ce6e67c'
     'aba53c49acffb7cedf55296dfb84b1c39005243f194ce56071dd1bf6de0760cf'
 )
 
