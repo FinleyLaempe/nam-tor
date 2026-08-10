@@ -75,7 +75,6 @@ pub struct StatusReport {
 /// capture suitability, NOT authentication accuracy. `quality_bucket` is a
 /// coarse byte label (0=low, 1=medium, 2=high). `guidance` is a closed enum
 /// mapped client-side.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct EnrollmentProgressV3 {
     pub session: String,
@@ -92,7 +91,6 @@ pub struct EnrollmentProgressV3 {
 /// v3 review snapshot returned by `ReviewEnrollment` on `org.namtor.Manager3`
 /// (frozen wire `(sbuuus)`). Session-scoped summary of a stopped enrollment,
 /// distinct from v1's profile-scoped `ReviewOutcome`.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct EnrollmentReviewV3 {
     pub session: String,

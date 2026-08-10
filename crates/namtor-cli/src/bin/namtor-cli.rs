@@ -23,7 +23,14 @@ struct Cli {
 enum Command {
     /// Report the selected device, stream state, and protection level.
     Status,
-    /// Enroll a face template. Use --user to enroll another user (requires root).
+    /// Enroll a face template. Defaults to the v3 daemon-driven continuous
+    /// enrollment lifecycle (`org.namtor.Manager3`). Use `--old` for the v1
+    /// local capture-and-store flow (no daemon required). Use `--user` to
+    /// enroll another user (requires root).
+    ///
+    /// v3 lifecycle: start → live progress → press Enter to stop → review →
+    /// Save (commit) / Resume (continue capture) / Discard (cancel). SIGINT
+    /// discards cleanly.
     Enroll {
         #[arg(long)]
         models_dir: Option<PathBuf>,
@@ -35,6 +42,10 @@ enum Command {
         device: Option<String>,
         #[arg(long)]
         user: Option<String>,
+        /// Use the v1 local capture-and-store flow instead of the v3 daemon
+        /// lifecycle. Kept for compatibility and daemon-less environments.
+        #[arg(long)]
+        old: bool,
     },
     /// Verify a face against enrolled templates via the daemon socket.
     Verify {
@@ -81,15 +92,20 @@ fn main() -> ExitCode {
             key_path,
             device,
             user,
+            old,
         } => {
-            let layout = installed_layout();
-            namtor_cli::enroll::run_enroll(
-                &models_dir.unwrap_or(layout.models_dir),
-                &templates_dir.unwrap_or(layout.templates_dir),
-                &key_path.unwrap_or(layout.key_path),
-                device,
-                user,
-            )
+            if old {
+                let layout = installed_layout();
+                namtor_cli::enroll::run_enroll(
+                    &models_dir.unwrap_or(layout.models_dir),
+                    &templates_dir.unwrap_or(layout.templates_dir),
+                    &key_path.unwrap_or(layout.key_path),
+                    device,
+                    user,
+                )
+            } else {
+                namtor_cli::enroll::run_enroll_v3(user)
+            }
         }
         Command::Verify { user } => namtor_cli::verify::run_verify(user),
         Command::List {

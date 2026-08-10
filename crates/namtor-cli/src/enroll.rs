@@ -1,19 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Enrollment subcommand: capture 25 frames, quality-filter, retain 8 diverse
-//! templates, store encrypted.
+//! Enrollment subcommand.
 //!
-//! Spec §6.6 Tier 1: "Capture 25 frames across poses (±15–20° yaw/pitch),
-//! distances, ambient conditions. Actively reject bad frames: variance-of-
-//! Laplacian blur threshold, minimum face size, pose angle limit, exposure
-//! sanity, landmark confidence. Retain the 8 most diverse high-quality
-//! templates."
+//! v3 path (default): drives the daemon's `org.namtor.Manager3` continuous
+//! enrollment lifecycle over the system D-Bus. The daemon owns capture,
+//! quality scoring, and the candidate reservoir; the CLI is a thin driver
+//! that shows progress, waits for the operator to stop, reviews, and
+//! commits/discards. Spec §6.6 Tier 1 + enrollment redesign.
+//!
+//! `--old` path: the original local capture-and-store flow (Spec §6.6 Tier 1
+//! baseline). Captures 25 frames directly via V4L2, quality-filters, retains
+//! 8 diverse templates, stores encrypted. Kept for v1 compatibility and for
+//! environments where the daemon is not running.
 
+use std::io::{stdin, BufReader};
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use namtor_recog::pipeline::RecognitionPipeline;
 use namtor_store::template::{EnrollmentMeta, Template, TemplateRecord};
 use namtor_store::{StoreError, TemplateStore};
+
+use crate::enroll_session::{install_sigint_handler, run_v3_session, DbusEnrollmentServiceV3};
 
 /// The system user that owns the template store in production. The
 /// sysusers.d entry (`packaging/sysusers.d/namtor.conf`) installs it; the
@@ -293,6 +302,45 @@ pub fn run_enroll(
             ExitCode::FAILURE
         }
     }
+}
+
+/// v3 enrollment entry point: drives the daemon's continuous enrollment
+/// lifecycle over `org.namtor.Manager3` on the system D-Bus.
+///
+/// Flow: resolve identity → connect to daemon → start → progress → stop →
+/// review → Save/Resume/Discard. SIGINT cancels cleanly.
+pub fn run_enroll_v3(user: Option<String>) -> ExitCode {
+    let identity = match resolve_identity(user.as_deref()) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let service = match DbusEnrollmentServiceV3::connect() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            eprintln!("hint: is the namtor-daemon running? Or use `namtor-cli enroll --old` for the local capture path.");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    if let Err(e) = install_sigint_handler(cancel_flag.clone()) {
+        eprintln!("warning: {e}; Ctrl+C will hard-terminate");
+    }
+
+    let mut reader = BufReader::new(stdin());
+    run_v3_session(
+        &service,
+        identity.uid,
+        &identity.username,
+        &mut reader,
+        &cancel_flag,
+    )
+    .to_exit_code()
 }
 
 pub fn run_remove(uid: u32, templates_dir: &Path, key_path: &Path) -> ExitCode {

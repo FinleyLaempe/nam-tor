@@ -86,6 +86,31 @@ struct WireProtectionStatus {
 };
 Q_DECLARE_METATYPE(WireProtectionStatus)
 
+// --- v3 D-Bus wire structs (frozen enrollment-redesign contract: org.namtor.Manager3) ---
+
+struct WireEnrollmentProgressV3 {
+    QString session;
+    QString phase;
+    quint32 quality_percent;
+    quint32 diversity_percent;
+    quint32 frames_seen;
+    quint32 frames_accepted;
+    quint32 frames_rejected;
+    quint8 quality_bucket;
+    QString guidance;
+};
+Q_DECLARE_METATYPE(WireEnrollmentProgressV3)
+
+struct WireEnrollmentReviewV3 {
+    QString session;
+    bool ready_to_save;
+    quint32 quality_percent;
+    quint32 diversity_percent;
+    quint32 frames_accepted;
+    QString guidance;
+};
+Q_DECLARE_METATYPE(WireEnrollmentReviewV3)
+
 // --- QDBusArgument operators for wire structs ---
 
 QDBusArgument &operator<<(QDBusArgument &arg, const WireProfileInfo &p)
@@ -184,6 +209,44 @@ const QDBusArgument &operator>>(const QDBusArgument &arg, WireProtectionStatus &
     return arg;
 }
 
+QDBusArgument &operator<<(QDBusArgument &arg, const WireEnrollmentProgressV3 &p)
+{
+    arg.beginStructure();
+    arg << p.session << p.phase << p.quality_percent << p.diversity_percent
+        << p.frames_seen << p.frames_accepted << p.frames_rejected
+        << p.quality_bucket << p.guidance;
+    arg.endStructure();
+    return arg;
+}
+
+const QDBusArgument &operator>>(const QDBusArgument &arg, WireEnrollmentProgressV3 &p)
+{
+    arg.beginStructure();
+    arg >> p.session >> p.phase >> p.quality_percent >> p.diversity_percent
+        >> p.frames_seen >> p.frames_accepted >> p.frames_rejected
+        >> p.quality_bucket >> p.guidance;
+    arg.endStructure();
+    return arg;
+}
+
+QDBusArgument &operator<<(QDBusArgument &arg, const WireEnrollmentReviewV3 &r)
+{
+    arg.beginStructure();
+    arg << r.session << r.ready_to_save << r.quality_percent
+        << r.diversity_percent << r.frames_accepted << r.guidance;
+    arg.endStructure();
+    return arg;
+}
+
+const QDBusArgument &operator>>(const QDBusArgument &arg, WireEnrollmentReviewV3 &r)
+{
+    arg.beginStructure();
+    arg >> r.session >> r.ready_to_save >> r.quality_percent
+        >> r.diversity_percent >> r.frames_accepted >> r.guidance;
+    arg.endStructure();
+    return arg;
+}
+
 // --- NamtorKcm ---
 
 static bool s_typesRegistered = false;
@@ -208,6 +271,10 @@ static void registerWireTypes()
     qDBusRegisterMetaType<QVector<WirePamServiceInfo>>();
     qRegisterMetaType<WireProtectionStatus>("WireProtectionStatus");
     qDBusRegisterMetaType<WireProtectionStatus>();
+    qRegisterMetaType<WireEnrollmentProgressV3>("WireEnrollmentProgressV3");
+    qDBusRegisterMetaType<WireEnrollmentProgressV3>();
+    qRegisterMetaType<WireEnrollmentReviewV3>("WireEnrollmentReviewV3");
+    qDBusRegisterMetaType<WireEnrollmentReviewV3>();
     s_typesRegistered = true;
 }
 
@@ -217,6 +284,7 @@ NamtorKcm::NamtorKcm(QObject *parent)
     , m_profileModel(new NamtorProfileModel(this))
     , m_iface(nullptr)
     , m_iface2(nullptr)
+    , m_iface3(nullptr)
     , m_daemonReachable(false)
     , m_cameraPresent(false)
     , m_emitterArmed(false)
@@ -228,6 +296,16 @@ NamtorKcm::NamtorKcm(QObject *parent)
     , m_coveragePercent(0)
     , m_reviewNeedsReenroll(false)
     , m_protectionHasTpm(false)
+    , m_qualityPercent(0)
+    , m_diversityPercent(0)
+    , m_framesSeen(0)
+    , m_framesAccepted(0)
+    , m_framesRejected(0)
+    , m_qualityBucket(0)
+    , m_reviewReadyToSave(false)
+    , m_reviewQualityPercent(0)
+    , m_reviewDiversityPercent(0)
+    , m_reviewFramesAccepted(0)
     , m_generation(0)
 {
     registerWireTypes();
@@ -257,6 +335,13 @@ NamtorKcm::NamtorKcm(QObject *parent)
         QDBusConnection::systemBus(),
         this);
 
+    m_iface3 = new QDBusInterface(
+        QString::fromUtf8(namtor_kde_manager_bus_name()),
+        QString::fromUtf8(namtor_kde_manager_object_path()),
+        QStringLiteral("org.namtor.Manager3"),
+        QDBusConnection::systemBus(),
+        this);
+
     connectDBusSignals();
 }
 
@@ -274,6 +359,7 @@ void NamtorKcm::connectDBusSignals()
     const QString path = QString::fromUtf8(namtor_kde_manager_object_path());
     const QString iface = QStringLiteral("org.namtor.Manager");
     const QString iface2 = QStringLiteral("org.namtor.Manager2");
+    const QString iface3 = QStringLiteral("org.namtor.Manager3");
 
     bus.connect(service, path, iface, QStringLiteral("EnrollmentProgress"),
         this, SLOT(onEnrollmentProgressDBus(QDBusMessage)));
@@ -288,6 +374,15 @@ void NamtorKcm::connectDBusSignals()
         this, SLOT(onPamServicesChangedDBus(QDBusMessage)));
     bus.connect(service, path, iface2, QStringLiteral("ProtectionStatusChanged"),
         this, SLOT(onProtectionStatusChangedDBus(QDBusMessage)));
+
+    bus.connect(service, path, iface3, QStringLiteral("EnrollmentProgress"),
+        this, SLOT(onEnrollmentProgressV3DBus(QDBusMessage)));
+    bus.connect(service, path, iface3, QStringLiteral("EnrollmentCompleted"),
+        this, SLOT(onEnrollmentCompletedDBus(QDBusMessage)));
+    bus.connect(service, path, iface3, QStringLiteral("ProfileChanged"),
+        this, SLOT(onProfileChangedDBus(QDBusMessage)));
+    bus.connect(service, path, iface3, QStringLiteral("StatusChanged"),
+        this, SLOT(onStatusChangedDBus(QDBusMessage)));
 }
 
 // --- ABI properties ---
@@ -346,6 +441,25 @@ bool NamtorKcm::protectionHasTpm() const { return m_protectionHasTpm; }
 QString NamtorKcm::protectionWarning() const { return m_protectionWarning; }
 
 QVariantList NamtorKcm::pamServices() const { return m_pamServices; }
+
+// --- v3 enrollment state properties ---
+
+QString NamtorKcm::enrollmentPhase() const { return m_enrollmentPhase; }
+quint32 NamtorKcm::qualityPercent() const { return m_qualityPercent; }
+quint32 NamtorKcm::diversityPercent() const { return m_diversityPercent; }
+quint32 NamtorKcm::framesSeen() const { return m_framesSeen; }
+quint32 NamtorKcm::framesAccepted() const { return m_framesAccepted; }
+quint32 NamtorKcm::framesRejected() const { return m_framesRejected; }
+quint8 NamtorKcm::qualityBucket() const { return m_qualityBucket; }
+QString NamtorKcm::guidance() const { return m_guidance; }
+
+// --- v3 review state properties ---
+
+bool NamtorKcm::reviewReadyToSave() const { return m_reviewReadyToSave; }
+quint32 NamtorKcm::reviewQualityPercent() const { return m_reviewQualityPercent; }
+quint32 NamtorKcm::reviewDiversityPercent() const { return m_reviewDiversityPercent; }
+quint32 NamtorKcm::reviewFramesAccepted() const { return m_reviewFramesAccepted; }
+QString NamtorKcm::reviewGuidance() const { return m_reviewGuidance; }
 
 // --- State helpers ---
 
@@ -664,6 +778,119 @@ void NamtorKcm::getProtectionStatus()
     m_pendingWatchers.append(call);
     connect(call, &QDBusPendingCallWatcher::finished, this,
             [this, gen, call]() { handleGetProtectionStatusReply(call, gen); });
+}
+
+// --- v3 Q_INVOKABLE methods (org.namtor.Manager3 continuous enrollment) ---
+
+void NamtorKcm::startEnrollmentV3(quint32 uid, const QString &name)
+{
+    if (!m_abiOk || !m_iface3 || !m_iface3->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
+    const quint64 gen = ++m_generation;
+    QList<QVariant> args;
+    args << uid << name;
+    auto *call = new QDBusPendingCallWatcher(m_iface3->asyncCallWithArgumentList(
+        QStringLiteral("StartEnrollment"), args));
+    m_pendingWatchers.append(call);
+    connect(call, &QDBusPendingCallWatcher::finished, this,
+            [this, gen, call]() { handleStartEnrollmentV3Reply(call, gen); });
+}
+
+void NamtorKcm::stopEnrollment(const QString &session)
+{
+    if (!m_abiOk || !m_iface3 || !m_iface3->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
+    const quint64 gen = ++m_generation;
+    QList<QVariant> args;
+    args << session;
+    auto *call = new QDBusPendingCallWatcher(m_iface3->asyncCallWithArgumentList(
+        QStringLiteral("StopEnrollment"), args));
+    m_pendingWatchers.append(call);
+    connect(call, &QDBusPendingCallWatcher::finished, this,
+            [this, gen, call]() { handleStopEnrollmentReply(call, gen); });
+}
+
+void NamtorKcm::resumeEnrollment(const QString &session)
+{
+    if (!m_abiOk || !m_iface3 || !m_iface3->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
+    const quint64 gen = ++m_generation;
+    QList<QVariant> args;
+    args << session;
+    auto *call = new QDBusPendingCallWatcher(m_iface3->asyncCallWithArgumentList(
+        QStringLiteral("ResumeEnrollment"), args));
+    m_pendingWatchers.append(call);
+    connect(call, &QDBusPendingCallWatcher::finished, this,
+            [this, gen, call]() { handleResumeEnrollmentReply(call, gen); });
+}
+
+void NamtorKcm::reviewEnrollment(const QString &session)
+{
+    if (!m_abiOk || !m_iface3 || !m_iface3->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
+    const quint64 gen = ++m_generation;
+    QList<QVariant> args;
+    args << session;
+    auto *call = new QDBusPendingCallWatcher(m_iface3->asyncCallWithArgumentList(
+        QStringLiteral("ReviewEnrollment"), args));
+    m_pendingWatchers.append(call);
+    connect(call, &QDBusPendingCallWatcher::finished, this,
+            [this, gen, call]() { handleReviewEnrollmentReply(call, gen); });
+}
+
+void NamtorKcm::commitProfileV3(const QString &session)
+{
+    if (!m_abiOk || !m_iface3 || !m_iface3->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    setLoading(true);
+    const quint64 gen = ++m_generation;
+    QList<QVariant> args;
+    args << session;
+    auto *call = new QDBusPendingCallWatcher(m_iface3->asyncCallWithArgumentList(
+        QStringLiteral("CommitProfile"), args));
+    m_pendingWatchers.append(call);
+    connect(call, &QDBusPendingCallWatcher::finished, this,
+            [this, gen, call]() { handleCommitProfileV3Reply(call, gen); });
+}
+
+void NamtorKcm::cancelEnrollmentV3(const QString &session)
+{
+    if (!m_abiOk || !m_iface3 || !m_iface3->isValid()) {
+        setError(QStringLiteral("daemon unavailable"));
+        return;
+    }
+    ++m_generation;
+    setEnrollmentActive(false);
+    setCurrentSession({});
+    m_enrollmentPhase.clear();
+    m_qualityPercent = 0;
+    m_diversityPercent = 0;
+    m_framesSeen = 0;
+    m_framesAccepted = 0;
+    m_framesRejected = 0;
+    m_qualityBucket = 0;
+    m_guidance.clear();
+    QList<QVariant> args;
+    args << session;
+    auto *call = new QDBusPendingCallWatcher(m_iface3->asyncCallWithArgumentList(
+        QStringLiteral("CancelEnrollment"), args));
+    m_pendingWatchers.append(call);
+    connect(call, &QDBusPendingCallWatcher::finished, this,
+            [this, call]() { handleCancelEnrollmentV3Reply(call, 0); });
 }
 
 void NamtorKcm::refresh()
@@ -1005,4 +1232,157 @@ void NamtorKcm::handleGetProtectionStatusReply(QDBusPendingCallWatcher *watcher,
     m_protectionWarning = s.warning;
     emit protectionStatusChanged();
     setLoading(false);
+}
+
+// --- v3 reply handlers (org.namtor.Manager3) ---
+
+void NamtorKcm::handleStartEnrollmentV3Reply(QDBusPendingCallWatcher *watcher, quint64 gen)
+{
+    removeWatcher(m_pendingWatchers, watcher);
+    if (gen != m_generation)
+        return;
+
+    QDBusPendingReply<QString> reply = *watcher;
+    if (reply.isError()) {
+        setError(reply.error().message());
+        setEnrollmentActive(false);
+        setLoading(false);
+        return;
+    }
+    setError({});
+    const QString session = reply.value();
+    setCurrentSession(session);
+    setEnrollmentActive(true);
+    m_enrollmentPhase = QStringLiteral("capturing");
+    emit enrollmentStarted(session);
+    emit enrollmentProgressV3(session, m_enrollmentPhase, 0, 0, 0, 0, 0, 0, QString());
+    setLoading(false);
+}
+
+void NamtorKcm::handleStopEnrollmentReply(QDBusPendingCallWatcher *watcher, quint64 gen)
+{
+    removeWatcher(m_pendingWatchers, watcher);
+    if (gen != m_generation)
+        return;
+
+    QDBusPendingReply<> reply = *watcher;
+    if (reply.isError()) {
+        setError(reply.error().message());
+        setLoading(false);
+        return;
+    }
+    setError({});
+    m_enrollmentPhase = QStringLiteral("stopped");
+    emit enrollmentStopped(m_currentSession);
+    setLoading(false);
+}
+
+void NamtorKcm::handleResumeEnrollmentReply(QDBusPendingCallWatcher *watcher, quint64 gen)
+{
+    removeWatcher(m_pendingWatchers, watcher);
+    if (gen != m_generation)
+        return;
+
+    QDBusPendingReply<> reply = *watcher;
+    if (reply.isError()) {
+        setError(reply.error().message());
+        setLoading(false);
+        return;
+    }
+    setError({});
+    m_enrollmentPhase = QStringLiteral("capturing");
+    emit enrollmentResumed(m_currentSession);
+    setLoading(false);
+}
+
+void NamtorKcm::handleReviewEnrollmentReply(QDBusPendingCallWatcher *watcher, quint64 gen)
+{
+    removeWatcher(m_pendingWatchers, watcher);
+    if (gen != m_generation)
+        return;
+
+    QDBusPendingReply<WireEnrollmentReviewV3> reply = *watcher;
+    if (reply.isError()) {
+        setError(reply.error().message());
+        setLoading(false);
+        return;
+    }
+    setError({});
+    const auto &r = reply.value();
+    m_reviewReadyToSave = r.ready_to_save;
+    m_reviewQualityPercent = r.quality_percent;
+    m_reviewDiversityPercent = r.diversity_percent;
+    m_reviewFramesAccepted = r.frames_accepted;
+    m_reviewGuidance = r.guidance;
+    emit reviewReadyV3(r.session, r.ready_to_save, r.quality_percent,
+                       r.diversity_percent, r.frames_accepted, r.guidance);
+    setLoading(false);
+}
+
+void NamtorKcm::handleCommitProfileV3Reply(QDBusPendingCallWatcher *watcher, quint64 gen)
+{
+    removeWatcher(m_pendingWatchers, watcher);
+    if (gen != m_generation)
+        return;
+
+    QDBusPendingReply<QString> reply = *watcher;
+    if (reply.isError()) {
+        setError(reply.error().message());
+        setLoading(false);
+        return;
+    }
+    setError({});
+    const QString profile = reply.value();
+    setEnrollmentActive(false);
+    setCurrentSession({});
+    m_enrollmentPhase.clear();
+    emit enrollmentCompleted({}, profile);
+    emit profileChanged(0, profile);
+    listProfiles();
+    setLoading(false);
+}
+
+void NamtorKcm::handleCancelEnrollmentV3Reply(QDBusPendingCallWatcher *watcher, quint64 gen)
+{
+    removeWatcher(m_pendingWatchers, watcher);
+    if (gen != m_generation)
+        return;
+
+    QDBusPendingReply<> reply = *watcher;
+    if (reply.isError()) {
+        setError(reply.error().message());
+    }
+    setError({});
+}
+
+// --- v3 D-Bus signal handler ---
+
+void NamtorKcm::onEnrollmentProgressV3DBus(const QDBusMessage &msg)
+{
+    const auto args = msg.arguments();
+    if (args.isEmpty())
+        return;
+    const auto arg = args.at(0).value<QDBusArgument>();
+    WireEnrollmentProgressV3 p;
+    arg >> p;
+
+    if (!m_currentSession.isEmpty() && p.session != m_currentSession)
+        return;
+
+    m_enrollmentPhase = p.phase;
+    m_qualityPercent = p.quality_percent;
+    m_diversityPercent = p.diversity_percent;
+    m_framesSeen = p.frames_seen;
+    m_framesAccepted = p.frames_accepted;
+    m_framesRejected = p.frames_rejected;
+    m_qualityBucket = p.quality_bucket;
+    m_guidance = p.guidance;
+
+    if (p.phase == QStringLiteral("capturing") && !m_currentSession.isEmpty())
+        setEnrollmentActive(true);
+
+    emit enrollmentProgressV3(p.session, p.phase, p.quality_percent,
+                              p.diversity_percent, p.frames_seen,
+                              p.frames_accepted, p.frames_rejected,
+                              p.quality_bucket, p.guidance);
 }

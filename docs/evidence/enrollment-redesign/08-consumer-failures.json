@@ -1,0 +1,57 @@
+{
+  "task": "08-consumer-failures",
+  "date": "2026-08-10",
+  "description": "Failure-path tests for the v3 consumer migration. Asserts malformed v3 tuples, SIGINT during capture, and review-after-cancel all fail closed: no partial profile is committed, the session is cancelled, and the CLI exits cleanly.",
+  "tests": [
+    {
+      "test": "enroll_v3_malformed_tuple_fails_closed",
+      "crate": "namtor-cli",
+      "pass": true,
+      "setup": "FakeEnrollmentServiceV3 configured to return EnrollmentError::MalformedTuple from review()",
+      "flow": "start -> stop -> review (malformed) -> cancel",
+      "asserts": "driver surfaces the malformed-tuple error, calls cancel, returns V3Outcome::Discarded; commit is never called so no partial profile can result",
+      "fails_closed": true
+    },
+    {
+      "test": "enroll_v3_sigint_cancels",
+      "crate": "namtor-cli",
+      "pass": true,
+      "setup": "cancel_flag set to true before the driver enters the capture loop (simulates SIGINT received during capture)",
+      "flow": "start -> (cancel_flag true) -> cancel",
+      "asserts": "driver calls cancel, returns V3Outcome::Discarded; stop/review/commit never run; clean exit without panic",
+      "fails_closed": true
+    },
+    {
+      "test": "v3_bridge_malformed_tuple_fails_closed",
+      "crate": "namtor-kde",
+      "pass": true,
+      "setup": "fake bus server dropped before review so the review call fails on the transport layer",
+      "flow": "start -> stop -> review (transport failure)",
+      "asserts": "bridge surfaces KcmError::DaemonUnavailable or KcmError::Call; no commit attempted; no partial profile visible to v1 ListProfiles",
+      "fails_closed": true
+    },
+    {
+      "test": "v3_bridge_start_cancel_no_partial_profile",
+      "crate": "namtor-kde",
+      "pass": true,
+      "setup": "fake v3 service with no committed profiles",
+      "flow": "start -> cancel -> list_profiles",
+      "asserts": "list_profiles is empty after cancel; review-after-cancel returns KcmError::Call (session gone), not a stale review",
+      "fails_closed": true
+    },
+    {
+      "test": "v3_bridge_review_while_capturing_rejected",
+      "crate": "namtor-kde",
+      "pass": true,
+      "setup": "fake v3 service with session in Capturing phase (not Stopped)",
+      "flow": "start -> stop -> resume -> review (wrong phase)",
+      "asserts": "review returns KcmError::Call because the session is in Capturing, not Stopped; daemon enforces the stop-before-review contract",
+      "fails_closed": true
+    }
+  ],
+  "invariants": {
+    "no_partial_profile_on_failure": "Every failure path (malformed tuple, SIGINT, transport loss, wrong-phase review) calls cancel or surfaces an error before commit. No code path writes a profile when review/commit did not succeed.",
+    "sigint_clean_exit": "SIGINT sets an AtomicBool checked at the top of every capture-loop iteration; the driver calls cancel and returns V3Outcome::Discarded without panicking.",
+    "review_requires_stopped": "The daemon (and the fake) reject ReviewEnrollment when the session is not in the Stopped phase, enforcing the Stop→Review→Commit checkpoint."
+  }
+}

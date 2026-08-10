@@ -1,0 +1,109 @@
+{
+  "task": "08-consumer-parity",
+  "date": "2026-08-10",
+  "description": "KDE and CLI consumers migrated to org.namtor.Manager3 with functional parity. v1/v2 compatibility preserved. Rust and C++ contract fixtures match v3 XML. CLI supports Stop/Review/Resume/Commit/Cancel.",
+  "tests": [
+    {
+      "test": "v3_types_match_contract",
+      "crate": "namtor-kde",
+      "pass": true,
+      "asserts": "EnrollmentProgressV3 SIGNATURE == (ssuuuuuys), EnrollmentReviewV3 SIGNATURE == (sbuuus), JSON field names match daemon contract, no forbidden biometric tokens"
+    },
+    {
+      "test": "v3_bridge_start_stop_review_commit",
+      "crate": "namtor-kde",
+      "pass": true,
+      "asserts": "start_enrollment_v3 -> stop_enrollment_v3 -> review_enrollment_v3 -> commit_profile_v3 produces a profile visible to v1 ListProfiles; api_version_v3 == 3"
+    },
+    {
+      "test": "v3_bridge_start_cancel",
+      "crate": "namtor-kde",
+      "pass": true,
+      "asserts": "start_enrollment_v3 -> cancel_enrollment_v3 leaves no committed profile; review-after-cancel fails closed with KcmError::Call"
+    },
+    {
+      "test": "v3_bridge_stop_resume_cycle",
+      "crate": "namtor-kde",
+      "pass": true,
+      "asserts": "stop -> resume -> review-while-capturing fails -> stop -> review -> commit succeeds"
+    },
+    {
+      "test": "v1_v2_compatibility_unchanged",
+      "crate": "namtor-kde",
+      "pass": true,
+      "asserts": "existing v1/v2 contract suite (happy_path, cancel_keeps_state_safe, review_returns_coarse_quality, get_status_returns_report) still passes alongside v3 additions"
+    },
+    {
+      "test": "enroll_v3_lifecycle",
+      "crate": "namtor-cli",
+      "pass": true,
+      "asserts": "fake service: start -> progress -> stop -> review -> commit returns V3Outcome::Saved; cancel never called"
+    },
+    {
+      "test": "enroll_v3_discard",
+      "crate": "namtor-cli",
+      "pass": true,
+      "asserts": "start -> stop -> discard returns V3Outcome::Discarded; cancel called, commit never called"
+    },
+    {
+      "test": "enroll_v3_resume_then_commit",
+      "crate": "namtor-cli",
+      "pass": true,
+      "asserts": "start -> stop -> review -> resume -> stop -> review -> commit: 2 stops, 2 reviews, 1 resume, 1 commit, 0 cancels"
+    },
+    {
+      "test": "v3_mirror_types_signatures",
+      "crate": "namtor-cli",
+      "pass": true,
+      "asserts": "CLI EnrollmentProgressV3/EnrollmentReviewV3 mirror types match frozen wire signatures"
+    },
+    {
+      "test": "v3_mirror_types_no_biometric_leak",
+      "crate": "namtor-cli",
+      "pass": true,
+      "asserts": "CLI v3 mirror types carry no embedding/vector/score/threshold/template/biometric tokens in JSON serialisation"
+    },
+    {
+      "test": "cpp_v3_wire_structs_compile",
+      "crate": "namtor-kde (C++)",
+      "pass": true,
+      "asserts": "WireEnrollmentProgressV3 and WireEnrollmentReviewV3 QDBusArgument operators + qDBusRegisterMetaType compile clean under moc + Qt6"
+    },
+    {
+      "test": "cpp_v3_qinvokable_methods_implemented",
+      "crate": "namtor-kde (C++)",
+      "pass": true,
+      "asserts": "startEnrollmentV3, stopEnrollment, resumeEnrollment, reviewEnrollment, commitProfileV3, cancelEnrollmentV3 each have a Q_INVOKABLE declaration and a reply handler"
+    }
+  ],
+  "wire_parity": {
+    "v3_progress_signature": "(ssuuuuuys)",
+    "v3_review_signature": "(sbuuus)",
+    "v3_methods": [
+      "StartEnrollment",
+      "CancelEnrollment",
+      "CommitProfile",
+      "StopEnrollment",
+      "ResumeEnrollment",
+      "ReviewEnrollment"
+    ],
+    "v3_signals": [
+      "EnrollmentProgress",
+      "EnrollmentCompleted",
+      "ProfileChanged",
+      "StatusChanged"
+    ],
+    "consumers": [
+      {"name": "namtor-kde Rust bridge", "interface": "org.namtor.Manager3", "status": "wired"},
+      {"name": "namtor-kde C++ KCM", "interface": "org.namtor.Manager3", "status": "wired"},
+      {"name": "namtor-cli v3 driver", "interface": "org.namtor.Manager3", "status": "wired"}
+    ]
+  },
+  "compatibility": {
+    "v1_unchanged": true,
+    "v2_unchanged": true,
+    "v1_tests_pass": true,
+    "v2_contract_suite_pass": true,
+    "old_flag_for_v1_local_capture": true
+  }
+}

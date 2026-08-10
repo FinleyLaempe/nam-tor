@@ -3,12 +3,13 @@
 // namtor_kcm.h — async D-Bus bridge QObject for the Nam-tor KCM (spec §9.3,
 // Tasks 22-24).
 //
-// Exposes the frozen `org.namtor.Manager` (v1, Task 8) and `org.namtor.Manager2`
-// (v2, Task 1) contracts to QML as typed QObject properties, Q_INVOKABLE
-// methods, and Qt signals. All D-Bus calls are asynchronous via
-// QDBusPendingCall + QDBusPendingCallWatcher so the GUI thread never blocks.
+// Exposes the frozen `org.namtor.Manager` (v1, Task 8), `org.namtor.Manager2`
+// (v2, Task 1), and `org.namtor.Manager3` (v3, enrollment redesign) contracts
+// to QML as typed QObject properties, Q_INVOKABLE methods, and Qt signals.
+// All D-Bus calls are asynchronous via QDBusPendingCall +
+// QDBusPendingCallWatcher so the GUI thread never blocks.
 //
-// Bus: ALL calls go through QDBusConnection::systemBus() — the daemon is a
+// Bus: ALL calls go through QDBusConnection::systemBus()—the daemon is a
 // system service. The KCM never used the session bus.
 //
 // Cancellation: each in-flight call is tracked by a generation counter. When
@@ -18,17 +19,29 @@
 //
 // D-Bus signal forwarding: the bridge connects to the four frozen v1 Manager
 // signals (EnrollmentProgress, EnrollmentCompleted, ProfileChanged,
-// StatusChanged) and the two v2 Manager2 signals (PamServicesChanged,
-// ProtectionStatusChanged) and re-emits them as Qt signals. EnrollmentProgress
-// also updates the cached progress properties so QML can bind without
-// inspecting signal arguments. ProfileChanged triggers an automatic
-// listProfiles refresh so external mutations are reflected. The v2 signals
-// trigger listPamServices / getProtectionStatus refreshes respectively.
+// StatusChanged), the two v2 Manager2 signals (PamServicesChanged,
+// ProtectionStatusChanged), and the four v3 Manager3 signals
+// (EnrollmentProgress with the expanded (ssuuuuuys) struct,
+// EnrollmentCompleted, ProfileChanged, StatusChanged). v1/v2 signals are
+// re-emitted as Qt signals unchanged. The v3 EnrollmentProgress signal
+// updates the cached v3 progress properties (phase, qualityPercent,
+// diversityPercent, framesSeen, framesAccepted, framesRejected,
+// qualityBucket, guidance) and re-emits as enrollmentProgressV3 so QML can
+// bind without inspecting signal arguments. ProfileChanged triggers an
+// automatic listProfiles refresh so external mutations are reflected.
+//
+// v3 enrollment lifecycle: the v3 surface adds Stop/Resume/Review between
+// Start and Commit. QML drives it as: startEnrollmentV3 → (progress) →
+// stopEnrollment → reviewEnrollment → commitProfileV3 (save) or
+// cancelEnrollmentV3 (discard), with resumeEnrollment to return to capturing
+// after a stop. The v1 startEnrollment/cancelEnrollment/commitProfile
+// methods are preserved unchanged for v1 clients.
 //
 // No biometric data (embeddings, frames, scores, thresholds) is exposed in
-// any property or signal — only ProfileInfo metadata, EnrollmentProgress
+// any property or signal—only ProfileInfo metadata, EnrollmentProgress
 // (quality bucket + coverage %), ReviewOutcome, StatusReport, PamServiceInfo,
-// and ProtectionStatus.
+// ProtectionStatus, and the v3 progress/review structs (coarse percents,
+// counters, a quality bucket byte, and guidance text).
 
 #ifndef NAMTOR_KCM_H_CPP
 #define NAMTOR_KCM_H_CPP
@@ -77,6 +90,23 @@ class NamtorKcm : public QObject {
     Q_PROPERTY(bool reviewNeedsReenroll READ reviewNeedsReenroll NOTIFY reviewReady)
     Q_PROPERTY(QString reviewQuality READ reviewQuality NOTIFY reviewReady)
 
+    // --- v3 enrollment state (org.namtor.Manager3) ---
+    Q_PROPERTY(QString enrollmentPhase READ enrollmentPhase NOTIFY enrollmentProgressV3)
+    Q_PROPERTY(quint32 qualityPercent READ qualityPercent NOTIFY enrollmentProgressV3)
+    Q_PROPERTY(quint32 diversityPercent READ diversityPercent NOTIFY enrollmentProgressV3)
+    Q_PROPERTY(quint32 framesSeen READ framesSeen NOTIFY enrollmentProgressV3)
+    Q_PROPERTY(quint32 framesAccepted READ framesAccepted NOTIFY enrollmentProgressV3)
+    Q_PROPERTY(quint32 framesRejected READ framesRejected NOTIFY enrollmentProgressV3)
+    Q_PROPERTY(quint8 qualityBucket READ qualityBucket NOTIFY enrollmentProgressV3)
+    Q_PROPERTY(QString guidance READ guidance NOTIFY enrollmentProgressV3)
+
+    // --- v3 review state (org.namtor.Manager3) ---
+    Q_PROPERTY(bool reviewReadyToSave READ reviewReadyToSave NOTIFY reviewReadyV3)
+    Q_PROPERTY(quint32 reviewQualityPercent READ reviewQualityPercent NOTIFY reviewReadyV3)
+    Q_PROPERTY(quint32 reviewDiversityPercent READ reviewDiversityPercent NOTIFY reviewReadyV3)
+    Q_PROPERTY(quint32 reviewFramesAccepted READ reviewFramesAccepted NOTIFY reviewReadyV3)
+    Q_PROPERTY(QString reviewGuidance READ reviewGuidance NOTIFY reviewReadyV3)
+
     // --- v2 ProtectionStatus (org.namtor.Manager2) ---
     Q_PROPERTY(QString protectionSealing READ protectionSealing NOTIFY protectionStatusChanged)
     Q_PROPERTY(bool protectionHasTpm READ protectionHasTpm NOTIFY protectionStatusChanged)
@@ -117,6 +147,23 @@ public:
     bool reviewNeedsReenroll() const;
     QString reviewQuality() const;
 
+    // v3 enrollment state properties
+    QString enrollmentPhase() const;
+    quint32 qualityPercent() const;
+    quint32 diversityPercent() const;
+    quint32 framesSeen() const;
+    quint32 framesAccepted() const;
+    quint32 framesRejected() const;
+    quint8 qualityBucket() const;
+    QString guidance() const;
+
+    // v3 review state properties
+    bool reviewReadyToSave() const;
+    quint32 reviewQualityPercent() const;
+    quint32 reviewDiversityPercent() const;
+    quint32 reviewFramesAccepted() const;
+    QString reviewGuidance() const;
+
     // v2 ProtectionStatus properties
     QString protectionSealing() const;
     bool protectionHasTpm() const;
@@ -142,6 +189,14 @@ public:
     Q_INVOKABLE void listPamServices();
     Q_INVOKABLE void setPamServiceEnabled(const QString &serviceId, bool enabled);
     Q_INVOKABLE void getProtectionStatus();
+
+    // --- Q_INVOKABLE methods (v3 org.namtor.Manager3 continuous enrollment) ---
+    Q_INVOKABLE void startEnrollmentV3(quint32 uid, const QString &name);
+    Q_INVOKABLE void stopEnrollment(const QString &session);
+    Q_INVOKABLE void resumeEnrollment(const QString &session);
+    Q_INVOKABLE void reviewEnrollment(const QString &session);
+    Q_INVOKABLE void commitProfileV3(const QString &session);
+    Q_INVOKABLE void cancelEnrollmentV3(const QString &session);
 
     // --- Refresh all state (convenience for Component.onCompleted) ---
     Q_INVOKABLE void refresh();
@@ -182,6 +237,18 @@ signals:
     void pamServicesChanged();
     void protectionStatusChanged();
 
+    // --- v3 signals (org.namtor.Manager3) ---
+    void enrollmentProgressV3(const QString &session, const QString &phase,
+                              quint32 qualityPercent, quint32 diversityPercent,
+                              quint32 framesSeen, quint32 framesAccepted,
+                              quint32 framesRejected, quint8 qualityBucket,
+                              const QString &guidance);
+    void reviewReadyV3(const QString &session, bool readyToSave,
+                       quint32 qualityPercent, quint32 diversityPercent,
+                       quint32 framesAccepted, const QString &guidance);
+    void enrollmentStopped(const QString &session);
+    void enrollmentResumed(const QString &session);
+
 private:
     void setLoading(bool loading);
     void setError(const QString &error);
@@ -196,6 +263,12 @@ private:
     void handleListPamServicesReply(QDBusPendingCallWatcher *watcher, quint64 gen);
     void handleSetPamServiceEnabledReply(QDBusPendingCallWatcher *watcher, quint64 gen);
     void handleGetProtectionStatusReply(QDBusPendingCallWatcher *watcher, quint64 gen);
+    void handleStartEnrollmentV3Reply(QDBusPendingCallWatcher *watcher, quint64 gen);
+    void handleStopEnrollmentReply(QDBusPendingCallWatcher *watcher, quint64 gen);
+    void handleResumeEnrollmentReply(QDBusPendingCallWatcher *watcher, quint64 gen);
+    void handleReviewEnrollmentReply(QDBusPendingCallWatcher *watcher, quint64 gen);
+    void handleCommitProfileV3Reply(QDBusPendingCallWatcher *watcher, quint64 gen);
+    void handleCancelEnrollmentV3Reply(QDBusPendingCallWatcher *watcher, quint64 gen);
     void connectDBusSignals();
 
 private slots:
@@ -205,6 +278,7 @@ private slots:
     void onStatusChangedDBus(const QDBusMessage &msg);
     void onPamServicesChangedDBus(const QDBusMessage &msg);
     void onProtectionStatusChangedDBus(const QDBusMessage &msg);
+    void onEnrollmentProgressV3DBus(const QDBusMessage &msg);
 
 private:
     bool m_abiOk;
@@ -212,6 +286,7 @@ private:
     NamtorProfileModel *m_profileModel;
     QDBusInterface *m_iface;
     QDBusInterface *m_iface2;
+    QDBusInterface *m_iface3;
 
     bool m_daemonReachable;
     bool m_cameraPresent;
@@ -240,6 +315,23 @@ private:
 
     // v2 PAM services (list of QVariantMap per PamServiceInfo)
     QVariantList m_pamServices;
+
+    // v3 enrollment state
+    QString m_enrollmentPhase;
+    quint32 m_qualityPercent;
+    quint32 m_diversityPercent;
+    quint32 m_framesSeen;
+    quint32 m_framesAccepted;
+    quint32 m_framesRejected;
+    quint8 m_qualityBucket;
+    QString m_guidance;
+
+    // v3 review state
+    bool m_reviewReadyToSave;
+    quint32 m_reviewQualityPercent;
+    quint32 m_reviewDiversityPercent;
+    quint32 m_reviewFramesAccepted;
+    QString m_reviewGuidance;
 
     quint64 m_generation;
     QVector<QDBusPendingCallWatcher *> m_pendingWatchers;

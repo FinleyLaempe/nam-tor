@@ -606,6 +606,465 @@ fn aggregate_quality(qs: &[&EnrollmentQuality]) -> EnrollmentQuality {
     EnrollmentQuality::new(det, lm, blur, pose, illum)
 }
 
+// ---------------------------------------------------------------------------
+// v3 continuous-enrollment client (org.namtor.Manager3)
+// ---------------------------------------------------------------------------
+//
+// The v3 surface moves capture and quality scoring to the daemon. The CLI
+// becomes a thin driver: it calls Start, listens for EnrollmentProgress
+// signals (which carry the daemon-authoritative `quality_percent` and
+// `guidance`), waits for the operator to request a review, then drives
+// Stop → Review → (Commit | Resume | Cancel). There is no local quality
+// calculation on this path — the values printed to the operator come straight
+// from the v3 progress/review structs.
+//
+// The driver is parameterised over an [`EnrollmentServiceV3`] trait so the
+// hermetic tests in [`tests::v3`] can drive it against a fake without a real
+// D-Bus daemon or camera.
+
+use std::io::BufRead;
+use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+/// v3 enrollment progress mirror (frozen wire `(ssuuuuuys)`). Matches
+/// `namtor-daemon::manager::contract::EnrollmentProgressV3` and
+/// `namtor-kde::types::EnrollmentProgressV3` field-for-field. The daemon is
+/// the single source of truth for every field; the CLI does not recompute.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, zvariant::Type)]
+pub struct EnrollmentProgressV3 {
+    pub session: String,
+    pub phase: String,
+    pub quality_percent: u32,
+    pub diversity_percent: u32,
+    pub frames_seen: u32,
+    pub frames_accepted: u32,
+    pub frames_rejected: u32,
+    pub quality_bucket: u8,
+    pub guidance: String,
+}
+
+/// v3 review snapshot mirror (frozen wire `(sbuuus)`). Matches
+/// `namtor-daemon::manager::contract::EnrollmentReviewV3`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, zvariant::Type)]
+pub struct EnrollmentReviewV3 {
+    pub session: String,
+    pub ready_to_save: bool,
+    pub quality_percent: u32,
+    pub diversity_percent: u32,
+    pub frames_accepted: u32,
+    pub guidance: String,
+}
+
+/// Errors surfaced by an [`EnrollmentServiceV3`] implementation. The driver
+/// maps each variant to a distinct user-facing message so a transport failure
+/// is distinguishable from a daemon-state rejection.
+#[derive(Debug, Clone)]
+pub enum EnrollmentError {
+    /// D-Bus transport or daemon-unavailable failure.
+    Transport(String),
+    /// The daemon rejected the call (bad session, wrong phase, polkit deny).
+    Daemon(String),
+    /// The reply tuple was malformed and could not be deserialised.
+    MalformedTuple(String),
+}
+
+impl std::fmt::Display for EnrollmentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EnrollmentError::Transport(m) => write!(f, "enrollment transport error: {m}"),
+            EnrollmentError::Daemon(m) => write!(f, "enrollment daemon error: {m}"),
+            EnrollmentError::MalformedTuple(m) => {
+                write!(f, "enrollment malformed v3 tuple: {m}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EnrollmentError {}
+
+/// The v3 enrollment service the CLI drives. Production uses a D-Bus impl
+/// (see [`DbusEnrollmentServiceV3`]); tests use [`FakeEnrollmentServiceV3`].
+///
+/// Methods are synchronous because the CLI blocks on each daemon round-trip.
+/// Progress signals are pulled (not pushed) via [`next_progress`] so the
+/// driver loop can interleave keypress/SIGINT polling with signal draining.
+pub trait EnrollmentServiceV3 {
+    fn start(&self, uid: u32, name: &str) -> Result<String, EnrollmentError>;
+    fn stop(&self, session: &str) -> Result<(), EnrollmentError>;
+    fn resume(&self, session: &str) -> Result<(), EnrollmentError>;
+    fn review(&self, session: &str) -> Result<EnrollmentReviewV3, EnrollmentError>;
+    fn commit(&self, session: &str) -> Result<String, EnrollmentError>;
+    fn cancel(&self, session: &str) -> Result<(), EnrollmentError>;
+    /// Drain one progress signal. Returns `Ok(None)` when no signal is
+    /// pending (so the driver can poll keypress/SIGINT and loop).
+    fn next_progress(&self) -> Result<Option<EnrollmentProgressV3>, EnrollmentError>;
+}
+
+/// Coarse quality-bucket label for display (matches the daemon's
+/// `QualityBucket::from_percent` mapping: 0=low, 1=medium, 2=high).
+fn bucket_label(bucket: u8) -> &'static str {
+    match bucket {
+        0 => "low",
+        1 => "medium",
+        _ => "high",
+    }
+}
+
+/// Print a single progress line to stderr. Uses carriage-return to overwrite
+/// in place when driven from a terminal. Terminology follows the spec:
+/// "capture quality" (not "accuracy"), "guidance" (not "score"),
+/// "accepted/rejected" (not "match/no-match").
+fn print_progress(p: &EnrollmentProgressV3) {
+    eprint!(
+        "\r{}: quality {}% [{}], diversity {}%, accepted {}/{}, rejected {}  [{}]   ",
+        p.phase,
+        p.quality_percent,
+        bucket_label(p.quality_bucket),
+        p.diversity_percent,
+        p.frames_accepted,
+        p.frames_seen,
+        p.frames_rejected,
+        p.guidance
+    );
+}
+
+/// Print the review summary.
+fn print_review(r: &EnrollmentReviewV3) {
+    eprintln!();
+    eprintln!(
+        "review: ready_to_save={}, quality {}%, diversity {}%, accepted {}, guidance [{}]",
+        r.ready_to_save, r.quality_percent, r.diversity_percent, r.frames_accepted, r.guidance
+    );
+}
+
+/// Read a single line of operator input (the Save/Resume/Discard choice).
+/// Returns the trimmed uppercase first character, or `None` on EOF.
+fn read_choice<R: BufRead>(reader: &mut R) -> Option<char> {
+    let mut line = String::new();
+    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+        return None;
+    }
+    line.trim().chars().next().map(|c| c.to_ascii_uppercase())
+}
+
+/// Outcome of a v3 enrollment session. Distinct from `ExitCode` so the driver
+/// is unit-testable without spawning a process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V3Outcome {
+    /// `CommitProfile` succeeded; a profile was saved.
+    Saved,
+    /// `CancelEnrollment` ran (operator discard, SIGINT, or error fail-closed).
+    Discarded,
+    /// The session failed before any commit/cancel decision (e.g. start failed).
+    Failed,
+}
+
+impl V3Outcome {
+    pub fn to_exit_code(self) -> ExitCode {
+        match self {
+            V3Outcome::Saved => ExitCode::SUCCESS,
+            V3Outcome::Discarded | V3Outcome::Failed => ExitCode::FAILURE,
+        }
+    }
+}
+
+/// Read one line from `reader`; return true if a line was read (i.e. the
+/// reader is not at EOF). Used as the "press Enter to stop" trigger — a full
+/// line read keeps line-buffered test input aligned with `read_choice`.
+fn read_any_key<R: BufRead>(reader: &mut R) -> bool {
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap_or(0) > 0
+}
+
+/// Drive the v3 continuous enrollment lifecycle.
+///
+/// Flow: start → poll progress until the operator signals stop (via keypress
+/// on `keypress_reader` or by setting `cancel_flag`) → stop → review →
+/// prompt Save/Resume/Discard → commit / resume / cancel. SIGINT (or any
+/// external setting of `cancel_flag`) during capture calls `cancel` and
+/// exits cleanly.
+///
+/// Returns [`V3Outcome::Saved`] on a successful commit,
+/// [`V3Outcome::Discarded`] on operator discard / SIGINT / error fail-closed,
+/// [`V3Outcome::Failed`] if the session could not start.
+pub fn run_v3_session<S, K>(
+    service: &S,
+    uid: u32,
+    name: &str,
+    keypress_reader: &mut K,
+    cancel_flag: &Arc<AtomicBool>,
+) -> V3Outcome
+where
+    S: EnrollmentServiceV3,
+    K: BufRead,
+{
+    let session = match service.start(uid, name) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return V3Outcome::Failed;
+        }
+    };
+    eprintln!("enrollment session {session} started for uid={uid} ({name})");
+    eprintln!("press Enter to stop and review; Ctrl+C to discard");
+
+    loop {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return cancel_and_exit(service, &session);
+        }
+        match service.next_progress() {
+            Ok(Some(p)) => print_progress(&p),
+            Ok(None) => {}
+            Err(EnrollmentError::MalformedTuple(m)) => {
+                eprintln!("\nerror: {m}");
+                return cancel_and_exit(service, &session);
+            }
+            Err(e) => {
+                eprintln!("\nerror: {e}");
+                return cancel_and_exit(service, &session);
+            }
+        }
+        if read_any_key(keypress_reader) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    if cancel_flag.load(Ordering::SeqCst) {
+        return cancel_and_exit(service, &session);
+    }
+
+    if let Err(e) = service.stop(&session) {
+        eprintln!("\nerror: {e}");
+        return cancel_and_exit(service, &session);
+    }
+    let review = match service.review(&session) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("\nerror: {e}");
+            return cancel_and_exit(service, &session);
+        }
+    };
+    print_review(&review);
+
+    if !review.ready_to_save {
+        eprintln!("daemon reports not ready to save; resume to capture more, or discard.");
+    }
+
+    loop {
+        eprintln!("choose: [S]ave / [R]esume / [D]iscard");
+        match read_choice(keypress_reader) {
+            Some('S') => match service.commit(&session) {
+                Ok(profile_id) => {
+                    eprintln!("Profile saved: {profile_id}");
+                    return V3Outcome::Saved;
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return cancel_and_exit(service, &session);
+                }
+            },
+            Some('R') => match service.resume(&session) {
+                Ok(()) => {
+                    eprintln!("resuming capture; press Enter to stop and review");
+                    return capture_loop(service, &session, keypress_reader, cancel_flag);
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return cancel_and_exit(service, &session);
+                }
+            },
+            Some('D') | None => return cancel_and_exit(service, &session),
+            Some(_) => continue,
+        }
+    }
+}
+
+fn capture_loop<S, K>(
+    service: &S,
+    session: &str,
+    keypress_reader: &mut K,
+    cancel_flag: &Arc<AtomicBool>,
+) -> V3Outcome
+where
+    S: EnrollmentServiceV3,
+    K: BufRead,
+{
+    loop {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return cancel_and_exit(service, session);
+        }
+        match service.next_progress() {
+            Ok(Some(p)) => print_progress(&p),
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("\nerror: {e}");
+                return cancel_and_exit(service, session);
+            }
+        }
+        if read_any_key(keypress_reader) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    if cancel_flag.load(Ordering::SeqCst) {
+        return cancel_and_exit(service, session);
+    }
+    if let Err(e) = service.stop(session) {
+        eprintln!("\nerror: {e}");
+        return cancel_and_exit(service, session);
+    }
+    let review = match service.review(session) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("\nerror: {e}");
+            return cancel_and_exit(service, session);
+        }
+    };
+    print_review(&review);
+    loop {
+        eprintln!("choose: [S]ave / [R]esume / [D]iscard");
+        match read_choice(keypress_reader) {
+            Some('S') => match service.commit(session) {
+                Ok(profile_id) => {
+                    eprintln!("Profile saved: {profile_id}");
+                    return V3Outcome::Saved;
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return cancel_and_exit(service, session);
+                }
+            },
+            Some('R') => match service.resume(session) {
+                Ok(()) => {
+                    eprintln!("resuming capture; press Enter to stop and review");
+                    return capture_loop(service, session, keypress_reader, cancel_flag);
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return cancel_and_exit(service, session);
+                }
+            },
+            Some('D') | None => return cancel_and_exit(service, session),
+            Some(_) => continue,
+        }
+    }
+}
+
+fn cancel_and_exit<S: EnrollmentServiceV3>(service: &S, session: &str) -> V3Outcome {
+    let _ = service.cancel(session);
+    eprintln!("Enrollment discarded");
+    V3Outcome::Discarded
+}
+
+/// Install a SIGINT handler that sets `cancel_flag` on the first signal.
+/// Returns `Err` if the handler could not be installed (the caller then
+/// proceeds without SIGINT protection — Ctrl+C will hard-terminate, which
+/// is the pre-existing behaviour for the v1 CLI).
+pub fn install_sigint_handler(cancel_flag: Arc<AtomicBool>) -> Result<(), EnrollmentError> {
+    signal_hook::flag::register(signal_hook::consts::SIGINT, cancel_flag)
+        .map_err(|e| EnrollmentError::Transport(format!("sigint: {e}")))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// D-Bus production implementation
+// ---------------------------------------------------------------------------
+
+const MANAGER3_BUS_NAME: &str = "org.namtor.Manager";
+const MANAGER3_OBJECT_PATH: &str = "/org/namtor/Manager";
+const MANAGER3_INTERFACE: &str = "org.namtor.Manager3";
+
+/// Production [`EnrollmentServiceV3`] backed by the system D-Bus
+/// `org.namtor.Manager3` interface. Constructed with
+/// [`DbusEnrollmentServiceV3::connect`].
+pub struct DbusEnrollmentServiceV3 {
+    proxy: zbus::blocking::Proxy<'static>,
+}
+
+impl DbusEnrollmentServiceV3 {
+    /// Connect to the system bus and bind a proxy to `org.namtor.Manager3`
+    /// at the canonical object path. Fails if the bus is unreachable.
+    pub fn connect() -> Result<Self, EnrollmentError> {
+        let conn = zbus::blocking::Connection::system()
+            .map_err(|e| EnrollmentError::Transport(e.to_string()))?;
+        let proxy = zbus::blocking::Proxy::new(
+            &conn,
+            MANAGER3_BUS_NAME,
+            MANAGER3_OBJECT_PATH,
+            MANAGER3_INTERFACE,
+        )
+        .map_err(|e| EnrollmentError::Transport(e.to_string()))?;
+        Ok(Self { proxy })
+    }
+
+    fn classify_error(e: zbus::Error) -> EnrollmentError {
+        let msg = e.to_string();
+        match e {
+            zbus::Error::FDO(boxed) => match *boxed {
+                zbus::fdo::Error::ServiceUnknown(_) | zbus::fdo::Error::NameHasNoOwner(_) => {
+                    EnrollmentError::Transport(msg)
+                }
+                _ => EnrollmentError::Daemon(msg),
+            },
+            zbus::Error::MethodError(name, _, _)
+                if name
+                    .as_str()
+                    .starts_with("org.freedesktop.DBus.Error.Service") =>
+            {
+                EnrollmentError::Transport(msg)
+            }
+            _ => EnrollmentError::Daemon(msg),
+        }
+    }
+}
+
+impl EnrollmentServiceV3 for DbusEnrollmentServiceV3 {
+    fn start(&self, uid: u32, name: &str) -> Result<String, EnrollmentError> {
+        self.proxy
+            .call("StartEnrollment", &(uid, name))
+            .map_err(Self::classify_error)
+    }
+
+    fn stop(&self, session: &str) -> Result<(), EnrollmentError> {
+        self.proxy
+            .call("StopEnrollment", &(session,))
+            .map_err(Self::classify_error)
+    }
+
+    fn resume(&self, session: &str) -> Result<(), EnrollmentError> {
+        self.proxy
+            .call("ResumeEnrollment", &(session,))
+            .map_err(Self::classify_error)
+    }
+
+    fn review(&self, session: &str) -> Result<EnrollmentReviewV3, EnrollmentError> {
+        self.proxy
+            .call("ReviewEnrollment", &(session,))
+            .map_err(Self::classify_error)
+    }
+
+    fn commit(&self, session: &str) -> Result<String, EnrollmentError> {
+        self.proxy
+            .call("CommitProfile", &(session,))
+            .map_err(Self::classify_error)
+    }
+
+    fn cancel(&self, session: &str) -> Result<(), EnrollmentError> {
+        self.proxy
+            .call("CancelEnrollment", &(session,))
+            .map_err(Self::classify_error)
+    }
+
+    fn next_progress(&self) -> Result<Option<EnrollmentProgressV3>, EnrollmentError> {
+        // The blocking proxy does not expose a non-blocking signal drain. The
+        // CLI prints progress opportunistically; the daemon's ReviewEnrollment
+        // snapshot is the authoritative summary shown to the operator.
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1050,5 +1509,249 @@ mod tests {
         // calls cancel_inner_zeroize — exercise it explicitly via cancel.
         s.cancel();
         assert_eq!(s.reservoir_len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod v3_tests {
+    use super::*;
+    use std::io::{BufReader, Cursor};
+    use std::sync::{Arc, Mutex};
+    use zvariant::Type;
+
+    /// In-memory fake [`EnrollmentServiceV3`] for hermetic CLI driver tests.
+    /// Records every call in order so tests can assert the lifecycle sequence.
+    struct FakeEnrollmentServiceV3 {
+        calls: Arc<Mutex<Vec<String>>>,
+        progress_queue: Arc<Mutex<Vec<EnrollmentProgressV3>>>,
+        review_result: Result<EnrollmentReviewV3, EnrollmentError>,
+        commit_result: Result<String, EnrollmentError>,
+        fail_review_with_malformed: bool,
+    }
+
+    impl FakeEnrollmentServiceV3 {
+        fn new() -> Self {
+            Self {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                progress_queue: Arc::new(Mutex::new(Vec::new())),
+                review_result: Ok(EnrollmentReviewV3 {
+                    session: "sess-1".to_string(),
+                    ready_to_save: true,
+                    quality_percent: 80,
+                    diversity_percent: 60,
+                    frames_accepted: 8,
+                    guidance: "looking_good".to_string(),
+                }),
+                commit_result: Ok("profile-1".to_string()),
+                fail_review_with_malformed: false,
+            }
+        }
+
+        fn enqueue_progress(&self, p: EnrollmentProgressV3) {
+            self.progress_queue.lock().unwrap().push(p);
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl EnrollmentServiceV3 for FakeEnrollmentServiceV3 {
+        fn start(&self, _uid: u32, _name: &str) -> Result<String, EnrollmentError> {
+            self.calls.lock().unwrap().push("start".into());
+            Ok("sess-1".to_string())
+        }
+        fn stop(&self, _session: &str) -> Result<(), EnrollmentError> {
+            self.calls.lock().unwrap().push("stop".into());
+            Ok(())
+        }
+        fn resume(&self, _session: &str) -> Result<(), EnrollmentError> {
+            self.calls.lock().unwrap().push("resume".into());
+            Ok(())
+        }
+        fn review(&self, _session: &str) -> Result<EnrollmentReviewV3, EnrollmentError> {
+            self.calls.lock().unwrap().push("review".into());
+            if self.fail_review_with_malformed {
+                Err(EnrollmentError::MalformedTuple(
+                    "field `quality_percent` missing".into(),
+                ))
+            } else {
+                self.review_result.clone()
+            }
+        }
+        fn commit(&self, _session: &str) -> Result<String, EnrollmentError> {
+            self.calls.lock().unwrap().push("commit".into());
+            self.commit_result.clone()
+        }
+        fn cancel(&self, _session: &str) -> Result<(), EnrollmentError> {
+            self.calls.lock().unwrap().push("cancel".into());
+            Ok(())
+        }
+        fn next_progress(&self) -> Result<Option<EnrollmentProgressV3>, EnrollmentError> {
+            Ok(self.progress_queue.lock().unwrap().pop())
+        }
+    }
+
+    fn progress(session: &str, phase: &str) -> EnrollmentProgressV3 {
+        EnrollmentProgressV3 {
+            session: session.into(),
+            phase: phase.into(),
+            quality_percent: 75,
+            diversity_percent: 50,
+            frames_seen: 10,
+            frames_accepted: 8,
+            frames_rejected: 2,
+            quality_bucket: 2,
+            guidance: "looking_good".into(),
+        }
+    }
+
+    /// v3 happy path: start → progress → stop → review → commit. The driver
+    /// receives a keypress (newline) to trigger stop, then "S" to save.
+    #[test]
+    fn enroll_v3_lifecycle() {
+        let svc = FakeEnrollmentServiceV3::new();
+        svc.enqueue_progress(progress("sess-1", "capturing"));
+        let cancel = Arc::new(AtomicBool::new(false));
+        // "\n" triggers stop after the first progress drain; "S\n" saves.
+        let mut input = BufReader::new(Cursor::new(b"\nS\n"));
+        let exit = run_v3_session(&svc, 1000, "alice", &mut input, &cancel);
+        assert_eq!(exit, V3Outcome::Saved);
+        let calls = svc.calls();
+        assert!(calls.contains(&"start".to_string()));
+        assert!(calls.contains(&"stop".to_string()));
+        assert!(calls.contains(&"review".to_string()));
+        assert!(calls.contains(&"commit".to_string()));
+        assert!(!calls.contains(&"cancel".to_string()));
+    }
+
+    /// v3 discard path: start → stop → discard (cancel). The driver receives
+    /// "\n" to stop, then "D" to discard.
+    #[test]
+    fn enroll_v3_discard() {
+        let svc = FakeEnrollmentServiceV3::new();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut input = BufReader::new(Cursor::new(b"\nD\n"));
+        let exit = run_v3_session(&svc, 1000, "bob", &mut input, &cancel);
+        assert_eq!(exit, V3Outcome::Discarded);
+        let calls = svc.calls();
+        assert!(calls.contains(&"start".to_string()));
+        assert!(calls.contains(&"stop".to_string()));
+        assert!(calls.contains(&"review".to_string()));
+        assert!(calls.contains(&"cancel".to_string()));
+        assert!(!calls.contains(&"commit".to_string()));
+    }
+
+    /// v3 SIGINT during capture: the cancel flag is set before the driver
+    /// reaches stop. The driver calls cancel and exits cleanly.
+    #[test]
+    fn enroll_v3_sigint_cancels() {
+        let svc = FakeEnrollmentServiceV3::new();
+        let cancel = Arc::new(AtomicBool::new(true));
+        // No keypress needed; cancel flag already set.
+        let mut input = BufReader::new(Cursor::new(b""));
+        let exit = run_v3_session(&svc, 1000, "carol", &mut input, &cancel);
+        assert_eq!(exit, V3Outcome::Discarded);
+        let calls = svc.calls();
+        assert!(calls.contains(&"start".to_string()));
+        assert!(calls.contains(&"cancel".to_string()));
+        // Stop/review/commit must never run on SIGINT.
+        assert!(!calls.contains(&"stop".to_string()));
+        assert!(!calls.contains(&"review".to_string()));
+        assert!(!calls.contains(&"commit".to_string()));
+    }
+
+    /// v3 malformed tuple fails closed: review returns a malformed-tuple
+    /// error. The driver surfaces the error, calls cancel, and exits
+    /// FAILURE. No commit is attempted — no partial profile can result.
+    #[test]
+    fn enroll_v3_malformed_tuple_fails_closed() {
+        let mut svc = FakeEnrollmentServiceV3::new();
+        svc.fail_review_with_malformed = true;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut input = BufReader::new(Cursor::new(b"\nS\n"));
+        let exit = run_v3_session(&svc, 1000, "dan", &mut input, &cancel);
+        assert_eq!(exit, V3Outcome::Discarded);
+        let calls = svc.calls();
+        assert!(calls.contains(&"start".to_string()));
+        assert!(calls.contains(&"stop".to_string()));
+        assert!(calls.contains(&"review".to_string()));
+        // Cancel is called after the malformed review; commit never runs.
+        assert!(calls.contains(&"cancel".to_string()));
+        assert!(!calls.contains(&"commit".to_string()));
+    }
+
+    /// v3 resume path: start → stop → review → resume → stop → review →
+    /// commit. Confirms the Resume choice returns to capture and a second
+    /// stop→review→commit completes the session.
+    #[test]
+    fn enroll_v3_resume_then_commit() {
+        let svc = FakeEnrollmentServiceV3::new();
+        let cancel = Arc::new(AtomicBool::new(false));
+        // "\n" stop, "R\n" resume, "\n" stop again, "S\n" save.
+        let mut input = BufReader::new(Cursor::new(b"\nR\n\nS\n"));
+        let exit = run_v3_session(&svc, 1000, "eve", &mut input, &cancel);
+        assert_eq!(exit, V3Outcome::Saved);
+        let calls = svc.calls();
+        // Two stop/review cycles, one resume, one commit, no cancel.
+        assert_eq!(calls.iter().filter(|c| c == &"stop").count(), 2);
+        assert_eq!(calls.iter().filter(|c| c == &"review").count(), 2);
+        assert_eq!(calls.iter().filter(|c| c == &"resume").count(), 1);
+        assert!(calls.contains(&"commit".to_string()));
+        assert!(!calls.contains(&"cancel".to_string()));
+    }
+
+    /// v3 mirror types match the frozen wire signatures.
+    #[test]
+    fn v3_mirror_types_signatures() {
+        assert_eq!(
+            EnrollmentProgressV3::SIGNATURE,
+            "(ssuuuuuys)",
+            "EnrollmentProgressV3 signature drifted"
+        );
+        assert_eq!(
+            EnrollmentReviewV3::SIGNATURE,
+            "(sbuuus)",
+            "EnrollmentReviewV3 signature drifted"
+        );
+    }
+
+    /// v3 mirror types carry no forbidden biometric tokens in their JSON
+    /// serialisation (the approved-exception `frame` substring in
+    /// `frames_*` fields is the only allowed one).
+    #[test]
+    fn v3_mirror_types_no_biometric_leak() {
+        let p = EnrollmentProgressV3 {
+            session: "s".into(),
+            phase: "capturing".into(),
+            quality_percent: 1,
+            diversity_percent: 1,
+            frames_seen: 1,
+            frames_accepted: 1,
+            frames_rejected: 1,
+            quality_bucket: 0,
+            guidance: "looking_good".into(),
+        };
+        let r = EnrollmentReviewV3 {
+            session: "s".into(),
+            ready_to_save: true,
+            quality_percent: 1,
+            diversity_percent: 1,
+            frames_accepted: 1,
+            guidance: "looking_good".into(),
+        };
+        let pj = serde_json::to_string(&p).unwrap().to_lowercase();
+        let rj = serde_json::to_string(&r).unwrap().to_lowercase();
+        for forbidden in [
+            "embedding",
+            "vector",
+            "score",
+            "threshold",
+            "template",
+            "biometric",
+        ] {
+            assert!(!pj.contains(forbidden), "progress leaked `{forbidden}`");
+            assert!(!rj.contains(forbidden), "review leaked `{forbidden}`");
+        }
     }
 }

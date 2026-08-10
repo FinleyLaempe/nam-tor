@@ -14,12 +14,14 @@
 
 use zbus::{connection::Connection, proxy::CacheProperties};
 
-use crate::proxy::ManagerProxy;
+use crate::proxy::{Manager3Proxy, ManagerProxy};
 use crate::types::{
-    EnrollOutcome, EnrollmentProgress, KcmError, ProfileInfo, ReviewOutcome, StatusReport,
+    EnrollOutcome, EnrollmentProgress, EnrollmentReviewV3, KcmError, ProfileInfo, ReviewOutcome,
+    StatusReport,
 };
 
 /// Well-known D-Bus name and object path of the manager service (Task 8).
+/// v1, v2, and v3 interfaces all live at this same name/path.
 pub const MANAGER_BUS_NAME: &str = "org.namtor.Manager";
 pub const MANAGER_OBJECT_PATH: &str = "/org/namtor/Manager";
 
@@ -28,8 +30,16 @@ pub const MANAGER_OBJECT_PATH: &str = "/org/namtor/Manager";
 /// Constructed for production with [`KcmBridge::connect`] (system bus), or
 /// for tests with [`KcmBridge::new`] against an injected connection (e.g. a
 /// p2p socket pair driving a fake service, see [`crate::fake`]).
+///
+/// Holds two proxies: one bound to the frozen v1 `org.namtor.Manager`
+/// interface, one to the v3 `org.namtor.Manager3` interface. Both target the
+/// same well-known bus name and object path — a v3 client speaks
+/// `Manager3`, a v1 client speaks `Manager`. v1 methods are unchanged; v3
+/// methods drive the continuous enrollment lifecycle (Stop/Review/Resume/
+/// Commit/Cancel).
 pub struct KcmBridge {
     proxy: ManagerProxy<'static>,
+    proxy3: Manager3Proxy<'static>,
 }
 
 impl KcmBridge {
@@ -53,7 +63,16 @@ impl KcmBridge {
             .build()
             .await
             .map_err(KcmError::from)?;
-        Ok(Self { proxy })
+        let proxy3 = Manager3Proxy::builder(conn)
+            .destination(MANAGER_BUS_NAME)
+            .map_err(KcmError::from)?
+            .path(MANAGER_OBJECT_PATH)
+            .map_err(KcmError::from)?
+            .cache_properties(CacheProperties::No)
+            .build()
+            .await
+            .map_err(KcmError::from)?;
+        Ok(Self { proxy, proxy3 })
     }
 
     /// `ListProfiles` → [`ProfileInfo`] list for the QML model.
@@ -141,6 +160,76 @@ impl KcmBridge {
     /// `ApiVersion` property. Matches `contract::API_VERSION` on the daemon.
     pub async fn api_version(&self) -> Result<u32, KcmError> {
         self.proxy.api_version().await.map_err(KcmError::from)
+    }
+
+    // --- v3 methods (org.namtor.Manager3, continuous enrollment) ---
+
+    /// v3 `StartEnrollment(uid, name) -> session_id`. Returns the fresh
+    /// enrollment session id the daemon allocated. Same wire signature as
+    /// v1's `StartEnrollment` but routed through the v3 worker.
+    pub async fn start_enrollment_v3(&self, uid: u32, name: &str) -> Result<String, KcmError> {
+        self.proxy3
+            .start_enrollment(uid, name)
+            .await
+            .map_err(KcmError::from)
+    }
+
+    /// v3 `StopEnrollment(session)`. Stops capture but retains the reservoir;
+    /// the session enters the `Stopped` phase and must be reviewed before
+    /// commit. Idempotent.
+    pub async fn stop_enrollment_v3(&self, session: &str) -> Result<(), KcmError> {
+        self.proxy3
+            .stop_enrollment(session)
+            .await
+            .map_err(KcmError::from)
+    }
+
+    /// v3 `ResumeEnrollment(session)`. Restarts capture from the `Stopped`
+    /// phase, preserving the reservoir. The session returns to `Capturing`.
+    pub async fn resume_enrollment_v3(&self, session: &str) -> Result<(), KcmError> {
+        self.proxy3
+            .resume_enrollment(session)
+            .await
+            .map_err(KcmError::from)
+    }
+
+    /// v3 `ReviewEnrollment(session) -> EnrollmentReviewV3`. Returns the
+    /// session-scoped review snapshot (ready_to_save, quality/diversity
+    /// percent, frames_accepted, guidance). Only valid in the `Stopped`
+    /// phase.
+    pub async fn review_enrollment_v3(
+        &self,
+        session: &str,
+    ) -> Result<EnrollmentReviewV3, KcmError> {
+        self.proxy3
+            .review_enrollment(session)
+            .await
+            .map_err(KcmError::from)
+    }
+
+    /// v3 `CommitProfile(session) -> profile_id`. Commits the enrollment
+    /// reservoir as a new profile and returns the new profile id. Requires
+    /// the session to be in the `Stopped` phase with `ready_to_save == true`.
+    pub async fn commit_profile_v3(&self, session: &str) -> Result<String, KcmError> {
+        self.proxy3
+            .commit_profile(session)
+            .await
+            .map_err(KcmError::from)
+    }
+
+    /// v3 `CancelEnrollment(session)`. Discards the reservoir and tears down
+    /// capture. Idempotent.
+    pub async fn cancel_enrollment_v3(&self, session: &str) -> Result<(), KcmError> {
+        self.proxy3
+            .cancel_enrollment(session)
+            .await
+            .map_err(KcmError::from)
+    }
+
+    /// v3 `ApiVersion` property (read). Returns `contract::API_VERSION_V3`
+    /// on the daemon side.
+    pub async fn api_version_v3(&self) -> Result<u32, KcmError> {
+        self.proxy3.api_version().await.map_err(KcmError::from)
     }
 }
 

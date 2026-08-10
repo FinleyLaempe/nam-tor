@@ -17,10 +17,15 @@ use zbus::interface;
 use zbus::zvariant::Type;
 
 use crate::contract::ScenarioHook;
-use crate::types::{EnrollmentProgress, ProfileInfo, ReviewOutcome, StatusReport};
+use crate::types::{
+    EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, ProfileInfo, ReviewOutcome,
+    StatusReport,
+};
 
 /// Frozen API version (matches `namtor-daemon::manager::contract::API_VERSION`).
 const FAKE_API_VERSION: u32 = 1;
+/// Frozen v3 API version (matches `namtor-daemon::manager::contract::API_VERSION_V3`).
+const FAKE_API_VERSION_V3: u32 = 3;
 
 /// Mutable state behind the fake interface. Tests mutate it through
 /// [`FakeHandle`] (which implements [`ScenarioHook`]).
@@ -30,6 +35,15 @@ pub struct FakeState {
     pub daemon_unavailable: bool,
     pub auth_denied: bool,
     pub next_session: u32,
+    /// v3 session state: session_id → phase ("capturing" or "stopped").
+    pub v3_sessions: std::collections::HashMap<String, V3Phase>,
+}
+
+/// v3 enrollment session phase tracked by the fake.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum V3Phase {
+    Capturing,
+    Stopped,
 }
 
 /// The zbus interface implementation. Method handlers are deliberately tiny:
@@ -256,6 +270,7 @@ impl ScenarioHook for FakeHandle {
             daemon_unavailable: false,
             auth_denied: false,
             next_session: 0,
+            v3_sessions: std::collections::HashMap::new(),
         };
     }
 
@@ -288,6 +303,10 @@ impl FakeBus {
             .serve_at(
                 crate::bridge::MANAGER_OBJECT_PATH,
                 FakeManager::new(handle.state_arc()),
+            )?
+            .serve_at(
+                crate::bridge::MANAGER_OBJECT_PATH,
+                FakeManager3::new(handle.state_arc()),
             )?;
         let client_b = zbus::connection::Builder::unix_stream(b).p2p();
         let (server, client) = futures_util::try_join!(server_b.build(), client_b.build())?;
@@ -310,4 +329,179 @@ fn _assert_no_biometric_types() {
     require_type::<EnrollmentProgress>();
     require_type::<ReviewOutcome>();
     require_type::<StatusReport>();
+    // v3 types are part of the v3 wire surface.
+    require_send::<EnrollmentProgressV3>();
+    require_send::<EnrollmentReviewV3>();
+    require_type::<EnrollmentProgressV3>();
+    require_type::<EnrollmentReviewV3>();
+}
+
+// ---------------------------------------------------------------------------
+// v3 fake interface: org.namtor.Manager3 (continuous enrollment lifecycle)
+// ---------------------------------------------------------------------------
+
+/// Fake `org.namtor.Manager3` service. Shares [`FakeState`] with
+/// [`FakeManager`] so a test's `reset()` clears both surfaces. Implements the
+/// six v3 methods with the same state-machine semantics as the daemon:
+/// `Stop` moves a session from Capturing → Stopped (retains reservoir),
+/// `Resume` moves Stopped → Capturing, `Review` requires Stopped,
+/// `Commit` requires Stopped and produces a new profile, `Cancel` tears down.
+pub struct FakeManager3 {
+    state: Arc<Mutex<FakeState>>,
+}
+
+impl FakeManager3 {
+    pub fn new(state: Arc<Mutex<FakeState>>) -> Self {
+        Self { state }
+    }
+
+    fn denied(&self) -> Option<zbus::fdo::Error> {
+        let s = self.state.lock().unwrap();
+        if s.daemon_unavailable {
+            Some(zbus::fdo::Error::ServiceUnknown(
+                "org.namtor.Manager".to_string(),
+            ))
+        } else if s.auth_denied {
+            Some(zbus::fdo::Error::AccessDenied("polkit denied".to_string()))
+        } else {
+            None
+        }
+    }
+}
+
+#[interface(name = "org.namtor.Manager3")]
+impl FakeManager3 {
+    fn start_enrollment(&self, _uid: u32, _name: &str) -> zbus::fdo::Result<String> {
+        if let Some(e) = self.denied() {
+            return Err(e);
+        }
+        let mut s = self.state.lock().unwrap();
+        s.next_session = s.next_session.wrapping_add(1);
+        let session = format!("sess3-{}", s.next_session);
+        s.v3_sessions.insert(session.clone(), V3Phase::Capturing);
+        Ok(session)
+    }
+
+    fn cancel_enrollment(&self, session: &str) -> zbus::fdo::Result<()> {
+        if let Some(e) = self.denied() {
+            return Err(e);
+        }
+        self.state.lock().unwrap().v3_sessions.remove(session);
+        Ok(())
+    }
+
+    fn commit_profile(&self, session: &str) -> zbus::fdo::Result<String> {
+        if let Some(e) = self.denied() {
+            return Err(e);
+        }
+        let mut s = self.state.lock().unwrap();
+        match s.v3_sessions.get(session) {
+            Some(V3Phase::Stopped) => {}
+            _ => {
+                return Err(zbus::fdo::Error::Failed(
+                    "session not in stopped phase".to_string(),
+                ))
+            }
+        }
+        let id = format!("p{}", s.profiles.len() + 1);
+        s.profiles.push(ProfileInfo {
+            id: id.clone(),
+            name: name_from_session(session),
+            enabled: true,
+            created: 1,
+            last_used: 0,
+        });
+        s.v3_sessions.remove(session);
+        Ok(id)
+    }
+
+    fn stop_enrollment(&self, session: &str) -> zbus::fdo::Result<()> {
+        if let Some(e) = self.denied() {
+            return Err(e);
+        }
+        let mut s = self.state.lock().unwrap();
+        match s.v3_sessions.get_mut(session) {
+            Some(phase) => {
+                *phase = V3Phase::Stopped;
+                Ok(())
+            }
+            None => Err(zbus::fdo::Error::Failed("session not found".into())),
+        }
+    }
+
+    fn resume_enrollment(&self, session: &str) -> zbus::fdo::Result<()> {
+        if let Some(e) = self.denied() {
+            return Err(e);
+        }
+        let mut s = self.state.lock().unwrap();
+        match s.v3_sessions.get_mut(session) {
+            Some(phase) => {
+                *phase = V3Phase::Capturing;
+                Ok(())
+            }
+            None => Err(zbus::fdo::Error::Failed("session not found".into())),
+        }
+    }
+
+    fn review_enrollment(&self, session: &str) -> zbus::fdo::Result<EnrollmentReviewV3> {
+        if let Some(e) = self.denied() {
+            return Err(e);
+        }
+        let s = self.state.lock().unwrap();
+        match s.v3_sessions.get(session) {
+            Some(V3Phase::Stopped) => Ok(EnrollmentReviewV3 {
+                session: session.to_string(),
+                ready_to_save: true,
+                quality_percent: 80,
+                diversity_percent: 60,
+                frames_accepted: 8,
+                guidance: "looking_good".to_string(),
+            }),
+            _ => Err(zbus::fdo::Error::Failed(
+                "session not in stopped phase".into(),
+            )),
+        }
+    }
+
+    #[zbus(property)]
+    fn api_version(&self) -> zbus::fdo::Result<u32> {
+        Ok(FAKE_API_VERSION_V3)
+    }
+
+    #[zbus(signal)]
+    async fn enrollment_progress(
+        &self,
+        _emitter: zbus::object_server::SignalEmitter<'_>,
+        progress: EnrollmentProgressV3,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn enrollment_completed(
+        &self,
+        _emitter: zbus::object_server::SignalEmitter<'_>,
+        session: String,
+        profile: String,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn profile_changed(
+        &self,
+        _emitter: zbus::object_server::SignalEmitter<'_>,
+        uid: u32,
+        id: String,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn status_changed(
+        &self,
+        _emitter: zbus::object_server::SignalEmitter<'_>,
+        status: StatusReport,
+    ) -> zbus::Result<()>;
+}
+
+fn name_from_session(session: &str) -> String {
+    session
+        .strip_prefix("sess3-")
+        .map(|n| format!("user{n}"))
+        .unwrap_or_else(|| "Alice".to_string())
 }
