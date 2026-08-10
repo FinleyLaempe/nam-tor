@@ -1,0 +1,6 @@
+{"step": "start", "result": "sess3-1", "ok": true}
+{"step": "stop", "result": "Ok", "ok": true}
+{"step": "review", "result": "EnrollmentReviewV3{ready_to_save: false}", "ok": true}
+{"step": "resume", "result": "Ok", "ok": true}
+{"step": "stop", "result": "Ok", "ok": true}
+{"step": "commit", "result": "profile-sess3-1", "ok": true}

@@ -1,0 +1,8 @@
+{"case": "unauthorized", "err": "Denied", "ok": false}
+{"case": "duplicate_session", "err": "SessionBusy", "ok": false}
+{"case": "unknown_session_review", "err": "SessionNotFound", "ok": false}
+{"case": "unknown_session_cancel", "err": "SessionNotFound", "ok": false}
+{"case": "unknown_session_commit", "err": "SessionNotFound", "ok": false}
+{"case": "unknown_session_stop", "err": "SessionNotFound", "ok": false}
+{"case": "unknown_session_resume", "err": "SessionNotFound", "ok": false}
+{"case": "version_mismatch", "err": "IncompatibleVersion", "ok": false}

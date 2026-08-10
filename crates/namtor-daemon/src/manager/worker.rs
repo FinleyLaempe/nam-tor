@@ -173,7 +173,7 @@ fn drop_oldest_progress(q: &mut VecDeque<WorkerEvent>) {
 }
 
 /// Receiver end of the event queue.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EventReceiver {
     queue: Arc<BoundedEventQueue>,
 }
@@ -270,6 +270,11 @@ impl WorkerRegistry {
     }
     pub fn is_empty(&self) -> bool {
         self.workers.is_empty()
+    }
+    pub fn send_command(&self, uid: u32, cmd: WorkerCommand) -> Result<(), crate::dbus::ApiError> {
+        self.workers.get(&uid)
+            .ok_or_else(|| crate::dbus::ApiError::SessionNotFound(format!("uid {uid}")))
+            .and_then(|h| h.send_command(cmd))
     }
     pub fn shutdown_all(&mut self) {
         let workers = std::mem::take(&mut self.workers);

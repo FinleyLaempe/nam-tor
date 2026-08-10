@@ -27,7 +27,7 @@ use namtor_daemon::dbus::{ManagerService, SystemPolkit};
 use namtor_daemon::dispatch::DaemonDispatcher;
 use namtor_daemon::lifecycle::SystemClock;
 use namtor_daemon::manager::bus::ManagerBusService;
-use namtor_daemon::manager::dbus::Manager2Service;
+use namtor_daemon::manager::dbus::{Manager2Service, Manager3Service};
 use namtor_daemon::manager::store::{ProfileStore, TemplateProfileStore};
 use namtor_daemon::models::{
     hex, resolve_required_specs, ManifestGate, ModelFetcher, ModelManifest, NoFetch,
@@ -227,7 +227,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _disconnect_monitor =
         bus_service
             .as_ref()
-            .and_then(|(bus, svc)| match bus.monitor_disconnects(svc.clone()) {
+            .and_then(|(bus, svc, svc3)| match bus.monitor_disconnects(svc.clone(), svc3.clone()) {
                 Ok(handle) => Some(handle),
                 Err(e) => {
                     tracing::warn!(error = %e, "disconnect monitor not started");
@@ -260,7 +260,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if let Some((bus, _svc)) = bus_service {
+    if let Some((bus, _svc, _svc3)) = bus_service {
         bus.shutdown();
     }
 
@@ -272,7 +272,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 fn start_manager_bus(
     store_dir: &std::path::Path,
     key_path: &std::path::Path,
-) -> Option<(ManagerBusService, Arc<ManagerService<SystemPolkit>>)> {
+) -> Option<(ManagerBusService, Arc<ManagerService<SystemPolkit>>, Arc<Manager3Service<SystemPolkit>>)> {
     let store = match TemplateStore::open(store_dir, key_path) {
         Ok(s) => Arc::new(s),
         Err(e) => {
@@ -289,12 +289,13 @@ fn start_manager_bus(
     let registry_root = std::path::PathBuf::from("/var/lib/namtor");
     let svc2 = Arc::new(Manager2Service::new(
         SystemPolkit::default(),
-        profile_store,
+        profile_store.clone(),
         pamd_root,
         registry_root,
     ));
-    match ManagerBusService::start_system(svc.clone(), svc2) {
-        Ok(bus) => Some((bus, svc)),
+    let svc3 = Arc::new(Manager3Service::new(SystemPolkit::default(), profile_store.clone()));
+    match ManagerBusService::start_system(svc.clone(), svc2, svc3.clone()) {
+        Ok(bus) => Some((bus, svc, svc3)),
         Err(e) => {
             tracing::warn!(error = %e, "manager d-bus service not started (pam path continues)");
             None

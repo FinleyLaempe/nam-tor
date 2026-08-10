@@ -42,10 +42,11 @@ use crate::dbus::{
     ReviewOutcome, StatusReport, SystemPolkit,
 };
 use crate::manager::contract;
-use crate::manager::dbus::{Manager2DBusError, Manager2Service, PamApi, PamSignal};
+use crate::manager::dbus::{Manager2DBusError, Manager2Service, Manager3DBusError, Manager3Service, Manager3Signal, PamApi, PamSignal};
 
 type Svc = ManagerService<SystemPolkit>;
 type Svc2 = Manager2Service<SystemPolkit>;
+type Svc3 = Manager3Service<SystemPolkit>;
 
 /// Resolve a D-Bus caller's UID/Pid from the bus daemon's
 /// `GetConnectionCredentials`. The `bus_name` (unique connection name
@@ -101,8 +102,7 @@ impl ManagerIface {
             match sig {
                 crate::dbus::ManagerSignal::EnrollmentProgress(p) => {
                     let session = p.session_id.clone();
-                    emitter
-                        .enrollment_progress(&session, &p)
+                    ManagerIfaceSignals::enrollment_progress(emitter, &session, &p)
                         .await
                         .map_err(ManagerDBusError::ZBus)?;
                 }
@@ -110,20 +110,17 @@ impl ManagerIface {
                     session_id,
                     profile_id,
                 } => {
-                    emitter
-                        .enrollment_completed(&session_id, &profile_id)
+                    ManagerIfaceSignals::enrollment_completed(emitter, &session_id, &profile_id)
                         .await
                         .map_err(ManagerDBusError::ZBus)?;
                 }
                 crate::dbus::ManagerSignal::ProfileChanged { uid, id } => {
-                    emitter
-                        .profile_changed(uid, &id)
+                    ManagerIfaceSignals::profile_changed(emitter, uid, &id)
                         .await
                         .map_err(ManagerDBusError::ZBus)?;
                 }
                 crate::dbus::ManagerSignal::StatusChanged(status) => {
-                    emitter
-                        .status_changed(&status)
+                    ManagerIfaceSignals::status_changed(emitter, &status)
                         .await
                         .map_err(ManagerDBusError::ZBus)?;
                 }
@@ -442,6 +439,180 @@ impl Manager2Iface {
     ) -> zbus::Result<()>;
 }
 
+// ---------------------------------------------------------------------------
+// v3 interface: org.namtor.Manager3
+// ---------------------------------------------------------------------------
+
+struct Manager3Iface {
+    svc: Arc<Svc3>,
+}
+
+impl Manager3Iface {
+    fn new(svc: Arc<Svc3>) -> Self {
+        Self { svc }
+    }
+
+    async fn emit_drained_v3(
+        emitter: &SignalEmitter<'_>,
+        svc: &Svc3,
+    ) -> Result<(), Manager3DBusError> {
+        for sig in svc.drain_signals() {
+            match sig {
+                Manager3Signal::EnrollmentProgress(p) => {
+                    Manager3IfaceSignals::enrollment_progress(emitter, &p.session, &p)
+                        .await
+                        .map_err(Manager3DBusError::ZBus)?;
+                }
+                Manager3Signal::EnrollmentCompleted { session_id, profile_id } => {
+                    Manager3IfaceSignals::enrollment_completed(emitter, &session_id, &profile_id)
+                        .await
+                        .map_err(Manager3DBusError::ZBus)?;
+                }
+                Manager3Signal::ProfileChanged { uid, id } => {
+                    Manager3IfaceSignals::profile_changed(emitter, uid, &id)
+                        .await
+                        .map_err(Manager3DBusError::ZBus)?;
+                }
+                Manager3Signal::StatusChanged(status) => {
+                    Manager3IfaceSignals::status_changed(emitter, &status)
+                        .await
+                        .map_err(Manager3DBusError::ZBus)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[interface(name = "org.namtor.Manager3")]
+impl Manager3Iface {
+    #[zbus(name = "StartEnrollment")]
+    async fn start_enrollment(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        uid: u32,
+        name: &str,
+    ) -> Result<String, Manager3DBusError> {
+        let peer = resolve_peer_identity(conn, &header).await?;
+        let session = self
+            .svc
+            .start_enrollment(&peer, uid, name)
+            .map_err(Manager3DBusError::from)?;
+        Self::emit_drained_v3(&emitter, &self.svc).await?;
+        Ok(session)
+    }
+
+    #[zbus(name = "CancelEnrollment")]
+    async fn cancel_enrollment(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        session: &str,
+    ) -> Result<(), Manager3DBusError> {
+        let peer = resolve_peer_identity(conn, &header).await?;
+        self.svc
+            .cancel_enrollment(&peer, session)
+            .map_err(Manager3DBusError::from)?;
+        Self::emit_drained_v3(&emitter, &self.svc).await?;
+        Ok(())
+    }
+
+    #[zbus(name = "CommitProfile")]
+    async fn commit_profile(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        session: &str,
+    ) -> Result<String, Manager3DBusError> {
+        let peer = resolve_peer_identity(conn, &header).await?;
+        let profile = self
+            .svc
+            .commit_profile(&peer, session)
+            .map_err(Manager3DBusError::from)?;
+        Self::emit_drained_v3(&emitter, &self.svc).await?;
+        Ok(profile)
+    }
+
+    #[zbus(name = "StopEnrollment")]
+    async fn stop_enrollment(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        session: &str,
+    ) -> Result<(), Manager3DBusError> {
+        let peer = resolve_peer_identity(conn, &header).await?;
+        self.svc
+            .stop_enrollment(&peer, session)
+            .map_err(Manager3DBusError::from)?;
+        Self::emit_drained_v3(&emitter, &self.svc).await?;
+        Ok(())
+    }
+
+    #[zbus(name = "ResumeEnrollment")]
+    async fn resume_enrollment(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        session: &str,
+    ) -> Result<(), Manager3DBusError> {
+        let peer = resolve_peer_identity(conn, &header).await?;
+        self.svc
+            .resume_enrollment(&peer, session)
+            .map_err(Manager3DBusError::from)?;
+        Self::emit_drained_v3(&emitter, &self.svc).await?;
+        Ok(())
+    }
+
+    #[zbus(name = "ReviewEnrollment")]
+    async fn review_enrollment(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        session: &str,
+    ) -> Result<contract::EnrollmentReviewV3, Manager3DBusError> {
+        let peer = resolve_peer_identity(conn, &header).await?;
+        let review = self
+            .svc
+            .review_enrollment(&peer, session)
+            .map_err(Manager3DBusError::from)?;
+        Self::emit_drained_v3(&emitter, &self.svc).await?;
+        Ok(review)
+    }
+
+    #[zbus(property, name = "ApiVersion")]
+    fn api_version(&self) -> u32 {
+        contract::API_VERSION_V3
+    }
+
+    #[zbus(signal)]
+    async fn enrollment_progress(
+        emitter: &SignalEmitter<'_>,
+        session: &str,
+        progress: &contract::EnrollmentProgressV3,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn enrollment_completed(
+        emitter: &SignalEmitter<'_>,
+        session: &str,
+        profile: &str,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn profile_changed(emitter: &SignalEmitter<'_>, uid: u32, id: &str) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn status_changed(emitter: &SignalEmitter<'_>, status: &StatusReport)
+        -> zbus::Result<()>;
+}
+
 fn emit_drained_blocking(conn: &zbus::blocking::Connection, svc: &Svc) {
     for sig in svc.drain_signals() {
         let res = match sig {
@@ -503,12 +674,14 @@ impl ManagerBusService {
     /// `/org/namtor/Manager2` (v2) at the same object path, and own
     /// `org.namtor.Manager`. Returns `Err(NameTaken)` if another process
     /// already owns the name — the caller logs and exits cleanly.
-    pub fn start_system(svc: Arc<Svc>, svc2: Arc<Svc2>) -> Result<Self, BusServiceError> {
+    pub fn start_system(svc: Arc<Svc>, svc2: Arc<Svc2>, svc3: Arc<Svc3>) -> Result<Self, BusServiceError> {
         let iface = ManagerIface::new(svc);
         let iface2 = Manager2Iface::new(svc2);
+        let iface3 = Manager3Iface::new(svc3);
         let conn = connection::Builder::system()?
             .serve_at(contract::OBJECT_PATH, iface)?
             .serve_at(contract::OBJECT_PATH, iface2)?
+            .serve_at(contract::OBJECT_PATH, iface3)?
             .allow_name_replacements(false)
             .name(contract::BUS_NAME)?
             .build()
@@ -519,7 +692,7 @@ impl ManagerBusService {
         tracing::info!(
             bus = contract::BUS_NAME,
             path = contract::OBJECT_PATH,
-            "manager d-bus service registered on system bus (v1 + v2)"
+            "manager d-bus service registered on system bus (v1 + v2 + v3)"
         );
         Ok(Self { conn })
     }
@@ -536,12 +709,14 @@ impl ManagerBusService {
 
     /// Connect to the session bus (for tests).
     #[cfg(test)]
-    fn start_session(svc: Arc<Svc>, svc2: Arc<Svc2>) -> Result<Self, BusServiceError> {
+    fn start_session(svc: Arc<Svc>, svc2: Arc<Svc2>, svc3: Arc<Svc3>) -> Result<Self, BusServiceError> {
         let iface = ManagerIface::new(svc);
         let iface2 = Manager2Iface::new(svc2);
+        let iface3 = Manager3Iface::new(svc3);
         let conn = connection::Builder::session()?
             .serve_at(contract::OBJECT_PATH, iface)?
             .serve_at(contract::OBJECT_PATH, iface2)?
+            .serve_at(contract::OBJECT_PATH, iface3)?
             .allow_name_replacements(false)
             .name(contract::BUS_NAME)?
             .build()
@@ -553,21 +728,24 @@ impl ManagerBusService {
     }
 
     /// Build a p2p pair for testing: returns (service, client). The service
-    /// side serves both v1 and v2 interfaces; the client side can call
+    /// side serves v1, v2, and v3 interfaces; the client side can call
     /// methods and introspect.
     #[cfg(test)]
     fn start_p2p(
         svc: Arc<Svc>,
         svc2: Arc<Svc2>,
+        svc3: Arc<Svc3>,
     ) -> Result<(Self, zbus::blocking::Connection), BusServiceError> {
         let (s0, s1) = zbus::connection::socket::Channel::pair();
         let guid = zbus::Guid::generate();
         let iface = ManagerIface::new(svc);
         let iface2 = Manager2Iface::new(svc2);
+        let iface3 = Manager3Iface::new(svc3);
         let conn = zbus::blocking::connection::Builder::authenticated_socket(s0, guid.clone())?
             .p2p()
             .serve_at(contract::OBJECT_PATH, iface)?
             .serve_at(contract::OBJECT_PATH, iface2)?
+            .serve_at(contract::OBJECT_PATH, iface3)?
             .build()?;
         let client = zbus::blocking::connection::Builder::authenticated_socket(s1, guid)?
             .p2p()
@@ -589,6 +767,7 @@ impl ManagerBusService {
     pub fn monitor_disconnects(
         &self,
         svc: Arc<Svc>,
+        svc3: Arc<Svc3>,
     ) -> Result<std::thread::JoinHandle<()>, BusServiceError> {
         let conn = self.conn.clone();
         let dbus = zbus::blocking::fdo::DBusProxy::new(&conn).map_err(BusServiceError::ZBus)?;
@@ -608,6 +787,7 @@ impl ManagerBusService {
                     continue;
                 }
                 svc.handle_disconnect_by_bus_name(&old);
+                svc3.handle_disconnect_by_bus_name(&old);
                 emit_drained_blocking(&emit_conn, &svc);
             }
         }))
@@ -638,12 +818,18 @@ mod tests {
         ))
     }
 
+    fn new_svc3() -> Arc<Svc3> {
+        let store: Arc<dyn crate::manager::store::ProfileStore> = Arc::new(NullProfileStore);
+        Arc::new(Manager3Service::new(SystemPolkit::for_testing(), store))
+    }
+
     /// p2p introspection must declare the frozen method/signal/property set.
     #[test]
     fn p2p_introspection_matches_frozen_contract() {
         let svc = new_svc();
         let svc2 = new_svc2();
-        let (service, client) = ManagerBusService::start_p2p(svc, svc2).expect("p2p build");
+        let svc3 = new_svc3();
+        let (service, client) = ManagerBusService::start_p2p(svc, svc2, svc3).expect("p2p build");
         let _service = service;
 
         let proxy = IntrospectableProxy::builder(&client)
@@ -689,7 +875,8 @@ mod tests {
     fn p2p_introspection_contains_manager_interface() {
         let svc = new_svc();
         let svc2 = new_svc2();
-        let (service, client) = ManagerBusService::start_p2p(svc, svc2).expect("p2p build");
+        let svc3 = new_svc3();
+        let (service, client) = ManagerBusService::start_p2p(svc, svc2, svc3).expect("p2p build");
         let _service = service;
 
         let proxy = IntrospectableProxy::builder(&client)
@@ -733,7 +920,8 @@ mod tests {
         }
         let svc1 = new_svc();
         let svc1v2 = new_svc2();
-        let first = ManagerBusService::start_session(svc1, svc1v2);
+        let svc1v3 = new_svc3();
+        let first = ManagerBusService::start_session(svc1, svc1v2, svc1v3);
         if first.is_err() {
             return;
         }
@@ -741,7 +929,8 @@ mod tests {
 
         let svc2 = new_svc();
         let svc2v2 = new_svc2();
-        let second = ManagerBusService::start_session(svc2, svc2v2);
+        let svc2v3 = new_svc3();
+        let second = ManagerBusService::start_session(svc2, svc2v2, svc2v3);
 
         match second {
             Err(BusServiceError::NameTaken(name)) => {
@@ -769,7 +958,8 @@ mod tests {
         }
         let svc = new_svc();
         let svc2 = new_svc2();
-        let service = ManagerBusService::start_session(svc, svc2);
+        let svc3 = new_svc3();
+        let service = ManagerBusService::start_session(svc, svc2, svc3);
         if service.is_err() {
             return;
         }
@@ -832,7 +1022,8 @@ mod tests {
     fn p2p_introspection_contains_v2_interface() {
         let svc = new_svc();
         let svc2 = new_svc2();
-        let (service, client) = ManagerBusService::start_p2p(svc, svc2).expect("p2p build");
+        let svc3 = new_svc3();
+        let (service, client) = ManagerBusService::start_p2p(svc, svc2, svc3).expect("p2p build");
         let _service = service;
 
         let proxy = IntrospectableProxy::builder(&client)
@@ -857,5 +1048,44 @@ mod tests {
         let svc2 = new_svc2();
         let iface = Manager2Iface::new(svc2);
         assert_eq!(iface.api_version(), contract::API_VERSION_V2);
+    }
+
+    // -----------------------------------------------------------------------
+    // v3 interface tests
+    // -----------------------------------------------------------------------
+
+    /// p2p introspection must declare the v3 interface.
+    #[test]
+    fn p2p_introspection_contains_v3_interface() {
+        let svc = new_svc();
+        let svc2 = new_svc2();
+        let svc3 = new_svc3();
+        let (service, client) = ManagerBusService::start_p2p(svc, svc2, svc3).expect("p2p build");
+        let _service = service;
+
+        let proxy = IntrospectableProxy::builder(&client)
+            .destination(contract::BUS_NAME)
+            .expect("dest")
+            .path(contract::OBJECT_PATH)
+            .expect("path")
+            .build()
+            .expect("proxy");
+        let xml = proxy.introspect().expect("introspect");
+        assert!(xml.contains("org.namtor.Manager3"), "missing v3 interface");
+        assert!(xml.contains("StartEnrollment"));
+        assert!(xml.contains("CancelEnrollment"));
+        assert!(xml.contains("CommitProfile"));
+        assert!(xml.contains("StopEnrollment"));
+        assert!(xml.contains("ResumeEnrollment"));
+        assert!(xml.contains("ReviewEnrollment"));
+    }
+
+    /// v3 ApiVersion property must be frozen at 3.
+    #[test]
+    fn v3_api_version_property_is_frozen() {
+        assert_eq!(contract::API_VERSION_V3, 3);
+        let svc3 = new_svc3();
+        let iface = Manager3Iface::new(svc3);
+        assert_eq!(iface.api_version(), contract::API_VERSION_V3);
     }
 }
