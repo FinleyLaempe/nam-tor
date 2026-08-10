@@ -1,0 +1,156 @@
+# Offline State Rendering — Daemon Unavailable
+
+## When Offline State Triggers
+
+The offline state renders when:
+1. D-Bus connection fails at app startup
+2. Daemon crashes during operation
+3. System bus becomes unavailable
+4. Polkit denies all operations (effectively unavailable)
+
+## Visual Representation
+
+### Status Page Components
+
+```
+┌─────────────────────────────────────────┐
+│                                         │
+│         [computer-fail-symbolic]        │
+│                                         │
+│   Cannot reach the Nam-tor daemon       │
+│                                         │
+│   Connection refused                    │
+│   (technical detail from error)         │
+│                                         │
+│         [    Retry    ]                 │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+### Icon
+- `computer-fail-symbolic` — indicates daemon/service failure
+- Alternative: `network-offline-symbolic` for network-related issues
+
+### Title
+- Fixed text: "Cannot reach the Nam-tor daemon"
+- Clear, non-technical language
+- Names the component (daemon) explicitly
+
+### Description
+- Technical detail from the error (e.g., "Connection refused")
+- Shown as-is for debugging
+- Not localized (technical users read this)
+
+### Recovery Action
+- Single "Retry" button
+- Accessible name: "Retry connection to daemon"
+- On click: re-attempts DbusManagerClient::connect()
+- On success: transitions to Loading → Ready state
+- On failure: stays in Offline state (no error loop)
+
+## What is NOT Shown
+
+The offline state explicitly avoids:
+- Empty unexplained space
+- Disabled controls without explanation
+- Profile list with greyed-out items
+- Partial UI with some elements visible
+- Error messages without recovery path
+
+## State Transitions
+
+```
+App Start
+    ↓
+Loading (spinner, "Connecting…")
+    ↓
+┌──────────────┬──────────────┐
+│   Success    │   Failure    │
+│      ↓        │      ↓       │
+│   Ready       │   Offline    │
+│      ↓        │      ↓       │
+│  [Operational]│  [Retry]     │
+│               │      ↓       │
+│               │   (user clicks)
+│               │      ↓       │
+│               │   Loading    │
+│               │      ↓       │
+│               └──→ [loop]    │
+└──────────────┴──────────────┘
+```
+
+## Implementation Details
+
+### Shell Method
+
+```rust
+pub fn show_offline(&self, error_detail: &str, on_retry: impl Fn() + 'static)
+```
+
+Parameters:
+- `error_detail`: Technical error string for description
+- `on_retry`: Closure to re-attempt connection
+
+### Rendering Per Destination
+
+The offline state renders in the **current destination's content area**:
+- If on Profiles → shows in profiles page
+- If on Authentication → shows in auth page
+- If on System → shows in system page
+
+This is intentional: the user should see the offline state
+in context, not as a separate modal.
+
+### Retry Mechanism
+
+The retry closure typically:
+1. Calls `DbusManagerClient::connect()`
+2. On success: creates new ProfilePresenter
+3. Re-renders model (transitions to Loading → Ready)
+4. On failure: calls `show_offline()` again (loop)
+
+### Accessibility
+
+- Status page icon has implicit aria-label
+- Retry button has explicit accessible name
+- Title and description are read by screen readers
+- Keyboard navigation: Tab to Retry, Enter to activate
+
+## Test Coverage
+
+Offline state is tested indirectly via:
+- `presenter_flow.rs::daemon_unavailable_shows_error_and_recovery`
+  - Verifies error title mentions "daemon"
+  - Verifies recovery steps are present
+  - Verifies recovery title is actionable
+
+Direct GTK rendering tests would require a display server
+and are deferred to manual QA or visual regression testing.
+
+## Design Rationale
+
+1. **Full-page status page** (not a banner):
+   - Makes the state unambiguous
+   - Prevents confusion about partial functionality
+   - Follows GNOME HIG for error states
+
+2. **Single retry action**:
+   - Reduces cognitive load
+   - One clear path to recovery
+   - No secondary actions to distract
+
+3. **Technical detail preserved**:
+   - Helps advanced users diagnose
+   - Not hidden behind "Show details"
+   - Still actionable for non-technical users
+
+4. **No automatic retry**:
+   - Respects user's intent to retry
+   - Avoids annoying retry loops
+   - User controls the timing
+
+## Related Files
+
+- `crates/namtor-gnome/src/shell.rs::show_offline()` — implementation
+- `crates/namtor-gnome/DESIGN.md §6.2` — design specification
+- `crates/namtor-gnome/tests/presenter_flow.rs` — presenter-level tests

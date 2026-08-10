@@ -35,6 +35,9 @@ pub mod privacy;
 pub mod shell;
 pub mod view_model;
 
+pub use shell::{Destination, Shell};
+pub use navigation::EnrollmentNavigation;
+
 #[cfg(feature = "dbus")]
 pub mod dbus_client;
 

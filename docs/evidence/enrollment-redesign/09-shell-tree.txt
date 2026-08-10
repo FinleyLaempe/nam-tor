@@ -1,0 +1,104 @@
+# Shell Navigation Tree — Adaptive Settings App
+
+## Destinations (3 total)
+
+The adaptive shell implements three destinations using AdwViewStack:
+
+1. **Profiles** (default)
+   - Icon: `system-users-symbolic`
+   - Stack name: `profiles`
+   - Purpose: Manage enrolled face profiles
+   - Default destination on app launch
+
+2. **Authentication**
+   - Icon: `authenticator-symbolic`
+   - Stack name: `authentication`
+   - Purpose: PAM service toggles, protection status
+   - Accessed via navigation switcher
+
+3. **System**
+   - Icon: `emblem-system-symbolic`
+   - Stack name: `system`
+   - Purpose: Daemon status, camera info, about
+   - Accessed via navigation switcher
+
+## Adaptive Navigation Pattern
+
+### Wide Windows (≥ 600px)
+- Navigation: `AdwViewSwitcher` in header bar
+- Layout: `[≡] Nam-tor — {Destination}  [Profiles|Authentication|System]`
+- Breakpoint condition: MaxWidth 600px
+
+### Narrow Windows (< 600px)
+- Navigation: `AdwViewSwitcherBar` at bottom
+- Layout: Header bar clean, switcher bar at bottom
+- Breakpoint triggers: reveal switcher bar
+
+## Enrollment Flow (NavigationView)
+
+The enrollment flow uses drill-down navigation:
+
+```
+Setup Page (root)
+    ↓ (Start button)
+Capture Page
+    ↓ (Stop button)
+Review Page
+    ↓ (Save/Resume/Discard)
+[Back to Profiles or continue enrollment]
+```
+
+### Page Hierarchy
+
+1. **Setup Page**
+   - Title: "Enroll Face"
+   - Content: Profile name entry, privacy notice
+   - Primary action: Start button
+
+2. **Capture Page**
+   - Title: "Capturing"
+   - Content: Activity indicator, progress metrics, guidance
+   - Primary action: Stop button
+
+3. **Review Page**
+   - Title: "Review"
+   - Content: Summary metrics, quality/diversity/frame counts
+   - Actions: Save (primary), Resume (secondary), Discard (destructive)
+
+### Back Navigation
+
+- Back button in header (automatic via AdwNavigationPage)
+- Swipe-right gesture on touch devices
+- Esc key on keyboard
+- Pops to previous page in stack
+
+## State Machine
+
+### Shell States
+- Loading: AdwStatusPage with spinner
+- Ready: Content rendered for active destination
+- Offline: AdwStatusPage with retry action
+
+### Enrollment States (v3)
+- Setup: Initial state, name entry
+- Capturing: Worker running, progress updates
+- Stopped: User pressed Stop, awaiting review
+- Reviewing: Summary displayed, decision point
+- Saving: Commit in flight
+- Error: Recoverable error with message
+
+## Test Coverage
+
+See `crates/namtor-gnome/tests/shell_navigation.rs` for:
+- Destination enumeration
+- Default destination verification
+- Title/icon/name validation
+- Navigation between destinations
+- Equality and Copy semantics
+
+## Implementation Files
+
+- `crates/namtor-gnome/src/shell.rs` — Adaptive shell with ViewStack
+- `crates/namtor-gnome/src/navigation.rs` — Enrollment NavigationView
+- `crates/namtor-gnome/src/bin/wizard.rs` — App entry point
+- `crates/namtor-gnome/DESIGN.md` — Authoritative design contract
