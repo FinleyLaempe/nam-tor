@@ -19,6 +19,7 @@ namtor-pad = { path = "../namtor-pad" }
 namtor-recog = { path = "../namtor-recog" }
 namtor-uvc = { path = "../namtor-uvc" }
 namtor-layout = { path = "../namtor-layout" }
+namtor-pam-config = { path = "../namtor-pam-config" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
