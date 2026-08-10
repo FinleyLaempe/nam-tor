@@ -23,8 +23,8 @@
 use std::sync::Arc;
 
 use crate::client::{
-    EnrollmentProgress, EnrollmentProgressV3, ManagerClient, ManagerError, ProfileId, SessionId,
-    StatusReport, PamServiceCompatibility,
+    EnrollmentProgress, EnrollmentProgressV3, ManagerClient, ManagerError, PamServiceCompatibility,
+    ProfileId, SessionId, StatusReport,
 };
 use crate::view_model::*;
 
@@ -172,10 +172,8 @@ impl<C: ManagerClient> ProfilePresenter<C> {
                     }
                 }
 
-                auth_view.recommended_service = safe
-                    .iter()
-                    .find(|s| s.id == "gdm-password")
-                    .cloned();
+                auth_view.recommended_service =
+                    safe.iter().find(|s| s.id == "gdm-password").cloned();
 
                 auth_view.safe_services = safe;
                 auth_view.risky_services = risky;

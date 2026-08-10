@@ -1,1 +1,6 @@
-[{"test":"recommended_first","pass":true}]
+[
+  {"test":"recommended_first","pass":true},
+  {"test":"pam_service_row_view_has_no_biometrics","pass":true},
+  {"test":"dbus_client_uses_system_bus","pass":true},
+  {"test":"high_impact_warning_contains_required_phrases","pass":true}
+]

@@ -1,1 +1,17 @@
-[]
+[
+  {"test":"progress_updates_live_values","pass":true},
+  {"test":"stop_freezes_values","pass":true},
+  {"test":"resume_retains_progress","pass":true},
+  {"test":"save_persists_once","pass":true},
+  {"test":"discard_clears_state","pass":true},
+  {"test":"quality_never_labelled_accuracy","pass":true},
+  {"test":"poor_quality_shows_guidance","pass":true},
+  {"test":"start_capturing_reaches_capturing_state","pass":true},
+  {"test":"progress_updates_view","pass":true},
+  {"test":"stop_reaches_stopped_state","pass":true},
+  {"test":"review_shows_summary","pass":true},
+  {"test":"resume_returns_to_capturing","pass":true},
+  {"test":"save_persists_and_returns_to_profiles","pass":true},
+  {"test":"discard_clears_and_returns","pass":true},
+  {"test":"review_flow_stages_and_commits","pass":true}
+]

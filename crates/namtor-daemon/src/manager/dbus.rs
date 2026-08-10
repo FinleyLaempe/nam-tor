@@ -19,11 +19,16 @@ use namtor_pam_config::{
 use std::collections::HashMap;
 
 use crate::dbus::{action, AuthzDecision, PeerIdentity, PolkitAuthority};
-use crate::manager::contract::{EnrollmentProgressV3, EnrollmentReviewV3, PamServiceCompatibility, PamServiceInfo, ProtectionStatus};
+use crate::manager::contract::{
+    EnrollmentProgressV3, EnrollmentReviewV3, PamServiceCompatibility, PamServiceInfo,
+    ProtectionStatus,
+};
 use crate::manager::observation::GuidanceProgress;
 use crate::manager::session::{EnrollmentCapture, ReviewSnapshot};
 use crate::manager::store::ProfileStore;
-use crate::manager::worker::{EventReceiver, SystemWorkerClock, WorkerCommand, WorkerEvent, WorkerRegistry};
+use crate::manager::worker::{
+    EventReceiver, SystemWorkerClock, WorkerCommand, WorkerEvent, WorkerRegistry,
+};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -301,7 +306,10 @@ impl From<Manager3ApiError> for Manager3DBusError {
             Manager3ApiError::State(s) => Self::State(s),
             Manager3ApiError::SessionBusy(u) => Self::SessionBusy(format!("uid {u}")),
             Manager3ApiError::SessionNotFound(s) => Self::SessionNotFound(s),
-            Manager3ApiError::IncompatibleVersion { requested, supported } => Self::IncompatibleVersion(format!("requested {requested}, supported {supported}")),
+            Manager3ApiError::IncompatibleVersion {
+                requested,
+                supported,
+            } => Self::IncompatibleVersion(format!("requested {requested}, supported {supported}")),
         }
     }
 }
@@ -340,8 +348,14 @@ impl From<crate::dbus::ManagerDBusError> for Manager3DBusError {
 #[derive(Debug, Clone)]
 pub enum Manager3Signal {
     EnrollmentProgress(EnrollmentProgressV3),
-    EnrollmentCompleted { session_id: String, profile_id: String },
-    ProfileChanged { uid: u32, id: String },
+    EnrollmentCompleted {
+        session_id: String,
+        profile_id: String,
+    },
+    ProfileChanged {
+        uid: u32,
+        id: String,
+    },
     StatusChanged(crate::dbus::StatusReport),
 }
 
@@ -350,6 +364,7 @@ struct Manager3Session {
     uid: u32,
     receiver: EventReceiver,
     bus_name: String,
+    display_name: String,
 }
 
 /// v3 `org.namtor.Manager3` service. Continuous enrollment lifecycle
@@ -377,11 +392,18 @@ impl<P: PolkitAuthority> Manager3Service<P> {
         std::mem::take(&mut *lock(&self.signals))
     }
 
-    fn authz(&self, action: &str, peer: &PeerIdentity, target_uid: u32) -> Result<(), Manager3ApiError> {
+    fn authz(
+        &self,
+        action: &str,
+        peer: &PeerIdentity,
+        target_uid: u32,
+    ) -> Result<(), Manager3ApiError> {
         match self.polkit.check(action, peer, target_uid) {
             AuthzDecision::Allowed => Ok(()),
             AuthzDecision::Challenge => Err(Manager3ApiError::Challenge(action.into())),
-            AuthzDecision::Denied => Err(Manager3ApiError::Denied { action: action.into() }),
+            AuthzDecision::Denied => Err(Manager3ApiError::Denied {
+                action: action.into(),
+            }),
         }
     }
 
@@ -394,7 +416,8 @@ impl<P: PolkitAuthority> Manager3Service<P> {
     pub fn handle_disconnect_by_bus_name(&self, bus_name: &str) {
         let to_remove: Vec<String> = {
             let sessions = lock(&self.sessions);
-            sessions.iter()
+            sessions
+                .iter()
                 .filter(|(_, s)| s.bus_name == bus_name)
                 .map(|(k, _)| k.clone())
                 .collect()
@@ -415,45 +438,98 @@ impl<P: PolkitAuthority> Manager3Service<P> {
         }
     }
 
-    pub fn start_enrollment(&self, peer: &PeerIdentity, uid: u32, name: &str) -> Result<String, Manager3ApiError> {
-        let action = if peer.uid == uid { action::ENROLL_SELF } else { action::ENROLL_OTHER };
+    pub fn start_enrollment(
+        &self,
+        peer: &PeerIdentity,
+        uid: u32,
+        name: &str,
+    ) -> Result<String, Manager3ApiError> {
+        let action = if peer.uid == uid {
+            action::ENROLL_SELF
+        } else {
+            action::ENROLL_OTHER
+        };
         self.authz(action, peer, uid)?;
-        let capture = EnrollmentCapture::new(uid, peer.uid, peer.bus_name.clone(), name.to_string(), None, None, 100);
+        let capture = EnrollmentCapture::new(
+            uid,
+            peer.uid,
+            peer.bus_name.clone(),
+            name.to_string(),
+            None,
+            None,
+            100,
+        );
         let session_id = Self::gen_session_id();
         let receiver = {
             let mut workers = lock(&self.workers);
-            workers.start(uid, capture, SystemWorkerClock).map_err(Manager3ApiError::from)?
+            workers
+                .start(uid, capture, SystemWorkerClock)
+                .map_err(Manager3ApiError::from)?
         };
-        lock(&self.sessions).insert(session_id.clone(), Manager3Session {
-            uid,
-            receiver,
-            bus_name: peer.bus_name.clone(),
-        });
+        lock(&self.sessions).insert(
+            session_id.clone(),
+            Manager3Session {
+                uid,
+                receiver,
+                bus_name: peer.bus_name.clone(),
+                display_name: name.to_string(),
+            },
+        );
         Ok(session_id)
     }
 
-    pub fn stop_enrollment(&self, peer: &PeerIdentity, session: &str) -> Result<(), Manager3ApiError> {
+    pub fn stop_enrollment(
+        &self,
+        peer: &PeerIdentity,
+        session: &str,
+    ) -> Result<(), Manager3ApiError> {
         let uid = self.require_session(session)?;
-        let action = if peer.uid == uid { action::ENROLL_SELF } else { action::ENROLL_OTHER };
+        let action = if peer.uid == uid {
+            action::ENROLL_SELF
+        } else {
+            action::ENROLL_OTHER
+        };
         self.authz(action, peer, uid)?;
-        lock(&self.workers).send_command(uid, WorkerCommand::Stop).map_err(Manager3ApiError::from)?;
+        lock(&self.workers)
+            .send_command(uid, WorkerCommand::Stop)
+            .map_err(Manager3ApiError::from)?;
         self.drain_until_review(session)?;
         Ok(())
     }
 
-    pub fn resume_enrollment(&self, peer: &PeerIdentity, session: &str) -> Result<(), Manager3ApiError> {
+    pub fn resume_enrollment(
+        &self,
+        peer: &PeerIdentity,
+        session: &str,
+    ) -> Result<(), Manager3ApiError> {
         let uid = self.require_session(session)?;
-        let action = if peer.uid == uid { action::ENROLL_SELF } else { action::ENROLL_OTHER };
+        let action = if peer.uid == uid {
+            action::ENROLL_SELF
+        } else {
+            action::ENROLL_OTHER
+        };
         self.authz(action, peer, uid)?;
-        lock(&self.workers).send_command(uid, WorkerCommand::Resume).map_err(Manager3ApiError::from)?;
+        lock(&self.workers)
+            .send_command(uid, WorkerCommand::Resume)
+            .map_err(Manager3ApiError::from)?;
         Ok(())
     }
 
-    pub fn review_enrollment(&self, peer: &PeerIdentity, session: &str) -> Result<EnrollmentReviewV3, Manager3ApiError> {
+    pub fn review_enrollment(
+        &self,
+        peer: &PeerIdentity,
+        session: &str,
+    ) -> Result<EnrollmentReviewV3, Manager3ApiError> {
         let uid = self.require_session(session)?;
-        let action = if peer.uid == uid { action::ENROLL_SELF } else { action::ENROLL_OTHER };
+        let action = if peer.uid == uid {
+            action::ENROLL_SELF
+        } else {
+            action::ENROLL_OTHER
+        };
         self.authz(action, peer, uid)?;
-        lock(&self.workers).send_command(uid, WorkerCommand::Review).map_err(Manager3ApiError::from)?;
+        lock(&self.workers)
+            .send_command(uid, WorkerCommand::Review)
+            .map_err(Manager3ApiError::from)?;
         let snap = self.drain_until_review(session)?;
         Ok(EnrollmentReviewV3 {
             session: session.to_string(),
@@ -465,25 +541,47 @@ impl<P: PolkitAuthority> Manager3Service<P> {
         })
     }
 
-    pub fn commit_profile(&self, peer: &PeerIdentity, session: &str) -> Result<String, Manager3ApiError> {
+    pub fn commit_profile(
+        &self,
+        peer: &PeerIdentity,
+        session: &str,
+    ) -> Result<String, Manager3ApiError> {
         let uid = self.require_session(session)?;
-        let action = if peer.uid == uid { action::ENROLL_SELF } else { action::ENROLL_OTHER };
+        let action = if peer.uid == uid {
+            action::ENROLL_SELF
+        } else {
+            action::ENROLL_OTHER
+        };
         self.authz(action, peer, uid)?;
-        lock(&self.workers).send_command(uid, WorkerCommand::Commit).map_err(Manager3ApiError::from)?;
+        lock(&self.workers)
+            .send_command(uid, WorkerCommand::Commit)
+            .map_err(Manager3ApiError::from)?;
         let templates = self.drain_until_committed(session)?;
+        let display_name = {
+            let sessions = lock(&self.sessions);
+            sessions
+                .get(session)
+                .map(|s| s.display_name.clone())
+                .unwrap_or_else(|| session.to_string())
+        };
         let profile_id = format!("profile-{}", session);
         let record = namtor_store::ProfileRecord {
             profile_id: namtor_store::ProfileId(format!("profile-{}", session)),
-            display_name: session.to_string(),
+            display_name,
             enabled: true,
             uid,
             model_id: "sface_2021dec".into(),
-            created_at_us: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_micros() as u64).unwrap_or(0),
+            created_at_us: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_micros() as u64)
+                .unwrap_or(0),
             schema_version: 1,
             last_used_us: 0,
             extrinsics: None,
         };
-        self.store.create_profile(uid, record, templates).map_err(|e| Manager3ApiError::State(e.to_string()))?;
+        self.store
+            .create_profile(uid, record, templates)
+            .map_err(|e| Manager3ApiError::State(e.to_string()))?;
         lock(&self.signals).push(Manager3Signal::EnrollmentCompleted {
             session_id: session.to_string(),
             profile_id: profile_id.clone(),
@@ -492,37 +590,61 @@ impl<P: PolkitAuthority> Manager3Service<P> {
         Ok(profile_id)
     }
 
-    pub fn cancel_enrollment(&self, peer: &PeerIdentity, session: &str) -> Result<(), Manager3ApiError> {
+    pub fn cancel_enrollment(
+        &self,
+        peer: &PeerIdentity,
+        session: &str,
+    ) -> Result<(), Manager3ApiError> {
         let uid = self.require_session(session)?;
-        let action = if peer.uid == uid { action::ENROLL_SELF } else { action::ENROLL_OTHER };
+        let action = if peer.uid == uid {
+            action::ENROLL_SELF
+        } else {
+            action::ENROLL_OTHER
+        };
         self.authz(action, peer, uid)?;
-        lock(&self.workers).send_command(uid, WorkerCommand::Cancel).map_err(Manager3ApiError::from)?;
+        lock(&self.workers)
+            .send_command(uid, WorkerCommand::Cancel)
+            .map_err(Manager3ApiError::from)?;
         self.drain_until_cancelled(session)?;
         self.remove_session(session, uid);
         Ok(())
     }
 
     fn require_session(&self, session: &str) -> Result<u32, Manager3ApiError> {
-        lock(&self.sessions).get(session).map(|s| s.uid).ok_or_else(|| Manager3ApiError::SessionNotFound(session.into()))
+        lock(&self.sessions)
+            .get(session)
+            .map(|s| s.uid)
+            .ok_or_else(|| Manager3ApiError::SessionNotFound(session.into()))
     }
 
     fn drain_until_review(&self, session: &str) -> Result<ReviewSnapshot, Manager3ApiError> {
-        let sessions = lock(&self.sessions);
-        let s = sessions.get(session).ok_or_else(|| Manager3ApiError::SessionNotFound(session.into()))?;
+        let receiver = {
+            let sessions = lock(&self.sessions);
+            sessions
+                .get(session)
+                .map(|s| s.receiver.clone())
+                .ok_or_else(|| Manager3ApiError::SessionNotFound(session.into()))?
+        };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut pushed_progress = false;
         loop {
-            if let Some(ev) = s.receiver.recv_timeout(std::time::Duration::from_millis(100)) {
+            if let Some(ev) = receiver.recv_timeout(std::time::Duration::from_millis(100)) {
                 match ev {
                     WorkerEvent::ReviewReady(snap) => return Ok(snap),
                     WorkerEvent::Progress(p) => {
-                        drop(sessions);
-                        self.push_progress(session, p);
-                        return self.drain_until_review_inner(session);
+                        if !pushed_progress {
+                            self.push_progress(session, p);
+                            pushed_progress = true;
+                        }
                     }
                     WorkerEvent::Error(msg) => return Err(Manager3ApiError::State(msg)),
-                    WorkerEvent::Cancelled => return Err(Manager3ApiError::State("cancelled".into())),
+                    WorkerEvent::Cancelled => {
+                        return Err(Manager3ApiError::State("cancelled".into()))
+                    }
                     WorkerEvent::Exhausted => {}
-                    WorkerEvent::Committed(_) => return Err(Manager3ApiError::State("unexpected committed".into())),
+                    WorkerEvent::Committed(_) => {
+                        return Err(Manager3ApiError::State("unexpected committed".into()))
+                    }
                 }
             }
             if std::time::Instant::now() > deadline {
@@ -531,32 +653,20 @@ impl<P: PolkitAuthority> Manager3Service<P> {
         }
     }
 
-    fn drain_until_review_inner(&self, session: &str) -> Result<ReviewSnapshot, Manager3ApiError> {
-        let sessions = lock(&self.sessions);
-        let s = sessions.get(session).ok_or_else(|| Manager3ApiError::SessionNotFound(session.into()))?;
+    fn drain_until_committed(
+        &self,
+        session: &str,
+    ) -> Result<Vec<namtor_store::Template>, Manager3ApiError> {
+        let receiver = {
+            let sessions = lock(&self.sessions);
+            sessions
+                .get(session)
+                .map(|s| s.receiver.clone())
+                .ok_or_else(|| Manager3ApiError::SessionNotFound(session.into()))?
+        };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            if let Some(ev) = s.receiver.recv_timeout(std::time::Duration::from_millis(100)) {
-                match ev {
-                    WorkerEvent::ReviewReady(snap) => return Ok(snap),
-                    WorkerEvent::Progress(_) => continue,
-                    WorkerEvent::Error(msg) => return Err(Manager3ApiError::State(msg)),
-                    WorkerEvent::Cancelled => return Err(Manager3ApiError::State("cancelled".into())),
-                    _ => return Err(Manager3ApiError::State("unexpected event".into())),
-                }
-            }
-            if std::time::Instant::now() > deadline {
-                return Err(Manager3ApiError::State("timeout".into()));
-            }
-        }
-    }
-
-    fn drain_until_committed(&self, session: &str) -> Result<Vec<namtor_store::Template>, Manager3ApiError> {
-        let sessions = lock(&self.sessions);
-        let s = sessions.get(session).ok_or_else(|| Manager3ApiError::SessionNotFound(session.into()))?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            if let Some(ev) = s.receiver.recv_timeout(std::time::Duration::from_millis(100)) {
+            if let Some(ev) = receiver.recv_timeout(std::time::Duration::from_millis(100)) {
                 match ev {
                     WorkerEvent::Committed(t) => return Ok(t),
                     WorkerEvent::Progress(_) => continue,
@@ -571,11 +681,16 @@ impl<P: PolkitAuthority> Manager3Service<P> {
     }
 
     fn drain_until_cancelled(&self, session: &str) -> Result<(), Manager3ApiError> {
-        let sessions = lock(&self.sessions);
-        let s = sessions.get(session).ok_or_else(|| Manager3ApiError::SessionNotFound(session.into()))?;
+        let receiver = {
+            let sessions = lock(&self.sessions);
+            sessions
+                .get(session)
+                .map(|s| s.receiver.clone())
+                .ok_or_else(|| Manager3ApiError::SessionNotFound(session.into()))?
+        };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            if let Some(ev) = s.receiver.recv_timeout(std::time::Duration::from_millis(100)) {
+            if let Some(ev) = receiver.recv_timeout(std::time::Duration::from_millis(100)) {
                 match ev {
                     WorkerEvent::Cancelled => return Ok(()),
                     WorkerEvent::Progress(_) => continue,
@@ -1217,7 +1332,7 @@ mod tests {
         let _ = svc.start_enrollment(&peer(0), 0, "test");
         let signals = svc.drain_signals();
         // With no capture source, no progress signals are generated
-        assert!(signals.is_empty() || signals.len() >= 0);
+        assert!(signals.is_empty());
     }
 
     #[test]
@@ -1247,7 +1362,10 @@ mod tests {
             Manager3DBusError::SessionNotFound(_)
         ));
         assert!(matches!(
-            Manager3DBusError::from(Manager3ApiError::IncompatibleVersion { requested: 2, supported: 3 }),
+            Manager3DBusError::from(Manager3ApiError::IncompatibleVersion {
+                requested: 2,
+                supported: 3
+            }),
             Manager3DBusError::IncompatibleVersion(_)
         ));
     }

@@ -1,1 +1,7 @@
-[{"test":"empty_state","pass":true}]
+[
+  {"test":"empty_state","pass":true},
+  {"test":"review_flow_stages_and_commits","pass":true},
+  {"test":"save_persists_and_returns_to_profiles","pass":true},
+  {"test":"save_persists_once","pass":true},
+  {"test":"discard_clears_and_returns","pass":true}
+]

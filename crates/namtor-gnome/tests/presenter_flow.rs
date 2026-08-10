@@ -68,7 +68,7 @@ fn stop_freezes_values() {
         p.stop_enrollment_v3();
     });
     assert_eq!(presenter.model().enrollment_state, EnrollmentState::Stopped);
-    
+
     // Attempt to update while stopped
     let progress_late = EnrollmentProgressV3 {
         session: progress.session,
@@ -86,7 +86,10 @@ fn stop_freezes_values() {
     });
     let view = model.enrollment_view_v3.as_ref().expect("view");
     assert_eq!(view.quality_percent, 70, "value frozen after stop");
-    assert!(presenter.client().list_profiles().expect("list").is_empty(), "no profile exists yet");
+    assert!(
+        presenter.client().list_profiles().expect("list").is_empty(),
+        "no profile exists yet"
+    );
 }
 
 #[test]
@@ -116,7 +119,10 @@ fn resume_retains_progress() {
     after(&mut presenter, |p| {
         p.resume_enrollment_v3();
     });
-    assert_eq!(presenter.model().enrollment_state, EnrollmentState::Capturing);
+    assert_eq!(
+        presenter.model().enrollment_state,
+        EnrollmentState::Capturing
+    );
     let view = presenter.model().enrollment_view_v3.as_ref().expect("view");
     assert_eq!(view.quality_percent, 50, "progress retained on resume");
 }
@@ -138,7 +144,7 @@ fn save_persists_once() {
     });
     assert_eq!(model.profiles.len(), 1);
     assert_eq!(model.enrollment_state, EnrollmentState::Setup);
-    
+
     // Try to save again (should be no-op as session is gone)
     let model_retry = after(&mut presenter, |p| {
         p.save_profile_v3();
@@ -184,8 +190,14 @@ fn quality_never_labelled_accuracy() {
     });
     let view = model.enrollment_view_v3.as_ref().expect("view");
     let s = format!("{:?}", view);
-    assert!(!s.to_lowercase().contains("accuracy"), "no 'accuracy' label");
-    assert!(!s.to_lowercase().contains("confidence"), "no 'confidence' label");
+    assert!(
+        !s.to_lowercase().contains("accuracy"),
+        "no 'accuracy' label"
+    );
+    assert!(
+        !s.to_lowercase().contains("confidence"),
+        "no 'confidence' label"
+    );
 }
 
 #[test]
@@ -195,8 +207,10 @@ fn camera_loss_recoverable() {
     after(&mut presenter, |p| {
         p.start_enrollment_v3("Grace V3");
     });
-    
-    presenter.client().set_mode(Mode::DaemonDown("camera lost".into()));
+
+    presenter
+        .client()
+        .set_mode(Mode::DaemonDown("camera lost".into()));
     let model = after(&mut presenter, |p| {
         // This is where a timer would call poll_progress
         p.on_progress_v3(&EnrollmentProgressV3 {
@@ -250,13 +264,13 @@ fn daemon_restart_recoverable() {
     after(&mut presenter, |p| {
         p.start_enrollment_v3("Ivan V3");
     });
-    
+
     fake.set_mode(Mode::DaemonDown("restart".into()));
     let model = after(&mut presenter, |p| {
         p.stop_enrollment_v3();
     });
     assert!(matches!(model.enrollment_state, EnrollmentState::Error(_)));
-    
+
     fake.set_mode(Mode::Normal);
     let model = after(&mut presenter, |p| {
         p.dismiss_v3_error();

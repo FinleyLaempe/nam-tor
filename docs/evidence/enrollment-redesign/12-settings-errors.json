@@ -1,1 +1,8 @@
-[{"test":"polkit_failure","pass":true}]
+[
+  {"test":"polkit_failure","pass":true},
+  {"test":"unsupported_pam_service_cannot_be_toggled","pass":true},
+  {"test":"failed_pam_toggle_reverts_to_previous_state","pass":true},
+  {"test":"high_impact_pam_service_requires_confirmation","pass":true},
+  {"test":"disabling_risky_service_needs_no_confirmation","pass":true},
+  {"test":"set_pam_service_enabled_refuses_unsupported","pass":true}
+]

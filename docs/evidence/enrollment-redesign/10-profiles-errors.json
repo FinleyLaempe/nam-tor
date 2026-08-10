@@ -1,1 +1,6 @@
-[{"test":"duplicate_name","pass":true}]
+[
+  {"test":"duplicate_name","pass":true},
+  {"test":"save_failure_recoverable","pass":true},
+  {"test":"save_failure_low_diversity_stays_stopped","pass":true},
+  {"test":"duplicate_actions_disabled_while_pending","pass":true}
+]

@@ -42,7 +42,10 @@ use crate::dbus::{
     ReviewOutcome, StatusReport, SystemPolkit,
 };
 use crate::manager::contract;
-use crate::manager::dbus::{Manager2DBusError, Manager2Service, Manager3DBusError, Manager3Service, Manager3Signal, PamApi, PamSignal};
+use crate::manager::dbus::{
+    Manager2DBusError, Manager2Service, Manager3DBusError, Manager3Service, Manager3Signal, PamApi,
+    PamSignal,
+};
 
 type Svc = ManagerService<SystemPolkit>;
 type Svc2 = Manager2Service<SystemPolkit>;
@@ -463,7 +466,10 @@ impl Manager3Iface {
                         .await
                         .map_err(Manager3DBusError::ZBus)?;
                 }
-                Manager3Signal::EnrollmentCompleted { session_id, profile_id } => {
+                Manager3Signal::EnrollmentCompleted {
+                    session_id,
+                    profile_id,
+                } => {
                     Manager3IfaceSignals::enrollment_completed(emitter, &session_id, &profile_id)
                         .await
                         .map_err(Manager3DBusError::ZBus)?;
@@ -674,7 +680,11 @@ impl ManagerBusService {
     /// `/org/namtor/Manager2` (v2) at the same object path, and own
     /// `org.namtor.Manager`. Returns `Err(NameTaken)` if another process
     /// already owns the name — the caller logs and exits cleanly.
-    pub fn start_system(svc: Arc<Svc>, svc2: Arc<Svc2>, svc3: Arc<Svc3>) -> Result<Self, BusServiceError> {
+    pub fn start_system(
+        svc: Arc<Svc>,
+        svc2: Arc<Svc2>,
+        svc3: Arc<Svc3>,
+    ) -> Result<Self, BusServiceError> {
         let iface = ManagerIface::new(svc);
         let iface2 = Manager2Iface::new(svc2);
         let iface3 = Manager3Iface::new(svc3);
@@ -709,7 +719,11 @@ impl ManagerBusService {
 
     /// Connect to the session bus (for tests).
     #[cfg(test)]
-    fn start_session(svc: Arc<Svc>, svc2: Arc<Svc2>, svc3: Arc<Svc3>) -> Result<Self, BusServiceError> {
+    fn start_session(
+        svc: Arc<Svc>,
+        svc2: Arc<Svc2>,
+        svc3: Arc<Svc3>,
+    ) -> Result<Self, BusServiceError> {
         let iface = ManagerIface::new(svc);
         let iface2 = Manager2Iface::new(svc2);
         let iface3 = Manager3Iface::new(svc3);

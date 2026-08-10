@@ -224,16 +224,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let bus_service = start_manager_bus(&store_dir, &key_path);
 
-    let _disconnect_monitor =
-        bus_service
-            .as_ref()
-            .and_then(|(bus, svc, svc3)| match bus.monitor_disconnects(svc.clone(), svc3.clone()) {
-                Ok(handle) => Some(handle),
-                Err(e) => {
-                    tracing::warn!(error = %e, "disconnect monitor not started");
-                    None
-                }
-            });
+    let _disconnect_monitor = bus_service.as_ref().and_then(|(bus, svc, svc3)| {
+        match bus.monitor_disconnects(svc.clone(), svc3.clone()) {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                tracing::warn!(error = %e, "disconnect monitor not started");
+                None
+            }
+        }
+    });
 
     let started = if std::env::var("LISTEN_FDS").is_ok() {
         tracing::info!(fd = 3, "adopting socket-activation listener");
@@ -267,12 +266,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+type ManagerBusHandle = (
+    ManagerBusService,
+    Arc<ManagerService<SystemPolkit>>,
+    Arc<Manager3Service<SystemPolkit>>,
+);
+
 /// Start the `org.namtor.Manager` service on the system bus. Returns `None`
 /// and logs a warning if the bus is unavailable or the name is already taken.
 fn start_manager_bus(
     store_dir: &std::path::Path,
     key_path: &std::path::Path,
-) -> Option<(ManagerBusService, Arc<ManagerService<SystemPolkit>>, Arc<Manager3Service<SystemPolkit>>)> {
+) -> Option<ManagerBusHandle> {
     let store = match TemplateStore::open(store_dir, key_path) {
         Ok(s) => Arc::new(s),
         Err(e) => {
@@ -293,7 +298,10 @@ fn start_manager_bus(
         pamd_root,
         registry_root,
     ));
-    let svc3 = Arc::new(Manager3Service::new(SystemPolkit::default(), profile_store.clone()));
+    let svc3 = Arc::new(Manager3Service::new(
+        SystemPolkit::default(),
+        profile_store.clone(),
+    ));
     match ManagerBusService::start_system(svc.clone(), svc2, svc3.clone()) {
         Ok(bus) => Some((bus, svc, svc3)),
         Err(e) => {

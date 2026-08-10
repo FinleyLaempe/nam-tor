@@ -467,10 +467,12 @@ impl EnrollmentCapture {
         if candidate.score() <= min_score {
             let mut dropped = candidate;
             dropped.raw_frame.zeroize();
+            dropped.embedding.zeroize();
         } else {
             let evicted = std::mem::replace(&mut self.reservoir[min_idx], candidate);
             let mut dropped = evicted;
             dropped.raw_frame.zeroize();
+            dropped.embedding.zeroize();
         }
     }
 
