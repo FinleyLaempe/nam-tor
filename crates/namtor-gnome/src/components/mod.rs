@@ -12,6 +12,6 @@ pub mod review;
 pub mod system_status;
 
 pub use enrollment::EnrollmentViewComponent;
-pub use profile_list::ProfileListView;
+pub use profile_list::{ProfileListView, ToggleCallback};
 pub use recovery::RecoveryView;
 pub use review::ReviewViewComponent;

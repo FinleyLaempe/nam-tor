@@ -6,6 +6,8 @@ use crate::view_model::PresenterModel;
 use gtk4::prelude::*;
 use gtk4::{AccessibleRole, Box as GtkBox, CheckButton, Label, Orientation};
 
+pub type ToggleCallback = std::rc::Rc<dyn Fn(&str, bool)>;
+
 pub struct ProfileListView {
     container: GtkBox,
 }
@@ -20,6 +22,17 @@ impl ProfileListView {
     }
 
     pub fn render(&self, model: &PresenterModel) -> &GtkBox {
+        self.render_with_callback(model, None)
+    }
+
+    /// Render with an optional toggle callback invoked as `on_toggle(id, enabled)`.
+    /// When `on_toggle` is `None` the switches are rendered but not wired (used
+    /// by callers that refresh separately after mutations).
+    pub fn render_with_callback(
+        &self,
+        model: &PresenterModel,
+        on_toggle: Option<ToggleCallback>,
+    ) -> &GtkBox {
         while let Some(child) = self.container.first_child() {
             self.container.remove(&child);
         }
@@ -73,6 +86,14 @@ impl ProfileListView {
                 )))]);
                 toggle
                     .set_tooltip_text(Some(&tr(&format!("Toggle profile {} on or off", row.name))));
+
+                if let Some(cb) = &on_toggle {
+                    let id = row.id.clone();
+                    let cb = std::rc::Rc::clone(cb);
+                    toggle.connect_toggled(move |chk| {
+                        cb(&id, chk.is_active());
+                    });
+                }
 
                 let last = Label::builder()
                     .label(tr(&format!(

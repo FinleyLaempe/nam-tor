@@ -27,9 +27,9 @@ impl ReviewViewComponent {
     pub fn render(
         &self,
         view: &ReviewViewV3,
-        _on_save: impl Fn() + 'static,
-        _on_resume: impl Fn() + 'static,
-        _on_discard: impl Fn() + 'static,
+        on_save: impl Fn() + 'static,
+        on_resume: impl Fn() + 'static,
+        on_discard: impl Fn() + 'static,
         is_pending: bool,
     ) -> &GtkBox {
         while let Some(child) = self.container.first_child() {
@@ -112,6 +112,7 @@ impl ReviewViewComponent {
             gtk4::accessible::Property::Label(&tr("Save profile")),
             gtk4::accessible::Property::Description(&tr("Commit the captured profile to storage")),
         ]);
+        save_btn.connect_clicked(move |_| on_save());
 
         let resume_btn = gtk4::Button::builder()
             .label(tr("_Resume Capture"))
@@ -123,6 +124,7 @@ impl ReviewViewComponent {
             gtk4::accessible::Property::Label(&tr("Resume capture")),
             gtk4::accessible::Property::Description(&tr("Return to capturing to add more frames")),
         ]);
+        resume_btn.connect_clicked(move |_| on_resume());
 
         let discard_btn = gtk4::Button::builder()
             .label(tr("_Discard"))
@@ -137,6 +139,7 @@ impl ReviewViewComponent {
                 "Throw away the captured profile without saving",
             )),
         ]);
+        discard_btn.connect_clicked(move |_| on_discard());
 
         action_box.append(&discard_btn);
         action_box.append(&resume_btn);

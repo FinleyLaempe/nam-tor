@@ -1612,6 +1612,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "namtor-proto",
+ "nix",
  "serde",
  "serde_json",
  "tempfile",

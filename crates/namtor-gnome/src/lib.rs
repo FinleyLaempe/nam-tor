@@ -23,6 +23,7 @@
 //! ---------------------------------------------------------------------------
 
 pub mod a11y;
+pub mod app;
 pub mod client;
 pub mod components;
 pub mod fake;

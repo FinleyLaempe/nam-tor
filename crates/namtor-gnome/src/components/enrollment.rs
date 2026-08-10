@@ -46,7 +46,7 @@ impl EnrollmentViewComponent {
         &self.container
     }
 
-    fn render_setup_phase<F>(&self, _on_start: F, _on_cancel: impl Fn() + 'static)
+    fn render_setup_phase<F>(&self, on_start: F, on_cancel: impl Fn() + 'static)
     where
         F: Fn(&str) + 'static,
     {
@@ -123,6 +123,11 @@ impl EnrollmentViewComponent {
                 "Begin the face enrollment capture process",
             )),
         ]);
+        let entry_for_start = name_entry.clone();
+        start_btn.connect_clicked(move |_| {
+            let name = entry_for_start.text().to_string();
+            on_start(&name);
+        });
         group.append(&start_btn);
 
         let cancel_btn = gtk4::Button::builder()
@@ -137,13 +142,14 @@ impl EnrollmentViewComponent {
                 "Discard the new profile and return to the list",
             )),
         ]);
+        cancel_btn.connect_clicked(move |_| on_cancel());
 
         group.append(&cancel_btn);
 
         self.container.append(&group);
     }
 
-    fn render_capture_phase<F1, F2>(&self, view: &EnrollmentViewV3, _on_stop: F1, _on_cancel: F2)
+    fn render_capture_phase<F1, F2>(&self, view: &EnrollmentViewV3, on_stop: F1, on_cancel: F2)
     where
         F1: Fn() + 'static,
         F2: Fn() + 'static,
@@ -234,6 +240,7 @@ impl EnrollmentViewComponent {
                 "Stop capturing and review the enrolled profile",
             )),
         ]);
+        stop_btn.connect_clicked(move |_| on_stop());
 
         let cancel_btn = gtk4::Button::builder()
             .label(tr("Cancel"))
@@ -245,6 +252,7 @@ impl EnrollmentViewComponent {
                 "Discard the enrollment and return to the profile list",
             )),
         ]);
+        cancel_btn.connect_clicked(move |_| on_cancel());
 
         action_box.append(&stop_btn);
         action_box.append(&cancel_btn);
