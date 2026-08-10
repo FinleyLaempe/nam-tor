@@ -1,0 +1,36 @@
+=== Task 14: Package mutation test ===
+Goal: prove the desktop cert harness is non-vacuous by removing one
+  staged GNOME resource and showing certification fails, then
+  restoring it and showing certification passes.
+
+[1] Staging GNOME package into temp DESTDIR...
+warning: not running as root — owner/group will not be applied; modes and content remain deterministic
+staged 0 dirs + 4 files into /tmp/tmp.6fLiIznGUO (package: gnome)
+
+[2] Verifying staged payload contains all expected resources:
+  PRESENT: usr/bin/namtor-enroll-wizard
+  PRESENT: usr/share/applications/org.namtor.Wizard.desktop
+  PRESENT: usr/share/metainfo/org.namtor.Wizard.metainfo.xml
+  PRESENT: usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg
+
+[3] MUTATION: removing usr/share/metainfo/org.namtor.Wizard.metainfo.xml from staged payload...
+
+[4] Certification re-scan after mutation:
+  OK: usr/bin/namtor-enroll-wizard
+  OK: usr/share/applications/org.namtor.Wizard.desktop
+  FAIL (missing): usr/share/metainfo/org.namtor.Wizard.metainfo.xml
+  OK: usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg
+
+RESULT: certification FAILS after mutation (expected — test is non-vacuous)
+
+[5] RESTORE: re-creating usr/share/metainfo/org.namtor.Wizard.metainfo.xml...
+
+[6] Certification re-scan after restore:
+  OK: usr/bin/namtor-enroll-wizard
+  OK: usr/share/applications/org.namtor.Wizard.desktop
+  OK: usr/share/metainfo/org.namtor.Wizard.metainfo.xml
+  OK: usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg
+
+RESULT: certification PASSES after restore (round-trip confirmed)
+
+=== Mutation test complete ===

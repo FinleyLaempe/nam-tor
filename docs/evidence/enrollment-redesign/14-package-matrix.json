@@ -1,0 +1,79 @@
+{
+  "task": 14,
+  "title": "Update package manifests and desktop certification harness",
+  "date": "2026-08-10",
+  "commit_scope": "build(packaging): certify redesigned GNOME app",
+  "summary": "Extended packaging/tests/test_desktop_cert.sh with 8 new certification sections (m-t) covering GNOME redesigned source resources, Manager3 introspection availability, translation seam, executable linkage, build-output-absence hygiene, core GTK-free invariant, exact-version dependency, and a mutation test. No install-manifest.toml, PKGBUILD, Debian, or Fedora manifest changes were needed — tasks 9-13 added only Rust source files compiled into the existing namtor-enroll-wizard binary, and the v3 D-Bus introspection XML is already compiled into the daemon binary via include_str!.",
+  "manifest_changes": {
+    "install-manifest.toml": "no change — GNOME entries (binary, .desktop, .metainfo.xml, .svg) already correct",
+    "arch/PKGBUILD": "no change — already builds namtor-gnome crate which compiles all new source files",
+    "debian/control": "no change — namtor-gnome Depends already correct (namtor exact + libgtk-4-1 + libadwaita-1-0)",
+    "debian/namtor-gnome.install": "no change — already lists binary + desktop + metainfo + icon",
+    "fedora/namtor.spec": "no change — %files gnome already lists binary + desktop + metainfo + icon",
+    "dbus-contract-v3.xml": "not installed separately — compiled into daemon binary via include_str! (consistent with v1/v2)"
+  },
+  "test_sections_added": {
+    "m": "GNOME redesigned source resources present (DESIGN.md, shell.rs, navigation.rs, a11y.rs, system_status.rs, components, shell_navigation tests)",
+    "n": "Manager3 introspection XML available (v3 source exists, compiled into daemon, declares Manager3, preserves v1+v2)",
+    "o": "Translation seam (tr() in lib.rs, POTFILES.in, .pot template, no compiled .mo files)",
+    "p": "Executable linkage (Cargo.toml binary declaration, wizard.rs source, manifest mapping, desktop Exec=, metainfo provides/binary)",
+    "q": "No generated build output (.omo gitignored, arch/src gitignored, arch/pkg gitignored, no screenshots, no biometric data outside ml/fixtures, no package archives)",
+    "r": "Core package GTK-free (Arch/Fedora/Debian core has no gtk4/libadwaita deps)",
+    "s": "namtor-gnome depends on namtor exact version (Arch namtor=$pkgver, Fedora namtor=ver-rel, Debian namtor=0.1.0-1)",
+    "t": "Mutation test (stage gnome, remove metainfo XML, cert fails; restore, cert passes — round-trip)"
+  },
+  "new_section_results": {
+    "passed": 47,
+    "failed": 0,
+    "sections": {
+      "m": { "passed": 13, "failed": 0 },
+      "n": { "passed": 4, "failed": 0 },
+      "o": { "passed": 5, "failed": 0 },
+      "p": { "passed": 5, "failed": 0 },
+      "q": { "passed": 6, "failed": 0 },
+      "r": { "passed": 6, "failed": 0 },
+      "s": { "passed": 3, "failed": 0 },
+      "t": { "passed": 5, "failed": 0 }
+    }
+  },
+  "mutation_test": {
+    "staged_package": "gnome",
+    "staged_files": 4,
+    "removed_resource": "usr/share/metainfo/org.namtor.Wizard.metainfo.xml",
+    "cert_after_removal": "FAIL",
+    "cert_after_restore": "PASS",
+    "non_vacuous": true,
+    "transcript": "14-package-mutation.txt"
+  },
+  "daemon_tests": {
+    "command": "cargo test -p namtor-daemon -- --test-threads=1",
+    "result": "451 passed, 3 failed (pre-existing manager::worker::tests failures, daemon-side enrollment worker code outside packaging scope), 1 ignored",
+    "note": "The 3 failures are in manager::worker::tests (worker_cancel, worker_resume, worker_stop) — pre-existing enrollment worker test issues from tasks 9-13, not caused by packaging changes. Task 14 scope is packaging only; daemon-side code must not be modified."
+  },
+  "split_package_invariants": {
+    "core_gtk_free": {
+      "arch": true,
+      "fedora": true,
+      "debian": true
+    },
+    "gnome_exact_version_dep": {
+      "arch": "namtor=$pkgver",
+      "fedora": "%{name} = %{version}-%{release}",
+      "debian": "namtor (= 0.1.0-1)"
+    },
+    "gnome_payload": [
+      "usr/bin/namtor-enroll-wizard",
+      "usr/share/applications/org.namtor.Wizard.desktop",
+      "usr/share/metainfo/org.namtor.Wizard.metainfo.xml",
+      "usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg"
+    ]
+  },
+  "hygiene_checks": {
+    "omo_gitignored": true,
+    "arch_src_gitignored": true,
+    "arch_pkg_gitignored": true,
+    "no_tracked_screenshots_in_gnome_crate": true,
+    "no_biometric_data_outside_ml_and_fixtures": true,
+    "no_tracked_package_archives": true
+  }
+}

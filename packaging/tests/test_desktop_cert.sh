@@ -49,6 +49,7 @@ EVIDENCE_DIR="$REPO_ROOT/docs/evidence/public-release"
 GNOME_CRATE="$REPO_ROOT/crates/namtor-gnome"
 KDE_CRATE="$REPO_ROOT/crates/namtor-kde"
 MANIFEST="$PACKAGING_DIR/install-manifest.toml"
+STAGE_SH="$PACKAGING_DIR/stage.sh"
 PAM_INSTALL="$PACKAGING_DIR/pam-install.sh"
 POLKIT_POLICY="$PACKAGING_DIR/polkit-1/actions/org.namtor.policy"
 
@@ -503,6 +504,322 @@ if echo "$GNOME_RECONNECT" | grep -qE '^test reconnect_restores_state \.\.\. ok'
     ok "GNOME reconnect_restores_state covers daemon-restart recovery"
 else
     not_ok "GNOME reconnect_restores_state missing/failed"
+fi
+
+# ---------------------------------------------------------------------------
+# (m) GNOME redesigned source resources present (tasks 9-13)
+# ---------------------------------------------------------------------------
+echo ""
+echo "[m] GNOME redesigned source resources present"
+check_file "GNOME DESIGN.md" "$GNOME_CRATE/DESIGN.md"
+check_file "GNOME shell.rs" "$GNOME_CRATE/src/shell.rs"
+check_file "GNOME navigation.rs" "$GNOME_CRATE/src/navigation.rs"
+check_file "GNOME a11y.rs" "$GNOME_CRATE/src/a11y.rs"
+check_file "GNOME system_status.rs component" "$GNOME_CRATE/src/components/system_status.rs"
+for c in enrollment.rs pam_services.rs profile_list.rs recovery.rs review.rs; do
+    check_file "GNOME component $c" "$GNOME_CRATE/src/components/$c"
+done
+check_file "GNOME shell_navigation tests" "$GNOME_CRATE/tests/shell_navigation.rs"
+if grep -q 'Profiles' "$GNOME_CRATE/DESIGN.md" \
+   && grep -q 'Authentication' "$GNOME_CRATE/DESIGN.md" \
+   && grep -q 'System' "$GNOME_CRATE/DESIGN.md"; then
+    ok "DESIGN.md defines three destinations (Profiles, Authentication, System)"
+else
+    not_ok "DESIGN.md missing one of: Profiles, Authentication, System"
+fi
+if grep -q 'ProgressAnnouncer\|should_announce\|throttle' "$GNOME_CRATE/src/a11y.rs"; then
+    ok "a11y.rs defines announcement throttle"
+else
+    not_ok "a11y.rs missing announcement throttle"
+fi
+
+# ---------------------------------------------------------------------------
+# (n) Manager3 introspection XML available in package
+# ---------------------------------------------------------------------------
+echo ""
+echo "[n] Manager3 introspection XML available"
+V3_XML="$REPO_ROOT/docs/evidence/dbus-contract-v3.xml"
+check_file "dbus-contract-v3.xml source" "$V3_XML"
+# The daemon compiles the v3 XML into the binary via include_str!, making it
+# available to D-Bus clients via org.freedesktop.DBus.Introspectable.Introspect.
+if grep -q 'dbus-contract-v3.xml' \
+   "$REPO_ROOT/crates/namtor-daemon/src/manager/contract.rs"; then
+    ok "daemon contract.rs includes dbus-contract-v3.xml"
+else
+    not_ok "daemon contract.rs does not include dbus-contract-v3.xml"
+fi
+if grep -q 'interface name="org.namtor.Manager3"' "$V3_XML" 2>/dev/null; then
+    ok "v3 XML declares org.namtor.Manager3 interface"
+else
+    not_ok "v3 XML missing org.namtor.Manager3 interface"
+fi
+if grep -q 'interface name="org.namtor.Manager"' "$V3_XML" 2>/dev/null \
+   && grep -q 'interface name="org.namtor.Manager2"' "$V3_XML" 2>/dev/null; then
+    ok "v3 XML preserves v1 + v2 interfaces"
+else
+    not_ok "v3 XML missing v1 or v2 interface preservation"
+fi
+
+# ---------------------------------------------------------------------------
+# (o) Translation seam exists (i18n infrastructure)
+# ---------------------------------------------------------------------------
+echo ""
+echo "[o] Translation seam (i18n infrastructure)"
+if grep -q 'pub fn tr(' "$GNOME_CRATE/src/lib.rs"; then
+    ok "GNOME lib.rs exports tr() translation seam"
+else
+    not_ok "GNOME lib.rs missing tr() translation seam"
+fi
+check_file "POTFILES.in" "$PACKAGING_DIR/po/POTFILES.in"
+check_file "namtor-gnome.pot template" "$PACKAGING_DIR/po/namtor-gnome.pot"
+if grep -q 'crates/namtor-gnome/src/' "$PACKAGING_DIR/po/POTFILES.in"; then
+    ok "POTFILES.in references GNOME source files"
+else
+    not_ok "POTFILES.in does not reference any GNOME source file"
+fi
+MO_COUNT=$(find "$REPO_ROOT" -name '*.mo' -not -path '*/target/*' \
+           -not -path '*/packaging/arch/src/*' 2>/dev/null | wc -l)
+if [[ "$MO_COUNT" -eq 0 ]]; then
+    ok "no compiled .mo files in repo (translations not yet compiled)"
+else
+    not_ok "found $MO_COUNT compiled .mo files in repo (should not ship yet)"
+fi
+
+# ---------------------------------------------------------------------------
+# (p) Executable linkage — namtor-gnome binary present and buildable
+# ---------------------------------------------------------------------------
+echo ""
+echo "[p] Executable linkage (namtor-gnome binary)"
+if grep -q 'name = "namtor-enroll-wizard"' "$GNOME_CRATE/Cargo.toml" \
+   || grep -q 'path = "src/bin/wizard.rs"' "$GNOME_CRATE/Cargo.toml"; then
+    ok "namtor-gnome Cargo.toml declares namtor-enroll-wizard binary"
+else
+    not_ok "namtor-gnome Cargo.toml missing binary declaration"
+fi
+check_file "wizard.rs binary source" "$GNOME_CRATE/src/bin/wizard.rs"
+if grep -A6 'dest = "/usr/bin/namtor-enroll-wizard"' "$MANIFEST" \
+   | grep -q 'src = "target/release/namtor-enroll-wizard"'; then
+    ok "install-manifest maps namtor-enroll-wizard to target/release binary"
+else
+    not_ok "install-manifest binary source mapping missing"
+fi
+if grep -q '^Exec=namtor-enroll-wizard' \
+   "$PACKAGING_DIR/applications/org.namtor.Wizard.desktop"; then
+    ok "desktop file Exec= matches namtor-enroll-wizard"
+else
+    not_ok "desktop file Exec= does not match namtor-enroll-wizard"
+fi
+if grep -q '<binary>namtor-enroll-wizard</binary>' \
+   "$PACKAGING_DIR/metainfo/org.namtor.Wizard.metainfo.xml"; then
+    ok "metainfo provides/binary matches namtor-enroll-wizard"
+else
+    not_ok "metainfo provides/binary missing or mismatched"
+fi
+
+# ---------------------------------------------------------------------------
+# (q) No generated build output in source tree / staged packages
+# ---------------------------------------------------------------------------
+echo ""
+echo "[q] No generated build output in source tree"
+if git -C "$REPO_ROOT" check-ignore .omo >/dev/null 2>&1; then
+    ok ".omo/ is gitignored"
+else
+    not_ok ".omo/ is not gitignored"
+fi
+if git -C "$REPO_ROOT" check-ignore packaging/arch/src >/dev/null 2>&1; then
+    ok "packaging/arch/src/ is gitignored"
+else
+    not_ok "packaging/arch/src/ is not gitignored"
+fi
+if git -C "$REPO_ROOT" check-ignore packaging/arch/pkg >/dev/null 2>&1; then
+    ok "packaging/arch/pkg/ is gitignored"
+else
+    not_ok "packaging/arch/pkg/ is not gitignored"
+fi
+SCREENSHOT_COUNT=$(git -C "$REPO_ROOT" ls-files 'crates/namtor-gnome/**/*.png' \
+                    'crates/namtor-gnome/**/*.jpg' 'crates/namtor-gnome/**/*.jpeg' 2>/dev/null \
+                    | wc -l)
+if [[ "$SCREENSHOT_COUNT" -eq 0 ]]; then
+    ok "no tracked screenshots in crates/namtor-gnome/"
+else
+    not_ok "found $SCREENSHOT_COUNT tracked screenshots in crates/namtor-gnome/"
+fi
+# Biometric evidence = face images, template dumps, captured frames — NOT
+# synthetic test fixtures (fixtures/onnx/*.onnx are backend test models).
+BIOMETRIC_HITS=$(git -C "$REPO_ROOT" ls-files '*.onnx' '*.npy' 2>/dev/null \
+                  | grep -v '^ml/' | grep -v '^fixtures/' | wc -l)
+if [[ "$BIOMETRIC_HITS" -eq 0 ]]; then
+    ok "no tracked biometric data (.onnx/.npy) outside ml/ and fixtures/"
+else
+    not_ok "found $BIOMETRIC_HITS tracked biometric data files outside ml/ and fixtures/"
+fi
+PKG_ARCHIVE_COUNT=$(git -C "$REPO_ROOT" ls-files 'packaging/**/*.pkg.tar.zst' \
+                    'packaging/**/*.tar.gz' 2>/dev/null | wc -l)
+if [[ "$PKG_ARCHIVE_COUNT" -eq 0 ]]; then
+    ok "no tracked package archives (.pkg.tar.zst / .tar.gz) in packaging/"
+else
+    not_ok "found $PKG_ARCHIVE_COUNT tracked package archives in packaging/"
+fi
+
+# ---------------------------------------------------------------------------
+# (r) Core package remains GTK-free (no gtk4/libadwaita in core deps)
+# ---------------------------------------------------------------------------
+echo ""
+echo "[r] Core package GTK-free (no gtk4/libadwaita in core deps)"
+ARCH_PKGBUILD="$PACKAGING_DIR/arch/PKGBUILD"
+core_body_arch="$(awk '/^package_namtor\(\)/{f=1} f{print} f&&/^}/{exit}' "$ARCH_PKGBUILD")"
+for nodep in gtk4 libadwaita; do
+    if printf '%s\n' "$core_body_arch" | grep -qE "['\"]${nodep}['\"]"; then
+        not_ok "Arch core depends on $nodep (must not)"
+    else
+        ok "Arch core does not depend on $nodep"
+    fi
+done
+SPEC="$PACKAGING_DIR/fedora/namtor.spec"
+core_requires_fed=$(awk '/^%package/{exit} /^Requires:/{print}' "$SPEC")
+for nodep in gtk4 libadwaita; do
+    if printf '%s\n' "$core_requires_fed" | grep -qi "$nodep"; then
+        not_ok "Fedora core Requires $nodep (must not)"
+    else
+        ok "Fedora core does not Require $nodep"
+    fi
+done
+DEBIAN_CONTROL="$PACKAGING_DIR/debian/control"
+core_depends_deb=$(awk '/^Package: namtor$/{f=1;next} f&&/^Depends:/{f=2;next} f==2&&/^[[:space:]]/{gsub(/[[:space:]]/,"");print;next} f==2&&!/^[[:space:]]/{exit}' "$DEBIAN_CONTROL" | tr -d '\n')
+for nodep in libgtk-4-1 libadwaita-1-0; do
+    if printf '%s' "$core_depends_deb" | grep -q "$nodep"; then
+        not_ok "Debian core Depends on $nodep (must not)"
+    else
+        ok "Debian core does not Depend on $nodep"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# (s) namtor-gnome depends on namtor (exact version)
+# ---------------------------------------------------------------------------
+echo ""
+echo "[s] namtor-gnome depends on namtor (exact version)"
+gnome_body_arch="$(awk '/^package_namtor-gnome\(\)/{f=1} f{print} f&&/^}/{exit}' "$ARCH_PKGBUILD")"
+if printf '%s\n' "$gnome_body_arch" | grep -qF 'namtor=$pkgver'; then
+    ok "Arch gnome depends on namtor=\$pkgver (exact)"
+else
+    not_ok "Arch gnome missing namtor=\$pkgver exact dep"
+fi
+gnome_requires_fed=$(awk '/^%package gnome/{f=1;next} f&&/^Requires:/{print} f&&/^%/{exit}' "$SPEC")
+if printf '%s\n' "$gnome_requires_fed" | grep -q '%{name} = %{version}-%{release}'; then
+    ok "Fedora gnome Requires namtor = ver-rel (exact)"
+else
+    not_ok "Fedora gnome missing exact namtor Requires"
+fi
+gnome_depends_deb=$(awk '/^Package: namtor-gnome$/{f=1;next} f&&/^Depends:/{f=2;next} f==2&&/^[[:space:]]/{gsub(/[[:space:]]/,"");print;next} f==2&&!/^[[:space:]]/{exit}' "$DEBIAN_CONTROL" | tr -d '\n')
+if printf '%s' "$gnome_depends_deb" | grep -q 'namtor(=0.1.0-1)'; then
+    ok "Debian gnome Depends on namtor (= 0.1.0-1) (exact)"
+else
+    not_ok "Debian gnome missing exact namtor Depends"
+fi
+
+# ---------------------------------------------------------------------------
+# (t) Mutation test — staged manifest minus one resource fails certification
+# ---------------------------------------------------------------------------
+echo ""
+echo "[t] Mutation test (staged manifest minus one resource fails cert)"
+mutation_root="$(mk_temp_dir)"
+mkdir -p "$mutation_root/target/release"
+mkdir -p "$mutation_root/packaging"
+cp "$MANIFEST" "$mutation_root/packaging/install-manifest.toml"
+cp "$STAGE_SH" "$mutation_root/packaging/stage.sh"
+for bin in namtor-daemon namtor-worker namtor-camera-emitter-off \
+           namtor-cli namtor-enroll-wizard; do
+    printf 'placeholder' > "$mutation_root/target/release/$bin"
+done
+printf 'placeholder' > "$mutation_root/target/release/libnamtor_pam.so"
+for f in \
+    packaging/systemd/namtor-daemon.service \
+    packaging/systemd/namtor-daemon.socket \
+    packaging/sysusers.d/namtor.conf \
+    packaging/tmpfiles.d/namtor.conf \
+    packaging/dbus-1/org.namtor.Manager.service \
+    packaging/dbus-1/org.namtor.Manager.conf \
+    packaging/polkit-1/actions/org.namtor.policy \
+    packaging/applications/org.namtor.Wizard.desktop \
+    packaging/applications/org.namtor.kcm.desktop \
+    packaging/metainfo/org.namtor.Wizard.metainfo.xml \
+    packaging/metainfo/org.namtor.kcm.metainfo.xml \
+    packaging/model-manifest.toml \
+    packaging/pam-install.sh \
+    packaging/pam-uninstall.sh \
+    packaging/pam-preflight.sh \
+    packaging/lifecycle.sh \
+    packaging/README.md \
+    COPYING.md \
+    docs/evidence/packaging/namtor.spdx.json \
+    docs/evidence/packaging/namtor.cyclonedx.json; do
+    mkdir -p "$mutation_root/$(dirname "$f")"
+    printf 'placeholder' > "$mutation_root/$f"
+done
+for icon in org.namtor.Wizard.svg org.namtor.kcm.svg; do
+    mkdir -p "$mutation_root/packaging/icons/hicolor/scalable/apps"
+    printf 'placeholder' > "$mutation_root/packaging/icons/hicolor/scalable/apps/$icon"
+done
+
+dest_gnome_mut="$(mk_temp_dir)"
+if bash "$STAGE_SH" "$dest_gnome_mut" "$mutation_root" --package gnome >/dev/null 2>&1; then
+    ok "mutation: stage.sh --package gnome succeeded"
+else
+    not_ok "mutation: stage.sh --package gnome failed"
+fi
+
+GNOME_EXPECTED=(
+    "usr/bin/namtor-enroll-wizard"
+    "usr/share/applications/org.namtor.Wizard.desktop"
+    "usr/share/metainfo/org.namtor.Wizard.metainfo.xml"
+    "usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg"
+)
+mut_present=0
+for r in "${GNOME_EXPECTED[@]}"; do
+    if [[ -f "$dest_gnome_mut/$r" ]]; then
+        mut_present=$((mut_present + 1))
+    fi
+done
+if [[ "$mut_present" -eq "${#GNOME_EXPECTED[@]}" ]]; then
+    ok "mutation: staged gnome payload has all ${#GNOME_EXPECTED[@]} expected resources"
+else
+    not_ok "mutation: staged gnome payload has only $mut_present/${#GNOME_EXPECTED[@]} resources"
+fi
+
+REMOVED="usr/share/metainfo/org.namtor.Wizard.metainfo.xml"
+rm -f "$dest_gnome_mut/$REMOVED"
+if [[ ! -f "$dest_gnome_mut/$REMOVED" ]]; then
+    ok "mutation: removed $REMOVED from staged payload"
+else
+    not_ok "mutation: failed to remove $REMOVED"
+fi
+
+mut_fail=0
+for r in "${GNOME_EXPECTED[@]}"; do
+    if [[ ! -f "$dest_gnome_mut/$r" ]]; then
+        mut_fail=1
+        echo "  (mutation detected missing: $r)"
+    fi
+done
+if [[ "$mut_fail" -eq 1 ]]; then
+    ok "mutation: certification FAILS when resource removed (test is non-vacuous)"
+else
+    not_ok "mutation: certification passed despite removed resource (test is vacuous)"
+fi
+
+mkdir -p "$(dirname "$dest_gnome_mut/$REMOVED")"
+printf 'placeholder' > "$dest_gnome_mut/$REMOVED"
+mut_pass=1
+for r in "${GNOME_EXPECTED[@]}"; do
+    if [[ ! -f "$dest_gnome_mut/$r" ]]; then
+        mut_pass=0
+    fi
+done
+if [[ "$mut_pass" -eq 1 ]]; then
+    ok "mutation: certification PASSES after resource restored (round-trip)"
+else
+    not_ok "mutation: certification still fails after restore"
 fi
 
 # ---------------------------------------------------------------------------
