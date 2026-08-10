@@ -28,6 +28,7 @@ use namtor_store::template::Template;
 use zeroize::Zeroize;
 
 use crate::dbus::{ApiError, QualityLabel};
+use crate::manager::observation::{self, CaptureObservation, Guidance};
 
 /// Default reservoir bound. Bounds memory for multi-frame capture sessions
 /// while giving the diversity selector a wide pool.
@@ -73,8 +74,32 @@ pub struct ProgressSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapturePhase {
     Capturing,
+    /// Capture paused; the bounded reservoir is retained for review/resume.
+    /// Transition here via [`EnrollmentCapture::stop`]; leave via
+    /// [`EnrollmentCapture::resume`] or [`EnrollmentCapture::finish`].
+    Stopped,
     Finished,
     Cancelled,
+}
+
+/// Privacy-safe frozen summary of a stopped enrollment session (plan task 4).
+/// Returned by [`EnrollmentCapture::review_snapshot`] when the session is in
+/// the [`Stopped`](CapturePhase::Stopped) phase. Carries only bounded
+/// percentages, a readiness flag, a frame counter, and a snake_case guidance
+/// string — no embeddings, raw frames, thresholds, or match scores.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewSnapshot {
+    /// `true` when the reservoir holds at least [`MIN_CANDIDATES`] candidates.
+    pub ready_to_save: bool,
+    /// 0-100 aggregate capture-suitability percent (NOT authentication accuracy).
+    pub quality_percent: u32,
+    /// 0-100 retained-embedding spread percent.
+    pub diversity_percent: u32,
+    /// Number of candidates currently held in the reservoir.
+    pub frames_accepted: u32,
+    /// Snake_case guidance enum value (mapped client-side from the
+    /// [`Guidance`] enum, see [`guidance_to_snake_case`]).
+    pub guidance: String,
 }
 
 /// Result of [`EnrollmentCapture::finish`]: the diverse template set ready for
@@ -265,10 +290,13 @@ impl EnrollmentCapture {
     }
 
     /// Stop capturing, select a diverse template set, zeroize the reservoir,
-    /// and transition to `Finished`.
+    /// and transition to `Finished`. Only callable from the
+    /// [`Stopped`](CapturePhase::Stopped) phase — a Capturing session must
+    /// [`stop`](Self::stop) first. This enforces the Stop→Commit flow so the
+    /// caller always has a review checkpoint before persistence.
     pub fn finish(&mut self) -> Result<FinishedCapture, ApiError> {
-        if self.phase != CapturePhase::Capturing {
-            return Err(ApiError::State("session not in capturing phase".into()));
+        if self.phase != CapturePhase::Stopped {
+            return Err(ApiError::State("session not in stopped phase".into()));
         }
         if self.reservoir.len() < MIN_CANDIDATES {
             self.zeroize_reservoir();
@@ -328,6 +356,100 @@ impl EnrollmentCapture {
             quality: QualityLabel::from_scalar(avg_quality),
             coverage_percent: coverage,
         }
+    }
+
+    /// Transition Capturing→Stopped. Retains the bounded reservoir (does NOT
+    /// zeroize). Stops the capture source (emitter off) but keeps the embed
+    /// source for a subsequent [`resume`](Self::resume). Idempotent: calling
+    /// `stop()` when already [`Stopped`](CapturePhase::Stopped) is a no-op.
+    pub fn stop(&mut self) -> Result<(), ApiError> {
+        if self.phase == CapturePhase::Stopped {
+            return Ok(());
+        }
+        if self.phase != CapturePhase::Capturing {
+            return Err(ApiError::State("stop requires capturing phase".into()));
+        }
+        if let Some(c) = self.capture.as_mut() {
+            c.stop();
+        }
+        self.phase = CapturePhase::Stopped;
+        Ok(())
+    }
+
+    /// Transition Stopped→Capturing. Restarts the capture source. The
+    /// reservoir is preserved across the Stop→Resume cycle.
+    pub fn resume(&mut self) -> Result<(), ApiError> {
+        if self.phase != CapturePhase::Stopped {
+            return Err(ApiError::State("resume requires stopped phase".into()));
+        }
+        if let Some(c) = self.capture.as_mut() {
+            c.start()
+                .map_err(|e| ApiError::State(format!("capture restart: {e}")))?;
+        }
+        self.phase = CapturePhase::Capturing;
+        Ok(())
+    }
+
+    /// Return a frozen privacy-safe summary of the stopped session. Only
+    /// callable in the [`Stopped`](CapturePhase::Stopped) phase.
+    pub fn review_snapshot(&self) -> Result<ReviewSnapshot, ApiError> {
+        if self.phase != CapturePhase::Stopped {
+            return Err(ApiError::State("review requires stopped phase".into()));
+        }
+        let frames_accepted = self.reservoir.len() as u32;
+        let ready_to_save = self.reservoir.len() >= MIN_CANDIDATES;
+        let quality_percent = self.avg_quality_percent();
+        let diversity_percent = self.diversity_percent();
+        let guidance = self.review_guidance(quality_percent);
+        Ok(ReviewSnapshot {
+            ready_to_save,
+            quality_percent,
+            diversity_percent,
+            frames_accepted,
+            guidance,
+        })
+    }
+
+    fn avg_quality_percent(&self) -> u32 {
+        if self.reservoir.is_empty() {
+            return 0;
+        }
+        let avg = self.reservoir.iter().map(|c| c.quality as f32).sum::<f32>()
+            / self.reservoir.len() as f32;
+        observation::clamp_percent(avg)
+    }
+
+    fn diversity_percent(&self) -> u32 {
+        if self.reservoir.len() < 2 {
+            return 0;
+        }
+        let mut sum_dist = 0.0_f32;
+        let mut count = 0.0_f32;
+        for i in 0..self.reservoir.len() {
+            for j in (i + 1)..self.reservoir.len() {
+                let sim =
+                    cosine_similarity(&self.reservoir[i].embedding, &self.reservoir[j].embedding);
+                sum_dist += 1.0 - sim;
+                count += 1.0;
+            }
+        }
+        if count == 0.0 {
+            return 0;
+        }
+        observation::clamp_percent((sum_dist / count) * 100.0)
+    }
+
+    fn review_guidance(&self, quality_percent: u32) -> String {
+        let q = quality_percent.min(100) as u8;
+        let obs = CaptureObservation {
+            detection_suitability: q,
+            landmark_stability: 100,
+            blur_estimate: q,
+            pose_frontality: q,
+            illumination: q,
+            embedding_spread: 100,
+        };
+        guidance_to_snake_case(observation::derive_guidance(&obs))
     }
 
     fn offer(&mut self, candidate: Candidate) {
@@ -418,6 +540,22 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     } else {
         0.0
     }
+}
+
+fn guidance_to_snake_case(g: Guidance) -> String {
+    use Guidance::*;
+    match g {
+        Centering => "centering",
+        MoveCloser => "move_closer",
+        MoveBack => "move_back",
+        BetterLighting => "better_lighting",
+        HoldStill => "hold_still",
+        FaceFront => "face_front",
+        LookingGood => "looking_good",
+        Capturing => "capturing",
+        InsufficientPose => "insufficient_pose",
+    }
+    .into()
 }
 
 #[cfg(test)]
@@ -529,6 +667,7 @@ mod tests {
             100,
         );
         s.pump_until_exhausted().unwrap();
+        s.stop().unwrap();
         let finished = s.finish().unwrap();
         assert!(finished.templates.len() <= 8);
         assert!(!finished.templates.is_empty());
@@ -552,6 +691,7 @@ mod tests {
             100,
         );
         s.pump().unwrap();
+        s.stop().unwrap();
         let finished = s.finish().unwrap();
         assert!(finished.templates.is_empty());
     }
@@ -679,5 +819,226 @@ mod tests {
     fn pump_without_capture_errors() {
         let mut s = EnrollmentCapture::new(1000, 1000, ":1.42".into(), "a".into(), None, None, 10);
         assert!(matches!(s.pump(), Err(ApiError::State(_))));
+    }
+
+    fn session_with_frames(n: u32, max_reservoir: usize) -> EnrollmentCapture {
+        let frames: Vec<Frame> = (0..n).map(|i| grey_frame(110 + (i as u8), 8, 8)).collect();
+        let capture = Box::new(ReplaySource::new(frames));
+        let embed = Box::new(MockEmbedSource::new(8));
+        EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.42".into(),
+            "alice".into(),
+            Some(capture),
+            Some(embed),
+            max_reservoir,
+        )
+    }
+
+    #[test]
+    fn stop_transitions_to_stopped_and_retains_reservoir() {
+        let mut s = session_with_frames(5, 100);
+        for _ in 0..5 {
+            s.pump().unwrap();
+        }
+        s.stop().unwrap();
+        assert_eq!(s.phase(), CapturePhase::Stopped);
+        assert_eq!(s.reservoir_len(), 5, "reservoir retained after stop");
+    }
+
+    #[test]
+    fn stop_is_idempotent() {
+        let mut s = session_with_frames(5, 100);
+        for _ in 0..3 {
+            s.pump().unwrap();
+        }
+        s.stop().unwrap();
+        assert_eq!(s.phase(), CapturePhase::Stopped);
+        s.stop().unwrap();
+        assert_eq!(s.phase(), CapturePhase::Stopped);
+    }
+
+    #[test]
+    fn stop_from_non_capturing_fails() {
+        let mut s = session_with_frames(5, 100);
+        for _ in 0..3 {
+            s.pump().unwrap();
+        }
+        s.stop().unwrap();
+        s.finish().unwrap();
+        let err = s.stop().unwrap_err();
+        assert!(matches!(err, ApiError::State(_)));
+        assert_eq!(s.phase(), CapturePhase::Finished, "state unchanged");
+    }
+
+    #[test]
+    fn resume_transitions_to_capturing() {
+        let mut s = session_with_frames(10, 100);
+        for _ in 0..3 {
+            s.pump().unwrap();
+        }
+        s.stop().unwrap();
+        s.resume().unwrap();
+        assert_eq!(s.phase(), CapturePhase::Capturing);
+        assert_eq!(s.reservoir_len(), 3, "reservoir preserved across resume");
+    }
+
+    #[test]
+    fn resume_from_non_stopped_fails() {
+        let mut s = session_with_frames(5, 100);
+        s.pump().unwrap();
+        let err = s.resume().unwrap_err();
+        assert!(matches!(err, ApiError::State(_)));
+        assert_eq!(s.phase(), CapturePhase::Capturing, "state unchanged");
+
+        s.stop().unwrap();
+        s.finish().unwrap();
+        let err = s.resume().unwrap_err();
+        assert!(matches!(err, ApiError::State(_)));
+    }
+
+    #[test]
+    fn review_snapshot_in_stopped_returns_summary() {
+        let mut s = session_with_frames(5, 100);
+        for _ in 0..5 {
+            s.pump().unwrap();
+        }
+        s.stop().unwrap();
+        let review = s.review_snapshot().unwrap();
+        assert_eq!(review.frames_accepted, 5);
+        assert!(review.ready_to_save, "5 >= MIN_CANDIDATES(3)");
+        assert!(review.quality_percent <= 100);
+        assert!(review.diversity_percent <= 100);
+        assert!(!review.guidance.is_empty());
+    }
+
+    #[test]
+    fn review_snapshot_in_non_stopped_fails() {
+        let mut s = session_with_frames(5, 100);
+        s.pump().unwrap();
+        let err = s.review_snapshot().unwrap_err();
+        assert!(matches!(err, ApiError::State(_)));
+    }
+
+    #[test]
+    fn finish_from_stopped_commits_and_zeroizes() {
+        let mut s = session_with_frames(10, 100);
+        s.pump_until_exhausted().unwrap();
+        s.stop().unwrap();
+        let finished = s.finish().unwrap();
+        assert!(!finished.templates.is_empty());
+        assert_eq!(s.phase(), CapturePhase::Finished);
+        assert_eq!(s.reservoir_len(), 0, "reservoir zeroized after finish");
+    }
+
+    #[test]
+    fn finish_from_capturing_fails() {
+        let mut s = session_with_frames(10, 100);
+        s.pump_until_exhausted().unwrap();
+        let err = s.finish().unwrap_err();
+        assert!(matches!(err, ApiError::State(_)));
+        assert_eq!(s.phase(), CapturePhase::Capturing, "state unchanged");
+        assert!(
+            s.reservoir_len() > 0,
+            "reservoir intact after failed finish"
+        );
+    }
+
+    #[test]
+    fn cancel_from_stopped_zeroizes() {
+        let mut s = session_with_frames(5, 100);
+        for _ in 0..5 {
+            s.pump().unwrap();
+        }
+        s.stop().unwrap();
+        assert_eq!(s.reservoir_len(), 5);
+        s.cancel();
+        assert_eq!(s.phase(), CapturePhase::Cancelled);
+        assert_eq!(
+            s.reservoir_len(),
+            0,
+            "retained reservoir zeroized on cancel"
+        );
+    }
+
+    #[test]
+    fn cancel_from_finished_transitions_to_cancelled() {
+        let mut s = session_with_frames(10, 100);
+        s.pump_until_exhausted().unwrap();
+        s.stop().unwrap();
+        s.finish().unwrap();
+        assert_eq!(s.phase(), CapturePhase::Finished);
+        assert_eq!(s.reservoir_len(), 0);
+        s.cancel();
+        assert_eq!(s.phase(), CapturePhase::Cancelled);
+        assert_eq!(s.reservoir_len(), 0, "still zeroized");
+    }
+
+    #[test]
+    fn resume_preserves_reservoir_across_stop_resume_cycle() {
+        let mut s = session_with_frames(10, 100);
+        for _ in 0..5 {
+            s.pump().unwrap();
+        }
+        s.stop().unwrap();
+        s.resume().unwrap();
+        for _ in 0..3 {
+            s.pump().unwrap();
+        }
+        s.stop().unwrap();
+        assert_eq!(s.reservoir_len(), 8, "reservoir accumulated across cycle");
+        let finished = s.finish().unwrap();
+        assert!(
+            !finished.templates.is_empty(),
+            "templates reflect 8 candidates"
+        );
+    }
+
+    #[test]
+    fn full_lifecycle_capture_stop_review_resume_stop_commit() {
+        let mut s = session_with_frames(15, 100);
+        for _ in 0..10 {
+            s.pump().unwrap();
+        }
+        s.stop().unwrap();
+        let review = s.review_snapshot().unwrap();
+        assert!(review.ready_to_save, "ready after 10 frames");
+        s.resume().unwrap();
+        for _ in 0..5 {
+            s.pump().unwrap();
+        }
+        s.stop().unwrap();
+        let finished = s.finish().unwrap();
+        assert!(
+            !finished.templates.is_empty(),
+            "one durable profile with templates"
+        );
+        assert_eq!(s.phase(), CapturePhase::Finished);
+        assert_eq!(s.reservoir_len(), 0);
+    }
+
+    #[test]
+    fn commit_while_capturing_fails_without_persistence() {
+        let mut s = session_with_frames(10, 100);
+        s.pump_until_exhausted().unwrap();
+        let err = s.finish().unwrap_err();
+        assert!(matches!(err, ApiError::State(_)));
+        assert_eq!(s.phase(), CapturePhase::Capturing, "no phase change");
+        assert!(s.reservoir_len() > 0, "reservoir intact, no persistence");
+    }
+
+    #[test]
+    fn resume_after_cancel_fails() {
+        let mut s = session_with_frames(5, 100);
+        for _ in 0..5 {
+            s.pump().unwrap();
+        }
+        s.cancel();
+        assert_eq!(s.phase(), CapturePhase::Cancelled);
+        let err = s.resume().unwrap_err();
+        assert!(matches!(err, ApiError::State(_)));
+        assert_eq!(s.phase(), CapturePhase::Cancelled, "still cancelled");
+        assert_eq!(s.reservoir_len(), 0, "no retained buffer");
     }
 }

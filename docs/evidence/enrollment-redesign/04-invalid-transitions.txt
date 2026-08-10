@@ -1,0 +1,46 @@
+Evidence: Stopped review state — invalid transitions fail without persistence or buffer leak
+Task 4: Add stopped review state without persistence
+Date: 2026-08-10
+Tests: commit_while_capturing_fails_without_persistence, resume_after_cancel_fails
+
+Command:
+  cargo test -p namtor-daemon --lib \
+    manager::session::tests::evidence_invalid_transitions_with_trace -- --nocapture
+
+Trace 1: commit while capturing (finish() from Capturing)
+
+  === commit while capturing ===
+  phase: Capturing
+  reservoir_len: 10
+  finish() from Capturing err: State("session not in stopped phase")
+  phase after failed finish: Capturing
+  reservoir_len after failed finish: 10
+
+  Assertions:
+    - finish() returns Err(ApiError::State("session not in stopped phase")).
+    - Phase remains Capturing (no state change).
+    - Reservoir remains intact (len=10, no zeroization, no persistence).
+    - No profile produced, no templates returned.
+
+Trace 2: resume after cancel (resume() from Cancelled)
+
+  === resume after cancel ===
+  phase: Cancelled
+  reservoir_len: 0
+  resume() from Cancelled err: State("resume requires stopped phase")
+  phase after failed resume: Cancelled
+  reservoir_len after failed resume: 0
+
+  Assertions:
+    - resume() returns Err(ApiError::State("resume requires stopped phase")).
+    - Phase remains Cancelled (no state change).
+    - Reservoir remains zeroized (len=0, no retained buffer).
+    - No capture source restarted, no buffer leak.
+
+Result: 1 passed; 0 failed.
+
+Summary:
+  - Illegal transitions return typed ApiError::State errors.
+  - Illegal transitions leave data and state unchanged (no partial mutation).
+  - No persistence occurs on failed commit (no profile written).
+  - No buffer leak on failed resume (reservoir stays zeroized after cancel).

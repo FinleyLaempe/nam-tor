@@ -1,0 +1,45 @@
+Evidence: Stopped review state — full lifecycle (Capture→Stop→Review→Resume→Stop→Commit)
+Task 4: Add stopped review state without persistence
+Date: 2026-08-10
+Test: manager::session::tests::full_lifecycle_capture_stop_review_resume_stop_commit
+
+Command:
+  cargo test -p namtor-daemon --lib \
+    manager::session::tests::evidence_full_lifecycle_with_trace -- --nocapture
+
+Deterministic trace (ReplaySource + MockEmbedSource, 15 frames, reservoir=100):
+
+  phase after 10 pumps: Capturing
+  reservoir_len: 10
+  phase after stop: Stopped
+  reservoir_len after stop: 10
+  review: ready_to_save=true quality_percent=88 diversity_percent=100 frames_accepted=10 guidance=looking_good
+  phase after resume: Capturing
+  reservoir_len after 5 more pumps: 15
+  phase after second stop: Stopped
+  phase after finish: Finished
+  templates: 8
+  quality_scalar: 0.904
+  reservoir_len after finish: 0
+
+Assertions verified:
+  - Stop transitions Capturing→Stopped and retains the reservoir (10 candidates, NOT zeroized).
+  - review_snapshot() in Stopped returns a privacy-safe summary (no embeddings/thresholds):
+      ready_to_save=true (10 >= MIN_CANDIDATES=3)
+      quality_percent=88, diversity_percent=100, frames_accepted=10
+      guidance="looking_good" (snake_case enum value)
+  - Resume transitions Stopped→Capturing and preserves the reservoir.
+  - After 5 more pumps the reservoir accumulates to 15 (10 retained + 5 new).
+  - Second Stop transitions back to Stopped.
+  - finish() from Stopped selects 8 diverse templates (SELECT_N=8), transitions to Finished,
+    and zeroizes the reservoir (len=0).
+  - Exactly one durable profile is produced (templates.len()=8, one anchor + 7 non-anchor).
+
+Result: 1 passed; 0 failed.
+
+Transition table enforced:
+  Capturing --stop()-->    Stopped   (retains reservoir, stops capture source)
+  Stopped   --resume()-->  Capturing (restarts capture source, preserves reservoir)
+  Stopped   --finish()-->  Finished  (selects templates, zeroizes reservoir)
+  Stopped   --cancel()-->  Cancelled (zeroizes retained reservoir)
+  Any       --cancel()-->  Cancelled (zeroizes, stops capture)

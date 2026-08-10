@@ -745,6 +745,12 @@ impl<P: PolkitAuthority> ProfileApi for ManagerService<P> {
                 self.teardown_session(session_id, uid);
                 return Err(e);
             }
+            if let Err(e) = s.stop() {
+                s.cancel();
+                drop(sessions);
+                self.teardown_session(session_id, uid);
+                return Err(e);
+            }
             match s.finish() {
                 Ok(finished) => (uid, name, finished),
                 Err(e) => {
