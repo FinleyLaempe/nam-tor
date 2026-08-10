@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Face recognition pipeline: detect → align → embed.
 //!
-//! Uses YuNet (from OpenCV Zoo, BSD-3-Clause) for face detection with 5-point
+//! Uses YuNet (from OpenCV Zoo, MIT) for face detection with 5-point
 //! landmarks, a similarity-transform alignment to 112×112, and SFace (also
 //! OpenCV Zoo) for 128-dimensional L2-normalised embeddings.
 

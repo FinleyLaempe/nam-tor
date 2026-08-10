@@ -125,7 +125,7 @@ build() {
     export LDFLAGS="${LDFLAGS//-flto=auto/}"
     # Build every artifact the install manifest references. -p pins avoid
     # pulling unrelated workspace members (e.g. namtor-eval, namtor-probe).
-    cargo build --release --frozen \
+    cargo build --release --locked --offline \
         -p namtor-daemon \
         -p namtor-worker \
         -p namtor-cli \

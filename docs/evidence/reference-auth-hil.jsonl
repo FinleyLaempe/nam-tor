@@ -1,7 +1,7 @@
-{"timestamp":"2026-08-07T12:44:55Z","step":"install","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: dry_run_forced,root","hardware_identity":""}
-{"timestamp":"2026-08-07T12:44:55Z","step":"activate","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: dry_run_forced,root","hardware_identity":""}
-{"timestamp":"2026-08-07T12:44:55Z","step":"enroll","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: dry_run_forced,root","hardware_identity":""}
-{"timestamp":"2026-08-07T12:44:55Z","step":"verify_pos","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: dry_run_forced,root","hardware_identity":""}
-{"timestamp":"2026-08-07T12:44:55Z","step":"verify_neg","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: dry_run_forced,root","hardware_identity":""}
-{"timestamp":"2026-08-07T12:44:55Z","step":"trace","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: dry_run_forced,root","hardware_identity":""}
-{"timestamp":"2026-08-07T12:44:55Z","step":"restore","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: dry_run_forced,root","hardware_identity":""}
+{"timestamp":"2026-08-10T09:55:03Z","step":"install","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: root","hardware_identity":""}
+{"timestamp":"2026-08-10T09:55:03Z","step":"activate","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: root","hardware_identity":""}
+{"timestamp":"2026-08-10T09:55:03Z","step":"enroll","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: root","hardware_identity":""}
+{"timestamp":"2026-08-10T09:55:03Z","step":"verify_pos","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: root","hardware_identity":""}
+{"timestamp":"2026-08-10T09:55:03Z","step":"verify_neg","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: root","hardware_identity":""}
+{"timestamp":"2026-08-10T09:55:03Z","step":"trace","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: root","hardware_identity":""}
+{"timestamp":"2026-08-10T09:55:03Z","step":"restore","status":"WITHHELD","detail":"WITHHELD: missing owner-gated inputs: root","hardware_identity":""}

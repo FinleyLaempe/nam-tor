@@ -272,7 +272,8 @@ impl WorkerRegistry {
         self.workers.is_empty()
     }
     pub fn send_command(&self, uid: u32, cmd: WorkerCommand) -> Result<(), crate::dbus::ApiError> {
-        self.workers.get(&uid)
+        self.workers
+            .get(&uid)
             .ok_or_else(|| crate::dbus::ApiError::SessionNotFound(format!("uid {uid}")))
             .and_then(|h| h.send_command(cmd))
     }
@@ -651,6 +652,23 @@ mod tests {
         }
         None
     }
+    /// Drain until `predicate` matches, skipping stale terminal events from
+    /// pre-command source exhaustion. Returns `None` on timeout.
+    fn wait_for_matching<F: Fn(&WorkerEvent) -> bool>(
+        rx: &EventReceiver,
+        predicate: F,
+        timeout: Duration,
+    ) -> Option<WorkerEvent> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if let Some(e) = rx.recv_timeout(Duration::from_millis(50)) {
+                if predicate(&e) {
+                    return Some(e);
+                }
+            }
+        }
+        None
+    }
     fn count_progress(events: &[WorkerEvent]) -> usize {
         events
             .iter()
@@ -681,7 +699,11 @@ mod tests {
         let (mut handle, rx) = spawn_worker(capture, clock);
         thread::sleep(Duration::from_millis(50));
         handle.send_command(WorkerCommand::Stop).unwrap();
-        let event = wait_for_non_progress(&rx, Duration::from_secs(2));
+        let event = wait_for_matching(
+            &rx,
+            |e| matches!(e, WorkerEvent::ReviewReady(_)),
+            Duration::from_secs(2),
+        );
         match &event {
             Some(WorkerEvent::ReviewReady(review)) => assert!(review.frames_accepted > 0),
             other => panic!("expected ReviewReady, got {other:?}"),
@@ -707,7 +729,11 @@ mod tests {
         let (mut handle, rx) = spawn_worker(capture, clock.clone());
         thread::sleep(Duration::from_millis(50));
         handle.send_command(WorkerCommand::Stop).unwrap();
-        let _ = wait_for_non_progress(&rx, Duration::from_secs(1));
+        let _ = wait_for_matching(
+            &rx,
+            |e| matches!(e, WorkerEvent::ReviewReady(_)),
+            Duration::from_secs(1),
+        );
         handle.send_command(WorkerCommand::Resume).unwrap();
         let events = collect_events(&rx, Duration::from_millis(300));
         assert!(
@@ -725,9 +751,17 @@ mod tests {
         let (mut handle, rx) = spawn_worker(capture, clock);
         thread::sleep(Duration::from_millis(50));
         handle.send_command(WorkerCommand::Stop).unwrap();
-        let _ = wait_for_non_progress(&rx, Duration::from_secs(1));
+        let _ = wait_for_matching(
+            &rx,
+            |e| matches!(e, WorkerEvent::ReviewReady(_)),
+            Duration::from_secs(1),
+        );
         handle.send_command(WorkerCommand::Commit).unwrap();
-        let event = wait_for_non_progress(&rx, Duration::from_secs(2));
+        let event = wait_for_matching(
+            &rx,
+            |e| matches!(e, WorkerEvent::Committed(_)),
+            Duration::from_secs(2),
+        );
         match &event {
             Some(WorkerEvent::Committed(t)) => assert!(!t.is_empty(), "templates produced"),
             other => panic!("expected Committed, got {other:?}"),
@@ -743,7 +777,11 @@ mod tests {
         let (mut handle, rx) = spawn_worker(capture, clock);
         thread::sleep(Duration::from_millis(50));
         handle.send_command(WorkerCommand::Cancel).unwrap();
-        let event = wait_for_non_progress(&rx, Duration::from_secs(2));
+        let event = wait_for_matching(
+            &rx,
+            |e| matches!(e, WorkerEvent::Cancelled),
+            Duration::from_secs(2),
+        );
         assert!(
             matches!(event, Some(WorkerEvent::Cancelled)),
             "expected Cancelled, got {event:?}"

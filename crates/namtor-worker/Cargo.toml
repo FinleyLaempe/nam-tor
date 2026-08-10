@@ -50,7 +50,3 @@ r100 = []
 [[bin]]
 name = "namtor-worker"
 path = "src/bin/namtor-worker.rs"
-
-[[bin]]
-name = "namtor-worker-spawn"
-path = "src/bin/namtor-worker-spawn.rs"
