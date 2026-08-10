@@ -4,7 +4,7 @@
 //! Provides the user interface for creating a new profile, including
 //! identity entry, privacy notices, and real-time capture progress.
 
-use crate::view_model::EnrollmentView;
+use crate::view_model::EnrollmentViewV3;
 use gtk4::prelude::*;
 use gtk4::{Box as GtkBox, Label, Orientation};
 
@@ -27,32 +27,25 @@ impl EnrollmentViewComponent {
     /// If `view` is `Some`, it renders the capture progress phase.
     pub fn render(
         &self,
-        view: Option<&EnrollmentView>,
-        _on_start: impl Fn(&str) + 'static,
-        _on_cancel: impl Fn() + 'static,
+        view: Option<&EnrollmentViewV3>,
+        on_start: impl Fn(&str) + 'static,
+        on_stop: impl Fn() + 'static,
+        on_cancel: impl Fn() + 'static,
     ) -> &GtkBox {
         while let Some(child) = self.container.first_child() {
             self.container.remove(&child);
         }
 
         if let Some(enrollment) = view {
-            self.render_capture_phase(enrollment);
+            self.render_capture_phase(enrollment, on_stop, on_cancel);
         } else {
-            self.render_setup_phase(_on_start);
+            self.render_setup_phase(on_start, on_cancel);
         }
-
-        let cancel_btn = gtk4::Button::builder()
-            .label("Cancel")
-            .margin_top(12)
-            .halign(gtk4::Align::Center)
-            .build();
-
-        self.container.append(&cancel_btn);
 
         &self.container
     }
 
-    fn render_setup_phase<F>(&self, _on_start: F)
+    fn render_setup_phase<F>(&self, _on_start: F, _on_cancel: impl Fn() + 'static)
     where
         F: Fn(&str) + 'static,
     {
@@ -122,56 +115,100 @@ impl EnrollmentViewComponent {
         )]);
         group.append(&start_btn);
 
+        let cancel_btn = gtk4::Button::builder()
+            .label("Cancel")
+            .margin_top(12)
+            .halign(gtk4::Align::Center)
+            .build();
+        
+        group.append(&cancel_btn);
+
         self.container.append(&group);
     }
 
-    fn render_capture_phase(&self, view: &EnrollmentView) {
-        let frame = gtk4::Frame::builder().label("Capturing").build();
-        frame.update_property(&[gtk4::accessible::Property::Label(
-            "Enrollment Capture Progress",
-        )]);
-
-        let inner = GtkBox::builder()
+    fn render_capture_phase<F1, F2>(&self, view: &EnrollmentViewV3, _on_stop: F1, _on_cancel: F2)
+    where
+        F1: Fn() + 'static,
+        F2: Fn() + 'static,
+    {
+        let container = GtkBox::builder()
             .orientation(Orientation::Vertical)
-            .spacing(8)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(12)
-            .margin_bottom(12)
+            .spacing(16)
             .build();
 
-        let progress_text = Label::builder()
+        let spinner = gtk4::Spinner::builder()
+            .halign(gtk4::Align::Center)
+            .build();
+        spinner.start();
+        container.append(&spinner);
+
+        let stats_box = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk4::Align::Center)
+            .build();
+
+        let quality_label = Label::builder()
+            .label(format!("Quality: {}%", view.quality_percent))
+            .build();
+        stats_box.append(&quality_label);
+
+        let diversity_label = Label::builder()
+            .label(format!("Diversity: {}%", view.diversity_percent))
+            .build();
+        stats_box.append(&diversity_label);
+
+        container.append(&stats_box);
+
+        let counts_label = Label::builder()
             .label(format!(
-                "Frames captured: {}  ·  Coverage: {}%",
-                view.frames_captured, view.coverage_percent
+                "Accepted: {} / Seen: {}",
+                view.frames_accepted, view.frames_seen
             ))
-            .halign(gtk4::Align::Start)
+            .css_classes(["caption"])
+            .halign(gtk4::Align::Center)
             .build();
-        progress_text.set_accessible_role(gtk4::AccessibleRole::Status);
-        inner.append(&progress_text);
+        container.append(&counts_label);
 
-        if view.quality.show_guidance {
-            let guidance = Label::builder()
-                .label("Low quality — look at the camera and slowly turn your head left and right.")
-                .halign(gtk4::Align::Start)
-                .css_classes(["warning"])
-                .wrap(true)
-                .accessible_role(gtk4::AccessibleRole::Alert)
-                .build();
-            guidance.update_property(&[gtk4::accessible::Property::Label("Quality Guidance")]);
-            inner.append(&guidance);
-        }
+        let guidance = Label::builder()
+            .label(&view.guidance)
+            .halign(gtk4::Align::Center)
+            .wrap(true)
+            .css_classes(["guidance"])
+            .build();
+        guidance.set_accessible_role(gtk4::AccessibleRole::Status);
+        container.append(&guidance);
 
         let bar = gtk4::ProgressBar::builder()
-            .fraction(view.coverage_percent as f64 / 100.0)
+            .fraction(view.diversity_percent as f64 / 100.0)
+            .margin_top(12)
             .build();
         bar.update_property(&[gtk4::accessible::Property::Label(
-            "Enrollment Coverage Progress",
+            "Enrollment Diversity Progress",
         )]);
-        inner.append(&bar);
+        container.append(&bar);
 
-        frame.set_child(Some(&inner));
-        self.container.append(&frame);
+        let action_box = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(12)
+            .halign(gtk4::Align::Center)
+            .margin_top(24)
+            .build();
+
+        let stop_btn = gtk4::Button::builder()
+            .label("Stop")
+            .css_classes(["suggested-action"])
+            .build();
+        
+        let cancel_btn = gtk4::Button::builder()
+            .label("Cancel")
+            .build();
+
+        action_box.append(&stop_btn);
+        action_box.append(&cancel_btn);
+        container.append(&action_box);
+
+        self.container.append(&container);
     }
 }
 

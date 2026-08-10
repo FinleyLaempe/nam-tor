@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::client::{
     EnrollmentProgress, EnrollmentProgressV3, ManagerClient, ManagerError, ProfileId, SessionId,
-    StatusReport,
+    StatusReport, PamServiceCompatibility,
 };
 use crate::view_model::*;
 
@@ -141,58 +141,75 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             Err(_) => {}
         }
         self.model.status = status_result.ok();
+        self.model.is_loading = false;
 
-        // v2: refresh PAM services and protection status.
+        // Compose the sub-destinations so a single refresh() restores the
+        // full UI state (PAM inventory + system status).
+        self.refresh_pam_services();
+        self.refresh_system_status();
+        &self.model
+    }
+
+    /// Refresh the PAM service inventory and categorize them for the simplified view.
+    pub fn refresh_pam_services(&mut self) -> &PresenterModel {
         match self.client.list_pam_services() {
             Ok(services) => {
-                self.model.pam_services = services
+                let rows: Vec<PamServiceRowView> = services
                     .into_iter()
                     .map(PamServiceRowView::from_info)
                     .collect();
+
+                let mut auth_view = AuthenticationView::default();
+                let mut safe = Vec::new();
+                let mut risky = Vec::new();
+                let mut unsupported = Vec::new();
+
+                for row in &rows {
+                    match row.compatibility {
+                        PamServiceCompatibility::Safe => safe.push(row.clone()),
+                        PamServiceCompatibility::Risky => risky.push(row.clone()),
+                        PamServiceCompatibility::Unsupported => unsupported.push(row.clone()),
+                    }
+                }
+
+                auth_view.recommended_service = safe
+                    .iter()
+                    .find(|s| s.id == "gdm-password")
+                    .cloned();
+
+                auth_view.safe_services = safe;
+                auth_view.risky_services = risky;
+                auth_view.unsupported_services = unsupported;
+
+                self.model.authentication = Some(auth_view);
+                self.model.pam_services = rows;
             }
             Err(err) if self.model.error.is_none() => self.set_error(&err),
             Err(_) => {}
         }
+        &self.model
+    }
 
-        // v2: build the privacy-safe ProtectionView from the raw
-        // ProtectionStatus and the emitter-armed flag.
-        let emitter_armed = self.model.emitter_armed_warning;
-        match self.client.get_protection_status() {
-            Ok(protection) => {
-                self.model.protection =
-                    Some(ProtectionView::from_status(&protection, emitter_armed));
-            }
-            Err(err) if self.model.error.is_none() => self.set_error(&err),
-            Err(_) => {}
-        }
+    /// Toggle a PAM service from the simplified view.
+    pub fn toggle_pam_service(&mut self, id: &str, enabled: bool) -> &PresenterModel {
+        self.request_pam_toggle(id, enabled)
+    }
 
-        // v2: build readiness from daemon reachability and profile/PAM state.
-        let daemon_reachable = self.model.status.is_some();
-        let daemon_level = if daemon_reachable {
-            ReadinessLevel::Ready
-        } else {
-            ReadinessLevel::NotReady
-        };
-        let model_level = if daemon_reachable {
-            ReadinessLevel::Ready
-        } else {
-            ReadinessLevel::Unknown
-        };
-        let camera_level = if daemon_reachable {
-            ReadinessLevel::Ready
-        } else {
-            ReadinessLevel::Unknown
-        };
-        let enabled_pam_count = self.model.pam_services.iter().filter(|s| s.enabled).count() as u32;
-        self.model.readiness = Some(ReadinessView {
-            daemon: daemon_level,
-            model: model_level,
-            camera: camera_level,
-            has_enrolled_profiles: !self.model.profiles.is_empty(),
-            enabled_pam_count,
+    /// Refresh daemon, camera, and model status for the system destination.
+    pub fn refresh_system_status(&mut self) -> &PresenterModel {
+        let daemon_reachable = self.client.get_status().is_ok();
+        let protection = self.client.get_protection_status();
+
+        self.model.system = Some(SystemView {
+            daemon_running: daemon_reachable,
+            camera_detected: daemon_reachable, // Simplified: if daemon is up, camera is assumed ready for the view
+            models_loaded: daemon_reachable,
+            protection: if let Ok(p) = protection {
+                ProtectionView::from_status(&p, self.model.emitter_armed_warning)
+            } else {
+                ProtectionView::default()
+            },
         });
-
-        self.model.is_loading = false;
         &self.model
     }
 
@@ -512,8 +529,7 @@ impl<C: ManagerClient> ProfilePresenter<C> {
     }
 
     /// v3: Commit the enrollment to a persistent profile. Transitions to
-    /// Saving, then back to Setup (profile list) on success. On failure,
-    /// stays in Stopped with an error message.
+    /// Saving, then back to Setup (profile list) on success.
     pub fn save_profile_v3(&mut self) -> &PresenterModel {
         let Some(session) = self.model.enrollment_session_v3.clone() else {
             return &self.model;
@@ -521,6 +537,9 @@ impl<C: ManagerClient> ProfilePresenter<C> {
         if self.model.enrollment_state != EnrollmentState::Reviewing
             && self.model.enrollment_state != EnrollmentState::Stopped
         {
+            return &self.model;
+        }
+        if self.model.enrollment_state == EnrollmentState::Saving {
             return &self.model;
         }
         self.model.enrollment_state = EnrollmentState::Saving;

@@ -223,3 +223,4 @@ fn show_high_impact_dialog<C: crate::client::ManagerClient + 'static>(
 
     dialog.present();
 }
+

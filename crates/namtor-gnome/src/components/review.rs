@@ -5,7 +5,7 @@
 //! commits the profile to the store. No biometric data or raw scores are
 //! exposed.
 
-use crate::view_model::ReviewView;
+use crate::view_model::ReviewViewV3;
 use gtk4::prelude::*;
 use gtk4::{Box as GtkBox, Label, Orientation};
 
@@ -25,10 +25,11 @@ impl ReviewViewComponent {
     /// Renders the review summary.
     pub fn render(
         &self,
-        view: &ReviewView,
-        _on_commit: impl Fn() + 'static,
-        _on_retry: impl Fn() + 'static,
-        _on_cancel: impl Fn() + 'static,
+        view: &ReviewViewV3,
+        _on_save: impl Fn() + 'static,
+        _on_resume: impl Fn() + 'static,
+        _on_discard: impl Fn() + 'static,
+        is_pending: bool,
     ) -> &GtkBox {
         while let Some(child) = self.container.first_child() {
             self.container.remove(&child);
@@ -51,48 +52,60 @@ impl ReviewViewComponent {
             .spacing(8)
             .build();
 
-        let coverage_label = Label::builder()
-            .label(format!("Coverage: {}%", view.coverage_percent))
-            .halign(gtk4::Align::Start)
-            .build();
-        summary_box.append(&coverage_label);
-
         let quality_label = Label::builder()
-            .label(format!("Quality: {}", view.quality_label))
+            .label(format!("Quality: {}%", view.quality_percent))
             .halign(gtk4::Align::Start)
             .build();
         summary_box.append(&quality_label);
 
-        let template_label = Label::builder()
-            .label(format!("Frames: {} captures", view.frames_captured))
+        let diversity_label = Label::builder()
+            .label(format!("Diversity: {}%", view.diversity_percent))
             .halign(gtk4::Align::Start)
             .build();
-        summary_box.append(&template_label);
+        summary_box.append(&diversity_label);
+
+        let frames_label = Label::builder()
+            .label(format!("Frames accepted: {}", view.frames_accepted))
+            .halign(gtk4::Align::Start)
+            .build();
+        summary_box.append(&frames_label);
+
+        let guidance_label = Label::builder()
+            .label(&view.guidance)
+            .halign(gtk4::Align::Start)
+            .wrap(true)
+            .css_classes(["caption"])
+            .build();
+        summary_box.append(&guidance_label);
 
         group.append(&summary_box);
 
-        let btn_box = GtkBox::builder()
+        let action_box = GtkBox::builder()
             .orientation(Orientation::Horizontal)
             .spacing(12)
             .halign(gtk4::Align::End)
             .build();
 
-        let cancel_btn = gtk4::Button::builder().label("Cancel").build();
-        // In a real implementation, we would connect on_cancel here.
-
-        let retry_btn = gtk4::Button::builder().label("Retry").build();
-        // In a real implementation, we would connect on_retry here.
-
-        let commit_btn = gtk4::Button::builder()
-            .label("Finish")
+        let save_btn = gtk4::Button::builder()
+            .label("Save Profile")
             .css_classes(["suggested-action"])
+            .sensitive(!is_pending)
             .build();
-        // In a real implementation, we would connect on_commit here.
+        
+        let resume_btn = gtk4::Button::builder()
+            .label("Resume Capture")
+            .sensitive(!is_pending)
+            .build();
 
-        btn_box.append(&cancel_btn);
-        btn_box.append(&retry_btn);
-        btn_box.append(&commit_btn);
-        group.append(&btn_box);
+        let discard_btn = gtk4::Button::builder()
+            .label("Discard")
+            .sensitive(!is_pending)
+            .build();
+
+        action_box.append(&discard_btn);
+        action_box.append(&resume_btn);
+        action_box.append(&save_btn);
+        group.append(&action_box);
 
         self.container.append(&group);
 

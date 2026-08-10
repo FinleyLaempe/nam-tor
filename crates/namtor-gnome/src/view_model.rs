@@ -115,6 +115,26 @@ pub struct ReviewView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub struct AuthenticationView {
+    /// Prominent recommended service (e.g. GDM).
+    pub recommended_service: Option<PamServiceRowView>,
+    /// Safe services listed normally.
+    pub safe_services: Vec<PamServiceRowView>,
+    /// Risky services to be collapsed in an expander.
+    pub risky_services: Vec<PamServiceRowView>,
+    /// Unsupported services shown as disabled.
+    pub unsupported_services: Vec<PamServiceRowView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub struct SystemView {
+    pub daemon_running: bool,
+    pub camera_detected: bool,
+    pub models_loaded: bool,
+    pub protection: ProtectionView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
 pub struct PresenterModel {
     pub profiles: Vec<ProfileRowView>,
     pub status: Option<StatusReport>,
@@ -122,6 +142,10 @@ pub struct PresenterModel {
     pub protection: Option<ProtectionView>,
     /// v2: system readiness indicators (daemon, model, camera).
     pub readiness: Option<ReadinessView>,
+    /// Simplified authentication destination view.
+    pub authentication: Option<AuthenticationView>,
+    /// Simplified system destination view.
+    pub system: Option<SystemView>,
     /// v2: detected PAM auth services.
     pub pam_services: Vec<PamServiceRowView>,
     pub enrollment: Option<EnrollmentView>,

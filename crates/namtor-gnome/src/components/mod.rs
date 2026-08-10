@@ -9,6 +9,7 @@ pub mod pam_services;
 pub mod profile_list;
 pub mod recovery;
 pub mod review;
+pub mod system_status;
 
 pub use enrollment::EnrollmentViewComponent;
 pub use profile_list::ProfileListView;

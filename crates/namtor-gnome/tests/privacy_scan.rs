@@ -371,9 +371,9 @@ fn mutation_test_forbidden_fields_in_review_view_v3() {
 #[test]
 fn populated_presenter_model_carries_no_biometrics() {
     use namtor_gnome::view_model::{
-        EnrollmentState, EnrollmentView, EnrollmentViewV3, ErrorView, PendingMerge,
-        PendingPamToggle, PendingReplace, PresenterModel, ProtectionView, QualityView,
-        ReadinessLevel, ReadinessView, ReviewView, ReviewViewV3,
+        AuthenticationView, EnrollmentState, EnrollmentView, EnrollmentViewV3, ErrorView,
+        PendingMerge, PendingPamToggle, PendingReplace, PresenterModel, ProtectionView,
+        QualityView, ReadinessLevel, ReadinessView, ReviewView, ReviewViewV3, SystemView,
     };
 
     let model = PresenterModel {
@@ -402,6 +402,8 @@ fn populated_presenter_model_carries_no_biometrics() {
             has_enrolled_profiles: true,
             enabled_pam_count: 1,
         }),
+        authentication: Some(AuthenticationView::default()),
+        system: Some(SystemView::default()),
         pam_services: vec![],
         enrollment: Some(EnrollmentView {
             session_id: "sess-1".into(),
