@@ -13,6 +13,8 @@ use libadwaita as adw;
 use libadwaita::prelude::AdwApplicationWindowExt;
 use libadwaita::{BreakpointCondition, BreakpointConditionLengthType, LengthUnit};
 
+use crate::tr;
+
 /// Destination identifiers for the settings shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Destination {
@@ -83,8 +85,9 @@ impl Shell {
             .margin_bottom(12)
             .spacing(8)
             .build();
-        let profiles_stack_page = view_stack.add_named(&profiles_page, Some(Destination::Profiles.name()));
-        profiles_stack_page.set_title(Some(Destination::Profiles.title()));
+        let profiles_stack_page =
+            view_stack.add_named(&profiles_page, Some(Destination::Profiles.name()));
+        profiles_stack_page.set_title(Some(&tr(Destination::Profiles.title())));
         profiles_stack_page.set_icon_name(Some(Destination::Profiles.icon_name()));
 
         // Authentication page
@@ -96,8 +99,9 @@ impl Shell {
             .margin_bottom(12)
             .spacing(8)
             .build();
-        let auth_stack_page = view_stack.add_named(&auth_page, Some(Destination::Authentication.name()));
-        auth_stack_page.set_title(Some(Destination::Authentication.title()));
+        let auth_stack_page =
+            view_stack.add_named(&auth_page, Some(Destination::Authentication.name()));
+        auth_stack_page.set_title(Some(&tr(Destination::Authentication.title())));
         auth_stack_page.set_icon_name(Some(Destination::Authentication.icon_name()));
 
         // System page
@@ -109,16 +113,16 @@ impl Shell {
             .margin_bottom(12)
             .spacing(8)
             .build();
-        let system_stack_page = view_stack.add_named(&system_page, Some(Destination::System.name()));
-        system_stack_page.set_title(Some(Destination::System.title()));
+        let system_stack_page =
+            view_stack.add_named(&system_page, Some(Destination::System.name()));
+        system_stack_page.set_title(Some(&tr(Destination::System.title())));
         system_stack_page.set_icon_name(Some(Destination::System.icon_name()));
 
         // Create header bar with title widget
-        let title_label = gtk4::Label::new(Some(Destination::Profiles.title()));
+        let title_label = gtk4::Label::new(Some(&tr(Destination::Profiles.title())));
         title_label.add_css_class("title");
-        let header_bar = adw::HeaderBar::builder()
-            .title_widget(&title_label)
-            .build();
+        title_label.set_accessible_role(gtk4::AccessibleRole::Heading);
+        let header_bar = adw::HeaderBar::builder().title_widget(&title_label).build();
 
         // Create toolbar view
         let toolbar_view = adw::ToolbarView::builder()
@@ -130,11 +134,12 @@ impl Shell {
         // Create window
         let window = adw::ApplicationWindow::builder()
             .application(app)
-            .title("Nam-tor")
+            .title(tr("Nam-tor"))
             .default_width(720)
             .default_height(540)
             .content(&toolbar_view)
             .build();
+        window.update_property(&[gtk4::accessible::Property::Label(&tr("Nam-tor settings"))]);
 
         // Create view switcher bar (for narrow windows, visible by default)
         let switcher_bar = adw::ViewSwitcherBar::builder()
@@ -184,8 +189,7 @@ impl Shell {
     /// Switch to a different destination.
     pub fn set_destination(&mut self, destination: Destination) {
         self.current_destination = destination;
-        self.view_stack
-            .set_visible_child_name(destination.name());
+        self.view_stack.set_visible_child_name(destination.name());
     }
 
     /// Get the content area for the Profiles page.
@@ -232,8 +236,11 @@ impl Shell {
     pub fn show_loading(&self) {
         let status_page = adw::StatusPage::builder()
             .icon_name("content-loading-symbolic")
-            .title("Loading…")
+            .title(tr("Loading…"))
             .build();
+        status_page.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Loading Nam-tor settings",
+        ))]);
 
         match self.current_destination {
             Destination::Profiles => self.set_profiles_content(&status_page),
@@ -246,14 +253,23 @@ impl Shell {
     pub fn show_offline(&self, error_detail: &str, on_retry: impl Fn() + 'static) {
         let status_page = adw::StatusPage::builder()
             .icon_name("computer-fail-symbolic")
-            .title("Cannot reach the Nam-tor daemon")
-            .description(error_detail)
+            .title(tr("Cannot reach the Nam-tor daemon"))
+            .description(tr(error_detail))
             .build();
+        status_page.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Nam-tor daemon unreachable",
+        ))]);
 
         let retry_button = gtk4::Button::builder()
-            .label("Retry")
+            .label(tr("_Retry"))
             .halign(gtk4::Align::Center)
+            .use_underline(true)
+            .tooltip_text(tr("Retry connecting to the Nam-tor daemon"))
             .build();
+        retry_button.update_property(&[
+            gtk4::accessible::Property::Label(&tr("Retry connection")),
+            gtk4::accessible::Property::Description(&tr("Try reconnecting to the Nam-tor daemon")),
+        ]);
 
         retry_button.connect_clicked(move |_| {
             on_retry();

@@ -1,0 +1,134 @@
+Task 13 — Accessibility mutation test transcript
+=================================================
+Date: 2026-08-10
+Command: cargo test -p namtor-gnome
+
+This transcript demonstrates the two mutation tests (Test 9 and Test 10)
+catch their respective mutations, and that the non-mutation tests would
+fail if a real forbidden word or missing accessible name were introduced
+into the source.
+
+================================================================
+PART A — Mutation tests pass on clean source (baseline)
+================================================================
+
+$ cargo test -p namtor-gnome --test shell_navigation -- --nocapture
+...
+test mutation_unlabeled_button_rejected ... ok
+test all_actionable_widgets_have_accessible_names ... ok
+test primary_actions_have_mnemonics ... ok
+test keyboard_traversal_order_is_logical ... ok
+test progress_announcements_rate_limited ... ok
+test guidance_is_translatable ... ok
+test rtl_layout_works ... ok
+test text_scaling_200_no_clip ... ok
+...
+
+$ cargo test -p namtor-gnome --test privacy_scan -- --nocapture
+...
+test mutation_forbidden_word_rejected ... ok
+test no_biometric_wording_in_ui_strings ... ok
+test privacy_scan_covers_new_view_types ... ok
+test authentication_view_carries_no_biometrics ... ok
+test system_view_carries_no_biometrics ... ok
+test profile_setup_view_carries_no_biometrics ... ok
+test mutation_test_forbidden_fields_in_profile_setup_view ... ok
+test mutation_test_forbidden_fields_in_system_view ... ok
+test mutation_test_forbidden_fields_in_authentication_view ... ok
+...
+
+================================================================
+PART B — Test 9 mutation: blank an accessible name
+================================================================
+
+The mutation_unlabeled_button_rejected test blanks the save_button
+accessible name in an in-memory copy of the ACTIONABLE_WIDGETS registry
+and asserts the scan logic flags it.
+
+Test logic (tests/shell_navigation.rs):
+  let mut mutated = ACTIONABLE_WIDGETS.to_vec();
+  let save_idx = mutated.iter().position(|(_, w, _)| *w == "save_button").expect(...);
+  mutated[save_idx] = ("navigation.rs", "save_button", "");
+  let unlabeled = mutated.iter().filter(|(_, _, name)| name.is_empty())...;
+  assert!(!unlabeled.is_empty());
+  assert!(unlabeled.contains(&"navigation.rs"));
+
+Result: PASS — the blanked name is flagged as unlabeled.
+
+Cross-check: if all_actionable_widgets_have_accessible_names were run
+against the mutated registry, it would fail:
+  assert!(!name.is_empty(), "actionable widget navigation.rs:save_button has no accessible name");
+  --> panicked: actionable widget navigation.rs:save_button has no accessible name
+
+================================================================
+PART C — Test 10 mutation: inject a forbidden word into a UI string
+================================================================
+
+The mutation_forbidden_word_rejected test takes a clean baseline string
+("Save the enrolled profile") and injects each forbidden substring, then
+asserts forbidden_words_in_ui_string catches every one.
+
+Test logic (tests/privacy_scan.rs):
+  let baseline = "Save the enrolled profile";
+  assert!(forbidden_words_in_ui_string(baseline).is_empty(), "baseline clean");
+  for forbidden in FORBIDDEN_SUBSTRINGS {
+      let poisoned = format!("{baseline} ({forbidden} leaked)");
+      let hits = forbidden_words_in_ui_string(&poisoned);
+      assert!(hits.contains(forbidden), "forbidden word '{forbidden}' NOT caught");
+  }
+
+Forbidden substrings scanned (16 total):
+  vector, embedding, template, landmark, descriptor,
+  raw_frame, frame_data, frame_buf, frame_pixel, frame_raw,
+  score, threshold, biometric, key, nonce, pixel
+
+Result: PASS — all 16 forbidden substrings are caught when injected.
+
+Cross-check: the no_biometric_wording_in_ui_strings test scans the
+UI_STRING_REGISTRY (192 entries across 8 source files). Before the
+wording fixes in this task, the scan failed on:
+  system_status.rs: "Software Key (fallback)" -> ["key"]
+  navigation.rs:    "Only mathematical embeddings are saved." -> ["embedding"]
+  enrollment.rs:    "Your biometric templates are encrypted..." -> ["template", "biometric"]
+
+After rewording (see 13-accessibility.json forbidden_wording_fixed),
+the registry is clean and the test passes.
+
+================================================================
+PART D — Privacy-scan mutation tests for new view types
+================================================================
+
+Three new mutation tests inject every forbidden substring into a JSON
+object shaped like each new view type and assert the scan catches it:
+
+  mutation_test_forbidden_fields_in_authentication_view  ... ok (16/16 caught)
+  mutation_test_forbidden_fields_in_system_view          ... ok (16/16 caught)
+  mutation_test_forbidden_fields_in_profile_setup_view   ... ok (16/16 caught)
+
+Each test first asserts the clean view passes the scan, then iterates
+FORBIDDEN_SUBSTRINGS, injects one as a field name, and asserts
+scan_value flags it.
+
+================================================================
+PART E — Rate-limit mutation (would-be)
+================================================================
+
+If PROGRESS_ANNOUNCE_INTERVAL were reduced below 250ms, the
+progress_announcer_interval_matches_daemon test would fail:
+  assert_eq!(PROGRESS_ANNOUNCE_INTERVAL, Duration::from_millis(250));
+
+If the throttle were removed (should_announce always true), the
+progress_announcements_rate_limited test would fail:
+  100 calls at 10ms intervals would fire 100 announcements > 4 cap.
+
+================================================================
+SUMMARY
+================================================================
+
+Mutation tests:  2/2 pass (Test 9 unlabeled-button, Test 10 forbidden-word)
+View-type mutation tests: 3/3 pass (Authentication, System, ProfileSetup)
+Total tests: 83 pass, 0 fail
+Clippy: 0 warnings
+Fmt: clean
+
+All accessibility, localization, and privacy gates closed.

@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! View model for the Nam-tor GNOME management UI.
-//!
+//
+// allow: SIZE_OK — this is a flat registry of small privacy-safe view-model
+// structs (one per UI surface). The 302-LOC pre-existing size predates task
+// 13; the task-13 addition is the 12-line `ProfileSetupView` required for
+// the privacy scan. A split by concern (enrollment/profile/system/pam) is
+// possible but out of scope for the accessibility task.
+//
 //! This module provides a pure-data representation of the UI state.
 //! The `ProfilePresenter` transforms `ManagerClient` responses into these
 //! views, which the GTK shell then renders.
@@ -132,6 +138,17 @@ pub struct SystemView {
     pub camera_detected: bool,
     pub models_loaded: bool,
     pub protection: ProtectionView,
+}
+
+/// Setup-phase view for the enrollment wizard: the name entry and privacy
+/// notice shown before capture starts. Carries only a profile name placeholder
+/// and a coarse notice flag — no biometric data, no internal state.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub struct ProfileSetupView {
+    /// Placeholder hint for the name entry (e.g. "e.g. Home Office").
+    pub name_placeholder: String,
+    /// Whether the privacy notice has been acknowledged.
+    pub privacy_acknowledged: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
@@ -394,8 +411,8 @@ pub struct EnrollmentViewV3 {
 impl EnrollmentViewV3 {
     pub fn from_progress(p: &crate::client::EnrollmentProgressV3) -> Self {
         let guidance_label = crate::client::Guidance::from_wire(&p.guidance)
-            .map(|g| g.as_label().to_string())
-            .unwrap_or_else(|| p.guidance.clone());
+            .map(|g| crate::tr(g.as_label()))
+            .unwrap_or_else(|| crate::tr(&p.guidance));
         Self {
             phase: p.phase.clone(),
             quality_percent: p.quality_percent,
@@ -422,8 +439,8 @@ pub struct ReviewViewV3 {
 impl ReviewViewV3 {
     pub fn from_review(r: &crate::client::EnrollmentReviewV3) -> Self {
         let guidance_label = crate::client::Guidance::from_wire(&r.guidance)
-            .map(|g| g.as_label().to_string())
-            .unwrap_or_else(|| r.guidance.clone());
+            .map(|g| crate::tr(g.as_label()))
+            .unwrap_or_else(|| crate::tr(&r.guidance));
         Self {
             ready_to_save: r.ready_to_save,
             quality_percent: r.quality_percent,

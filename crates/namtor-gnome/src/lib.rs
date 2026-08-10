@@ -22,10 +22,7 @@
 //!
 //! ---------------------------------------------------------------------------
 
-pub fn tr(s: &str) -> String {
-    s.to_string()
-}
-
+pub mod a11y;
 pub mod client;
 pub mod components;
 pub mod fake;
@@ -35,8 +32,23 @@ pub mod privacy;
 pub mod shell;
 pub mod view_model;
 
-pub use shell::{Destination, Shell};
+/// Translation seam for user-facing strings.
+///
+/// Every label, tooltip, accessible name, status title, and guidance phrase
+/// shown in the GTK UI MUST pass through `tr()` so the string is the gettext
+/// msgid. In the test environment `tr()` is the identity function (no
+/// `.mo` catalog is loaded); in production the wizard binary loads a
+/// `gettext::Catalog` and rebinds this to look up the msgid.
+///
+/// Tests in `tests/shell_navigation.rs` assert that user-facing string
+/// literals are wrapped in `tr()` calls and that no forbidden biometric /
+/// internal wording leaks through.
+pub fn tr(s: &str) -> String {
+    s.to_string()
+}
+
 pub use navigation::EnrollmentNavigation;
+pub use shell::{Destination, Shell};
 
 #[cfg(feature = "dbus")]
 pub mod dbus_client;
@@ -55,6 +67,6 @@ pub use presenter::ProfilePresenter;
 pub use view_model::{
     compatibility_label, sealing_label, EnrollmentState, EnrollmentView, EnrollmentViewV3,
     ErrorView, PamServiceRowView, PendingMerge, PendingReplace, PresenterModel, ProfileRowView,
-    ProtectionStatusView, ProtectionView, QualityView, ReadinessLevel, ReadinessView, RecoveryHint,
-    ReviewView, ReviewViewV3,
+    ProfileSetupView, ProtectionStatusView, ProtectionView, QualityView, ReadinessLevel,
+    ReadinessView, RecoveryHint, ReviewView, ReviewViewV3,
 };

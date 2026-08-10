@@ -15,6 +15,7 @@ use libadwaita::prelude::MessageDialogExt;
 
 use crate::client::PamServiceCompatibility;
 use crate::presenter::ProfilePresenter;
+use crate::tr;
 use crate::view_model::{compatibility_label, PamServiceRowView};
 
 /// The exact warning text that MUST appear in the high-impact confirmation
@@ -44,19 +45,23 @@ pub fn render_pam_services<C: crate::client::ManagerClient + 'static>(
     let model = presenter_rc.borrow().model().clone();
 
     let title = Label::builder()
-        .label("Authentication uses")
+        .label(tr("Authentication uses"))
         .halign(Align::Start)
         .css_classes(["heading"])
         .accessible_role(AccessibleRole::Heading)
         .build();
+    title.update_property(&[gtk4::accessible::Property::Level(1)]);
     container.append(&title);
 
     if model.pam_services.is_empty() {
         let l = Label::builder()
-            .label("No PAM services found.")
+            .label(tr("No PAM services found."))
             .halign(Align::Start)
             .css_classes(["dim-label"])
             .build();
+        l.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Empty PAM service list",
+        ))]);
         container.append(&l);
         return;
     }
@@ -86,25 +91,34 @@ fn create_pam_service_row<C: crate::client::ManagerClient + 'static>(
         .build();
 
     let name_label = Label::builder()
-        .label(&service.display_name)
+        .label(tr(&service.display_name))
         .halign(Align::Start)
         .accessible_role(AccessibleRole::ListItem)
         .build();
+    name_label.update_property(&[gtk4::accessible::Property::Label(
+        &tr(&service.display_name),
+    )]);
     info_box.append(&name_label);
 
     let desc_label = Label::builder()
-        .label(&service.description)
+        .label(tr(&service.description))
         .halign(Align::Start)
         .css_classes(["dim-label", "caption"])
         .build();
+    desc_label.update_property(&[gtk4::accessible::Property::Description(&tr(
+        &service.description
+    ))]);
     info_box.append(&desc_label);
 
     let compat_text = compatibility_label(service.compatibility);
     let compat_label = Label::builder()
-        .label(format!("Compatibility: {compat_text}"))
+        .label(tr(&format!("Compatibility: {compat_text}")))
         .halign(Align::Start)
         .css_classes(["caption"])
         .build();
+    compat_label.update_property(&[gtk4::accessible::Property::Label(&tr(&format!(
+        "Service compatibility: {compat_text}"
+    )))]);
     if service.compatibility == PamServiceCompatibility::Risky {
         compat_label.add_css_class("warning");
     } else if service.compatibility == PamServiceCompatibility::Unsupported {
@@ -118,16 +132,29 @@ fn create_pam_service_row<C: crate::client::ManagerClient + 'static>(
         .active(service.enabled)
         .valign(Align::Center)
         .accessible_role(AccessibleRole::Switch)
-        .tooltip_text(format!("Toggle {} ({})", service.display_name, service.id))
+        .tooltip_text(tr(&format!(
+            "Toggle {} ({})",
+            service.display_name, service.id
+        )))
         .build();
+    toggle.update_property(&[
+        gtk4::accessible::Property::Label(&tr(&format!(
+            "Enable {} authentication",
+            service.display_name
+        ))),
+        gtk4::accessible::Property::Description(&tr(&format!(
+            "Toggle whether {} uses face authentication",
+            service.display_name
+        ))),
+    ]);
 
     let is_unsupported = service.compatibility == PamServiceCompatibility::Unsupported;
     if is_unsupported {
         toggle.set_sensitive(false);
-        toggle.set_tooltip_text(Some(&format!(
+        toggle.set_tooltip_text(Some(&tr(&format!(
             "{} is incompatible and cannot be enabled.",
             service.display_name
-        )));
+        ))));
     }
 
     if !is_unsupported {
@@ -223,4 +250,3 @@ fn show_high_impact_dialog<C: crate::client::ManagerClient + 'static>(
 
     dialog.present();
 }
-

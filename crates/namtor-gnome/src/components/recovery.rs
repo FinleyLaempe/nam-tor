@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Recovery view component for unreachable daemon.
 
+use crate::tr;
 use crate::view_model::RecoveryHint;
 use gtk4::prelude::*;
 use gtk4::{Box as GtkBox, Label, Orientation};
@@ -28,7 +29,7 @@ impl RecoveryView {
         }
 
         let title = Label::builder()
-            .label(&hint.title)
+            .label(tr(&hint.title))
             .halign(gtk4::Align::Start)
             .css_classes(["title-1"])
             .build();
@@ -37,24 +38,26 @@ impl RecoveryView {
         self.container.append(&title);
 
         let detail = Label::builder()
-            .label(&hint.title)
+            .label(tr(&hint.title))
             .halign(gtk4::Align::Start)
             .wrap(true)
             .build();
-        detail.update_property(&[gtk4::accessible::Property::Description(
+        detail.update_property(&[gtk4::accessible::Property::Description(&tr(
             "Detailed explanation of the recovery state",
-        )]);
+        ))]);
         self.container.append(&detail);
 
-        let steps_text = format!("Recovery Steps:\n\n{}", hint.steps.join("\n\n"));
+        let steps_text = format!("{}\n\n{}", tr("Recovery Steps:"), hint.steps.join("\n\n"));
         let steps = Label::builder()
-            .label(&steps_text)
+            .label(tr(&steps_text))
             .halign(gtk4::Align::Start)
             .wrap(true)
             .css_classes(["caption"])
             .build();
         steps.set_accessible_role(gtk4::AccessibleRole::List);
-        steps.update_property(&[gtk4::accessible::Property::Label("Recovery guidance steps")]);
+        steps.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Recovery guidance steps",
+        ))]);
         self.container.append(&steps);
 
         &self.container

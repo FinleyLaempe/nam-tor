@@ -45,6 +45,19 @@ pub fn forbidden_fields<T: Serialize>(value: &T) -> Vec<String> {
     hits
 }
 
+/// Scan a single user-facing string for forbidden biometric / internal
+/// terms. Returns the list of forbidden substrings found (empty = clean).
+/// Used by the accessibility test suite to assert no UI label, tooltip,
+/// accessible name, or guidance phrase leaks matcher internals.
+pub fn forbidden_words_in_ui_string(text: &str) -> Vec<&'static str> {
+    let lower = text.to_lowercase();
+    FORBIDDEN_SUBSTRINGS
+        .iter()
+        .filter(|f| lower.contains(*f))
+        .copied()
+        .collect()
+}
+
 /// Walk a serialized JSON value and collect every key (recursively) that
 /// contains a forbidden substring. Exposed so mutation tests can inject
 /// forbidden field names into JSON objects and verify they are caught.

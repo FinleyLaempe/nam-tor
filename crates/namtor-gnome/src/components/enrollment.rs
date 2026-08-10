@@ -4,6 +4,7 @@
 //! Provides the user interface for creating a new profile, including
 //! identity entry, privacy notices, and real-time capture progress.
 
+use crate::tr;
 use crate::view_model::EnrollmentViewV3;
 use gtk4::prelude::*;
 use gtk4::{Box as GtkBox, Label, Orientation};
@@ -55,7 +56,7 @@ impl EnrollmentViewComponent {
             .build();
 
         let title = Label::builder()
-            .label("Add New Profile")
+            .label(tr("Add New Profile"))
             .css_classes(["title-1"])
             .halign(gtk4::Align::Start)
             .build();
@@ -70,22 +71,24 @@ impl EnrollmentViewComponent {
             .build();
 
         let name_label = Label::builder()
-            .label("Profile Name")
+            .label(tr("_Profile Name"))
             .halign(gtk4::Align::Start)
+            .use_underline(true)
             .build();
         name_label.set_accessible_role(gtk4::AccessibleRole::Label);
         name_box.append(&name_label);
 
         let name_entry = gtk4::Entry::builder()
-            .placeholder_text("e.g. Home Office")
+            .placeholder_text(tr("e.g. Home Office"))
             .accessible_role(gtk4::AccessibleRole::TextBox)
             .build();
         name_entry.update_property(&[
-            gtk4::accessible::Property::Label("Profile Name"),
-            gtk4::accessible::Property::Description(
-                "Enter a descriptive name for this facial profile",
-            ),
+            gtk4::accessible::Property::Label(&tr("Profile name")),
+            gtk4::accessible::Property::Description(&tr(
+                "Enter a descriptive name for this profile",
+            )),
         ]);
+        name_label.set_mnemonic_widget(Some(&name_entry));
         name_box.append(&name_entry);
         group.append(&name_box);
 
@@ -96,7 +99,9 @@ impl EnrollmentViewComponent {
             .build();
 
         let privacy_text = Label::builder()
-            .label("Your biometric templates are encrypted and stored locally on this device. No biometric data leaves the system.")
+            .label(tr(
+                "Your face model is encrypted and stored locally on this device. No face data leaves the system.",
+            ))
             .wrap(true)
             .css_classes(["caption"])
             .halign(gtk4::Align::Start)
@@ -106,21 +111,33 @@ impl EnrollmentViewComponent {
         group.append(&privacy_box);
 
         let start_btn = gtk4::Button::builder()
-            .label("Start Enrollment")
+            .label(tr("_Start Enrollment"))
             .css_classes(["suggested-action"])
             .halign(gtk4::Align::End)
+            .use_underline(true)
+            .tooltip_text(tr("Begin the face enrollment capture process"))
             .build();
-        start_btn.update_property(&[gtk4::accessible::Property::Description(
-            "Begin the facial capture process",
-        )]);
+        start_btn.update_property(&[
+            gtk4::accessible::Property::Label(&tr("Start enrollment")),
+            gtk4::accessible::Property::Description(&tr(
+                "Begin the face enrollment capture process",
+            )),
+        ]);
         group.append(&start_btn);
 
         let cancel_btn = gtk4::Button::builder()
-            .label("Cancel")
+            .label(tr("Cancel"))
             .margin_top(12)
             .halign(gtk4::Align::Center)
+            .tooltip_text(tr("Cancel profile creation"))
             .build();
-        
+        cancel_btn.update_property(&[
+            gtk4::accessible::Property::Label(&tr("Cancel enrollment")),
+            gtk4::accessible::Property::Description(&tr(
+                "Discard the new profile and return to the list",
+            )),
+        ]);
+
         group.append(&cancel_btn);
 
         self.container.append(&group);
@@ -136,9 +153,7 @@ impl EnrollmentViewComponent {
             .spacing(16)
             .build();
 
-        let spinner = gtk4::Spinner::builder()
-            .halign(gtk4::Align::Center)
-            .build();
+        let spinner = gtk4::Spinner::builder().halign(gtk4::Align::Center).build();
         spinner.start();
         container.append(&spinner);
 
@@ -149,43 +164,55 @@ impl EnrollmentViewComponent {
             .build();
 
         let quality_label = Label::builder()
-            .label(format!("Quality: {}%", view.quality_percent))
+            .label(tr(&format!("Quality: {}%", view.quality_percent)))
             .build();
+        quality_label.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Capture quality percentage",
+        ))]);
         stats_box.append(&quality_label);
 
         let diversity_label = Label::builder()
-            .label(format!("Diversity: {}%", view.diversity_percent))
+            .label(tr(&format!("Diversity: {}%", view.diversity_percent)))
             .build();
+        diversity_label.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Pose diversity percentage",
+        ))]);
         stats_box.append(&diversity_label);
 
         container.append(&stats_box);
 
         let counts_label = Label::builder()
-            .label(format!(
+            .label(tr(&format!(
                 "Accepted: {} / Seen: {}",
                 view.frames_accepted, view.frames_seen
-            ))
+            )))
             .css_classes(["caption"])
             .halign(gtk4::Align::Center)
             .build();
+        counts_label.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Frames accepted and seen counts",
+        ))]);
         container.append(&counts_label);
 
         let guidance = Label::builder()
-            .label(&view.guidance)
+            .label(tr(&view.guidance))
             .halign(gtk4::Align::Center)
             .wrap(true)
             .css_classes(["guidance"])
             .build();
         guidance.set_accessible_role(gtk4::AccessibleRole::Status);
+        guidance.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Live capture guidance",
+        ))]);
         container.append(&guidance);
 
         let bar = gtk4::ProgressBar::builder()
             .fraction(view.diversity_percent as f64 / 100.0)
             .margin_top(12)
             .build();
-        bar.update_property(&[gtk4::accessible::Property::Label(
-            "Enrollment Diversity Progress",
-        )]);
+        bar.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Enrollment diversity progress",
+        ))]);
         container.append(&bar);
 
         let action_box = GtkBox::builder()
@@ -196,13 +223,28 @@ impl EnrollmentViewComponent {
             .build();
 
         let stop_btn = gtk4::Button::builder()
-            .label("Stop")
+            .label(tr("_Stop"))
             .css_classes(["suggested-action"])
+            .use_underline(true)
+            .tooltip_text(tr("Stop capture and review the result"))
             .build();
-        
+        stop_btn.update_property(&[
+            gtk4::accessible::Property::Label(&tr("Stop capture")),
+            gtk4::accessible::Property::Description(&tr(
+                "Stop capturing and review the enrolled profile",
+            )),
+        ]);
+
         let cancel_btn = gtk4::Button::builder()
-            .label("Cancel")
+            .label(tr("Cancel"))
+            .tooltip_text(tr("Cancel enrollment and discard frames"))
             .build();
+        cancel_btn.update_property(&[
+            gtk4::accessible::Property::Label(&tr("Cancel enrollment")),
+            gtk4::accessible::Property::Description(&tr(
+                "Discard the enrollment and return to the profile list",
+            )),
+        ]);
 
         action_box.append(&stop_btn);
         action_box.append(&cancel_btn);

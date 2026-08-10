@@ -469,3 +469,425 @@ fn populated_presenter_model_carries_no_biometrics() {
     let hits = forbidden_fields(&model);
     assert!(hits.is_empty(), "populated PresenterModel leaked: {hits:?}");
 }
+
+// ===========================================================================
+// Task 13: accessibility / privacy scan coverage for new view types and
+// user-facing strings. The tests below assert no biometric / internal
+// wording leaks into UI strings and that the new view types
+// (AuthenticationView, SystemView, ProfileSetupView) are scanned.
+// ===========================================================================
+
+use namtor_gnome::privacy::forbidden_words_in_ui_string;
+use namtor_gnome::view_model::{AuthenticationView, ProfileSetupView};
+
+/// `AuthenticationView` carries no biometric field names.
+#[test]
+fn authentication_view_carries_no_biometrics() {
+    let sample = AuthenticationView {
+        recommended_service: Some(namtor_gnome::view_model::PamServiceRowView {
+            id: "gdm-password".into(),
+            display_name: "GDM Password".into(),
+            enabled: false,
+            compatibility: PamServiceCompatibility::Safe,
+            description: "GNOME Display Manager".into(),
+        }),
+        safe_services: vec![],
+        risky_services: vec![],
+        unsupported_services: vec![],
+    };
+    let hits = forbidden_fields(&sample);
+    assert!(
+        hits.is_empty(),
+        "AuthenticationView leaked fields: {hits:?}"
+    );
+}
+
+/// `SystemView` carries no biometric field names.
+#[test]
+fn system_view_carries_no_biometrics() {
+    use namtor_gnome::view_model::{ProtectionView, SystemView};
+    let sample = SystemView {
+        daemon_running: true,
+        camera_detected: true,
+        models_loaded: true,
+        protection: ProtectionView {
+            label: "TPM2 (hardware-bound)".into(),
+            warning: String::new(),
+            is_software_fallback: false,
+            emitter_reduced: false,
+        },
+    };
+    let hits = forbidden_fields(&sample);
+    assert!(hits.is_empty(), "SystemView leaked fields: {hits:?}");
+}
+
+/// `ProfileSetupView` carries no biometric field names.
+#[test]
+fn profile_setup_view_carries_no_biometrics() {
+    let sample = ProfileSetupView {
+        name_placeholder: "e.g. Home Office".into(),
+        privacy_acknowledged: false,
+    };
+    let hits = forbidden_fields(&sample);
+    assert!(hits.is_empty(), "ProfileSetupView leaked fields: {hits:?}");
+}
+
+/// Mutation test: every forbidden substring injected into a
+/// `ProfileSetupView`-shaped JSON object is caught by the scan. This proves
+/// adding any forbidden field to the new setup view would fail CI.
+#[test]
+fn mutation_test_forbidden_fields_in_profile_setup_view() {
+    let clean = ProfileSetupView {
+        name_placeholder: "e.g. Home Office".into(),
+        privacy_acknowledged: false,
+    };
+    assert!(
+        forbidden_fields(&clean).is_empty(),
+        "clean ProfileSetupView must pass scan"
+    );
+
+    for forbidden in FORBIDDEN_SUBSTRINGS {
+        let key = (*forbidden).to_string();
+        let json = serde_json::json!({
+            "name_placeholder": "e.g. Home Office",
+            "privacy_acknowledged": false,
+            key: "injected",
+        });
+        let mut hits = Vec::new();
+        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        assert!(
+            hits.iter()
+                .any(|h: &String| h.to_lowercase().contains(forbidden)),
+            "forbidden field '{forbidden}' was NOT flagged in ProfileSetupView"
+        );
+    }
+}
+
+/// Mutation test: every forbidden substring injected into a `SystemView`-
+/// shaped JSON object is caught by the scan.
+#[test]
+fn mutation_test_forbidden_fields_in_system_view() {
+    use namtor_gnome::view_model::{ProtectionView, SystemView};
+    let clean = SystemView {
+        daemon_running: true,
+        camera_detected: true,
+        models_loaded: true,
+        protection: ProtectionView::default(),
+    };
+    assert!(
+        forbidden_fields(&clean).is_empty(),
+        "clean SystemView must pass scan"
+    );
+
+    for forbidden in FORBIDDEN_SUBSTRINGS {
+        let key = (*forbidden).to_string();
+        let json = serde_json::json!({
+            "daemon_running": true,
+            "camera_detected": true,
+            "models_loaded": true,
+            "protection": {
+                "label": "TPM2 (hardware-bound)",
+                "warning": "",
+                "is_software_fallback": false,
+                "emitter_reduced": false
+            },
+            key: "injected",
+        });
+        let mut hits = Vec::new();
+        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        assert!(
+            hits.iter()
+                .any(|h: &String| h.to_lowercase().contains(forbidden)),
+            "forbidden field '{forbidden}' was NOT flagged in SystemView"
+        );
+    }
+}
+
+/// Mutation test: every forbidden substring injected into an
+/// `AuthenticationView`-shaped JSON object is caught by the scan.
+#[test]
+fn mutation_test_forbidden_fields_in_authentication_view() {
+    let clean = AuthenticationView::default();
+    assert!(
+        forbidden_fields(&clean).is_empty(),
+        "clean AuthenticationView must pass scan"
+    );
+
+    for forbidden in FORBIDDEN_SUBSTRINGS {
+        let key = (*forbidden).to_string();
+        let json = serde_json::json!({
+            "recommended_service": null,
+            "safe_services": [],
+            "risky_services": [],
+            "unsupported_services": [],
+            key: "injected",
+        });
+        let mut hits = Vec::new();
+        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        assert!(
+            hits.iter()
+                .any(|h: &String| h.to_lowercase().contains(forbidden)),
+            "forbidden field '{forbidden}' was NOT flagged in AuthenticationView"
+        );
+    }
+}
+
+/// Registry of every user-facing string literal in the GNOME UI source.
+/// Each entry is `(source_file, string)`. The biometric-wording scan and
+/// mutation tests operate on this registry. Keeping it in the test file
+/// makes the scan deterministic and CI-safe (no GTK init needed).
+const UI_STRING_REGISTRY: &[(&str, &str)] = &[
+    ("shell.rs", "Nam-tor"),
+    ("shell.rs", "Nam-tor settings"),
+    ("shell.rs", "Loading…"),
+    ("shell.rs", "Loading Nam-tor settings"),
+    ("shell.rs", "Cannot reach the Nam-tor daemon"),
+    ("shell.rs", "Nam-tor daemon unreachable"),
+    ("shell.rs", "Retry"),
+    ("shell.rs", "Retry connection"),
+    ("shell.rs", "Try reconnecting to the Nam-tor daemon"),
+    ("shell.rs", "Profiles"),
+    ("shell.rs", "Authentication"),
+    ("shell.rs", "System"),
+    ("navigation.rs", "Enter profile name…"),
+    ("navigation.rs", "Profile name"),
+    ("navigation.rs", "Enter a descriptive name for this profile"),
+    ("navigation.rs", "Profile Name"),
+    (
+        "navigation.rs",
+        "Continuous capture mode\nFrames are analyzed locally and no raw images are stored.\nOnly the encrypted face model is saved on this device.",
+    ),
+    ("navigation.rs", "Start"),
+    ("navigation.rs", "Start enrollment"),
+    ("navigation.rs", "Begin face enrollment capture"),
+    ("navigation.rs", "Begin the face enrollment capture process"),
+    ("navigation.rs", "Enroll Face"),
+    ("navigation.rs", "Capture in progress"),
+    ("navigation.rs", "Frames: 0 · Quality: 0% · Diversity: 0%"),
+    ("navigation.rs", "Enrollment capture progress"),
+    ("navigation.rs", "Looking good…"),
+    ("navigation.rs", "Live capture guidance"),
+    ("navigation.rs", "Stop"),
+    ("navigation.rs", "Stop capture"),
+    ("navigation.rs", "Stop capturing and review the enrolled profile"),
+    ("navigation.rs", "Capturing"),
+    (
+        "navigation.rs",
+        "Frames accepted: 0\nQuality: 0%\nDiversity: 0%\nReady to save",
+    ),
+    ("navigation.rs", "Enrollment review summary"),
+    ("navigation.rs", "Save"),
+    ("navigation.rs", "Save profile"),
+    ("navigation.rs", "Commit the captured profile to storage"),
+    ("navigation.rs", "Resume"),
+    ("navigation.rs", "Resume capture"),
+    ("navigation.rs", "Return to capturing to add more frames"),
+    ("navigation.rs", "Discard"),
+    ("navigation.rs", "Discard profile"),
+    ("navigation.rs", "Throw away the captured profile without saving"),
+    ("navigation.rs", "Review"),
+    ("navigation.rs", "Ready to save"),
+    ("navigation.rs", "Consider re-enrolling"),
+    ("enrollment.rs", "Add New Profile"),
+    ("enrollment.rs", "Profile Name"),
+    ("enrollment.rs", "Profile name"),
+    ("enrollment.rs", "Enter a descriptive name for this profile"),
+    ("enrollment.rs", "e.g. Home Office"),
+    (
+        "enrollment.rs",
+        "Your face model is encrypted and stored locally on this device. No face data leaves the system.",
+    ),
+    ("enrollment.rs", "Start Enrollment"),
+    ("enrollment.rs", "Start enrollment"),
+    ("enrollment.rs", "Begin the face enrollment capture process"),
+    ("enrollment.rs", "Cancel"),
+    ("enrollment.rs", "Cancel enrollment"),
+    ("enrollment.rs", "Discard the new profile and return to the list"),
+    ("enrollment.rs", "Cancel profile creation"),
+    ("enrollment.rs", "Quality:"),
+    ("enrollment.rs", "Capture quality percentage"),
+    ("enrollment.rs", "Diversity:"),
+    ("enrollment.rs", "Pose diversity percentage"),
+    ("enrollment.rs", "Accepted:"),
+    ("enrollment.rs", "Frames accepted and seen counts"),
+    ("enrollment.rs", "Live capture guidance"),
+    ("enrollment.rs", "Enrollment diversity progress"),
+    ("enrollment.rs", "Stop"),
+    ("enrollment.rs", "Stop capture"),
+    ("enrollment.rs", "Stop capturing and review the enrolled profile"),
+    ("enrollment.rs", "Cancel enrollment"),
+    ("enrollment.rs", "Discard the enrollment and return to the profile list"),
+    ("enrollment.rs", "Cancel enrollment and discard frames"),
+    ("review.rs", "Review Enrollment"),
+    ("review.rs", "Quality:"),
+    ("review.rs", "Capture quality percentage"),
+    ("review.rs", "Diversity:"),
+    ("review.rs", "Pose diversity percentage"),
+    ("review.rs", "Frames accepted:"),
+    ("review.rs", "Number of accepted frames"),
+    ("review.rs", "Enrollment guidance"),
+    ("review.rs", "Save Profile"),
+    ("review.rs", "Save profile"),
+    ("review.rs", "Commit the captured profile to storage"),
+    ("review.rs", "Resume Capture"),
+    ("review.rs", "Resume capture"),
+    ("review.rs", "Return to capturing to add more frames"),
+    ("review.rs", "Discard"),
+    ("review.rs", "Discard profile"),
+    ("review.rs", "Throw away the captured profile without saving"),
+    ("profile_list.rs", "Reduced protection: Always-on emitter detected"),
+    ("profile_list.rs", "Reduced emitter protection warning"),
+    ("profile_list.rs", "No profiles enrolled yet."),
+    ("profile_list.rs", "Empty profile list"),
+    ("profile_list.rs", "Enrolled profile row"),
+    ("profile_list.rs", "Enabled"),
+    ("profile_list.rs", "Enable profile"),
+    ("profile_list.rs", "Toggle profile"),
+    ("profile_list.rs", "on or off"),
+    ("profile_list.rs", "last used:"),
+    ("profile_list.rs", "never"),
+    ("profile_list.rs", "Timestamp of last successful authentication"),
+    ("system_status.rs", "System status unavailable."),
+    ("system_status.rs", "System status unavailable"),
+    ("system_status.rs", "System status"),
+    ("system_status.rs", "Nam-tor Daemon"),
+    ("system_status.rs", "Whether the Nam-tor daemon process is running"),
+    ("system_status.rs", "Running"),
+    ("system_status.rs", "Stopped"),
+    ("system_status.rs", "IR Camera"),
+    ("system_status.rs", "Whether an infrared camera was detected"),
+    ("system_status.rs", "Detected"),
+    ("system_status.rs", "Not detected"),
+    ("system_status.rs", "Inference Models"),
+    ("system_status.rs", "Whether the inference models are loaded"),
+    ("system_status.rs", "Loaded"),
+    ("system_status.rs", "Missing"),
+    ("system_status.rs", "Software (fallback)"),
+    ("system_status.rs", "TPM2 Hardware-bound"),
+    ("system_status.rs", "Storage Protection"),
+    (
+        "system_status.rs",
+        "How the enrolled face profiles are protected at rest",
+    ),
+    ("system_status.rs", "Storage protection warning"),
+    ("system_status.rs", "Troubleshooting"),
+    ("system_status.rs", "Restart Daemon"),
+    ("system_status.rs", "Restart the Nam-tor daemon"),
+    ("system_status.rs", "Restart the system daemon service"),
+    ("system_status.rs", "View System Logs"),
+    ("system_status.rs", "View Nam-tor system logs"),
+    ("system_status.rs", "Open the system journal for the Nam-tor daemon"),
+    ("pam_services.rs", "Authentication uses"),
+    ("pam_services.rs", "No PAM services found."),
+    ("pam_services.rs", "Empty PAM service list"),
+    ("pam_services.rs", "Compatibility:"),
+    ("pam_services.rs", "Service compatibility:"),
+    ("pam_services.rs", "Toggle"),
+    ("pam_services.rs", "Enable"),
+    ("pam_services.rs", "authentication"),
+    ("pam_services.rs", "Toggle whether"),
+    ("pam_services.rs", "uses face authentication"),
+    ("pam_services.rs", "is incompatible and cannot be enabled."),
+    ("recovery.rs", "Recovery Steps:"),
+    ("recovery.rs", "Detailed explanation of the recovery state"),
+    ("recovery.rs", "Recovery guidance steps"),
+];
+
+/// Test 7: no user-facing UI string in the registry contains a forbidden
+/// biometric / internal term.
+#[test]
+fn no_biometric_wording_in_ui_strings() {
+    let mut leaks = Vec::new();
+    for (file, s) in UI_STRING_REGISTRY {
+        let hits = forbidden_words_in_ui_string(s);
+        if !hits.is_empty() {
+            leaks.push(format!("{file}: {s:?} -> {hits:?}"));
+        }
+    }
+    assert!(
+        leaks.is_empty(),
+        "forbidden biometric/internal wording in UI strings:\n{}",
+        leaks.join("\n")
+    );
+}
+
+/// Test 8: the privacy scan covers the new view types
+/// (AuthenticationView, SystemView, ProfileSetupView) — each has a dedicated
+/// scan test above, and each is exercised by the populated model test.
+#[test]
+fn privacy_scan_covers_new_view_types() {
+    use namtor_gnome::view_model::{
+        AuthenticationView, PendingPamToggle, PresenterModel, ProfileSetupView, SystemView,
+    };
+
+    let model = PresenterModel {
+        authentication: Some(AuthenticationView::default()),
+        system: Some(SystemView::default()),
+        ..Default::default()
+    };
+    assert!(forbidden_fields(&model).is_empty());
+
+    let setup = ProfileSetupView {
+        name_placeholder: "e.g. Home".into(),
+        privacy_acknowledged: true,
+    };
+    assert!(forbidden_fields(&setup).is_empty());
+
+    // All three new view types must be reachable from the public API.
+    let _auth = AuthenticationView::default();
+    let _sys = SystemView::default();
+    let _setup = ProfileSetupView::default();
+    let _toggle = PendingPamToggle {
+        id: "x".into(),
+        display_name: "X".into(),
+        enabled: false,
+        high_impact: false,
+    };
+}
+
+/// Test 10 (mutation): inject a forbidden word into a copy of a registry
+/// string and verify the scan catches it. This proves the
+/// `no_biometric_wording_in_ui_strings` test is not vacuous — if a
+/// contributor adds a forbidden term to any UI string, the test fails.
+#[test]
+fn mutation_forbidden_word_rejected() {
+    let baseline = "Save the enrolled profile";
+    assert!(
+        forbidden_words_in_ui_string(baseline).is_empty(),
+        "baseline must be clean"
+    );
+
+    for forbidden in FORBIDDEN_SUBSTRINGS {
+        let poisoned = format!("{baseline} ({forbidden} leaked)");
+        let hits = forbidden_words_in_ui_string(&poisoned);
+        assert!(
+            hits.contains(forbidden),
+            "forbidden word '{forbidden}' was NOT caught in UI string"
+        );
+    }
+}
+
+/// The UI string registry is non-empty and covers every GNOME source file
+/// that renders user-facing text.
+#[test]
+fn ui_string_registry_covers_all_gnome_sources() {
+    assert!(
+        !UI_STRING_REGISTRY.is_empty(),
+        "registry must not be vacuous"
+    );
+    let files: std::collections::BTreeSet<&str> =
+        UI_STRING_REGISTRY.iter().map(|(f, _)| *f).collect();
+    let expected = [
+        "shell.rs",
+        "navigation.rs",
+        "enrollment.rs",
+        "review.rs",
+        "profile_list.rs",
+        "pam_services.rs",
+        "system_status.rs",
+        "recovery.rs",
+    ];
+    for f in expected {
+        assert!(files.contains(f), "registry missing source file {f}");
+    }
+}

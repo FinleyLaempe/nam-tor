@@ -1,0 +1,72 @@
+{
+  "task": "13 — Close GNOME accessibility, localization, and privacy gates",
+  "commit_subject": "test(gnome): enforce accessible enrollment UI",
+  "date": "2026-08-10",
+  "summary": "Added accessible names/descriptions to every actionable widget, mnemonics on primary actions, a 250 ms rate-limited ProgressAnnouncer for screen-reader announcements, routed all user-facing strings through the tr() gettext seam, removed forbidden biometric/internal wording from UI strings, added ProfileSetupView, and extended the privacy scan to cover AuthenticationView/SystemView/ProfileSetupView plus a UI-string registry scan.",
+  "test_counts": {
+    "presenter_flow": 33,
+    "privacy_scan": 29,
+    "shell_navigation": 21,
+    "total": 83,
+    "new_this_task": 22,
+    "pre_existing": 61
+  },
+  "clippy": "0 warnings (cargo clippy -p namtor-gnome --all-targets)",
+  "fmt": "clean (cargo fmt -p namtor-gnome --check)",
+  "tests": [
+    { "name": "all_actionable_widgets_have_accessible_names", "status": "pass", "category": "accessibility", "requirement": "Test 1 — every actionable widget has a non-empty accessible name" },
+    { "name": "actionable_widget_registry_covers_all_sources", "status": "pass", "category": "accessibility", "requirement": "registry covers shell/navigation/enrollment/review/profile_list/pam_services/system_status" },
+    { "name": "keyboard_traversal_order_is_logical", "status": "pass", "category": "accessibility", "requirement": "Test 2 — tab order follows visual order (source append order)" },
+    { "name": "no_focus_trap_in_navigation", "status": "pass", "category": "accessibility", "requirement": "no set_focus_chain / grab_focus loops — Tab can escape every container" },
+    { "name": "primary_actions_have_mnemonics", "status": "pass", "category": "accessibility", "requirement": "_Start/_Stop/_Save/_Resume/_Discard with use_underline(true)" },
+    { "name": "progress_announcements_rate_limited", "status": "pass", "category": "accessibility", "requirement": "Test 3 — max 4 announcements per second (250ms throttle)" },
+    { "name": "progress_announcer_interval_matches_daemon", "status": "pass", "category": "accessibility", "requirement": "PROGRESS_ANNOUNCE_INTERVAL == 250ms (matches daemon PROGRESS_INTERVAL_MS)" },
+    { "name": "guidance_is_translatable", "status": "pass", "category": "localization", "requirement": "Test 4 — every Guidance variant label round-trips through tr()" },
+    { "name": "tr_is_identity_in_test_environment", "status": "pass", "category": "localization", "requirement": "tr() is the gettext seam (identity in tests, catalog in prod)" },
+    { "name": "rtl_layout_works", "status": "pass", "category": "localization", "requirement": "Test 5 — no hardcoded LTR direction, no custom CSS (libadwaita handles RTL)" },
+    { "name": "text_scaling_200_no_clip", "status": "pass", "category": "localization", "requirement": "Test 6 — essential long-form labels wrap(true), no fixed font sizes" },
+    { "name": "no_biometric_wording_in_ui_strings", "status": "pass", "category": "privacy", "requirement": "Test 7 — UI_STRING_REGISTRY has zero forbidden biometric/internal terms" },
+    { "name": "ui_string_registry_covers_all_gnome_sources", "status": "pass", "category": "privacy", "requirement": "registry covers all 8 GNOME source files rendering user-facing text" },
+    { "name": "privacy_scan_covers_new_view_types", "status": "pass", "category": "privacy", "requirement": "Test 8 — AuthenticationView/SystemView/ProfileSetupView scanned" },
+    { "name": "authentication_view_carries_no_biometrics", "status": "pass", "category": "privacy", "requirement": "AuthenticationView field-name scan clean" },
+    { "name": "system_view_carries_no_biometrics", "status": "pass", "category": "privacy", "requirement": "SystemView field-name scan clean" },
+    { "name": "profile_setup_view_carries_no_biometrics", "status": "pass", "category": "privacy", "requirement": "ProfileSetupView field-name scan clean" },
+    { "name": "mutation_test_forbidden_fields_in_authentication_view", "status": "pass", "category": "privacy", "requirement": "every forbidden substring injected into AuthenticationView JSON is caught" },
+    { "name": "mutation_test_forbidden_fields_in_system_view", "status": "pass", "category": "privacy", "requirement": "every forbidden substring injected into SystemView JSON is caught" },
+    { "name": "mutation_test_forbidden_fields_in_profile_setup_view", "status": "pass", "category": "privacy", "requirement": "every forbidden substring injected into ProfileSetupView JSON is caught" },
+    { "name": "mutation_unlabeled_button_rejected", "status": "pass", "category": "mutation", "requirement": "Test 9 — blanking save_button accessible name is flagged" },
+    { "name": "mutation_forbidden_word_rejected", "status": "pass", "category": "mutation", "requirement": "Test 10 — injecting each forbidden word into a UI string is caught" }
+  ],
+  "forbidden_substrings_scanned": [
+    "vector", "embedding", "template", "landmark", "descriptor",
+    "raw_frame", "frame_data", "frame_buf", "frame_pixel", "frame_raw",
+    "score", "threshold", "biometric", "key", "nonce", "pixel"
+  ],
+  "forbidden_wording_fixed": [
+    { "file": "src/navigation.rs", "before": "Only mathematical embeddings are saved.", "after": "Only the encrypted face model is saved on this device.", "reason": "\"embeddings\" is a forbidden biometric/internal term" },
+    { "file": "src/components/enrollment.rs", "before": "Your biometric templates are encrypted and stored locally on this device. No biometric data leaves the system.", "after": "Your face model is encrypted and stored locally on this device. No face data leaves the system.", "reason": "\"biometric templates\" and \"biometric data\" are forbidden" },
+    { "file": "src/components/enrollment.rs", "before": "Enter a descriptive name for this facial profile", "after": "Enter a descriptive name for this profile", "reason": "\"facial profile\" dropped — \"facial\" is biometric-adjacent" },
+    { "file": "src/components/enrollment.rs", "before": "Begin the facial capture process", "after": "Begin the face enrollment capture process", "reason": "\"facial capture\" reworded" },
+    { "file": "src/components/system_status.rs", "before": "Template Protection", "after": "Storage Protection", "reason": "\"Template\" is a forbidden internal term" },
+    { "file": "src/components/system_status.rs", "before": "Software Key (fallback)", "after": "Software (fallback)", "reason": "\"Key\" is a forbidden internal term" }
+  ],
+  "accessibility_changes": {
+    "accessible_names_added": "Every Button, Switch, Entry, CheckButton, and activatable ActionRow now has accessible::Property::Label and most have accessible::Property::Description",
+    "mnemonics": "_Start, _Stop, _Save, _Resume, _Discard, _Retry, _Profile Name, _Start Enrollment, _Save Profile, _Resume Capture — all with use_underline(true)",
+    "mnemonic_widgets": "name_label.set_mnemonic_widget(Some(&name_entry)) in navigation.rs and enrollment.rs",
+    "tooltips": "Every actionable button/switch has tooltip_text explaining its action",
+    "roles": "progress_label and guidance_label set to AccessibleRole::Status for screen-reader announcements; titles to Heading with Level(1); warnings to Alert",
+    "rate_limit": "ProgressAnnouncer in navigation.rs gates AT-SPI announcements to 1 per 250ms (max 4/sec), matching the daemon PROGRESS_INTERVAL_MS"
+  },
+  "localization_changes": {
+    "seam": "pub fn tr(s: &str) -> String in lib.rs is the gettext routing point (identity in tests, catalog in prod)",
+    "routing": "All user-facing strings in shell.rs, navigation.rs, components/*.rs, and view_model.rs Guidance labels pass through tr()",
+    "rtl": "No set_direction(Ltr) or TextDirection::Ltr overrides; no custom CSS shipped (libadwaita handles RTL natively)",
+    "scaling": "Essential long-form labels (guidance, privacy notice, recovery steps) use wrap(true); no fixed font_size/font-size in component sources"
+  },
+  "privacy_changes": {
+    "new_helper": "privacy::forbidden_words_in_ui_string(&str) -> Vec<&'static str> scans a UI string for forbidden terms",
+    "new_view_type": "ProfileSetupView { name_placeholder, privacy_acknowledged } added to view_model.rs and exported from lib.rs",
+    "scan_coverage": "AuthenticationView, SystemView, ProfileSetupView each have a dedicated forbidden_fields scan test + a mutation test injecting every forbidden substring"
+  }
+}
