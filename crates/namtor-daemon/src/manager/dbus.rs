@@ -610,6 +610,14 @@ impl<P: PolkitAuthority> Manager3Service<P> {
         Ok(())
     }
 
+    /// Look up the target uid for a live enrollment session. Returns `None`
+    /// when the session does not exist. Used by the D-Bus `PollProgress`
+    /// method to authorise the caller against the session owner before
+    /// draining worker events (SEC-5).
+    pub fn session_uid(&self, session: &str) -> Option<u32> {
+        lock(&self.sessions).get(session).map(|s| s.uid)
+    }
+
     fn require_session(&self, session: &str) -> Result<u32, Manager3ApiError> {
         lock(&self.sessions)
             .get(session)
@@ -1333,6 +1341,30 @@ mod tests {
         let signals = svc.drain_signals();
         // With no capture source, no progress signals are generated
         assert!(signals.is_empty());
+    }
+
+    // ---- session_uid lookup (SEC-5 task 5) ----
+
+    #[test]
+    fn v3_session_uid_returns_uid_for_known_session() {
+        let svc = new_svc3();
+        let sid = svc.start_enrollment(&peer(0), 1000, "alice").unwrap();
+        assert_eq!(svc.session_uid(&sid), Some(1000));
+    }
+
+    #[test]
+    fn v3_session_uid_returns_none_for_unknown_session() {
+        let svc = new_svc3();
+        assert_eq!(svc.session_uid("nonexistent"), None);
+    }
+
+    #[test]
+    fn v3_session_uid_returns_none_after_session_removed() {
+        let svc = new_svc3();
+        let sid = svc.start_enrollment(&peer(0), 1000, "alice").unwrap();
+        assert_eq!(svc.session_uid(&sid), Some(1000));
+        svc.cancel_enrollment(&peer(0), &sid).unwrap_or_default();
+        assert_eq!(svc.session_uid(&sid), None);
     }
 
     #[test]
