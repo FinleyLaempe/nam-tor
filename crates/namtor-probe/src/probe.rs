@@ -184,8 +184,9 @@ fn probe_msxu_modes<T: XuTransport, S: FrameSampler>(
 /// Samples frames by shelling out to `v4l2-ctl --stream-mmap`.
 ///
 /// Reused from the M1 spike: most UVC devices support only mmap streaming, so
-/// `read()` would fail. M2's in-process `IrUvc` (Task 12) will eventually
-/// replace this, but it is not on the critical path for the probe CLI.
+/// `read()` would fail. The in-process `IrUvc` capture source (in
+/// `namtor_capture`) is the production path; this subprocess sampler is kept
+/// for the probe CLI, which is not on the critical path.
 pub struct V4l2CtlSampler {
     device: std::path::PathBuf,
     width: u32,
