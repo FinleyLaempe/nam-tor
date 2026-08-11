@@ -189,21 +189,11 @@ mod tests {
     use std::sync::Arc;
 
     fn peer(uid: u32) -> PeerIdentity {
-        PeerIdentity {
-            uid,
-            pid: 1,
-            cmdline: "test".into(),
-            bus_name: format!(":1.{}", uid),
-        }
+        PeerIdentity::for_testing(uid, format!(":1.{}", uid))
     }
 
     fn peer_no_bus(uid: u32) -> PeerIdentity {
-        PeerIdentity {
-            uid,
-            pid: 1,
-            cmdline: "test".into(),
-            bus_name: String::new(),
-        }
+        PeerIdentity::for_testing(uid, String::new())
     }
 
     // ---- StubPolkit behavior ----
@@ -429,12 +419,7 @@ mod tests {
 
         // Peer claims uid=0 but has a non-root bus_name — polkit sees the
         // real uid from the bus name and denies.
-        let spoofed = PeerIdentity {
-            uid: 0,
-            pid: 1,
-            cmdline: "spoof".into(),
-            bus_name: ":1.999".into(),
-        };
+        let spoofed = PeerIdentity::for_testing(0, ":1.999".into());
         let err = svc.start_enrollment(&spoofed, 1000, "bob").unwrap_err();
         assert!(
             matches!(err, ApiError::Denied { .. }),
@@ -453,12 +438,7 @@ mod tests {
             }
         });
         let svc = ManagerService::new(polkit);
-        let legitimate_root = PeerIdentity {
-            uid: 0,
-            pid: 1,
-            cmdline: "root".into(),
-            bus_name: ":1.0".into(),
-        };
+        let legitimate_root = PeerIdentity::for_testing(0, ":1.0".into());
         let sid = svc.start_enrollment(&legitimate_root, 1000, "bob").unwrap();
         assert!(sid.starts_with("sess-"));
     }

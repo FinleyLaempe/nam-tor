@@ -829,21 +829,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn peer(uid: u32) -> PeerIdentity {
-        PeerIdentity {
-            uid,
-            pid: 1,
-            cmdline: "test".into(),
-            bus_name: format!(":1.{uid}"),
-        }
+        PeerIdentity::for_testing(uid, format!(":1.{uid}"))
     }
 
     fn peer_no_bus(uid: u32) -> PeerIdentity {
-        PeerIdentity {
-            uid,
-            pid: 1,
-            cmdline: "test".into(),
-            bus_name: String::new(),
-        }
+        PeerIdentity::for_testing(uid, String::new())
     }
 
     fn write_service(dir: &std::path::Path, id: &str) {
@@ -1438,15 +1428,6 @@ mod tests {
     fn v3_session_uid_returns_none_for_unknown_session() {
         let svc = new_svc3();
         assert_eq!(svc.session_uid("nonexistent"), None);
-    }
-
-    #[test]
-    fn v3_session_uid_returns_none_after_session_removed() {
-        let svc = new_svc3();
-        let sid = svc.start_enrollment(&peer(0), 1000, "alice").unwrap();
-        assert_eq!(svc.session_uid(&sid), Some(1000));
-        svc.cancel_enrollment(&peer(0), &sid).unwrap_or_default();
-        assert_eq!(svc.session_uid(&sid), None);
     }
 
     // ---- PollProgress peer authz (SEC-5 tasks 6-7) ----

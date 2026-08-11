@@ -144,7 +144,25 @@ pub struct ReviewOutcome {
     pub quality: QualityLabel,
 }
 
-/// Identity of a D-Bus peer, resolved from `SO_PEERCRED` + `/proc/<pid>/cmdline`.
+/// Identity of a D-Bus peer, resolved from `SO_PEERCRED` + `/proc/<pid>/cmdline`
+/// (PAM socket path) or from the bus daemon's `GetConnectionCredentials`
+/// (D-Bus path).
+///
+/// # Trusted-constructor invariant (SEC-8)
+///
+/// All fields are `pub(crate)` — visible for reads within the daemon crate
+/// but not constructible from outside it. Every `PeerIdentity` must be built
+/// through one of the trusted constructors:
+///
+/// - [`PeerIdentity::from_creds`] — PAM socket path (`bus_name` empty).
+/// - [`PeerIdentity::from_bus`] — D-Bus bus-daemon path (all fields set
+///   from bus-resolved credentials).
+/// - [`PeerIdentity::for_testing`] — test-only, gated by `#[cfg(test)]`;
+///   does not exist in production builds.
+///
+/// External crates cannot construct a `PeerIdentity` via struct literal
+/// because the fields are not visible to them; the `compile_fail` doc-test
+/// below asserts this invariant.
 ///
 /// `bus_name` is the unique D-Bus connection name (e.g. `:1.42`) from the
 /// message header — set by the bus daemon, not forgeable by the peer. It is
@@ -152,22 +170,29 @@ pub struct ReviewOutcome {
 /// `org.freedesktop.PolicyKit1.Authority`. An empty `bus_name` means the
 /// sender vanished (or the identity was built from raw socket credentials
 /// without a bus context) and polkit checks fail closed (`Denied`).
+///
+/// ```compile_fail
+/// // PeerIdentity fields are pub(crate); external crates cannot construct
+/// // via struct literal — only the trusted constructors work.
+/// use namtor_daemon::dbus::PeerIdentity;
+/// let _ = PeerIdentity { uid: 0, pid: 0, cmdline: String::new(), bus_name: String::new() };
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerIdentity {
-    pub uid: u32,
-    pub pid: i32,
-    pub cmdline: String,
-    pub bus_name: String,
+    pub(crate) uid: u32,
+    pub(crate) pid: i32,
+    pub(crate) cmdline: String,
+    pub(crate) bus_name: String,
 }
 
 impl PeerIdentity {
-    /// Build a peer identity from socket credentials. Reads `/proc/<pid>/cmdline`
-    /// on a best-effort basis (Linux only); a missing or unreadable cmdline is
-    /// represented as an empty string rather than an error. `bus_name` is empty
-    /// — this constructor is for the PAM socket path where there is no D-Bus
-    /// sender. The bus service (task 9) populates `bus_name` from the message
-    /// header.
-    pub fn from_creds(c: &PeerCreds) -> Self {
+    /// Build a peer identity from socket credentials (PAM socket path).
+    /// Reads `/proc/<pid>/cmdline` on a best-effort basis (Linux only); a
+    /// missing or unreadable cmdline is represented as an empty string
+    /// rather than an error. `bus_name` is empty — this constructor is for
+    /// the PAM socket path where there is no D-Bus sender.
+    #[allow(dead_code)]
+    pub(crate) fn from_creds(c: &PeerCreds) -> Self {
         let cmdline = std::fs::read(format!("/proc/{}/cmdline", c.pid))
             .ok()
             .map(|b| {
@@ -183,6 +208,33 @@ impl PeerIdentity {
             pid: c.pid,
             cmdline,
             bus_name: String::new(),
+        }
+    }
+
+    /// Build a peer identity from bus-daemon-resolved credentials (D-Bus
+    /// path). All four fields are set from the trusted `GetConnectionCredentials`
+    /// reply and the message header's sender. The `bus_name` is the unique
+    /// connection name (e.g. `:1.42`) — set by the bus daemon, not forgeable
+    /// by the peer, and required as the polkit subject.
+    pub(crate) fn from_bus(uid: u32, pid: i32, cmdline: String, bus_name: String) -> Self {
+        Self {
+            uid,
+            pid,
+            cmdline,
+            bus_name,
+        }
+    }
+
+    /// Test-only constructor with minimal fields. `pid` defaults to 1 and
+    /// `cmdline` to `"test"`. Gated by `#[cfg(test)]` so it does not exist
+    /// in production builds.
+    #[cfg(test)]
+    pub(crate) fn for_testing(uid: u32, bus_name: String) -> Self {
+        Self {
+            uid,
+            pid: 1,
+            cmdline: "test".to_string(),
+            bus_name,
         }
     }
 }
@@ -966,12 +1018,7 @@ mod tests {
     use std::time::Duration;
 
     fn peer(uid: u32) -> PeerIdentity {
-        PeerIdentity {
-            uid,
-            pid: 1,
-            cmdline: "test".into(),
-            bus_name: format!(":1.{}", uid),
-        }
+        PeerIdentity::for_testing(uid, format!(":1.{}", uid))
     }
 
     fn test_store() -> (tempfile::TempDir, Arc<dyn ProfileStore>) {
@@ -1987,12 +2034,7 @@ mod tests {
     #[test]
     fn handle_disconnect_by_bus_name_cancels_session() {
         let (_dir, svc) = svc();
-        let peer = PeerIdentity {
-            uid: 1000,
-            pid: 1,
-            cmdline: "test".into(),
-            bus_name: ":1.42".into(),
-        };
+        let peer = PeerIdentity::for_testing(1000, ":1.42".into());
         let sid = svc.start_enrollment(&peer, 1000, "alice").unwrap();
         for _ in 0..3 {
             svc.pump_enrollment(&sid).unwrap();

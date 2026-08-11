@@ -72,12 +72,12 @@ async fn resolve_peer_identity(
         .map_err(|e| ManagerDBusError::ZBus(e.into()))?;
     let uid = creds.unix_user_id().unwrap_or(0);
     let pid = creds.process_id().unwrap_or(0) as i32;
-    Ok(PeerIdentity {
+    Ok(PeerIdentity::from_bus(
         uid,
         pid,
-        cmdline: String::new(),
-        bus_name: sender.as_str().to_string(),
-    })
+        String::new(),
+        sender.as_str().to_string(),
+    ))
 }
 
 /// zbus interface wrapper around [`ManagerService`].
