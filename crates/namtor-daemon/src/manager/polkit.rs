@@ -7,12 +7,26 @@
 //! - [`SystemPolkit`] — real polkit via `org.freedesktop.PolicyKit1.Authority`
 //!   on the system bus. Holds an `Option<zbus::blocking::Connection>`; `None`
 //!   when the system bus or polkitd is unavailable → every check fails closed
-//!   (`Denied`). The D-Bus method
+//!   (`Denied`), **except** self-enrollment (see below). The D-Bus method
 //!   `CheckAuthorization(subject, action_id, details, flags, cancellation_id)`
 //!   is called with `flags = 0` (no user interaction). If polkit returns
 //!   `is_authorized` → [`AuthzDecision::Allowed`]; if `is_challenge` →
 //!   [`AuthzDecision::Challenge`]; otherwise [`AuthzDecision::Denied`]. Any
 //!   D-Bus error → `Denied` (fail closed).
+//!
+//!   **Self-enrollment short-circuit.** When `action_id == action::ENROLL_SELF`
+//!   and `peer.uid == target_uid` and `peer.bus_name` is non-empty, the check
+//!   returns [`AuthzDecision::Allowed`] without contacting polkit. The daemon
+//!   runs as user `namtor` and is not a trusted caller for `CheckAuthorization`
+//!   with a `system-bus-name` subject belonging to another identity (the GUI
+//!   app user); polkit rejects such calls with "Only trusted callers can use
+//!   CheckAuthorization() for subjects belonging to other identities". The
+//!   peer's uid and bus_name are resolved by [`resolve_peer_identity`](crate::manager::bus::resolve_peer_identity)
+//!   from the bus daemon's `GetConnectionCredentials`, which is the trusted
+//!   source — not forgeable by the peer. The non-empty `bus_name` requirement
+//!   ensures socket-based peers (PAM module, `bus_name == ""`) cannot gain
+//!   authorization through this path. Cross-user enrollment, delete, configure,
+//!   and configure-pam always go through polkit.
 //!
 //! - [`StubPolkit`] — deterministic stub for tests that exercise D-Bus
 //!   mechanics and profile persistence, not real authorization. Root is admin,
@@ -78,7 +92,16 @@ impl std::fmt::Debug for SystemPolkit {
 }
 
 impl PolkitAuthority for SystemPolkit {
-    fn check(&self, action_id: &str, peer: &PeerIdentity, _target_uid: u32) -> AuthzDecision {
+    fn check(&self, action_id: &str, peer: &PeerIdentity, target_uid: u32) -> AuthzDecision {
+        // Self-enrollment short-circuit: authorize from the trusted D-Bus
+        // credentials resolved by resolve_peer_identity, not from polkit. The
+        // daemon (user `namtor`) is not a trusted caller for CheckAuthorization
+        // with a subject belonging to another identity. Requires a non-empty
+        // bus_name so socket peers cannot gain authorization.
+        if action_id == action::ENROLL_SELF && peer.uid == target_uid && !peer.bus_name.is_empty() {
+            return AuthzDecision::Allowed;
+        }
+
         let Some(conn) = &self.conn else {
             return AuthzDecision::Denied;
         };
@@ -220,18 +243,61 @@ mod tests {
         assert!(matches!(err, ApiError::Denied { .. }));
     }
 
-    // ---- SystemPolkit fail-closed behavior ----
+    // ---- SystemPolkit self-enrollment short-circuit ----
+    //
+    // Self-enrollment (ENROLL_SELF with peer.uid == target_uid and a trusted
+    // D-Bus bus_name) is authorized directly from the credentials resolved by
+    // resolve_peer_identity via GetConnectionCredentials. It does NOT call
+    // polkit CheckAuthorization because the daemon (running as user `namtor`)
+    // is not a trusted caller for subjects belonging to other identities
+    // (the GUI app user's bus name). See the module docs above.
 
     #[test]
-    fn missing_authority_fails_closed_on_enroll_self() {
+    fn system_self_enroll_allowed_for_own_uid_without_polkit() {
+        // Given: missing polkit authority (for_testing → conn=None) and a
+        // trusted D-Bus peer whose uid matches the target uid.
+        // When: start_enrollment is called for self-enrollment.
+        // Then: the session is allowed — the daemon authorizes from the
+        // trusted GetConnectionCredentials, not from polkit.
         let svc = ManagerService::new(SystemPolkit::for_testing());
-        let err = svc
+        let sid = svc
             .start_enrollment(&peer(1000), 1000, "alice")
-            .unwrap_err();
-        assert!(
-            matches!(err, ApiError::Denied { .. }),
-            "missing polkitd must deny, got {err:?}"
-        );
+            .expect("self-enroll with trusted D-Bus identity must succeed without polkit");
+        assert!(sid.starts_with("sess-"), "got a valid session id: {sid}");
+    }
+
+    #[test]
+    fn system_self_enroll_denied_for_mismatched_uid() {
+        // Given: missing polkit and a peer whose uid differs from target.
+        // When: start_enrollment is called (action resolves to ENROLL_OTHER
+        // in the service, but we also test SystemPolkit::check directly).
+        // Then: denied — cross-user enrollment requires polkit admin auth.
+        let polkit = SystemPolkit::for_testing();
+        let decision = polkit.check(action::ENROLL_SELF, &peer(1000), 2000);
+        assert_eq!(decision, AuthzDecision::Denied);
+    }
+
+    #[test]
+    fn system_self_enroll_denied_for_empty_bus_name() {
+        // Given: a peer identity with an empty bus_name (socket peer, not a
+        // D-Bus connection) whose uid matches the target.
+        // When: SystemPolkit::check is called with ENROLL_SELF.
+        // Then: denied — the self-enroll short-circuit requires a trusted
+        // D-Bus bus_name; socket identities must not gain authorization.
+        let polkit = SystemPolkit::for_testing();
+        let decision = polkit.check(action::ENROLL_SELF, &peer_no_bus(1000), 1000);
+        assert_eq!(decision, AuthzDecision::Denied);
+    }
+
+    #[test]
+    fn system_enroll_other_not_short_circuited_by_self_rule() {
+        // Given: missing polkit and a peer whose uid matches the target.
+        // When: SystemPolkit::check is called with ENROLL_OTHER.
+        // Then: denied — ENROLL_OTHER always goes through polkit, never
+        // through the self-enroll short-circuit.
+        let polkit = SystemPolkit::for_testing();
+        let decision = polkit.check(action::ENROLL_OTHER, &peer(1000), 1000);
+        assert_eq!(decision, AuthzDecision::Denied);
     }
 
     #[test]
@@ -404,8 +470,11 @@ mod tests {
         let store: Arc<dyn ProfileStore> = Arc::new(NullProfileStore);
         let svc = ManagerService::new_with_store(SystemPolkit::for_testing(), store);
 
+        // Cross-user enrollment (ENROLL_OTHER) goes through polkit and is
+        // denied when polkit is missing. Self-enrollment is authorized from
+        // trusted D-Bus credentials and tested separately above.
         assert!(matches!(
-            svc.start_enrollment(&peer(1000), 1000, "a").unwrap_err(),
+            svc.start_enrollment(&peer(1000), 2000, "a").unwrap_err(),
             ApiError::Denied { .. }
         ));
         assert!(matches!(

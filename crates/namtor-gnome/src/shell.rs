@@ -8,7 +8,7 @@
 //! via an `AdwBreakpoint`.
 
 use gtk4::prelude::*;
-use gtk4::{Box as GtkBox, Orientation};
+use gtk4::{Box as GtkBox, Orientation, PolicyType, ScrolledWindow};
 use libadwaita as adw;
 use libadwaita::prelude::AdwApplicationWindowExt;
 use libadwaita::{BreakpointCondition, BreakpointConditionLengthType, LengthUnit};
@@ -79,42 +79,66 @@ impl Shell {
         // Profiles page
         let profiles_page = GtkBox::builder()
             .orientation(Orientation::Vertical)
+            .hexpand(true)
             .margin_start(12)
             .margin_end(12)
             .margin_top(12)
             .margin_bottom(12)
             .spacing(8)
             .build();
+        let profiles_scroll = ScrolledWindow::builder()
+            .vscrollbar_policy(PolicyType::Automatic)
+            .hscrollbar_policy(PolicyType::Never)
+            .propagate_natural_height(false)
+            .propagate_natural_width(false)
+            .child(&profiles_page)
+            .build();
         let profiles_stack_page =
-            view_stack.add_named(&profiles_page, Some(Destination::Profiles.name()));
+            view_stack.add_named(&profiles_scroll, Some(Destination::Profiles.name()));
         profiles_stack_page.set_title(Some(&tr(Destination::Profiles.title())));
         profiles_stack_page.set_icon_name(Some(Destination::Profiles.icon_name()));
 
         // Authentication page
         let auth_page = GtkBox::builder()
             .orientation(Orientation::Vertical)
+            .hexpand(true)
             .margin_start(12)
             .margin_end(12)
             .margin_top(12)
             .margin_bottom(12)
             .spacing(8)
             .build();
+        let auth_scroll = ScrolledWindow::builder()
+            .vscrollbar_policy(PolicyType::Automatic)
+            .hscrollbar_policy(PolicyType::Never)
+            .propagate_natural_height(false)
+            .propagate_natural_width(false)
+            .child(&auth_page)
+            .build();
         let auth_stack_page =
-            view_stack.add_named(&auth_page, Some(Destination::Authentication.name()));
+            view_stack.add_named(&auth_scroll, Some(Destination::Authentication.name()));
         auth_stack_page.set_title(Some(&tr(Destination::Authentication.title())));
         auth_stack_page.set_icon_name(Some(Destination::Authentication.icon_name()));
 
         // System page
         let system_page = GtkBox::builder()
             .orientation(Orientation::Vertical)
+            .hexpand(true)
             .margin_start(12)
             .margin_end(12)
             .margin_top(12)
             .margin_bottom(12)
             .spacing(8)
             .build();
+        let system_scroll = ScrolledWindow::builder()
+            .vscrollbar_policy(PolicyType::Automatic)
+            .hscrollbar_policy(PolicyType::Never)
+            .propagate_natural_height(false)
+            .propagate_natural_width(false)
+            .child(&system_page)
+            .build();
         let system_stack_page =
-            view_stack.add_named(&system_page, Some(Destination::System.name()));
+            view_stack.add_named(&system_scroll, Some(Destination::System.name()));
         system_stack_page.set_title(Some(&tr(Destination::System.title())));
         system_stack_page.set_icon_name(Some(Destination::System.icon_name()));
 
