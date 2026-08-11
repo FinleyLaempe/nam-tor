@@ -6,7 +6,7 @@
 //! argument signatures — lives in [`crate::manager::contract`] and is kept
 //! byte-identical to `docs/evidence/dbus-contract.xml`. This module owns the
 //! runtime types and an in-memory reference service; the bus service itself
-//! (zbus wiring) is task 9.
+//! (zbus wiring on the system bus) is implemented in [`crate::manager::bus`].
 //!
 //! Polkit-backed authorisation gates every mutating operation; enrollment
 //! sessions track emitter arming so a mid-enrollment disconnect disarms the

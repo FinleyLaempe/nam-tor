@@ -19,7 +19,7 @@
 //!
 //! Each method call resolves the caller's UID/PID via the bus daemon's
 //! `GetConnectionCredentials` and builds a [`PeerIdentity`] for the polkit
-//! stub. Proper polkit wiring is task 12; this module uses [`SystemPolkit`].
+//! check. Polkit authorisation is wired through [`SystemPolkit`].
 //!
 //! ## Privacy
 //!

@@ -23,9 +23,9 @@ use crate::acl::{authorise, get_peer_creds};
 use crate::nonce::NonceService;
 use crate::DaemonError;
 
-/// Trait the listener dispatches to. Task 17 implements this with the real
-/// lifecycle; Task 13 tests with a stub so the ACL/nonce/framing can be
-/// verified independently.
+/// Trait the listener dispatches to. The real lifecycle implementation lives in
+/// [`crate::daemon::Daemon`] via `DaemonDispatcher`; tests use a stub so the
+/// ACL/nonce/framing can be verified independently.
 pub trait LifecycleDispatch: Send + Sync {
     /// Drive an auth request. The caller already holds `camera_lock`.
     fn dispatch(&self, body: &AuthBody) -> Result<AuthReply, DaemonError>;

@@ -8,10 +8,11 @@
 //! bridge that speaks a different ABI — the only safe response.
 //!
 //! The full async D-Bus bridge (method calls, signal forwarding, QML model
-//! plumbing) is Task 22 and is NOT implemented here. The two string accessors
-//! below let the C++ side build a `QDBusInterface` against the canonical
-//! `org.namtor.Manager` service without hardcoding the bus name a second time,
-//! so the Rust crate stays the single source of truth for the D-Bus address.
+//! plumbing) is implemented in [`crate::bridge`] and the C++ KCModule shim
+//! lives in `namtor_kcm.cpp`. The two string accessors below let the C++ side
+//! build a `QDBusInterface` against the canonical `org.namtor.Manager` service
+//! without hardcoding the bus name a second time, so the Rust crate stays the
+//! single source of truth for the D-Bus address.
 //!
 //! No biometric data (embeddings, frames, scores, thresholds) crosses this
 //! boundary — only the ABI version integer and two public D-Bus address

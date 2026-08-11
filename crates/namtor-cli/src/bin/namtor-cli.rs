@@ -9,7 +9,7 @@ use namtor_cli::diagnostics::{
     collect_model_info, collect_systemd_status, create_bundle, filter_log_lines,
     get_daemon_version, run_doctor, BundleInfo, DiagnosticConfig,
 };
-use namtor_cli::status::{run_status, CameraManager, ProtectionLevel, StreamState};
+use namtor_cli::status::{run_status_command, DbusStatusSource};
 use namtor_layout::{InstallRoot, LayoutPaths};
 
 #[derive(Debug, Parser)]
@@ -135,9 +135,8 @@ fn main() -> ExitCode {
 }
 
 fn cmd_status() -> ExitCode {
-    let mgr = CameraManager::new(None, None, None, StreamState::Closed, ProtectionLevel::Full);
-    print!("{}", run_status(&mgr));
-    ExitCode::SUCCESS
+    let source = DbusStatusSource::new();
+    run_status_command(&source)
 }
 
 fn cmd_diagnostics(out_dir: Option<PathBuf>) -> ExitCode {

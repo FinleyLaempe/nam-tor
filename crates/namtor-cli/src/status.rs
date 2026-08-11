@@ -1,6 +1,188 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `status` subcommand: reports the selected device, stream state, and
-//! protection level.
+//! `status` subcommand: reports daemon state to the operator.
+//!
+//! Two status surfaces exist:
+//!
+//! - **D-Bus `GetStatus`** (`org.namtor.Manager` at `/org/namtor/Manager`)
+//!   returns a [`StatusReport`] carrying the API version, the caller's
+//!   enrolled profiles, and whether the IR emitter is armed. This is what
+//!   `namtor-cli status` renders by default (USA-4). It does NOT carry
+//!   device paths, vid:pid, stream state, or protection level.
+//! - **PAM socket `Status`** ([`namtor_proto::pam::StatusReply`]) carries the
+//!   live stream/warming/requester snapshot used by the auth path. The
+//!   [`CameraManager`] / [`run_status`] helpers below format that surface;
+//!   they are kept for callers that drive the PAM socket directly.
+//!
+//! The CLI `status` command no longer fabricates a closed/full snapshot when
+//! the daemon is unreachable — it prints a clear "daemon unreachable" message
+//! and exits `FAILURE` (USA-4).
+
+use std::process::ExitCode;
+
+use serde::{Deserialize, Serialize};
+use zbus::zvariant::Type;
+
+/// D-Bus bus name / object path / interface for `org.namtor.Manager` (v1).
+const MANAGER_BUS_NAME: &str = "org.namtor.Manager";
+const MANAGER_OBJECT_PATH: &str = "/org/namtor/Manager";
+const MANAGER_INTERFACE: &str = "org.namtor.Manager";
+
+/// One enrolled face profile as exposed over D-Bus (frozen wire `(ssbtt)`).
+/// Mirror of `namtor_daemon::dbus::ProfileInfo` / `namtor_kde::types::ProfileInfo`.
+/// Carries no biometric payload — no embeddings, frames, scores, or thresholds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ProfileInfo {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub created: u64,
+    pub last_used: u64,
+}
+
+/// Snapshot returned by `GetStatus` (frozen wire `(ua(ssbtt)b)`): API version,
+/// the caller's profiles, and whether the IR emitter is armed. Mirror of
+/// `namtor_daemon::dbus::StatusReport`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct StatusReport {
+    pub api_version: u32,
+    pub profiles: Vec<ProfileInfo>,
+    pub emitter_armed: bool,
+}
+
+/// Failures surfaced by a [`StatusSource`] fetch. The CLI maps each variant to
+/// a distinct user-facing message so a transport failure is distinguishable
+/// from a daemon-side rejection.
+#[derive(Debug, Clone)]
+pub enum StatusError {
+    /// D-Bus transport or daemon-unavailable failure (bus unreachable, name
+    /// not owned, connection refused).
+    Transport(String),
+    /// The daemon rejected the call (polkit deny, wrong state).
+    Daemon(String),
+}
+
+impl std::fmt::Display for StatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StatusError::Transport(m) => write!(f, "daemon unreachable: {m}"),
+            StatusError::Daemon(m) => write!(f, "daemon error: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for StatusError {}
+
+/// Source of daemon status. Production uses [`DbusStatusSource`]; tests inject
+/// a fake implementation.
+pub trait StatusSource {
+    fn fetch_status(&self) -> Result<StatusReport, StatusError>;
+}
+
+/// Production [`StatusSource`] backed by the system D-Bus `org.namtor.Manager`
+/// `GetStatus` method.
+pub struct DbusStatusSource;
+
+impl DbusStatusSource {
+    /// Construct a status source that connects to the system bus on each
+    /// fetch. The connection is not cached — `status` is a one-shot command.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for DbusStatusSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn classify_dbus_error(e: zbus::Error) -> StatusError {
+    let msg = e.to_string();
+    match e {
+        zbus::Error::FDO(boxed) => match *boxed {
+            zbus::fdo::Error::ServiceUnknown(_) | zbus::fdo::Error::NameHasNoOwner(_) => {
+                StatusError::Transport(msg)
+            }
+            _ => StatusError::Daemon(msg),
+        },
+        zbus::Error::MethodError(name, _, _)
+            if name
+                .as_str()
+                .starts_with("org.freedesktop.DBus.Error.Service")
+                || name.as_str() == "org.freedesktop.DBus.Error.NoReply" =>
+        {
+            StatusError::Transport(msg)
+        }
+        _ => StatusError::Daemon(msg),
+    }
+}
+
+impl StatusSource for DbusStatusSource {
+    fn fetch_status(&self) -> Result<StatusReport, StatusError> {
+        let conn = zbus::blocking::Connection::system()
+            .map_err(|e| StatusError::Transport(e.to_string()))?;
+        let proxy = zbus::blocking::Proxy::new(
+            &conn,
+            MANAGER_BUS_NAME,
+            MANAGER_OBJECT_PATH,
+            MANAGER_INTERFACE,
+        )
+        .map_err(|e| StatusError::Transport(e.to_string()))?;
+        let report: StatusReport = proxy.call("GetStatus", &()).map_err(classify_dbus_error)?;
+        Ok(report)
+    }
+}
+
+/// Format a [`StatusReport`] as a human-readable status line block. Carries
+/// no biometric payload: only the API version, profile names/enabled flags,
+/// and emitter armed state.
+pub fn render_status_report(report: &StatusReport) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("api version: {}\n", report.api_version));
+    if report.profiles.is_empty() {
+        out.push_str("no profiles\n");
+    } else {
+        out.push_str("profiles:\n");
+        for p in &report.profiles {
+            let state = if p.enabled { "enabled" } else { "disabled" };
+            out.push_str(&format!("  {} — {} ({})\n", p.name, p.id, state));
+        }
+    }
+    let emitter = if report.emitter_armed {
+        "armed"
+    } else {
+        "disarmed"
+    };
+    out.push_str(&format!("emitter: {emitter}\n"));
+    out
+}
+
+/// Format a "daemon unreachable" / daemon-error message for the operator.
+/// Never fabricates daemon state — only the error reason is shown.
+pub fn render_status_unreachable(err: &StatusError) -> String {
+    format!("status: {err}\n")
+}
+
+/// Drive the `status` command: fetch the report from `source`, print it, and
+/// return the process exit code. On any fetch failure, print the unreachable
+/// message and return `FAILURE`. This is the entry point the binary calls;
+/// tests inject a fake [`StatusSource`].
+pub fn run_status_command(source: &dyn StatusSource) -> ExitCode {
+    match source.fetch_status() {
+        Ok(report) => {
+            print!("{}", render_status_report(&report));
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprint!("{}", render_status_unreachable(&e));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PAM-socket status surface (CameraManager / run_status)
+// ---------------------------------------------------------------------------
 
 /// Protection level surfaced to the user. `Reduced` when the emitter is
 /// always-on (spec §4.10.5): liveness via strobe differential is unavailable,

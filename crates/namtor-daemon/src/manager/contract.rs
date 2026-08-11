@@ -319,6 +319,7 @@ pub mod method_v3 {
     pub const STOP_ENROLLMENT: &str = "StopEnrollment";
     pub const RESUME_ENROLLMENT: &str = "ResumeEnrollment";
     pub const REVIEW_ENROLLMENT: &str = "ReviewEnrollment";
+    pub const POLL_PROGRESS: &str = "PollProgress";
 
     /// All v3 method names, in declaration order.
     pub const ALL: &[&str] = &[
@@ -328,6 +329,7 @@ pub mod method_v3 {
         STOP_ENROLLMENT,
         RESUME_ENROLLMENT,
         REVIEW_ENROLLMENT,
+        POLL_PROGRESS,
     ];
 }
 
@@ -380,6 +382,16 @@ pub struct EnrollmentProgressV3 {
     pub quality_bucket: u8,
     /// Human-readable guidance enum value mapped client-side.
     pub guidance: String,
+}
+
+/// Reply for the `PollProgress` method on `org.namtor.Manager3` (frozen wire
+/// `b(ssuuuuuys)`). Carries the latest progress snapshot for a live capturing
+/// session, or `has_progress = false` when no new worker events arrived since
+/// the last poll. No biometric material crosses this surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct PollProgressReply {
+    pub has_progress: bool,
+    pub progress: EnrollmentProgressV3,
 }
 
 /// v3 review snapshot returned by `ReviewEnrollment` (frozen wire `(sbuuus)`).
