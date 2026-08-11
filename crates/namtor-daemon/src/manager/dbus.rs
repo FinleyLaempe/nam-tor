@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use crate::dbus::{action, AuthzDecision, PeerIdentity, PolkitAuthority};
 use crate::manager::contract::{
     EnrollmentProgressV3, EnrollmentReviewV3, PamServiceCompatibility, PamServiceInfo,
-    ProtectionStatus,
+    PollProgressReply, ProtectionStatus,
 };
 use crate::manager::observation::GuidanceProgress;
 use crate::manager::session::{EnrollmentCapture, ReviewSnapshot};
@@ -541,6 +541,74 @@ impl<P: PolkitAuthority> Manager3Service<P> {
         })
     }
 
+    pub fn poll_progress(
+        &self,
+        peer: &PeerIdentity,
+        session: &str,
+    ) -> Result<PollProgressReply, Manager3ApiError> {
+        let uid = self.require_session(session)?;
+        let action = if peer.uid == uid {
+            action::ENROLL_SELF
+        } else {
+            action::ENROLL_OTHER
+        };
+        self.authz(action, peer, uid)?;
+        let receiver = {
+            let sessions = lock(&self.sessions);
+            sessions
+                .get(session)
+                .map(|s| s.receiver.clone())
+                .ok_or_else(|| Manager3ApiError::SessionNotFound(session.into()))?
+        };
+        let mut latest: Option<EnrollmentProgressV3> = None;
+        loop {
+            match receiver.try_recv() {
+                Some(WorkerEvent::Progress(p)) => {
+                    self.push_progress(session, p);
+                    latest = {
+                        let sigs = lock(&self.signals);
+                        sigs.last().and_then(|s| {
+                            if let Manager3Signal::EnrollmentProgress(v3) = s {
+                                Some(v3.clone())
+                            } else {
+                                None
+                            }
+                        })
+                    };
+                }
+                Some(WorkerEvent::Exhausted) => {
+                    return Ok(PollProgressReply {
+                        has_progress: false,
+                        progress: empty_progress(session),
+                    });
+                }
+                Some(WorkerEvent::Error(msg)) => {
+                    self.remove_session(session, uid);
+                    return Err(Manager3ApiError::State(msg));
+                }
+                Some(WorkerEvent::Cancelled) => {
+                    self.remove_session(session, uid);
+                    return Ok(PollProgressReply {
+                        has_progress: false,
+                        progress: empty_progress(session),
+                    });
+                }
+                Some(WorkerEvent::ReviewReady(_)) | Some(WorkerEvent::Committed(_)) => break,
+                None => break,
+            }
+        }
+        Ok(match latest {
+            Some(p) => PollProgressReply {
+                has_progress: true,
+                progress: p,
+            },
+            None => PollProgressReply {
+                has_progress: false,
+                progress: empty_progress(session),
+            },
+        })
+    }
+
     pub fn commit_profile(
         &self,
         peer: &PeerIdentity,
@@ -733,6 +801,20 @@ impl<P: PolkitAuthority> Manager3Service<P> {
         if let Some(mut h) = workers.remove(uid) {
             h.shutdown_and_join();
         }
+    }
+}
+
+fn empty_progress(session: &str) -> EnrollmentProgressV3 {
+    EnrollmentProgressV3 {
+        session: session.to_string(),
+        phase: "capturing".into(),
+        quality_percent: 0,
+        diversity_percent: 0,
+        frames_seen: 0,
+        frames_accepted: 0,
+        frames_rejected: 0,
+        quality_bucket: 0,
+        guidance: String::new(),
     }
 }
 
@@ -1365,6 +1447,45 @@ mod tests {
         assert_eq!(svc.session_uid(&sid), Some(1000));
         svc.cancel_enrollment(&peer(0), &sid).unwrap_or_default();
         assert_eq!(svc.session_uid(&sid), None);
+    }
+
+    // ---- PollProgress peer authz (SEC-5 tasks 6-7) ----
+
+    #[test]
+    fn v3_poll_progress_own_user_passes_authz() {
+        let svc = new_svc3();
+        let sid = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        let result = svc.poll_progress(&peer(1000), &sid);
+        assert!(
+            !matches!(result, Err(Manager3ApiError::Denied { .. })),
+            "own-user poll must pass authz (not Denied), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn v3_poll_progress_cross_user_denied() {
+        let svc = new_svc3();
+        let sid = svc.start_enrollment(&peer(0), 1000, "alice").unwrap();
+        let err = svc.poll_progress(&peer(2000), &sid).unwrap_err();
+        assert!(
+            matches!(err, Manager3ApiError::Denied { .. }),
+            "cross-user poll must be denied, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn v3_poll_progress_unknown_session_not_found() {
+        let svc = new_svc3();
+        let err = svc.poll_progress(&peer(0), "nonexistent").unwrap_err();
+        assert!(matches!(err, Manager3ApiError::SessionNotFound(_)));
+    }
+
+    #[test]
+    fn v3_poll_progress_root_admin_allowed_for_other_uid() {
+        let svc = new_svc3();
+        let sid = svc.start_enrollment(&peer(0), 1000, "alice").unwrap();
+        let reply = svc.poll_progress(&peer(0), &sid).unwrap();
+        assert_eq!(reply.progress.session, sid);
     }
 
     #[test]

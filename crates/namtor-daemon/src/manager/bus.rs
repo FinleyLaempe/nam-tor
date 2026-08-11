@@ -592,6 +592,23 @@ impl Manager3Iface {
         Ok(review)
     }
 
+    #[zbus(name = "PollProgress")]
+    async fn poll_progress(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        session: &str,
+    ) -> Result<contract::PollProgressReply, Manager3DBusError> {
+        let peer = resolve_peer_identity(conn, &header).await?;
+        let reply = self
+            .svc
+            .poll_progress(&peer, session)
+            .map_err(Manager3DBusError::from)?;
+        Self::emit_drained_v3(&emitter, &self.svc).await?;
+        Ok(reply)
+    }
+
     #[zbus(property, name = "ApiVersion")]
     fn api_version(&self) -> u32 {
         contract::API_VERSION_V3
@@ -1092,6 +1109,7 @@ mod tests {
         assert!(xml.contains("StopEnrollment"));
         assert!(xml.contains("ResumeEnrollment"));
         assert!(xml.contains("ReviewEnrollment"));
+        assert!(xml.contains("PollProgress"));
     }
 
     /// v3 ApiVersion property must be frozen at 3.

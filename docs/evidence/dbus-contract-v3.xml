@@ -139,6 +139,10 @@
       <arg name="session" type="s" direction="in"/>
       <arg name="review" type="(sbuuus)" direction="out"/>
     </method>
+    <method name="PollProgress">
+      <arg name="session" type="s" direction="in"/>
+      <arg name="reply" type="b(ssuuuuuys)" direction="out"/>
+    </method>
     <signal name="EnrollmentProgress">
       <arg name="progress" type="(ssuuuuuys)"/>
     </signal>

@@ -1161,6 +1161,9 @@ mod tests {
         assert!(s.contains(
             r#"<method name="ReviewEnrollment"> <arg name="session" type="s" direction="in"/> <arg name="review" type="(sbuuus)" direction="out"/>"#
         ));
+        assert!(s.contains(
+            r#"<method name="PollProgress"> <arg name="session" type="s" direction="in"/> <arg name="reply" type="b(ssuuuuuys)" direction="out"/>"#
+        ));
     }
 
     /// The v3 EnrollmentProgress signal must carry the exact (ssuuuuuys)
@@ -1241,6 +1244,7 @@ mod tests {
     fn v3_types_have_correct_dbus_signatures() {
         assert_eq!(EnrollmentProgressV3::SIGNATURE, "(ssuuuuuys)");
         assert_eq!(EnrollmentReviewV3::SIGNATURE, "(sbuuus)");
+        assert_eq!(PollProgressReply::SIGNATURE, "b(ssuuuuuys)");
     }
 
     /// v3 wire structs must round-trip through JSON serialization. The D-Bus
