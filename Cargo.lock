@@ -1565,6 +1565,7 @@ dependencies = [
 name = "namtor-daemon"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "namtor-camera",
  "namtor-capture",
  "namtor-eval",

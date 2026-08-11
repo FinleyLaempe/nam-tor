@@ -30,6 +30,28 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+/// Read `CLOCK_BOOTTIME` as monotonic milliseconds since boot. Used to
+/// persist the backoff lock-window deadline across daemon restarts within
+/// the same boot (SEC-7). Returns 0 on the impossible-on-Linux failure
+/// path; callers treat 0 as "no deadline persisted" so a faulty read
+/// degrades to the pre-SEC-7 behaviour rather than aborting auth.
+#[allow(dead_code)] // wired into save/load by SEC-7 task 12
+fn boottime_now_ms() -> u64 {
+    // SAFETY: `timespec` is zeroed so both fields are valid for write.
+    // `clock_gettime` writes through the supplied pointer and never reads
+    // from it; `&mut ts` is a valid stack slot. `CLOCK_BOOTTIME` is a
+    // kernel-defined constant. On Linux `clock_gettime` never fails for a
+    // valid pointer and a known clock id.
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) };
+    if rc != 0 {
+        return 0;
+    }
+    (ts.tv_sec as u64)
+        .saturating_mul(1000)
+        .saturating_add((ts.tv_nsec as u64) / 1_000_000)
+}
+
 /// Schedule parameters. `base_ms` is the unit delay; each subsequent failure
 /// multiplies the previous delay by `multiplier`, capped at `max_ms`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -414,6 +436,17 @@ mod tests {
         let tmp = temp_path(&path);
         assert!(!tmp.exists(), "temp file must be renamed away");
         assert!(path.exists(), "target file must exist");
+    }
+
+    // Given a booted system, when boottime_now_ms is called twice in
+    // succession, then both readings are positive and the second is not
+    // less than the first — CLOCK_BOOTTIME is monotonic since boot.
+    #[test]
+    fn boottime_now_ms_is_monotonic() {
+        let a = boottime_now_ms();
+        let b = boottime_now_ms();
+        assert!(a > 0, "boottime should be positive on a booted system");
+        assert!(b >= a, "CLOCK_BOOTTIME must be monotonic non-decreasing");
     }
 
     // Given a loaded store, when a new failure is recorded,
