@@ -35,7 +35,6 @@ use serde::{Deserialize, Serialize};
 /// the same boot (SEC-7). Returns 0 on the impossible-on-Linux failure
 /// path; callers treat 0 as "no deadline persisted" so a faulty read
 /// degrades to the pre-SEC-7 behaviour rather than aborting auth.
-#[allow(dead_code)] // wired into save/load by SEC-7 task 12
 fn boottime_now_ms() -> u64 {
     // SAFETY: `timespec` is zeroed so both fields are valid for write.
     // `clock_gettime` writes through the supplied pointer and never reads
@@ -72,12 +71,15 @@ impl Default for BackoffConfig {
 }
 
 /// Per-uid backoff state held in memory. The `Instant` fields are process-local
-/// and not persisted; only `attempts` survives a restart (see module docs).
+/// but `backoff_until` is mirrored as a `CLOCK_BOOTTIME` monotonic-millisecond
+/// deadline so it can be persisted and restored across a daemon restart within
+/// the same boot (see module docs).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackoffState {
     attempts: u32,
     last_failure: Option<Instant>,
     backoff_until: Option<Instant>,
+    backoff_until_boottime_ms: Option<u64>,
     config: BackoffConfig,
 }
 
@@ -87,24 +89,29 @@ impl BackoffState {
             attempts: 0,
             last_failure: None,
             backoff_until: None,
+            backoff_until_boottime_ms: None,
             config,
         }
     }
 
     /// Record a failure at `now`. Advances `attempts`, recomputes
     /// `backoff_until = now + min(base * multiplier^attempts, max)`, and
-    /// stamps `last_failure`.
+    /// stamps `last_failure`. Also captures the deadline as a
+    /// `CLOCK_BOOTTIME` monotonic-millisecond timestamp so it can be
+    /// persisted across a daemon restart (SEC-7).
     pub fn record_failure(&mut self, now: Instant) {
         self.attempts = self.attempts.saturating_add(1);
         let delay_ms = self.next_delay_ms();
         self.backoff_until = Some(now + std::time::Duration::from_millis(delay_ms));
         self.last_failure = Some(now);
+        self.backoff_until_boottime_ms = Some(boottime_now_ms().saturating_add(delay_ms));
     }
 
     /// Record a success: reset attempts and clear both instants.
     pub fn record_success(&mut self) {
         self.attempts = 0;
         self.backoff_until = None;
+        self.backoff_until_boottime_ms = None;
         self.last_failure = None;
     }
 
@@ -162,11 +169,17 @@ pub struct BackoffStore {
     config: BackoffConfig,
 }
 
-/// On-disk shape. Only the attempt count is durable; lock-window instants are
-/// process-local and reconstructed on load (see module docs).
+/// On-disk shape. The attempt count and the `CLOCK_BOOTTIME` lock-window
+/// deadline (in milliseconds since boot) are durable; the process-local
+/// `Instant` is reconstructed on load relative to the current boottime
+/// (see module docs). The `backoff_until_ms` field is `#[serde(default)]`
+/// so pre-SEC-7 files (which contain only `states`) still load and degrade
+/// to the old no-lock-window behaviour.
 #[derive(Serialize, Deserialize)]
 struct PersistedStore {
     states: HashMap<u32, u32>,
+    #[serde(default)]
+    backoff_until_ms: HashMap<u32, u64>,
 }
 
 impl BackoffStore {
@@ -210,20 +223,29 @@ impl BackoffStore {
     }
 
     /// Persisted attempt count for `uid` (0 if untracked). This is the durable
-    /// signal that survives a restart; the in-memory lock window does not.
+    /// signal that survives a restart; the lock-window deadline is also
+    /// persisted as a `CLOCK_BOOTTIME` timestamp so the in-memory lock window
+    /// survives within the same boot.
     pub fn attempts(&self, uid: u32) -> u32 {
         self.states.get(&uid).map_or(0, |s| s.attempts())
     }
 
     /// Persist the store to `path` atomically: write to a sibling temp file,
     /// fsync, then rename over the target. A crash after the temp write but
-    /// before rename leaves the old file (or none) intact.
+    /// before rename leaves the old file (or none) intact. Persists both the
+    /// per-uid attempt count and the `CLOCK_BOOTTIME` lock-window deadline
+    /// (SEC-7) so a daemon restart within the same boot preserves the lock.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         let persisted = PersistedStore {
             states: self
                 .states
                 .iter()
                 .map(|(uid, s)| (*uid, s.attempts))
+                .collect(),
+            backoff_until_ms: self
+                .states
+                .iter()
+                .filter_map(|(uid, s)| s.backoff_until_boottime_ms.map(|ms| (*uid, ms)))
                 .collect(),
         };
         let json = serde_json::to_vec_pretty(&persisted).map_err(io::Error::other)?;
@@ -246,7 +268,13 @@ impl BackoffStore {
     /// yields `Err` (distinct from the missing-file case) so the operator can
     /// distinguish first-boot from tampering. Loaded uids inherit the caller's
     /// `config`; the persisted per-uid attempt counts are preserved so an
-    /// in-progress bruteforce is not forgiven by a restart.
+    /// in-progress bruteforce is not forgiven by a restart. When the on-disk
+    /// shape includes a `backoff_until_ms` entry for a uid (SEC-7), the
+    /// process-local `backoff_until` `Instant` is reconstructed relative to
+    /// the current `CLOCK_BOOTTIME` so the lock window survives the restart
+    /// within the same boot. A reboot resets `CLOCK_BOOTTIME`; the deadline
+    /// then resolves to "now or past" and the lock is dropped (the attempt
+    /// count survives and the next failure resumes the schedule).
     pub fn load(path: &Path, config: BackoffConfig) -> io::Result<Self> {
         let bytes = match fs::read(path) {
             Ok(b) => b,
@@ -256,10 +284,20 @@ impl BackoffStore {
             Err(e) => return Err(e),
         };
         let persisted: PersistedStore = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        let now_instant = Instant::now();
+        let now_boottime = boottime_now_ms();
         let mut states = HashMap::with_capacity(persisted.states.len());
         for (uid, attempts) in persisted.states {
             let mut s = BackoffState::new(config);
             s.attempts = attempts;
+            if let Some(&until_ms) = persisted.backoff_until_ms.get(&uid) {
+                let delta_ms = until_ms.saturating_sub(now_boottime);
+                if delta_ms > 0 {
+                    s.backoff_until =
+                        Some(now_instant + std::time::Duration::from_millis(delta_ms));
+                    s.backoff_until_boottime_ms = Some(until_ms);
+                }
+            }
             states.insert(uid, s);
         }
         Ok(Self { states, config })
@@ -436,6 +474,69 @@ mod tests {
         let tmp = temp_path(&path);
         assert!(!tmp.exists(), "temp file must be renamed away");
         assert!(path.exists(), "target file must exist");
+    }
+
+    // Given a recorded failure, when the store is saved and the on-disk JSON
+    // is inspected, then it contains a backoff_until_ms entry for the failed
+    // uid (the CLOCK_BOOTTIME deadline, SEC-7) — not just the attempt count.
+    #[test]
+    fn save_persists_backoff_until_boottime_ms() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backoff.json");
+        let mut s = BackoffStore::new(cfg());
+        s.record_failure(1000, Instant::now());
+        s.save(&path).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let until = v
+            .get("backoff_until_ms")
+            .and_then(|m| m.get("1000"))
+            .and_then(|n| n.as_u64());
+        assert!(until.is_some(), "backoff_until_ms must contain uid 1000");
+        assert!(
+            until.unwrap() > 0,
+            "boottime deadline must be a positive ms value"
+        );
+    }
+
+    // Given a recorded failure that is saved and reloaded, when the loaded
+    // store is queried at the current instant, then the lock window survives
+    // the restart within the same boot (SEC-7) — backoff_until is
+    // reconstructed from the persisted CLOCK_BOOTTIME deadline.
+    #[test]
+    fn load_reconstructs_lock_window_from_boottime() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backoff.json");
+        let mut s = BackoffStore::new(cfg());
+        s.record_failure(1000, Instant::now());
+        s.save(&path).unwrap();
+        let loaded = BackoffStore::load(&path, cfg()).unwrap();
+        let now = Instant::now();
+        assert!(
+            loaded.is_locked(1000, now),
+            "lock window must survive restart within the same boot"
+        );
+        assert!(
+            loaded.remaining_ms(1000, now) > 0,
+            "remaining_ms must be positive after reload"
+        );
+    }
+
+    // Given an old-format file (no backoff_until_ms field), when load is
+    // called, then it still succeeds — the field is optional and old files
+    // degrade to the pre-SEC-7 behaviour (attempts preserved, no lock window).
+    #[test]
+    fn load_accepts_old_format_without_backoff_until() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backoff.json");
+        // Pre-SEC-7 on-disk shape: only `states`.
+        fs::write(&path, br#"{"states":{"1000":2}}"#).unwrap();
+        let loaded = BackoffStore::load(&path, cfg()).unwrap();
+        assert_eq!(loaded.attempts(1000), 2, "attempts must still load");
+        assert!(
+            !loaded.is_locked(1000, Instant::now()),
+            "old-format file has no lock window — must not be locked"
+        );
     }
 
     // Given a booted system, when boottime_now_ms is called twice in
