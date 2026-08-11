@@ -16,11 +16,15 @@
 //! JSON shape is treated as tampering and yields `Err` so the operator is
 //! forced to inspect the path rather than silently starting from zero.
 //!
-//! `Instant` is a monotonic, non-serialisable clock bound to a single process.
-//! We therefore persist only the *attempt count* per uid (the durable signal
-//! of an in-progress bruteforce) and let the lock window restart with the
-//! daemon process. This is the conservative choice: a restart shortens a
-//! current lock but never erases the attempt history that drives the schedule.
+//! `Instant` is a process-local monotonic clock and cannot be serialised
+//! directly. SEC-7 persists the lock-window deadline as a `CLOCK_BOOTTIME`
+//! monotonic-millisecond timestamp alongside the attempt count, so a daemon
+//! restart within the same boot preserves the active lock window — the
+//! deadline is reconstructed relative to the current boottime on load. A
+//! reboot resets `CLOCK_BOOTTIME` and the lock window is lost; the attempt
+//! count survives and the next failure resumes the schedule. This reverses
+//! the earlier design decision that let a restart shorten a current lock:
+//! within a single boot a restart no longer forgives any of the lock window.
 
 use std::collections::HashMap;
 use std::fs;
@@ -550,9 +554,13 @@ mod tests {
         assert!(b >= a, "CLOCK_BOOTTIME must be monotonic non-decreasing");
     }
 
-    // Given a loaded store, when a new failure is recorded,
-    // then the schedule continues from the persisted attempt count
-    // (restart does not forgive an in-progress bruteforce).
+    // Given a store with a locked uid that is saved and reloaded, when the
+    // loaded store is queried before any new failure, then the lock window
+    // survives the restart within the same boot (SEC-7) — the persisted
+    // CLOCK_BOOTTIME deadline is reconstructed on load. Then, when a new
+    // failure is recorded on the loaded store, the schedule continues from
+    // the persisted attempt count (restart does not forgive an in-progress
+    // bruteforce).
     #[test]
     fn restart_continues_schedule() {
         let dir = tempfile::tempdir().unwrap();
@@ -563,6 +571,15 @@ mod tests {
         s.record_failure(1000, now); // attempts == 2
         s.save(&path).unwrap();
         let mut loaded = BackoffStore::load(&path, cfg()).unwrap();
+        // SEC-7: the lock window survives the restart within the same boot.
+        assert!(
+            loaded.is_locked(1000, Instant::now()),
+            "lock window must survive restart within the same boot (SEC-7)"
+        );
+        assert!(
+            loaded.remaining_ms(1000, Instant::now()) > 0,
+            "remaining_ms must be positive after reload (SEC-7)"
+        );
         // One more failure on the loaded store -> attempts == 3 -> 8000ms.
         loaded.record_failure(1000, now);
         let st = loaded.states.get(&1000).expect("uid present");

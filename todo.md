@@ -3,6 +3,9 @@
 > Generated 2026-08-11 from a deep audit of docs, code, security, and usability.
 > Sources: `docs/evidence/status-audit.md`, `docs/threat-model.md`, all crate sources,
 > GNOME/CLI usability audit, security audit. Severity: **SEC** = security, **USA** = usability, **POL** = polish.
+>
+> Pruned 2026-08-12: code-fixable items (SEC-3/5/6/7/8, USA-0/2-16, section E stale-doc)
+> resolved by the `namtor-todo-fix-and-gnome-redesign` plan. Owner-gated items below remain.
 
 ---
 
@@ -61,41 +64,11 @@ Structural CI gates G5.1, G5.2, G5.4, G5.6 = passed. Everything else = WITHHELD.
 - **Impact**: real-attack performance unmeasured. Fail-closed (Uncertain→refuse) keeps it safe but live-face reject rate unknown.
 - **Fix**: train on real device-disjoint attack data (O5), re-evaluate.
 
-### SEC-3. TPM2 file fallback — raw key in plaintext — HIGH (inherent, documented)
-- `namtor-store/src/crypto.rs:590-591` — `FileBackend::seal` stores the raw 32-byte AES key in the sealed blob. No encryption, no KDF.
-- Key file is `0600` owned by `namtor` user. If stolen + `.sealed` files copied → all templates decryptable offline.
-- `tpm2` feature not enabled by default. Production uses `FileBackend`.
-- **Impact**: disk theft or root compromise = full template exfiltration.
-- **Fix**: enable real TPM2 sealing (task 11), or add password-derived key wrapping as a second layer (see section H below).
-
 ### SEC-4. z-norm cohort WITHHELD — hardcoded match threshold — HIGH
 - `namtor-daemon/src/verify.rs:39` — `DEFAULT_MATCH_THRESHOLD = 0.45` (hardcoded fallback).
 - `namtor-recog/src/znorm.rs` — `SyntheticCohort` is non-production bootstrap only.
 - **Impact**: FAR/FRR at operating point not characterised. Global threshold may be too lenient or too strict per device.
 - **Fix**: select licence-verified cohort dataset (O4), calibrate z-norm, replace hardcoded threshold.
-
-### SEC-5. PollProgress D-Bus method unauthenticated — MEDIUM
-- `namtor-daemon/src/manager/dbus.rs:752` — `poll_progress` takes no `peer` parameter, no authz.
-- `namtor-daemon/src/manager/bus.rs:595-607` — no `conn`/`header` passed, peer identity never resolved.
-- Session IDs are sequential (`sess3-N` from `AtomicU64`) — trivially guessable.
-- **Impact**: any app on the system bus can poll any session ID, observe enrollment progress/timing of other users. Info leak + side-channel.
-- **Fix**: add `peer: &PeerIdentity` parameter to `poll_progress`, call `authz_self(ENROLL_SELF, peer, session_uid)`.
-
-### SEC-6. Worker sandbox: ioctl + mprotect surface — LOW-MEDIUM
-- `namtor-worker/src/sandbox/seccomp.rs:39` — `ioctl` allowed broadly (large syscall surface).
-- `namtor-worker/src/sandbox/seccomp.rs:31-32` — `mmap` + `mprotect` both allowed; `mprotect(PROT_EXEC)` not filtered.
-- **Impact**: a vulnerability in an ioctl-reachable path or a W^X violation could escape.
-- **Fix**: add seccomp arg filter denying `mprotect` with `PROT_EXEC` if ONNX runtime doesn't need it. Narrow `ioctl` allowlist if possible.
-
-### SEC-7. Backoff lock window not persisted — LOW-MEDIUM
-- `namtor-daemon/src/backoff.rs:19-23` — `backoff_until` is process-local `Instant`, not persisted. Attempt count IS persisted.
-- **Impact**: daemon restart resets the active lock window to zero (though attempt count survives and next failure resumes the schedule). An attacker who can crash the daemon shortens the effective backoff.
-- **Fix**: persist `backoff_until` as a monotonic timestamp alongside the attempt count.
-
-### SEC-8. PeerIdentity.uid fragility — LOW
-- `namtor-daemon/src/dbus.rs:387` — `authz_self` trusts `peer.uid` field. Currently only populated via trusted `resolve_peer_identity` / `from_creds`, but no type-level guarantee.
-- **Impact**: a future code path that constructs `PeerIdentity` from untrusted data would bypass authz.
-- **Fix**: make `PeerIdentity` fields private with a trusted constructor; document the invariant.
 
 ### SEC-9. S3 suspend/resume untested (R10) — SEC+USA
 - No test exists for emitter survival across suspend. Lid-open is the most common interaction.
@@ -104,105 +77,13 @@ Structural CI gates G5.1, G5.2, G5.4, G5.6 = passed. Everything else = WITHHELD.
 
 ---
 
-## D. Usability bugs (from GNOME/CLI audit)
-
-### USA-0. PAM toggle: cannot enable any PAM service — OPEN
-- **Symptom**: User flips a PAM service switch, it resets to disabled. "Authentication denied org.namtor.configure-pam" error.
-- **Root cause 1** (fixed): Daemon used `system-bus-name` polkit subject — rejected because daemon (user `namtor`) is not a trusted caller for other identities' bus names. Fixed: switched to `unix-process` subject (pid-based, no trusted-caller restriction).
-- **Root cause 2** (fixed): Presenter `set_pam_service_enabled` did not call `require_auth` → no client-side polkit prompt. Fixed: added `require_auth("org.namtor.configure-pam")`.
-- **Root cause 3** (fixed in latest build): Client-side `PolkitAuth::check` used `system-bus-name` subject while daemon used `unix-process` — polkit may cache auth per subject type, causing the daemon's check to miss the client's cached auth. Fixed: both sides now use `unix-process` subject.
-- **Still open**: The polkit `CheckAuthorization` call is blocking the GTK main thread (synchronous `zbus::blocking::Connection::call_method` from a switch handler). This may freeze the UI during the password dialog. If the polkit agent can't show the dialog (e.g. no polkit agent running, or the blocking call times out), the toggle fails silently. Needs testing after package reinstall.
-- **Scroll-to-top**: `render_pam_services` rebuilds the entire list on every toggle → scroll resets to top. Needs scroll-position save/restore or incremental update.
-- **Files**: `crates/namtor-daemon/src/manager/polkit.rs` (build_subject), `crates/namtor-gnome/src/polkit_auth.rs` (subject type), `crates/namtor-gnome/src/presenter.rs` (require_auth), `crates/namtor-gnome/src/components/pam_services.rs` (scroll reset)
+## D. Usability bugs (resolved items retained for reference)
 
 ### USA-0b. Diversity metric mismatch (100% during capture, 4% in review) — FIXED
 - `crates/namtor-daemon/src/manager/worker.rs:474` — `compute_progress` used `snapshot.coverage_percent` (reservoir fill %) as `diversity_percent`, but `review_snapshot()` used actual pairwise cosine distance. Completely different metrics. Fixed: use `capture.diversity_percent()` in both places.
 
 ### USA-1. "Stats" button does nothing (no re-render) — FIXED
 - `crates/namtor-gnome/src/app.rs:190-197` — `on_review` calls `review_existing_profile` but did NOT call `render_profiles` afterwards. Fixed: added re-render call.
-- **Fix**: add `rc_review.borrow_mut().render_profiles(&rc_review);` after the presenter call.
-
-### USA-2. Offline retry button is a no-op — HIGH
-- `crates/namtor-gnome/src/app.rs:516-518` — `show_offline_all` passes `|| {}` as `on_retry`.
-- **Impact**: user cannot recover from daemon-down without restarting app.
-- **Fix**: implement `retry_connection` on `AppController` that re-runs `DbusManagerClient::connect()` and rebuilds.
-
-### USA-3. Re-enroll creates duplicate instead of replacing — HIGH
-- `crates/namtor-gnome/src/app.rs:178-189` — `on_reenroll` calls `start_enrollment_v3(name)` which has NO duplicate-name check (unlike v1 `start_enrollment`).
-- **Impact**: clicking "Re-enroll" on "Home" creates a second "Home" or fails at commit.
-- **Fix**: add duplicate-name check to `start_enrollment_v3`; wire `on_reenroll` through `request_replace`/`confirm_replace`.
-
-### USA-4. `namtor-cli status` fabricates output — HIGH
-- `crates/namtor-cli/src/bin/namtor-cli.rs:137-141` — constructs `CameraManager` with all-default, never queries daemon. Always prints "stream: closed / protection: full".
-- **Fix**: connect to daemon `GetStatus`, build from reply; or remove the subcommand.
-
-### USA-5. Save errors invisible in enrollment view — MEDIUM
-- `crates/namtor-gnome/src/app.rs:495-509` — save failure sets `model.error` but `render_enrollment`'s Stopped branch doesn't render it. Error only shows in `render_profiles`.
-- **Fix**: render `model.error` at top of `render_enrollment`, or transition to `Error` state on save failure.
-
-### USA-6. No reconnect after daemon restart — MEDIUM
-- `crates/namtor-gnome/src/dbus_client.rs:52-76` — `connect()` called once at build; no reconnect path.
-- **Impact**: after daemon restart, every click fails until app restart.
-- **Fix**: wrap client in `Rc<RefCell<Option<DbusManagerClient>>>`; auto-reconnect on `ServiceNotRegistered`/`Transport`.
-
-### USA-7. CLI v3 enroll shows no live progress — MEDIUM
-- `crates/namtor-cli/src/enroll_session.rs:1060-1065` — `next_progress` always returns `Ok(None)`.
-- **Fix**: call the daemon's `PollProgress` method on a timer (like the GNOME app does).
-
-### USA-8. System status "Restart Daemon" and "View Logs" are no-op stubs — MEDIUM
-- `crates/namtor-gnome/src/components/system_status.rs:124-126, 139-141` — `connect_activated` closures are empty.
-- **Fix**: wire to `systemctl restart namtor-daemon` (polkit-authorized) and `journalctl`; or set `set_activatable(false)`.
-
-### USA-9. Diversity hits 100% with no "ready to save" signal — MEDIUM
-- `crates/namtor-gnome/src/components/enrollment.rs:218-225` — progress bar fills to 100% but no visual cue to stop.
-- **Fix**: when `diversity_percent >= 100` and `quality_bucket` is good, show "Enrollment complete — press Stop to review" and style the Stop button as suggested-action.
-
-### USA-10. No rename UI — MEDIUM
-- `crates/namtor-gnome/src/components/profile_list.rs` — no RenameCallback type or button.
-- `presenter.rename_profile` exists and works.
-- **Fix**: add a "Rename" button + `adw::EntryRow` or dialog; wire to `presenter.rename_profile`.
-
-### USA-11. Polkit unavailable surfaces as generic "Authentication required" — MEDIUM
-- `crates/namtor-gnome/src/polkit_auth.rs:50-85` — `Cancelled` variant never used; `Bus`/`Check` errors collapse to generic denial.
-- `presenter.rs:80` — error only `eprintln!`'d, not shown to user.
-- **Fix**: distinguish `Bus`/`Check` from `Denied`/`Cancelled` in `require_auth`; surface "Polkit service unavailable" vs "Authentication dismissed" vs "Authentication denied".
-
-### USA-12. Recovery view renders title twice — LOW
-- `crates/namtor-gnome/src/components/recovery.rs:31-48` — line 38 appends `hint.title`, line 44 appends `hint.title` again as "detail".
-- **Fix**: drop the second label or render a preamble/`hint.steps` instead.
-
-### USA-13. CLI `list` and `remove` bypass daemon — MEDIUM
-- `crates/namtor-cli/src/list.rs`, `enroll.rs` — open encrypted store directly, require root/`namtor` user, bypass polkit and audit.
-- **Fix**: add `--daemon` mode (default) using D-Bus `ListProfiles`/`DeleteProfile`; keep `--local` for recovery.
-
-### USA-14. CLI `--old` enroll hardcodes `/dev/video2` and `3277:0018` — LOW
-- `crates/namtor-cli/src/enroll.rs:372-384` — `--device` arg accepted but ignored.
-- **Fix**: honor `--device`, probe quirks by actual VID:PID; or deprecate `--old`.
-
-### USA-15. CLI SIGINT discards enrollment with no review — LOW
-- `crates/namtor-cli/src/enroll_session.rs:894-913` — Ctrl+C calls `cancel` + prints "discarded", no review prompt.
-- **Fix**: on SIGINT, call `stop` + `review`, print review summary, ask Save/Discard.
-
-### USA-16. UI blocks on D-Bus calls (dispatch_async unused) — MEDIUM, latent
-- `crates/namtor-gnome/src/app.rs:147-204` — all callbacks call synchronous presenter methods on the GTK main thread.
-- `presenter.dispatch_async` exists but is never called.
-- **Fix**: route mutations through `dispatch_async` + `glib::MainContext` idle callback.
-
----
-
-## E. Stale documentation / comments (polish)
-
-| File:Line | Issue |
-|-----------|-------|
-| `AGENTS.md` | Says "KDE KCM and D-Bus API not started" — both ARE shipped. Update. |
-| `AGENTS.md` | Says "M10 not started" — M10 IS implemented (tasks 29-31). Update. |
-| `namtor-daemon/src/dbus.rs:9` | "task 9 wiring" — bus service IS implemented. |
-| `namtor-daemon/src/listener.rs:26-27` | "Task 17 implements this… Task 13 tests with a stub" — lifecycle IS implemented. |
-| `namtor-daemon/src/manager/bus.rs:22` | "Proper polkit wiring is task 12" — SystemPolkit IS the wiring. |
-| `namtor-kde/src/abi.rs:10-14` | "Task 22 NOT implemented here" — bridge.rs + namtor_kcm.cpp ARE implemented (1388 lines). |
-| `namtor-probe/src/probe.rs:187` | "IrUvc (Task 12) will eventually" — IrUvc exists. |
-| `namtor-probe/src/emit.rs:30,56-57` | Report template emits `TODO` fields for human fill-in (intentional). |
-| `docs/superpowers/plans/2026-08-04-nam-tor-roadmap.md` | Stale on M7/M10/KDE/D-Bus status vs status-audit. |
 
 ---
 
@@ -231,6 +112,10 @@ Structural CI gates G5.1, G5.2, G5.4, G5.6 = passed. Everything else = WITHHELD.
 
 ## H. TPM2 double-encryption design question
 
+> Note: SEC-3 (argon2id key wrapping for FileBackend) was resolved by the
+> `namtor-todo-fix-and-gnome-redesign` plan. The design discussion below is
+> retained for context on the TPM2 + software fallback architecture.
+
 **User asked**: "What do you think about if once we got TPM we do it double with 0600 aes?"
 
 **Answer**: Yes — this is a good defense-in-depth pattern and aligns with how LUKS, gnome-keyring, and fscrypt work. The design would be:
@@ -245,7 +130,7 @@ But "double with 0600 aes" can mean two different things:
 - TPM2 unseals the AES key at daemon start → key lives in `mlock`'d memory → encrypts/decrypts templates.
 - Key file (`/var/lib/namtor/key`) is the TPM2-sealed blob, mode `0600`, owner `namtor`.
 - If TPM2 is absent: fall back to a **password-derived key** (argon2id from a daemon-startup password or a root-readable secret). The `0600` file stores the salt + derived-key-wrapped master key.
-- This is what the codebase already structurally supports (`BackendSelector`, `FileBackend`, `Tpm2Backend`). The gap is that `FileBackend` stores the raw key in plaintext — adding a KDF wrap would be the "double" layer.
+- This is what the codebase already structurally supports (`BackendSelector`, `FileBackend`, `Tpm2Backend`). The gap was that `FileBackend` stored the raw key in plaintext — the argon2id KDF wrap (SEC-3, now resolved) is the "double" layer.
 
 ### Option B: TPM2 + a second AES layer (belt-and-suspenders)
 - TPM2 unseals outer key → outer key decrypts an inner key file → inner key encrypts templates.
@@ -258,6 +143,4 @@ But "double with 0600 aes" can mean two different things:
 - A software layer that's more than just "raw key in a 0600 file" where TPM2 is absent.
 - No double-encryption latency.
 
-The current `FileBackend::seal` storing the raw key is the weakest link. Wrapping it with `argon2id(secret_file, salt)` would make disk theft alone insufficient — the attacker needs both the `.sealed` templates AND the root-owned secret file.
-
-**Severity**: SEC-3 in section C above. This is the highest-impact security gap that can be fixed with code alone (no owner-gated input needed, unlike PAD calibration or cohort datasets).
+The `FileBackend::seal` argon2id wrap (SEC-3) makes disk theft alone insufficient — the attacker needs both the `.sealed` templates AND the `namtor`-owned secret file. This is defense-in-depth, not a full disk-theft mitigation; only TPM2 sealing defeats disk theft.
