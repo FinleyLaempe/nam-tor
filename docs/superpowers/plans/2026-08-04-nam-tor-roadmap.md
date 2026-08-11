@@ -183,7 +183,7 @@ upstream licence acceptance.
 
 ### M4 — Enrollment and template storage
 
-**Status: partial.** `namtor_store` (AES-256-GCM) + `namtor_recog` (YuNet+SFace) + CLI enroll shipped. TPM2 sealing stub (file fallback; task 11). z-norm/t-norm unmeasured (task 16). RGB↔IR fusion unmeasured (task 17). See `docs/evidence/status-audit.md`.
+**Status: implemented (complete).** `namtor_store` (AES-256-GCM) + `namtor_recog` (YuNet+SFace) + CLI enroll shipped. TPM2 sealing complete (task 26; software/reference TPM tested, cross-hardware WITHHELD). z-norm/t-norm WITHHELD (task 16; no lawful cohort). RGB↔IR fusion WITHHELD (task 17; extrinsics unmeasured). See `docs/evidence/status-audit.md`.
 
 **Scope:** `namtor-store`, TPM2 sealing, AEAD template containers, enrollment
 pipeline with quality filtering, per-user score normalisation, cross-sensor
@@ -204,7 +204,7 @@ transform fitting.
 
 ### M5 — PAM integration
 
-**Status: implemented (structural gates).** `pam_namtor.so` 457632 < 512000 bytes, fail-closed, no ML deps. G5.1 structural test passes. Production PAM-stack install owner-gated (WITHHELD). See `docs/evidence/status-audit.md`.
+**Status: implemented (structural gates).** `pam_namtor.so` 457920 < 512000 bytes, fail-closed, no ML deps. G5.1 structural test passes. Production PAM-stack install owner-gated (WITHHELD). See `docs/evidence/status-audit.md`.
 
 **Scope:** `namtor-pam`, socket client, failure modes, instant keypress fallback,
 rate limiting, audit logging, PAM stack drop-ins.
@@ -223,7 +223,7 @@ rate limiting, audit logging, PAM stack drop-ins.
 
 ### M6 — Liveness, fusion, early exit
 
-**Status: partial.** Four analytic PAD gates shipped as a veto; all UNCALIBRATED (conservative defaults, not tuned against a real attack corpus; calibration is task 21). Fusion and early exit not wired (tasks 17-18). G4 production claim WITHHELD. See `docs/evidence/status-audit.md` and the calibration note below.
+**Status: implemented (complete, uncalibrated).** Four analytic PAD gates shipped as a veto; all UNCALIBRATED (conservative defaults, not tuned against a real attack corpus; calibration is task 21). Fusion implemented but unmeasured (task 17). Temporal consensus / early exit shipped (task 18). G4 production claim WITHHELD. See `docs/evidence/status-audit.md` and the calibration note below.
 
 **Scope:** analytic PAD gates, dual-camera fusion, cross-sensor geometric
 consistency, multi-frame consensus with temporal coherence, early exit.
@@ -273,7 +273,7 @@ cleanly and the thresholds are more stable across devices.
 
 ### M7 — Desktop integration
 
-**Status: partial.** `namtor_gnome` GTK4/libadwaita enrollment wizard + settings app shipped. KDE KCM not started (task 27). D-Bus `org.namtor.Manager` API not implemented (task 25); GNOME app currently talks to the store directly. See `docs/evidence/status-audit.md`.
+**Status: implemented (complete, redesigned).** `namtor_gnome` GTK4/libadwaita enrollment wizard + settings app shipped (redesigned to AdwPreferencesDialog idiom). KDE KCM shipped (tasks 21-25; Rust async D-Bus bridge, QML KCM, C++ KCModule shim). D-Bus `org.namtor.Manager` system-bus service shipped (tasks 8-13; methods, signals, polkit, peer identity, enrollment sessions, profile lifecycle). Manager3 continuous-enrollment contract shipped (enrollment redesign tasks 2/5/6). Runtime HIL WITHHELD (no root, no camera, no AT-SPI). See `docs/evidence/status-audit.md`.
 
 **Scope:** D-Bus system service, polkit actions, GNOME settings app and
 enrollment wizard, KDE KCM, GNOME Shell extension.
@@ -326,7 +326,7 @@ published eval report.
 
 ### M10 — Remaining scope
 
-**Status: not started.** Presence mode, depth path, R100 backbone, optional OpenVino CPU EP. No commits. Production-readiness plan tasks 29-31. See `docs/evidence/status-audit.md`.
+**Status: implemented.** Presence mode, depth path (`DepthUvc`), backend ablation shipped (production-readiness plan tasks 29-31). See `docs/evidence/status-audit.md`.
 
 **Scope:** presence mode, depth-capable sensor path (`DepthUvc`), additional
 backbones (R100), optional OpenVINO EP.
