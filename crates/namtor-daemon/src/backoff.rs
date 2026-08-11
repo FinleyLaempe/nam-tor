@@ -543,6 +543,34 @@ mod tests {
         );
     }
 
+    // Given a recorded failure with a known delay (attempts==1 -> 2000ms),
+    // when the store is saved and reloaded at the same logical boottime
+    // instant, then the full lock-window duration survives the restart
+    // within the same boot (SEC-7 gate) — remaining_ms is within a small
+    // tolerance of the original 2000ms deadline, not merely positive.
+    #[test]
+    fn persist_reload_preserves_lock_window_within_same_boot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backoff.json");
+        let mut s = BackoffStore::new(cfg());
+        s.record_failure(1000, Instant::now());
+        // attempts == 1 -> base * mult^1 = 2000ms.
+        s.save(&path).unwrap();
+        let loaded = BackoffStore::load(&path, cfg()).unwrap();
+        let now = Instant::now();
+        assert!(
+            loaded.is_locked(1000, now),
+            "lock window must survive restart within the same boot (SEC-7)"
+        );
+        let rem = loaded.remaining_ms(1000, now);
+        // Full 2000ms window minus save+load+read latency. 1500ms lower
+        // bound is generous — the round-trip takes <10ms in practice.
+        assert!(
+            rem > 1500 && rem <= 2000,
+            "remaining_ms should be ~2000ms after reload, got {rem}"
+        );
+    }
+
     // Given a booted system, when boottime_now_ms is called twice in
     // succession, then both readings are positive and the second is not
     // less than the first — CLOCK_BOOTTIME is monotonic since boot.
