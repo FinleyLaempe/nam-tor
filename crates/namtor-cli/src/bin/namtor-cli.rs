@@ -157,9 +157,7 @@ fn main() -> ExitCode {
                 )
             } else {
                 match namtor_cli::list::DbusProfileSource::connect() {
-                    Ok(source) => {
-                        namtor_cli::list::run_remove_daemon(&source, uid, &profile_id)
-                    }
+                    Ok(source) => namtor_cli::list::run_remove_daemon(&source, uid, &profile_id),
                     Err(e) => {
                         eprintln!("remove: {e}");
                         std::process::ExitCode::FAILURE
