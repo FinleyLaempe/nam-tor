@@ -8,6 +8,10 @@
 //! (GTK is single-threaded) and renders the three destinations — Profiles,
 //! Authentication, System — plus the enrollment flow.
 //!
+//! The enrollment flow uses [`adw::PreferencesDialog::push_subpage`] /
+//! [`pop_subpage`] for the capture and review sub-pages, wrapped in
+//! [`adw::NavigationPage`] per the libadwaita 1.5 migration guide.
+//!
 //! If the daemon is unreachable the controller routes every destination to
 //! the shell's offline status page (with a retry button) rather than
 //! showing placeholder labels.
@@ -16,8 +20,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk4::prelude::*;
-use gtk4::{Align, Box as GtkBox, Button, Label, Orientation};
 use libadwaita as adw;
+use libadwaita::prelude::{ActionRowExt, PreferencesGroupExt};
 
 use crate::components::pam_services::render_pam_services;
 use crate::components::system_status::render_system_status;
@@ -39,13 +43,18 @@ pub struct AppController {
     profile_list: ProfileListView,
     enrollment_view: EnrollmentViewComponent,
     review_view: ReviewViewComponent,
-    status_label: Label,
+    /// The enrollment sub-page (NavigationPage wrapping the enrollment
+    /// PreferencesPage). `Some` while the enrollment flow is active.
+    enrollment_nav_page: Option<adw::NavigationPage>,
+    /// The review sub-page (NavigationPage wrapping the review
+    /// PreferencesPage). `Some` while the review is visible.
+    review_nav_page: Option<adw::NavigationPage>,
     offline: bool,
 }
 
 impl AppController {
     pub fn build(app: &adw::Application) -> ControllerRc {
-        let shell = Shell::new(app);
+        let mut shell = Shell::new(app);
 
         let (presenter, offline) = match DbusManagerClient::connect() {
             Ok(client) => {
@@ -55,7 +64,7 @@ impl AppController {
             }
             Err(err) => {
                 let detail = err.to_string();
-                show_offline_all(&shell, &detail);
+                show_offline_all(&mut shell, &detail);
                 (None, true)
             }
         };
@@ -70,11 +79,8 @@ impl AppController {
             profile_list: ProfileListView::new(),
             enrollment_view: EnrollmentViewComponent::new(),
             review_view: ReviewViewComponent::new(),
-            status_label: Label::builder()
-                .halign(Align::Start)
-                .css_classes(["dim-label", "caption"])
-                .wrap(true)
-                .build(),
+            enrollment_nav_page: None,
+            review_nav_page: None,
             offline,
         }));
 
@@ -108,27 +114,14 @@ impl AppController {
         };
         let model = presenter.borrow().model().clone();
 
-        let container = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(12)
+        let group = adw::PreferencesGroup::builder()
+            .title(tr("Enrolled Profiles"))
             .build();
+        group.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Enrolled profiles group",
+        ))]);
 
-        let header = GtkBox::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(12)
-            .build();
-
-        let title = Label::builder()
-            .label(tr("Enrolled Profiles"))
-            .css_classes(["heading"])
-            .halign(Align::Start)
-            .hexpand(true)
-            .build();
-        title.set_accessible_role(gtk4::AccessibleRole::Heading);
-        title.update_property(&[gtk4::accessible::Property::Level(1)]);
-        header.append(&title);
-
-        let enroll_btn = Button::builder()
+        let enroll_btn = gtk4::Button::builder()
             .label(tr("_Enroll Face"))
             .css_classes(["suggested-action"])
             .use_underline(true)
@@ -142,13 +135,32 @@ impl AppController {
         let presenter_for_enroll = Rc::clone(presenter);
         let rc_enroll = Rc::clone(rc);
         enroll_btn.connect_clicked(move |_| {
-            let mut p = presenter_for_enroll.borrow_mut();
-            p.cancel_enrollment_v3();
-            drop(p);
+            {
+                let mut p = presenter_for_enroll.borrow_mut();
+                p.cancel_enrollment_v3();
+            }
             rc_enroll.borrow_mut().render_enrollment(&rc_enroll);
         });
-        header.append(&enroll_btn);
-        container.append(&header);
+
+        let enroll_row = adw::ActionRow::builder()
+            .title(tr("Enroll a new face profile"))
+            .activatable(true)
+            .build();
+        enroll_row.add_suffix(&enroll_btn);
+        enroll_row.update_property(&[
+            gtk4::accessible::Property::Label(&tr("Enroll face")),
+            gtk4::accessible::Property::Description(&tr("Begin the face enrollment wizard")),
+        ]);
+        let presenter_for_row = Rc::clone(presenter);
+        let rc_row = Rc::clone(rc);
+        enroll_row.connect_activated(move |_| {
+            {
+                let mut p = presenter_for_row.borrow_mut();
+                p.cancel_enrollment_v3();
+            }
+            rc_row.borrow_mut().render_enrollment(&rc_row);
+        });
+        group.add(&enroll_row);
 
         let on_toggle: ToggleCallback = {
             let presenter = Rc::clone(presenter);
@@ -161,54 +173,44 @@ impl AppController {
                 rc_toggle.borrow_mut().render_profiles(&rc_toggle);
             })
         };
-        let list_widget = self
+        let list_group = self
             .profile_list
             .render_with_callback(&model, Some(on_toggle));
-        container.append(list_widget);
 
-        if let Some(msg) = &model.message {
-            self.status_label.set_text(&tr(msg));
-            self.status_label
-                .update_property(&[gtk4::accessible::Property::Label(&tr("Status message"))]);
-            container.append(&self.status_label);
-        }
+        self.shell.set_profiles_content(list_group);
+        self.shell.add_profiles_group(&group);
 
         if let Some(err) = &model.error {
-            let err_label = Label::builder()
-                .label(tr(&format!("{}: {}", err.title, err.detail)))
+            let err_group = adw::PreferencesGroup::new();
+            let err_row = adw::ActionRow::builder()
+                .title(tr(&format!("{}: {}", err.title, err.detail)))
                 .css_classes(["error"])
-                .wrap(true)
-                .halign(Align::Start)
                 .build();
-            err_label.set_accessible_role(gtk4::AccessibleRole::Alert);
-            container.append(&err_label);
+            err_row.set_accessible_role(gtk4::AccessibleRole::Alert);
+            err_group.add(&err_row);
+            self.shell.add_profiles_group(&err_group);
         }
 
-        self.shell.set_profiles_content(&container);
+        self.shell.set_destination(Destination::Profiles);
     }
 
-    fn render_auth(&self) {
+    fn render_auth(&mut self) {
         let Some(presenter) = &self.presenter else {
             return;
         };
-        let container = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(12)
-            .build();
-        render_pam_services(&container, presenter);
-        self.shell.set_auth_content(&container);
+        let group = render_pam_services(presenter);
+        self.shell.set_auth_content(&group);
     }
 
-    fn render_system(&self) {
+    fn render_system(&mut self) {
         let Some(presenter) = &self.presenter else {
             return;
         };
-        let container = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(12)
-            .build();
-        render_system_status(&container, presenter);
-        self.shell.set_system_content(&container);
+        self.shell.clear_system();
+        let groups = render_system_status(presenter);
+        for g in &groups {
+            self.shell.add_system_group(g);
+        }
     }
 
     fn render_enrollment(&mut self, rc: &ControllerRc) {
@@ -217,11 +219,6 @@ impl AppController {
         };
         let model = presenter.borrow().model().clone();
         let state = model.enrollment_state.clone();
-
-        let container = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(12)
-            .build();
 
         match state {
             EnrollmentState::Setup => {
@@ -245,10 +242,14 @@ impl AppController {
                     rc_cancel.borrow_mut().render_profiles(&rc_cancel);
                 };
 
-                let widget = self
-                    .enrollment_view
+                self.enrollment_view
                     .render(None, on_start, move || {}, on_cancel);
-                container.append(widget);
+
+                if self.enrollment_nav_page.is_none() {
+                    let nav = self.enrollment_view.navigation_page("Enroll Face");
+                    self.shell.push_subpage(&nav);
+                    self.enrollment_nav_page = Some(nav);
+                }
             }
             EnrollmentState::Capturing => {
                 let view = model.enrollment_view_v3.clone();
@@ -272,15 +273,19 @@ impl AppController {
                     rc_cancel.borrow_mut().render_profiles(&rc_cancel);
                 };
 
-                let widget =
-                    self.enrollment_view
-                        .render(view.as_ref(), move |_| {}, on_stop, on_cancel);
-                container.append(widget);
+                self.enrollment_view
+                    .render(view.as_ref(), move |_| {}, on_stop, on_cancel);
+
+                if self.enrollment_nav_page.is_none() {
+                    let nav = self.enrollment_view.navigation_page("Enroll Face");
+                    self.shell.push_subpage(&nav);
+                    self.enrollment_nav_page = Some(nav);
+                }
             }
             EnrollmentState::Stopped => {
                 let presenter_review = Rc::clone(presenter);
                 let rc_review = Rc::clone(rc);
-                let review_btn = Button::builder()
+                let review_btn = gtk4::Button::builder()
                     .label(tr("_Review Enrollment"))
                     .css_classes(["suggested-action"])
                     .use_underline(true)
@@ -299,11 +304,10 @@ impl AppController {
                     }
                     rc_review.borrow_mut().render_enrollment(&rc_review);
                 });
-                container.append(&review_btn);
 
                 let presenter_cancel = Rc::clone(presenter);
                 let rc_cancel = Rc::clone(rc);
-                let cancel_btn = Button::builder()
+                let cancel_btn = gtk4::Button::builder()
                     .label(tr("Cancel"))
                     .tooltip_text(tr("Cancel enrollment and discard frames"))
                     .build();
@@ -317,7 +321,21 @@ impl AppController {
                     }
                     rc_cancel.borrow_mut().render_profiles(&rc_cancel);
                 });
-                container.append(&cancel_btn);
+
+                // Re-render the enrollment page with stop actions. The
+                // enrollment component's render method expects a capture
+                // view for the stop UI; we pass the current view and use
+                // the stop/cancel callbacks for the button actions.
+                let view = model.enrollment_view_v3.clone();
+                let on_stop_review = move || {};
+                self.enrollment_view
+                    .render(view.as_ref(), move |_| {}, on_stop_review, move || {});
+
+                if self.enrollment_nav_page.is_none() {
+                    let nav = self.enrollment_view.navigation_page("Enroll Face");
+                    self.shell.push_subpage(&nav);
+                    self.enrollment_nav_page = Some(nav);
+                }
             }
             EnrollmentState::Reviewing => {
                 if let Some(review) = &model.review_view_v3 {
@@ -351,45 +369,31 @@ impl AppController {
                         rc_discard.borrow_mut().render_profiles(&rc_discard);
                     };
 
-                    let widget = self.review_view.render(
-                        review,
-                        on_save,
-                        on_resume,
-                        on_discard,
-                        state == EnrollmentState::Saving,
-                    );
-                    container.append(widget);
-                } else {
-                    let fallback = Label::builder()
-                        .label(tr("Review unavailable. Press back to return."))
-                        .wrap(true)
-                        .halign(Align::Start)
-                        .build();
-                    container.append(&fallback);
+                    self.review_view
+                        .render(review, on_save, on_resume, on_discard, false);
+
+                    if self.review_nav_page.is_none() {
+                        let nav = self.review_view.navigation_page("Review");
+                        self.shell.push_subpage(&nav);
+                        self.review_nav_page = Some(nav);
+                    }
                 }
             }
             EnrollmentState::Saving => {
-                let saving = Label::builder()
-                    .label(tr("Saving profile…"))
-                    .css_classes(["heading"])
-                    .halign(Align::Center)
-                    .build();
-                saving.set_accessible_role(gtk4::AccessibleRole::Status);
-                container.append(&saving);
+                // Pop review sub-page if present, show saving state on
+                // the enrollment page.
+                if self.review_nav_page.is_some() {
+                    self.shell.pop_subpage();
+                    self.review_nav_page = None;
+                }
+                let view = model.enrollment_view_v3.clone();
+                self.enrollment_view
+                    .render(view.as_ref(), move |_| {}, move || {}, move || {});
             }
             EnrollmentState::Error(detail) => {
-                let err_label = Label::builder()
-                    .label(tr(&format!("Enrollment error: {detail}")))
-                    .css_classes(["error"])
-                    .wrap(true)
-                    .halign(Align::Start)
-                    .build();
-                err_label.set_accessible_role(gtk4::AccessibleRole::Alert);
-                container.append(&err_label);
-
                 let presenter_dismiss = Rc::clone(presenter);
                 let rc_dismiss = Rc::clone(rc);
-                let dismiss_btn = Button::builder()
+                let dismiss_btn = gtk4::Button::builder()
                     .label(tr("_Dismiss"))
                     .use_underline(true)
                     .css_classes(["suggested-action"])
@@ -403,32 +407,16 @@ impl AppController {
                     }
                     rc_dismiss.borrow_mut().render_enrollment(&rc_dismiss);
                 });
-                container.append(&dismiss_btn);
+
+                let view = model.enrollment_view_v3.clone();
+                self.enrollment_view
+                    .render(view.as_ref(), move |_| {}, move || {}, move || {});
+                // The error detail is surfaced via the model.error field,
+                // which render_profiles shows. For the sub-page, we rely
+                // on the enrollment component's guidance row.
+                let _ = detail;
             }
         }
-
-        let back_btn = Button::builder()
-            .label(tr("_Back to Profiles"))
-            .use_underline(true)
-            .halign(Align::Start)
-            .margin_top(12)
-            .build();
-        back_btn.update_property(&[gtk4::accessible::Property::Label(&tr("Back to profiles"))]);
-        let presenter_back = Rc::clone(presenter);
-        let rc_back = Rc::clone(rc);
-        back_btn.connect_clicked(move |_| {
-            {
-                let mut p = presenter_back.borrow_mut();
-                if !matches!(p.model().enrollment_state, EnrollmentState::Saving) {
-                    p.cancel_enrollment_v3();
-                }
-            }
-            rc_back.borrow_mut().render_profiles(&rc_back);
-        });
-        container.append(&back_btn);
-
-        self.shell.set_profiles_content(&container);
-        self.shell.set_destination(Destination::Profiles);
     }
 
     fn after_save(&mut self, rc: &ControllerRc) {
@@ -441,6 +429,15 @@ impl AppController {
             matches!(p.model().enrollment_state, EnrollmentState::Setup)
         };
         if setup {
+            // Pop any enrollment/review sub-pages and return to profiles.
+            if self.review_nav_page.is_some() {
+                self.shell.pop_subpage();
+                self.review_nav_page = None;
+            }
+            if self.enrollment_nav_page.is_some() {
+                self.shell.pop_subpage();
+                self.enrollment_nav_page = None;
+            }
             self.render_profiles(rc);
         } else {
             self.render_enrollment(rc);
@@ -452,7 +449,7 @@ fn current_uid() -> u32 {
     nix::unistd::getuid().as_raw()
 }
 
-fn show_offline_all(shell: &Shell, detail: &str) {
+fn show_offline_all(shell: &mut Shell, detail: &str) {
     let detail_owned = detail.to_string();
     shell.show_offline(&detail_owned, || {});
 }

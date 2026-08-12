@@ -153,12 +153,15 @@ fn review_component_connects_callbacks() {
 
 /// The profile list component MUST connect the enabled toggle to a
 /// callback so profile enable/disable is wired through the presenter.
+/// The redesigned component uses `adw::SwitchRow` with
+/// `connect_active_notify` (not the old `gtk4::CheckButton` with
+/// `connect_toggled`).
 #[test]
 fn profile_list_component_connects_toggle() {
     let profile_list = include_str!("../src/components/profile_list.rs");
     assert!(
-        profile_list.contains("connect_toggled"),
-        "profile list component must connect the toggle CheckButton to a callback"
+        profile_list.contains("connect_active_notify"),
+        "profile list component must connect the SwitchRow active-notify signal to a callback"
     );
 }
 

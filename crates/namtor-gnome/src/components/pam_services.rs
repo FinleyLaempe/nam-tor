@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! PAM services inventory component for the Nam-tor GNOME management UI.
 //!
-//! Renders a list of PAM services with `gtk::Switch` toggles, descriptions,
-//! and compatibility warnings. High-impact (risky) services require an
-//! explicit confirmation dialog before enabling.
+//! Renders a list of PAM services as an [`adw::PreferencesGroup`] containing
+//! one [`adw::ActionRow`] per service with an [`adw::SwitchRow`] suffix
+//! toggle, descriptions as subtitles, and compatibility warnings. High-impact
+//! (risky) services require an explicit confirmation dialog before enabling.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk4::prelude::*;
-use gtk4::{AccessibleRole, Align, Box as GtkBox, Label, Orientation, Switch};
 use libadwaita as adw;
-use libadwaita::prelude::MessageDialogExt;
+use libadwaita::prelude::{ActionRowExt, MessageDialogExt, PreferencesGroupExt};
 
 use crate::client::PamServiceCompatibility;
 use crate::presenter::ProfilePresenter;
 use crate::tr;
-use crate::view_model::{compatibility_label, PamServiceRowView};
+use crate::view_model::compatibility_label;
 
 /// The exact warning text that MUST appear in the high-impact confirmation
 /// dialog. The user must acknowledge this before a risky service can be
@@ -28,110 +28,66 @@ pub const HIGH_IMPACT_WARNING: &str =
 
 type PresenterRc<C> = Rc<RefCell<ProfilePresenter<C>>>;
 
-/// Render the PAM services inventory into `container`.
-///
-/// Reads the model from the presenter, builds one row per service with a
-/// `gtk::Switch`, and wires toggle callbacks that route through
-/// `request_pam_toggle` → confirmation dialog → `confirm_pam_toggle` for
-/// risky services, or direct apply for safe services.
+/// Render the PAM services inventory as a `PreferencesGroup` and return it.
+/// The caller adds the group to the Authentication `PreferencesPage`.
 pub fn render_pam_services<C: crate::client::ManagerClient + 'static>(
-    container: &GtkBox,
     presenter_rc: &PresenterRc<C>,
-) {
-    while let Some(child) = container.first_child() {
-        container.remove(&child);
-    }
+) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title(tr("Authentication uses"))
+        .build();
+    group.update_property(&[gtk4::accessible::Property::Label(&tr(
+        "PAM services inventory",
+    ))]);
 
     let model = presenter_rc.borrow().model().clone();
 
-    let title = Label::builder()
-        .label(tr("Authentication uses"))
-        .halign(Align::Start)
-        .css_classes(["heading"])
-        .accessible_role(AccessibleRole::Heading)
-        .build();
-    title.update_property(&[gtk4::accessible::Property::Level(1)]);
-    container.append(&title);
-
     if model.pam_services.is_empty() {
-        let l = Label::builder()
-            .label(tr("No PAM services found."))
-            .halign(Align::Start)
-            .css_classes(["dim-label"])
+        let l = adw::ActionRow::builder()
+            .title(tr("No PAM services found."))
             .build();
         l.update_property(&[gtk4::accessible::Property::Label(&tr(
             "Empty PAM service list",
         ))]);
-        container.append(&l);
-        return;
+        group.add(&l);
+        return group;
     }
 
     for svc in &model.pam_services {
-        container.append(&create_pam_service_row(svc, presenter_rc, container));
+        group.add(&create_pam_service_row(svc, presenter_rc));
     }
+    group
 }
 
-#[allow(clippy::too_many_arguments)]
 fn create_pam_service_row<C: crate::client::ManagerClient + 'static>(
-    service: &PamServiceRowView,
+    service: &crate::view_model::PamServiceRowView,
     presenter_rc: &PresenterRc<C>,
-    container: &GtkBox,
-) -> GtkBox {
-    let row_box = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(12)
-        .margin_bottom(8)
-        .build();
-
-    let info_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(2)
-        .hexpand(true)
-        .halign(Align::Start)
-        .build();
-
-    let name_label = Label::builder()
-        .label(tr(&service.display_name))
-        .halign(Align::Start)
-        .accessible_role(AccessibleRole::ListItem)
-        .build();
-    name_label.update_property(&[gtk4::accessible::Property::Label(
-        &tr(&service.display_name),
-    )]);
-    info_box.append(&name_label);
-
-    let desc_label = Label::builder()
-        .label(tr(&service.description))
-        .halign(Align::Start)
-        .css_classes(["dim-label", "caption"])
-        .build();
-    desc_label.update_property(&[gtk4::accessible::Property::Description(&tr(
-        &service.description
-    ))]);
-    info_box.append(&desc_label);
-
+) -> adw::ActionRow {
     let compat_text = compatibility_label(service.compatibility);
-    let compat_label = Label::builder()
-        .label(tr(&format!("Compatibility: {compat_text}")))
-        .halign(Align::Start)
-        .css_classes(["caption"])
+    let subtitle = format!(
+        "{}\n{}: {}",
+        service.description,
+        tr("Compatibility"),
+        compat_text
+    );
+
+    let row = adw::ActionRow::builder()
+        .title(tr(&service.display_name))
+        .subtitle(tr(&subtitle))
         .build();
-    compat_label.update_property(&[gtk4::accessible::Property::Label(&tr(&format!(
-        "Service compatibility: {compat_text}"
-    )))]);
+    row.update_property(&[
+        gtk4::accessible::Property::Label(&tr(&service.display_name)),
+        gtk4::accessible::Property::Description(&tr(&service.description)),
+    ]);
+
     if service.compatibility == PamServiceCompatibility::Risky {
-        compat_label.add_css_class("warning");
+        row.add_css_class("warning");
     } else if service.compatibility == PamServiceCompatibility::Unsupported {
-        compat_label.add_css_class("error");
+        row.add_css_class("error");
     }
-    info_box.append(&compat_label);
 
-    row_box.append(&info_box);
-
-    let toggle = Switch::builder()
+    let toggle = adw::SwitchRow::builder()
         .active(service.enabled)
-        .valign(Align::Center)
-        .accessible_role(AccessibleRole::Switch)
         .tooltip_text(tr(&format!(
             "Toggle {} ({})",
             service.display_name, service.id
@@ -159,33 +115,25 @@ fn create_pam_service_row<C: crate::client::ManagerClient + 'static>(
 
     if !is_unsupported {
         let rc = Rc::clone(presenter_rc);
-        let container_clone = container.clone();
         let service_id = service.id.clone();
         let service_name = service.display_name.clone();
-        toggle.connect_state_set(move |switch, new_state| {
-            handle_toggle::<C>(
-                &rc,
-                &container_clone,
-                &service_id,
-                &service_name,
-                switch,
-                new_state,
-            )
+        toggle.connect_active_notify(move |sw| {
+            handle_toggle::<C>(&rc, sw, &service_id, &service_name);
         });
     }
 
-    row_box.append(&toggle);
-    row_box
+    row.add_suffix(&toggle);
+    row.set_activatable_widget(Some(&toggle));
+    row
 }
 
 fn handle_toggle<C: crate::client::ManagerClient + 'static>(
     rc: &PresenterRc<C>,
-    container: &GtkBox,
+    switch: &adw::SwitchRow,
     service_id: &str,
     service_name: &str,
-    switch: &Switch,
-    new_state: bool,
-) -> glib::Propagation {
+) {
+    let new_state = switch.is_active();
     {
         let mut p = rc.borrow_mut();
         p.request_pam_toggle(service_id, new_state);
@@ -195,23 +143,18 @@ fn handle_toggle<C: crate::client::ManagerClient + 'static>(
     let has_error = rc.borrow().model().error.is_some();
 
     if has_error {
-        render_pam_services(container, rc);
-        return glib::Propagation::Stop;
+        switch.set_active(!new_state);
+        return;
     }
 
     if needs_confirmation {
-        show_high_impact_dialog(rc, container, switch, service_id, service_name);
-        return glib::Propagation::Stop;
+        show_high_impact_dialog(rc, switch, service_id, service_name);
     }
-
-    render_pam_services(container, rc);
-    glib::Propagation::Proceed
 }
 
 fn show_high_impact_dialog<C: crate::client::ManagerClient + 'static>(
     rc: &PresenterRc<C>,
-    container: &GtkBox,
-    switch: &Switch,
+    switch: &adw::SwitchRow,
     _service_id: &str,
     service_name: &str,
 ) {
@@ -232,7 +175,6 @@ fn show_high_impact_dialog<C: crate::client::ManagerClient + 'static>(
     dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
 
     let rc_dialog = Rc::clone(rc);
-    let container_dialog = container.clone();
     let switch_dialog = switch.clone();
     dialog.connect_response(None, move |dlg, response| {
         let mut p = rc_dialog.borrow_mut();
@@ -244,7 +186,6 @@ fn show_high_impact_dialog<C: crate::client::ManagerClient + 'static>(
             switch_dialog.set_active(false);
         }
         drop(p);
-        render_pam_services(&container_dialog, &rc_dialog);
         dlg.close();
     });
 

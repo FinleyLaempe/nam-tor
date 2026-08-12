@@ -1,27 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Profile list view component.
+//!
+//! Renders enrolled profiles as an [`adw::PreferencesGroup`] containing one
+//! [`adw::ActionRow`] per profile, with an [`adw::SwitchRow`] suffix to
+//! toggle the profile on or off. The group title is "Enrolled Profiles".
 
 use crate::tr;
 use crate::view_model::PresenterModel;
 use gtk4::prelude::*;
-use gtk4::{AccessibleRole, Box as GtkBox, CheckButton, Label, Orientation};
+use libadwaita as adw;
+use libadwaita::prelude::{ActionRowExt, PreferencesGroupExt};
 
 pub type ToggleCallback = std::rc::Rc<dyn Fn(&str, bool)>;
 
 pub struct ProfileListView {
-    container: GtkBox,
+    group: adw::PreferencesGroup,
 }
 
 impl ProfileListView {
     pub fn new() -> Self {
-        let container = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(4)
+        let group = adw::PreferencesGroup::builder()
+            .title(tr("Enrolled Profiles"))
             .build();
-        Self { container }
+        Self { group }
     }
 
-    pub fn render(&self, model: &PresenterModel) -> &GtkBox {
+    pub fn render(&self, model: &PresenterModel) -> &adw::PreferencesGroup {
         self.render_with_callback(model, None)
     }
 
@@ -32,71 +36,32 @@ impl ProfileListView {
         &self,
         model: &PresenterModel,
         on_toggle: Option<ToggleCallback>,
-    ) -> &GtkBox {
-        while let Some(child) = self.container.first_child() {
-            self.container.remove(&child);
-        }
+    ) -> &adw::PreferencesGroup {
+        self.clear();
 
         if model.emitter_armed_warning {
-            let warn = Label::builder()
-                .label(tr("Reduced protection: Always-on emitter detected"))
-                .css_classes(["warning-banner"])
+            let warn = adw::ActionRow::builder()
+                .title(tr("Reduced protection: Always-on emitter detected"))
+                .css_classes(["warning"])
                 .build();
-            warn.set_accessible_role(AccessibleRole::Alert);
+            warn.set_accessible_role(gtk4::AccessibleRole::Alert);
             warn.update_property(&[gtk4::accessible::Property::Label(&tr(
                 "Reduced emitter protection warning",
             ))]);
-            self.container.append(&warn);
+            self.group.add(&warn);
         }
 
         if model.profiles.is_empty() {
-            let l = Label::builder()
-                .label(tr("No profiles enrolled yet."))
-                .halign(gtk4::Align::Start)
+            let l = adw::ActionRow::builder()
+                .title(tr("No profiles enrolled yet."))
                 .build();
             l.update_property(&[gtk4::accessible::Property::Label(&tr("Empty profile list"))]);
-            self.container.append(&l);
+            self.group.add(&l);
         } else {
             for row in &model.profiles {
-                let row_box = GtkBox::builder()
-                    .orientation(Orientation::Horizontal)
-                    .spacing(8)
-                    .build();
-                row_box.set_accessible_role(AccessibleRole::ListItem);
-                row_box.update_property(&[gtk4::accessible::Property::Label(&tr(
-                    "Enrolled profile row",
-                ))]);
-
-                let name = Label::builder()
-                    .label(tr(&row.name))
-                    .halign(gtk4::Align::Start)
-                    .hexpand(true)
-                    .build();
-                name.set_accessible_role(AccessibleRole::ListItem);
-                name.update_property(&[gtk4::accessible::Property::Label(&tr(&row.name))]);
-
-                let toggle = CheckButton::builder()
-                    .label(tr("Enabled"))
-                    .active(row.enabled)
-                    .build();
-                toggle.set_accessible_role(AccessibleRole::Checkbox);
-                toggle.update_property(&[gtk4::accessible::Property::Label(&tr(&format!(
-                    "Enable profile {}",
-                    row.name
-                )))]);
-                toggle
-                    .set_tooltip_text(Some(&tr(&format!("Toggle profile {} on or off", row.name))));
-
-                if let Some(cb) = &on_toggle {
-                    let id = row.id.clone();
-                    let cb = std::rc::Rc::clone(cb);
-                    toggle.connect_toggled(move |chk| {
-                        cb(&id, chk.is_active());
-                    });
-                }
-
-                let last = Label::builder()
-                    .label(tr(&format!(
+                let action_row = adw::ActionRow::builder()
+                    .title(tr(&row.name))
+                    .subtitle(tr(&format!(
                         "last used: {}",
                         if row.last_used == 0 {
                             tr("never")
@@ -104,19 +69,47 @@ impl ProfileListView {
                             format!("epoch {}", row.last_used)
                         }
                     )))
-                    .css_classes(["dim-label", "caption"])
                     .build();
-                last.update_property(&[gtk4::accessible::Property::Description(&tr(
-                    "Timestamp of last successful authentication",
-                ))]);
+                action_row.set_accessible_role(gtk4::AccessibleRole::ListItem);
+                action_row.update_property(&[gtk4::accessible::Property::Label(&tr(&format!(
+                    "Enrolled profile {}",
+                    row.name
+                )))]);
 
-                row_box.append(&name);
-                row_box.append(&toggle);
-                row_box.append(&last);
-                self.container.append(&row_box);
+                let toggle = adw::SwitchRow::builder()
+                    .active(row.enabled)
+                    .tooltip_text(tr(&format!("Toggle profile {} on or off", row.name)))
+                    .build();
+                toggle.update_property(&[
+                    gtk4::accessible::Property::Label(&tr(&format!("Enable profile {}", row.name))),
+                    gtk4::accessible::Property::Description(&tr("Toggle this profile on or off")),
+                ]);
+
+                if let Some(cb) = &on_toggle {
+                    let id = row.id.clone();
+                    let cb = std::rc::Rc::clone(cb);
+                    toggle.connect_active_notify(move |sw| {
+                        cb(&id, sw.is_active());
+                    });
+                }
+
+                action_row.add_suffix(&toggle);
+                action_row.set_activatable_widget(Some(&toggle));
+                self.group.add(&action_row);
             }
         }
-        &self.container
+        &self.group
+    }
+
+    fn clear(&self) {
+        while let Some(child) = self.group.first_child() {
+            self.group.remove(&child);
+        }
+    }
+
+    /// Get a reference to the underlying `PreferencesGroup`.
+    pub fn group(&self) -> &adw::PreferencesGroup {
+        &self.group
     }
 }
 

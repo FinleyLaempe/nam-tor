@@ -3,103 +3,73 @@
 //!
 //! Displays a summary of the capture quality and coverage before the user
 //! commits the profile to the store. No biometric data or raw scores are
-//! exposed.
+//! exposed. Builds an [`adw::PreferencesPage`] (wrapped in a
+//! [`adw::NavigationPage`] by the caller for `push_subpage`).
 
 use crate::tr;
 use crate::view_model::ReviewViewV3;
 use gtk4::prelude::*;
-use gtk4::{Box as GtkBox, Label, Orientation};
+use libadwaita as adw;
+use libadwaita::prelude::{PreferencesGroupExt, PreferencesPageExt};
 
 pub struct ReviewViewComponent {
-    container: GtkBox,
+    page: adw::PreferencesPage,
+    group: Option<adw::PreferencesGroup>,
 }
 
 impl ReviewViewComponent {
     pub fn new() -> Self {
-        let container = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(12)
-            .build();
-        Self { container }
+        let page = adw::PreferencesPage::new();
+        Self { page, group: None }
     }
 
-    /// Renders the review summary.
+    /// Renders the review summary into the component's `PreferencesPage`.
     pub fn render(
-        &self,
+        &mut self,
         view: &ReviewViewV3,
         on_save: impl Fn() + 'static,
         on_resume: impl Fn() + 'static,
         on_discard: impl Fn() + 'static,
         is_pending: bool,
-    ) -> &GtkBox {
-        while let Some(child) = self.container.first_child() {
-            self.container.remove(&child);
-        }
+    ) -> &adw::PreferencesPage {
+        self.clear();
 
-        let group = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(16)
+        let group = adw::PreferencesGroup::builder()
+            .title(tr("Review Enrollment"))
             .build();
+        group.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Enrollment review group",
+        ))]);
 
-        let title = Label::builder()
-            .label(tr("Review Enrollment"))
-            .css_classes(["title-1"])
-            .halign(gtk4::Align::Start)
+        let quality_row = adw::ActionRow::builder()
+            .title(tr(&format!("Quality: {}%", view.quality_percent)))
             .build();
-        title.set_accessible_role(gtk4::AccessibleRole::Heading);
-        title.update_property(&[gtk4::accessible::Property::Level(1)]);
-        group.append(&title);
-
-        let summary_box = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(8)
-            .build();
-
-        let quality_label = Label::builder()
-            .label(tr(&format!("Quality: {}%", view.quality_percent)))
-            .halign(gtk4::Align::Start)
-            .build();
-        quality_label.update_property(&[gtk4::accessible::Property::Label(&tr(
+        quality_row.update_property(&[gtk4::accessible::Property::Label(&tr(
             "Capture quality percentage",
         ))]);
-        summary_box.append(&quality_label);
+        group.add(&quality_row);
 
-        let diversity_label = Label::builder()
-            .label(tr(&format!("Diversity: {}%", view.diversity_percent)))
-            .halign(gtk4::Align::Start)
+        let diversity_row = adw::ActionRow::builder()
+            .title(tr(&format!("Diversity: {}%", view.diversity_percent)))
             .build();
-        diversity_label.update_property(&[gtk4::accessible::Property::Label(&tr(
+        diversity_row.update_property(&[gtk4::accessible::Property::Label(&tr(
             "Pose diversity percentage",
         ))]);
-        summary_box.append(&diversity_label);
+        group.add(&diversity_row);
 
-        let frames_label = Label::builder()
-            .label(tr(&format!("Frames accepted: {}", view.frames_accepted)))
-            .halign(gtk4::Align::Start)
+        let frames_row = adw::ActionRow::builder()
+            .title(tr(&format!("Frames accepted: {}", view.frames_accepted)))
             .build();
-        frames_label.update_property(&[gtk4::accessible::Property::Label(&tr(
+        frames_row.update_property(&[gtk4::accessible::Property::Label(&tr(
             "Number of accepted frames",
         ))]);
-        summary_box.append(&frames_label);
+        group.add(&frames_row);
 
-        let guidance_label = Label::builder()
-            .label(tr(&view.guidance))
-            .halign(gtk4::Align::Start)
-            .wrap(true)
-            .css_classes(["caption"])
-            .build();
-        guidance_label.update_property(&[gtk4::accessible::Property::Label(&tr(
+        let guidance_row = adw::ActionRow::builder().title(tr(&view.guidance)).build();
+        guidance_row.update_property(&[gtk4::accessible::Property::Label(&tr(
             "Enrollment guidance",
         ))]);
-        summary_box.append(&guidance_label);
-
-        group.append(&summary_box);
-
-        let action_box = GtkBox::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(12)
-            .halign(gtk4::Align::End)
-            .build();
+        group.add(&guidance_row);
 
         let save_btn = gtk4::Button::builder()
             .label(tr("_Save Profile"))
@@ -141,14 +111,34 @@ impl ReviewViewComponent {
         ]);
         discard_btn.connect_clicked(move |_| on_discard());
 
-        action_box.append(&discard_btn);
-        action_box.append(&resume_btn);
-        action_box.append(&save_btn);
-        group.append(&action_box);
+        group.add(&discard_btn);
+        group.add(&resume_btn);
+        group.add(&save_btn);
 
-        self.container.append(&group);
+        self.page.add(&group);
+        self.group = Some(group);
 
-        &self.container
+        &self.page
+    }
+
+    fn clear(&mut self) {
+        if let Some(g) = self.group.take() {
+            self.page.remove(&g);
+        }
+    }
+
+    /// Get a reference to the underlying `PreferencesPage`.
+    pub fn page(&self) -> &adw::PreferencesPage {
+        &self.page
+    }
+
+    /// Wrap the component's `PreferencesPage` in a `NavigationPage` ready
+    /// for `push_subpage`.
+    pub fn navigation_page(&self, title: &str) -> adw::NavigationPage {
+        adw::NavigationPage::builder()
+            .title(tr(title))
+            .child(&self.page)
+            .build()
     }
 }
 

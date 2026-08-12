@@ -1,21 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Adaptive application shell for the Nam-tor GNOME settings app.
+//! Settings shell for the Nam-tor GNOME settings app.
 //!
-//! The shell owns the top-level [`adw::ApplicationWindow`] and implements
-//! adaptive navigation using `AdwViewStack` with three destinations:
-//! Profiles, Authentication, and System. Navigation switches between
-//! `AdwViewSwitcher` (wide, ≥ 600px) and `AdwViewSwitcherBar` (narrow, < 600px)
-//! via an `AdwBreakpoint`.
+//! The shell owns a top-level [`adw::ApplicationWindow`] and presents an
+//! [`adw::PreferencesDialog`] with three [`adw::PreferencesPage`]s: Profiles,
+//! Authentication, and System. Each page hosts one or more
+//! [`adw::PreferencesGroup`]s containing [`adw::ActionRow`] / [`adw::SwitchRow`]
+//! rows — the modern GNOME settings idiom.
+//!
+//! The enrollment flow uses [`adw::PreferencesDialog::push_subpage`] /
+//! [`adw::PreferencesDialog::pop_subpage`] for the capture and review
+//! sub-pages. Sub-pages MUST be wrapped in [`adw::NavigationPage`] per the
+//! libadwaita 1.5 migration guide (`push_subpage` takes an
+//! `adw::NavigationPage`).
+//!
+//! Note: the Rust `libadwaita` crate drops the `Adw` prefix — the types are
+//! `adw::PreferencesDialog`, `adw::PreferencesPage`, etc. The `v1_5` feature
+//! is enabled in `crates/namtor-gnome/Cargo.toml`.
 
 use gtk4::prelude::*;
-use gtk4::{Box as GtkBox, Orientation, PolicyType, ScrolledWindow};
 use libadwaita as adw;
-use libadwaita::prelude::AdwApplicationWindowExt;
-use libadwaita::{BreakpointCondition, BreakpointConditionLengthType, LengthUnit};
+use libadwaita::prelude::{
+    ActionRowExt, AdwDialogExt, PreferencesDialogExt, PreferencesGroupExt, PreferencesPageExt,
+};
 
 use crate::tr;
 
-/// Destination identifiers for the settings shell.
+/// Destination identifiers for the settings shell. Each destination maps to
+/// one [`adw::PreferencesPage`] in the preferences dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Destination {
     #[default]
@@ -25,7 +36,7 @@ pub enum Destination {
 }
 
 impl Destination {
-    /// Human-readable title for the destination.
+    /// Human-readable title for the destination (used as the page title).
     pub fn title(&self) -> &'static str {
         match self {
             Self::Profiles => "Profiles",
@@ -34,7 +45,7 @@ impl Destination {
         }
     }
 
-    /// Icon name for the destination (for switcher).
+    /// Icon name for the destination (for the page icon).
     pub fn icon_name(&self) -> &'static str {
         match self {
             Self::Profiles => "system-users-symbolic",
@@ -43,7 +54,7 @@ impl Destination {
         }
     }
 
-    /// Name for the view stack page.
+    /// Name for the preferences page (used as the page name for navigation).
     pub fn name(&self) -> &'static str {
         match self {
             Self::Profiles => "profiles",
@@ -58,149 +69,88 @@ impl Destination {
     }
 }
 
-/// Adaptive settings shell with three destinations.
+/// Settings shell presenting an [`adw::PreferencesDialog`] from an
+/// [`adw::ApplicationWindow`] with three destinations.
 pub struct Shell {
     pub window: adw::ApplicationWindow,
-    pub view_stack: adw::ViewStack,
-    pub switcher_bar: adw::ViewSwitcherBar,
-    pub header_bar: adw::HeaderBar,
-    pub profiles_page: GtkBox,
-    pub auth_page: GtkBox,
-    pub system_page: GtkBox,
+    pub dialog: adw::PreferencesDialog,
+    pub profiles_page: adw::PreferencesPage,
+    pub auth_page: adw::PreferencesPage,
+    pub system_page: adw::PreferencesPage,
+    /// Groups currently added to the profiles page. Tracked so a re-render
+    /// can remove the previous set before adding the new one.
+    profiles_groups: Vec<adw::PreferencesGroup>,
+    auth_groups: Vec<adw::PreferencesGroup>,
+    system_groups: Vec<adw::PreferencesGroup>,
     current_destination: Destination,
 }
 
 impl Shell {
-    /// Construct the adaptive settings shell.
+    /// Construct the settings shell: an `ApplicationWindow` hosting a
+    /// `PreferencesDialog` with three `PreferencesPage`s.
     pub fn new(app: &adw::Application) -> Self {
-        // Create the view stack with three pages
-        let view_stack = adw::ViewStack::new();
-
         // Profiles page
-        let profiles_page = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .hexpand(true)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(12)
-            .margin_bottom(12)
-            .spacing(8)
+        let profiles_page = adw::PreferencesPage::builder()
+            .title(tr(Destination::Profiles.title()))
+            .icon_name(Destination::Profiles.icon_name())
+            .name(Destination::Profiles.name())
             .build();
-        let profiles_scroll = ScrolledWindow::builder()
-            .vscrollbar_policy(PolicyType::Automatic)
-            .hscrollbar_policy(PolicyType::Never)
-            .propagate_natural_height(false)
-            .propagate_natural_width(false)
-            .child(&profiles_page)
-            .build();
-        let profiles_stack_page =
-            view_stack.add_named(&profiles_scroll, Some(Destination::Profiles.name()));
-        profiles_stack_page.set_title(Some(&tr(Destination::Profiles.title())));
-        profiles_stack_page.set_icon_name(Some(Destination::Profiles.icon_name()));
+        profiles_page.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Profiles settings page",
+        ))]);
 
         // Authentication page
-        let auth_page = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .hexpand(true)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(12)
-            .margin_bottom(12)
-            .spacing(8)
+        let auth_page = adw::PreferencesPage::builder()
+            .title(tr(Destination::Authentication.title()))
+            .icon_name(Destination::Authentication.icon_name())
+            .name(Destination::Authentication.name())
             .build();
-        let auth_scroll = ScrolledWindow::builder()
-            .vscrollbar_policy(PolicyType::Automatic)
-            .hscrollbar_policy(PolicyType::Never)
-            .propagate_natural_height(false)
-            .propagate_natural_width(false)
-            .child(&auth_page)
-            .build();
-        let auth_stack_page =
-            view_stack.add_named(&auth_scroll, Some(Destination::Authentication.name()));
-        auth_stack_page.set_title(Some(&tr(Destination::Authentication.title())));
-        auth_stack_page.set_icon_name(Some(Destination::Authentication.icon_name()));
+        auth_page.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Authentication settings page",
+        ))]);
 
         // System page
-        let system_page = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .hexpand(true)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(12)
-            .margin_bottom(12)
-            .spacing(8)
+        let system_page = adw::PreferencesPage::builder()
+            .title(tr(Destination::System.title()))
+            .icon_name(Destination::System.icon_name())
+            .name(Destination::System.name())
             .build();
-        let system_scroll = ScrolledWindow::builder()
-            .vscrollbar_policy(PolicyType::Automatic)
-            .hscrollbar_policy(PolicyType::Never)
-            .propagate_natural_height(false)
-            .propagate_natural_width(false)
-            .child(&system_page)
+        system_page.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "System settings page",
+        ))]);
+
+        // Preferences dialog hosting all three pages
+        let dialog = adw::PreferencesDialog::builder()
+            .title(tr("Nam-tor"))
+            .content_width(720)
+            .content_height(540)
+            .search_enabled(true)
             .build();
-        let system_stack_page =
-            view_stack.add_named(&system_scroll, Some(Destination::System.name()));
-        system_stack_page.set_title(Some(&tr(Destination::System.title())));
-        system_stack_page.set_icon_name(Some(Destination::System.icon_name()));
+        dialog.update_property(&[gtk4::accessible::Property::Label(&tr("Nam-tor settings"))]);
+        dialog.add(&profiles_page);
+        dialog.add(&auth_page);
+        dialog.add(&system_page);
 
-        // Create header bar with title widget
-        let title_label = gtk4::Label::new(Some(&tr(Destination::Profiles.title())));
-        title_label.add_css_class("title");
-        title_label.set_accessible_role(gtk4::AccessibleRole::Heading);
-        let header_bar = adw::HeaderBar::builder().title_widget(&title_label).build();
-
-        // Create toolbar view
-        let toolbar_view = adw::ToolbarView::builder()
-            .top_bar_style(adw::ToolbarStyle::Raised)
-            .build();
-        toolbar_view.add_top_bar(&header_bar);
-        toolbar_view.set_content(Some(&view_stack));
-
-        // Create window
+        // Application window — host for the dialog. The window itself shows
+        // nothing until the dialog is presented; it exists so the app has a
+        // top-level GTK window for WM/session integration.
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .title(tr("Nam-tor"))
             .default_width(720)
             .default_height(540)
-            .content(&toolbar_view)
             .build();
         window.update_property(&[gtk4::accessible::Property::Label(&tr("Nam-tor settings"))]);
 
-        // Create view switcher bar (for narrow windows, visible by default)
-        let switcher_bar = adw::ViewSwitcherBar::builder()
-            .stack(&view_stack)
-            .reveal(false) // Start hidden, breakpoint will reveal on narrow
-            .build();
-        toolbar_view.add_bottom_bar(&switcher_bar);
-
-        // Create view switcher for header bar (for wide windows)
-        let switcher = adw::ViewSwitcher::builder()
-            .stack(&view_stack)
-            .policy(adw::ViewSwitcherPolicy::Narrow)
-            .build();
-
-        // Set switcher as title widget for wide windows
-        header_bar.set_title_widget(Some(&switcher));
-
-        // Create breakpoint for adaptive switching
-        // Narrow < 600px: switcher bar revealed, header switcher hidden
-        // Wide >= 600px: switcher bar hidden, header switcher visible
-        let condition = BreakpointCondition::new_length(
-            BreakpointConditionLengthType::MaxWidth,
-            600.0,
-            LengthUnit::Px,
-        );
-        let breakpoint = adw::Breakpoint::new(condition);
-        breakpoint.add_setter(&switcher_bar, "reveal", Some(&glib::Value::from(true)));
-        window.add_breakpoint(breakpoint);
-
         Self {
             window,
-            view_stack,
-            switcher_bar,
-            header_bar,
+            dialog,
             profiles_page,
             auth_page,
             system_page,
+            profiles_groups: Vec::new(),
+            auth_groups: Vec::new(),
+            system_groups: Vec::new(),
             current_destination: Destination::Profiles,
         }
     }
@@ -210,116 +160,194 @@ impl Shell {
         self.current_destination
     }
 
-    /// Switch to a different destination.
+    /// Switch to a different destination by setting the dialog's visible
+    /// page to the matching `PreferencesPage`.
     pub fn set_destination(&mut self, destination: Destination) {
         self.current_destination = destination;
-        self.view_stack.set_visible_child_name(destination.name());
+        let page = match destination {
+            Destination::Profiles => &self.profiles_page,
+            Destination::Authentication => &self.auth_page,
+            Destination::System => &self.system_page,
+        };
+        self.dialog.set_visible_page(page);
     }
 
-    /// Get the content area for the Profiles page.
-    pub fn profiles_content(&self) -> &GtkBox {
+    /// Get the `PreferencesPage` for the Profiles destination.
+    pub fn profiles_page(&self) -> &adw::PreferencesPage {
         &self.profiles_page
     }
 
-    /// Get the content area for the Authentication page.
-    pub fn auth_content(&self) -> &GtkBox {
+    /// Get the `PreferencesPage` for the Authentication destination.
+    pub fn auth_page(&self) -> &adw::PreferencesPage {
         &self.auth_page
     }
 
-    /// Get the content area for the System page.
-    pub fn system_content(&self) -> &GtkBox {
+    /// Get the `PreferencesPage` for the System destination.
+    pub fn system_page(&self) -> &adw::PreferencesPage {
         &self.system_page
     }
 
-    /// Set the content of the Profiles page.
-    pub fn set_profiles_content(&self, widget: &impl gtk4::prelude::IsA<gtk4::Widget>) {
-        self.clear_content(&self.profiles_page);
-        self.profiles_page.append(widget);
+    /// Replace the Profiles page content with a single `PreferencesGroup`,
+    /// removing any previously added groups.
+    pub fn set_profiles_content(&mut self, group: &adw::PreferencesGroup) {
+        self.clear_profiles();
+        self.profiles_page.add(group);
+        self.profiles_groups.push(group.clone());
     }
 
-    /// Set the content of the Authentication page.
-    pub fn set_auth_content(&self, widget: &impl gtk4::prelude::IsA<gtk4::Widget>) {
-        self.clear_content(&self.auth_page);
-        self.auth_page.append(widget);
+    /// Replace the Authentication page content with a single
+    /// `PreferencesGroup`, removing any previously added groups.
+    pub fn set_auth_content(&mut self, group: &adw::PreferencesGroup) {
+        self.clear_auth();
+        self.auth_page.add(group);
+        self.auth_groups.push(group.clone());
     }
 
-    /// Set the content of the System page.
-    pub fn set_system_content(&self, widget: &impl gtk4::prelude::IsA<gtk4::Widget>) {
-        self.clear_content(&self.system_page);
-        self.system_page.append(widget);
+    /// Replace the System page content with a single `PreferencesGroup`,
+    /// removing any previously added groups.
+    pub fn set_system_content(&mut self, group: &adw::PreferencesGroup) {
+        self.clear_system();
+        self.system_page.add(group);
+        self.system_groups.push(group.clone());
     }
 
-    /// Clear all children from a content area.
-    fn clear_content(&self, area: &GtkBox) {
-        while let Some(child) = area.first_child() {
-            area.remove(&child);
+    /// Add a `PreferencesGroup` to the Profiles page without clearing
+    /// existing groups. Used by renderers that build multiple titled
+    /// groups for one destination.
+    pub fn add_profiles_group(&mut self, group: &adw::PreferencesGroup) {
+        self.profiles_page.add(group);
+        self.profiles_groups.push(group.clone());
+    }
+
+    /// Add a `PreferencesGroup` to the Authentication page without clearing.
+    pub fn add_auth_group(&mut self, group: &adw::PreferencesGroup) {
+        self.auth_page.add(group);
+        self.auth_groups.push(group.clone());
+    }
+
+    /// Add a `PreferencesGroup` to the System page without clearing.
+    pub fn add_system_group(&mut self, group: &adw::PreferencesGroup) {
+        self.system_page.add(group);
+        self.system_groups.push(group.clone());
+    }
+
+    /// Remove all tracked groups from the Profiles page.
+    pub fn clear_profiles(&mut self) {
+        for g in self.profiles_groups.drain(..) {
+            self.profiles_page.remove(&g);
         }
     }
 
-    /// Show a loading status page in the current destination.
-    pub fn show_loading(&self) {
-        let status_page = adw::StatusPage::builder()
-            .icon_name("content-loading-symbolic")
+    /// Remove all tracked groups from the Authentication page.
+    pub fn clear_auth(&mut self) {
+        for g in self.auth_groups.drain(..) {
+            self.auth_page.remove(&g);
+        }
+    }
+
+    /// Remove all tracked groups from the System page.
+    pub fn clear_system(&mut self) {
+        for g in self.system_groups.drain(..) {
+            self.system_page.remove(&g);
+        }
+    }
+
+    /// Push an enrollment sub-page onto the dialog's navigation stack.
+    /// The sub-page MUST be wrapped in an `adw::NavigationPage` per the
+    /// libadwaita 1.5 migration guide.
+    pub fn push_subpage(&self, page: &adw::NavigationPage) {
+        self.dialog.push_subpage(page);
+    }
+
+    /// Pop the current sub-page from the dialog's navigation stack.
+    /// Returns `true` if a sub-page was popped.
+    pub fn pop_subpage(&self) -> bool {
+        self.dialog.pop_subpage()
+    }
+
+    /// Show a loading status page in the current destination. Renders a
+    /// `PreferencesGroup` with a single informational row so the user sees
+    /// a loading state within the preferences idiom.
+    pub fn show_loading(&mut self) {
+        let group = adw::PreferencesGroup::builder()
             .title(tr("Loading…"))
             .build();
-        status_page.update_property(&[gtk4::accessible::Property::Label(&tr(
+        let row = adw::ActionRow::builder()
+            .title(tr("Loading Nam-tor settings"))
+            .subtitle(tr("Please wait while the daemon is contacted."))
+            .build();
+        row.update_property(&[gtk4::accessible::Property::Label(&tr(
             "Loading Nam-tor settings",
         ))]);
+        group.add(&row);
 
         match self.current_destination {
-            Destination::Profiles => self.set_profiles_content(&status_page),
-            Destination::Authentication => self.set_auth_content(&status_page),
-            Destination::System => self.set_system_content(&status_page),
+            Destination::Profiles => self.set_profiles_content(&group),
+            Destination::Authentication => self.set_auth_content(&group),
+            Destination::System => self.set_system_content(&group),
         }
     }
 
-    /// Show an offline/error status page with retry action.
-    pub fn show_offline(&self, error_detail: &str, on_retry: impl Fn() + 'static) {
-        let status_page = adw::StatusPage::builder()
-            .icon_name("computer-fail-symbolic")
+    /// Show an offline/error status page with a retry action. Renders a
+    /// `PreferencesGroup` containing an informational row plus a retry
+    /// button row so the user can re-attempt the connection within the
+    /// preferences idiom.
+    pub fn show_offline(&mut self, error_detail: &str, on_retry: impl Fn() + 'static) {
+        let group = adw::PreferencesGroup::builder()
             .title(tr("Cannot reach the Nam-tor daemon"))
             .description(tr(error_detail))
             .build();
-        status_page.update_property(&[gtk4::accessible::Property::Label(&tr(
+        group.update_property(&[gtk4::accessible::Property::Label(&tr(
             "Nam-tor daemon unreachable",
         ))]);
 
-        let retry_button = gtk4::Button::builder()
-            .label(tr("_Retry"))
-            .halign(gtk4::Align::Center)
+        let status_row = adw::ActionRow::builder()
+            .title(tr("Nam-tor daemon unreachable"))
+            .subtitle(tr(error_detail))
+            .build();
+        status_row.update_property(&[
+            gtk4::accessible::Property::Label(&tr("Nam-tor daemon unreachable")),
+            gtk4::accessible::Property::Description(&tr(
+                "The settings app cannot communicate with the system daemon.",
+            )),
+        ]);
+        group.add(&status_row);
+
+        let retry_row = adw::ActionRow::builder()
+            .title(tr("_Retry"))
             .use_underline(true)
+            .activatable(true)
             .tooltip_text(tr("Retry connecting to the Nam-tor daemon"))
             .build();
-        retry_button.update_property(&[
+        retry_row.update_property(&[
             gtk4::accessible::Property::Label(&tr("Retry connection")),
             gtk4::accessible::Property::Description(&tr("Try reconnecting to the Nam-tor daemon")),
         ]);
-
-        retry_button.connect_clicked(move |_| {
+        retry_row.connect_activated(move |_| {
             on_retry();
         });
-
-        let button_box = GtkBox::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(12)
-            .build();
-        button_box.append(&retry_button);
-        status_page.set_child(Some(&button_box));
+        group.add(&retry_row);
 
         match self.current_destination {
-            Destination::Profiles => self.set_profiles_content(&status_page),
-            Destination::Authentication => self.set_auth_content(&status_page),
-            Destination::System => self.set_system_content(&status_page),
+            Destination::Profiles => self.set_profiles_content(&group),
+            Destination::Authentication => self.set_auth_content(&group),
+            Destination::System => self.set_system_content(&group),
         }
     }
 
-    /// Present the window on screen.
+    /// Present the window and the preferences dialog on screen.
     pub fn present(&self) {
         self.window.present();
+        self.dialog.present(Some(&self.window));
     }
 
-    /// Get a reference to the window.
+    /// Get a reference to the host window.
     pub fn window(&self) -> &adw::ApplicationWindow {
         &self.window
+    }
+
+    /// Get a reference to the preferences dialog.
+    pub fn dialog(&self) -> &adw::PreferencesDialog {
+        &self.dialog
     }
 }
