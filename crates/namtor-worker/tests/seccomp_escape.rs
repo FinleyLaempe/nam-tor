@@ -47,3 +47,39 @@ fn seccomp_allows_write() {
     );
     assert!(stdout.contains("ok"), "expected ok, got: {stdout}");
 }
+
+/// SEC-6 W^X: `mmap(PROT_EXEC)` must be denied by the conditional allow rule.
+#[test]
+fn seccomp_denies_mmap_exec() {
+    let (status, stdout) = run_self_test("mmap_exec");
+    assert!(
+        !status.success(),
+        "mmap(PROT_EXEC) must be denied, status={status}, stdout={stdout}"
+    );
+    assert!(stdout.contains("errno 1"), "expected EPERM, got: {stdout}");
+}
+
+/// SEC-6 W^X: `mprotect(PROT_EXEC)` must be denied by the conditional allow
+/// rule. This closes the bypass that would exist if only `mmap` were filtered.
+#[test]
+fn seccomp_denies_mprotect_exec() {
+    let (status, stdout) = run_self_test("mprotect_exec");
+    assert!(
+        !status.success(),
+        "mprotect(PROT_EXEC) must be denied, status={status}, stdout={stdout}"
+    );
+    assert!(stdout.contains("errno 1"), "expected EPERM, got: {stdout}");
+}
+
+/// SEC-6 W^X positive control: `mmap(PROT_READ|PROT_WRITE)` (no PROT_EXEC)
+/// must still succeed — the conditional allow rule passes when the PROT_EXEC
+/// bit is clear.
+#[test]
+fn seccomp_allows_mmap_noexec() {
+    let (status, stdout) = run_self_test("mmap_noexec");
+    assert!(
+        status.success(),
+        "mmap(PROT_READ|PROT_WRITE) must succeed, status={status}, stdout={stdout}"
+    );
+    assert!(stdout.contains("ok"), "expected ok, got: {stdout}");
+}

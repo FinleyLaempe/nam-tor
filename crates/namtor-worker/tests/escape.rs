@@ -127,3 +127,39 @@ fn denied_open_models() {
         "expected EPERM/EACCES, got: {stdout}"
     );
 }
+
+/// SEC-6 W^X (combined sandbox): `mmap(PROT_EXEC)` must be denied by the
+/// seccomp conditional allow rule even with landlock also applied.
+#[test]
+fn denied_mmap_exec() {
+    let (status, stdout) = run_self_test("mmap_exec");
+    assert!(
+        !status.success(),
+        "mmap(PROT_EXEC) must be denied, status={status}, stdout={stdout}"
+    );
+    assert!(stdout.contains("errno 1"), "expected EPERM, got: {stdout}");
+}
+
+/// SEC-6 W^X (combined sandbox): `mprotect(PROT_EXEC)` must be denied —
+/// closes the mprotect bypass of the mmap gate.
+#[test]
+fn denied_mprotect_exec() {
+    let (status, stdout) = run_self_test("mprotect_exec");
+    assert!(
+        !status.success(),
+        "mprotect(PROT_EXEC) must be denied, status={status}, stdout={stdout}"
+    );
+    assert!(stdout.contains("errno 1"), "expected EPERM, got: {stdout}");
+}
+
+/// SEC-6 W^X positive control (combined sandbox): `mmap(PROT_READ|PROT_WRITE)`
+/// without PROT_EXEC must still succeed under the combined sandbox.
+#[test]
+fn allowed_mmap_noexec() {
+    let (status, stdout) = run_self_test("mmap_noexec");
+    assert!(
+        status.success(),
+        "mmap(PROT_READ|PROT_WRITE) must succeed, status={status}, stdout={stdout}"
+    );
+    assert!(stdout.contains("ok"), "expected ok, got: {stdout}");
+}

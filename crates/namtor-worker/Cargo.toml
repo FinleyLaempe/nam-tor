@@ -6,6 +6,7 @@ license = "GPL-3.0-only"
 
 [dependencies]
 landlock = "0.4"
+libc = "0.2"
 libseccomp = "0.4"
 namtor-capture = { path = "../namtor-capture" }
 namtor-proto = { path = "../namtor-proto" }

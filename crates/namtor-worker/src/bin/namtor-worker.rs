@@ -25,6 +25,9 @@ fn main() -> ExitCode {
             "--apply-sandbox" if i + 2 < args.len() && args[i + 1] == "--self-test" => {
                 return combined_escape_test(&args[i + 2]);
             }
+            "--ioctl-probe" if i + 1 < args.len() => {
+                return ioctl_probe(&args[i + 1]);
+            }
             _ => {}
         }
         i += 1;
@@ -126,6 +129,9 @@ fn seccomp_self_test(kind: &str) -> ExitCode {
         "open" => test_open(),
         "socket" => test_socket(),
         "write" => test_write(),
+        "mprotect_exec" => test_mprotect_exec(),
+        "mmap_exec" => test_mmap_exec(),
+        "mmap_noexec" => test_mmap_noexec(),
         other => {
             eprintln!("unknown self-test kind: {other}");
             return ExitCode::from(2);
@@ -213,6 +219,105 @@ fn test_write() -> TestResult {
     }
 }
 
+// ---- SEC-6 W^X self-tests ----
+
+use std::os::raw::{c_int, c_void};
+
+const PROT_READ: c_int = 1;
+const PROT_WRITE: c_int = 2;
+const PROT_EXEC: c_int = 4;
+const MAP_PRIVATE: c_int = 0x02;
+const MAP_ANONYMOUS: c_int = 0x20;
+const PAGE: usize = 4096;
+
+extern "C" {
+    fn mmap(
+        addr: *mut c_void,
+        len: usize,
+        prot: c_int,
+        flags: c_int,
+        fd: c_int,
+        offset: i64,
+    ) -> *mut c_void;
+    fn mprotect(addr: *mut c_void, len: usize, prot: c_int) -> c_int;
+    fn munmap(addr: *mut c_void, len: usize) -> c_int;
+}
+
+/// SEC-6 W^X: `mmap(NULL, PAGE, PROT_EXEC, MAP_PRIVATE|MAP_ANON, -1, 0)` must
+/// be denied by the conditional allow rule (the `PROT_EXEC` bit fails the
+/// `MaskedEq(PROT_EXEC) == 0` check, so the default EPERM action applies).
+fn test_mmap_exec() -> TestResult {
+    // SAFETY: mmap with PROT_EXEC on a fresh anonymous page; under the W^X
+    // seccomp filter this returns MAP_FAILED with errno EPERM.
+    let ptr = unsafe {
+        mmap(
+            std::ptr::null_mut(),
+            PAGE,
+            PROT_EXEC,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
+    if ptr == libc::MAP_FAILED {
+        TestResult::Errno(errno())
+    } else {
+        unsafe { munmap(ptr, PAGE) };
+        TestResult::Ok
+    }
+}
+
+/// SEC-6 W^X positive control: `mmap(NULL, PAGE, PROT_READ|PROT_WRITE,
+/// MAP_PRIVATE|MAP_ANON, -1, 0)` must succeed — the conditional allow rule
+/// passes because `(prot & PROT_EXEC) == 0`.
+fn test_mmap_noexec() -> TestResult {
+    let ptr = unsafe {
+        mmap(
+            std::ptr::null_mut(),
+            PAGE,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
+    if ptr == libc::MAP_FAILED {
+        return TestResult::Errno(errno());
+    }
+    unsafe { munmap(ptr, PAGE) };
+    TestResult::Ok
+}
+
+/// SEC-6 W^X: first mmap a page without `PROT_EXEC` (allowed), then attempt
+/// `mprotect(page, PAGE, PROT_EXEC)` — must be denied. This proves the
+/// `mprotect` gate closes the bypass that would exist if only `mmap` were
+/// filtered.
+fn test_mprotect_exec() -> TestResult {
+    let ptr = unsafe {
+        mmap(
+            std::ptr::null_mut(),
+            PAGE,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
+    if ptr == libc::MAP_FAILED {
+        eprintln!("mprotect_exec: setup mmap failed: errno {}", errno());
+        return TestResult::Errno(errno());
+    }
+    // SAFETY: mprotect on a valid page; under the W^X filter this returns
+    // -1 with errno EPERM.
+    let ret = unsafe { mprotect(ptr, PAGE, PROT_EXEC) };
+    unsafe { munmap(ptr, PAGE) };
+    if ret < 0 {
+        TestResult::Errno(errno())
+    } else {
+        TestResult::Ok
+    }
+}
+
 /// Read the thread-local `errno` via `__errno_location`.
 fn errno() -> i32 {
     extern "C" {
@@ -296,6 +401,9 @@ fn combined_escape_test(kind: &str) -> ExitCode {
         "exec" => test_exec(),
         "fork" => test_fork(),
         "write_inherited" => test_write(),
+        "mprotect_exec" => test_mprotect_exec(),
+        "mmap_exec" => test_mmap_exec(),
+        "mmap_noexec" => test_mmap_noexec(),
         other => {
             eprintln!("unknown combined self-test kind: {other}");
             return ExitCode::from(2);
@@ -390,4 +498,55 @@ fn test_fork() -> TestResult {
         unsafe { waitpid(ret, &mut status, 0) };
         TestResult::Ok
     }
+}
+
+/// Diagnostic probe: load `model_path` with OnnxCpu, run inference repeatedly,
+/// and print markers so `strace -e ioctl` between PROBE_START/PROBE_END captures
+/// the ioctl codes the ONNX Runtime issues during inference (after load). Used
+/// by SEC-6 task 9 to measure the ioctl surface before narrowing the seccomp
+/// allowlist. No sandbox is applied — the probe exists to observe the
+/// unrestricted syscall surface.
+fn ioctl_probe(model_path: &str) -> ExitCode {
+    let path = std::path::Path::new(model_path);
+    let mut backend = namtor_worker::infer_onnx::OnnxCpu::new(1);
+    let spec = namtor_proto::worker::ModelSpec {
+        id: "probe".into(),
+        quant: namtor_proto::worker::Quant::Fp32,
+        sha256: [0; 32],
+    };
+    let loaded = match backend.load_file(path, &spec) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("probe load failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Use a zero frame whose size matches the loaded input shape product.
+    let n: usize = loaded
+        .input_shape
+        .iter()
+        .map(|d| (*d as usize).max(1))
+        .product::<usize>()
+        .max(1);
+    let frame: Vec<u8> = vec![0u8; n * 4];
+    let frame_ref = namtor_proto::worker::FrameRef {
+        offset: 0,
+        len: (n * 4) as u32,
+        emitter: namtor_capture::frame::EmitterState::On,
+        spectrum: namtor_capture::source::Spectrum::Ir,
+        pix_fmt: namtor_capture::frame::PixFmt::Grey8,
+        w: n as u32,
+        h: 1,
+        ts_us: 0,
+    };
+    println!("PROBE_START");
+    use namtor_worker::infer::InferenceBackend;
+    for _ in 0..5 {
+        if let Err(e) = backend.run(&loaded, &frame, &frame_ref) {
+            eprintln!("probe run failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    println!("PROBE_END");
+    ExitCode::SUCCESS
 }
