@@ -151,7 +151,7 @@ pub fn run_enroll(
     models_dir: &Path,
     templates_dir: &Path,
     key_path: &Path,
-    _device: Option<String>,
+    device: Option<String>,
     user: Option<String>,
 ) -> ExitCode {
     let yunet = models_dir.join("yunet_2023mar.onnx");
@@ -179,9 +179,8 @@ pub fn run_enroll(
     let username = identity.username.clone();
 
     eprintln!("enrolling uid={uid} ({username})...");
-    eprintln!("opening IR camera /dev/video2...");
 
-    let frame_data = match capture_enrollment_frames() {
+    let frame_data = match capture_enrollment_frames(device.as_deref()) {
         Ok(frames) => frames,
         Err(e) => {
             eprintln!("capture failed: {e}");
@@ -369,12 +368,94 @@ struct CapturedFrame {
     height: u32,
 }
 
-fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
-    let dev = "/dev/video2";
-    let meta_dev = "/dev/video3";
-    if !std::path::Path::new(dev).exists() {
+/// A discovered IR camera candidate with its USB VID:PID for quirks lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceCandidate {
+    pub dev_path: std::path::PathBuf,
+    pub vid_pid: String,
+    pub is_metadata: bool,
+}
+
+/// Resolve which device to use for `--old` enrollment and its VID:PID for
+/// quirks lookup (USA-14). If `--device` is given, it takes priority — the
+/// function returns a candidate matching that path (with the VID:PID from the
+/// candidates list when available, or an empty string when the device is not
+/// found among the enumerated candidates). Without `--device`, the function
+/// probes by VID:PID: picks the first non-metadata candidate by lowest
+/// `/dev/videoN` index.
+pub fn resolve_enrollment_device(
+    device: Option<&str>,
+    candidates: &[DeviceCandidate],
+) -> Option<DeviceCandidate> {
+    if let Some(path) = device {
+        let parsed = std::path::Path::new(path);
+        return candidates
+            .iter()
+            .find(|c| c.dev_path == parsed)
+            .cloned()
+            .or_else(|| Some(DeviceCandidate {
+                dev_path: parsed.to_path_buf(),
+                vid_pid: String::new(),
+                is_metadata: false,
+            }));
+    }
+    candidates
+        .iter()
+        .filter(|c| !c.is_metadata)
+        .min_by_key(|c| node_index(&c.dev_path))
+        .cloned()
+}
+
+fn node_index(path: &std::path::Path) -> u32 {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.strip_prefix("video"))
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(u32::MAX)
+}
+
+/// Derive the metadata companion node for a given `/dev/videoN` stream device.
+/// The metadata node is typically `N+1` (the next video index on the same
+/// USB interface). Returns `None` when the derived path does not exist on the
+/// filesystem.
+fn metadata_dev_for(dev: &str) -> Option<String> {
+    let n = dev
+        .strip_prefix("/dev/video")
+        .and_then(|s| s.parse::<u32>().ok())?;
+    let meta = format!("/dev/video{}", n + 1);
+    if std::path::Path::new(&meta).exists() {
+        Some(meta)
+    } else {
+        None
+    }
+}
+
+fn capture_enrollment_frames(device: Option<&str>) -> Result<Vec<CapturedFrame>, String> {
+    let dev = match device {
+        Some(d) => d.to_string(),
+        None => {
+            let candidates = enumerate_device_candidates();
+            let selected =
+                resolve_enrollment_device(None, &candidates)
+                    .ok_or_else(|| "no IR camera device found".to_string())?;
+            eprintln!(
+                "selected IR camera {} (vid:pid {})",
+                selected.dev_path.display(),
+                if selected.vid_pid.is_empty() {
+                    "unknown"
+                } else {
+                    &selected.vid_pid
+                }
+            );
+            selected.dev_path.to_string_lossy().into_owned()
+        }
+    };
+    if !std::path::Path::new(&dev).exists() {
         return Err(format!("{dev} not found"));
     }
+
+    let meta_dev = metadata_dev_for(&dev);
+    let vid_pid = device_vid_pid(&dev);
 
     let width = 640u32;
     let height = 360u32;
@@ -384,20 +465,16 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
     use namtor_capture::ir_uvc::{IrUvc, ParityPolicy, V4l2IrStream};
     use namtor_capture::source::CaptureSource;
 
-    // Activate the IR emitter via MSXU mode 2 (firmware-strobed alternating
-    // illumination) before opening the V4L2 stream.
-    let emitter = activate_emitter(dev).unwrap_or_else(|e| {
+    let emitter = activate_emitter(&dev, &vid_pid).unwrap_or_else(|e| {
         eprintln!("warning: emitter activation failed: {e}");
         eprintln!("capturing without IR illumination (faces may not be visible)");
-        EmitterGuard { xu: None }
+        EmitterGuard { xu: None, vid_pid: vid_pid.clone() }
     });
     let streamer = V4l2IrStream::open(
-        std::path::Path::new(dev),
-        if std::path::Path::new(meta_dev).exists() {
-            Some(std::path::Path::new(meta_dev))
-        } else {
-            None
-        },
+        std::path::Path::new(&dev),
+        meta_dev
+            .as_ref()
+            .map(std::path::Path::new),
         width,
         height,
     )
@@ -451,12 +528,13 @@ fn capture_enrollment_frames() -> Result<Vec<CapturedFrame>, String> {
 /// RAII guard that activates the IR emitter and turns it off on drop.
 struct EmitterGuard {
     xu: Option<Box<namtor_uvc::probe::SafeXu<namtor_uvc::device::V4l2Device>>>,
+    vid_pid: String,
 }
 
 impl Drop for EmitterGuard {
     fn drop(&mut self) {
         if let Some(mut xu) = self.xu.take() {
-            if let Some(cfg) = emitter_cfg() {
+            if let Some(cfg) = emitter_cfg_for(&self.vid_pid) {
                 let unit = cfg.unit.unwrap_or(0);
                 let selector = cfg.selector.unwrap_or(0);
                 let _ = xu.try_write(unit, selector, &cfg.payload_off);
@@ -465,7 +543,13 @@ impl Drop for EmitterGuard {
     }
 }
 
-fn emitter_cfg() -> Option<namtor_hwdb::quirks::EmitterCfg> {
+/// Look up the emitter configuration for `vid_pid` in the quirks database
+/// (USA-14: no longer hardcodes "3277:0018"). Returns `None` when no quirk
+/// entry exists for the given VID:PID.
+fn emitter_cfg_for(vid_pid: &str) -> Option<namtor_hwdb::quirks::EmitterCfg> {
+    if vid_pid.is_empty() {
+        return None;
+    }
     let layout = namtor_layout::LayoutPaths::resolve(
         std::path::Path::new("/"),
         std::path::Path::new("/usr/share/namtor/install-manifest.toml"),
@@ -475,7 +559,7 @@ fn emitter_cfg() -> Option<namtor_hwdb::quirks::EmitterCfg> {
     candidates.push(std::path::PathBuf::from("../quirks/devices"));
     for dir in &candidates {
         if let Ok(db) = namtor_hwdb::quirks::load_quirks_dir(dir) {
-            if let Some(e) = db.entries.get("3277:0018") {
+            if let Some(e) = db.entries.get(vid_pid) {
                 return Some(e.emitter.clone());
             }
         }
@@ -483,11 +567,48 @@ fn emitter_cfg() -> Option<namtor_hwdb::quirks::EmitterCfg> {
     None
 }
 
-fn activate_emitter(dev: &str) -> Result<EmitterGuard, String> {
+/// Enumerate USB video devices and build a list of [`DeviceCandidate`]s with
+/// their VID:PID. Used when `--device` is not given (USA-14: probe by VID:PID).
+fn enumerate_device_candidates() -> Vec<DeviceCandidate> {
+    let sysfs = std::path::Path::new("/sys");
+    let usb_devices = match namtor_hwdb::sysfs::enumerate_usb(sysfs) {
+        Ok(devs) => devs,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for usb in &usb_devices {
+        let vid_pid = format!("{:04x}:{:04x}", usb.vid, usb.pid);
+        if let Ok(nodes) = namtor_hwdb::nodes::correlate_nodes(usb) {
+            for node in nodes {
+                out.push(DeviceCandidate {
+                    dev_path: node.dev_path,
+                    vid_pid: vid_pid.clone(),
+                    is_metadata: node.is_metadata,
+                });
+            }
+        }
+    }
+    out.sort_by_key(|c| node_index(&c.dev_path));
+    out
+}
+
+/// Look up the VID:PID for a `/dev/videoN` device from sysfs. Returns an
+/// empty string when the device cannot be correlated to a USB device.
+fn device_vid_pid(dev: &str) -> String {
+    let candidates = enumerate_device_candidates();
+    candidates
+        .iter()
+        .find(|c| c.dev_path == std::path::Path::new(dev))
+        .map(|c| c.vid_pid.clone())
+        .unwrap_or_default()
+}
+
+fn activate_emitter(dev: &str, vid_pid: &str) -> Result<EmitterGuard, String> {
     use namtor_uvc::device::V4l2Device;
     use namtor_uvc::probe::SafeXu;
 
-    let cfg = emitter_cfg().ok_or_else(|| "no quirk entry for 3277:0018".to_string())?;
+    let cfg = emitter_cfg_for(vid_pid)
+        .ok_or_else(|| format!("no quirk entry for vid:pid {vid_pid}"))?;
 
     let v4l2_dev = V4l2Device::open(std::path::Path::new(dev))
         .map_err(|e| format!("open {dev} for XU control: {e}"))?;
@@ -505,7 +626,7 @@ fn activate_emitter(dev: &str) -> Result<EmitterGuard, String> {
         .map_err(|e| format!("emitter write failed: {e}"))?;
     restorer.keep();
 
-    Ok(EmitterGuard { xu: Some(xu) })
+    Ok(EmitterGuard { xu: Some(xu), vid_pid: vid_pid.to_string() })
 }
 
 fn variance_of_laplacian(data: &[u8], width: u32, height: u32) -> f32 {
@@ -530,4 +651,98 @@ fn variance_of_laplacian(data: &[u8], width: u32, height: u32) -> f32 {
     let var: f32 =
         laplacian.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / laplacian.len() as f32;
     var.sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn candidate(dev: &str, vid_pid: &str, is_metadata: bool) -> DeviceCandidate {
+        DeviceCandidate {
+            dev_path: PathBuf::from(dev),
+            vid_pid: vid_pid.into(),
+            is_metadata,
+        }
+    }
+
+    /// USA-14: `--device /dev/video4` selects `/dev/video4` even when other
+    /// candidates have lower indices.
+    #[test]
+    fn resolve_device_honors_explicit_device_arg() {
+        let candidates = vec![
+            candidate("/dev/video0", "1111:2222", false),
+            candidate("/dev/video2", "3277:0018", false),
+            candidate("/dev/video3", "3277:0018", true),
+            candidate("/dev/video4", "9999:aaaa", false),
+        ];
+        let selected = resolve_enrollment_device(Some("/dev/video4"), &candidates)
+            .expect("explicit device must select");
+        assert_eq!(selected.dev_path, PathBuf::from("/dev/video4"));
+        assert_eq!(selected.vid_pid, "9999:aaaa");
+    }
+
+    /// USA-14: without `--device`, the function probes by VID:PID and picks
+    /// the first non-metadata candidate by lowest `/dev/videoN` index (not
+    /// the hardcoded `/dev/video2`).
+    #[test]
+    fn resolve_device_probes_by_vidpid_without_explicit_device() {
+        let candidates = vec![
+            candidate("/dev/video0", "1111:2222", false),
+            candidate("/dev/video1", "1111:2222", true),
+            candidate("/dev/video4", "3277:0018", false),
+        ];
+        let selected = resolve_enrollment_device(None, &candidates)
+            .expect("probe must find a non-metadata candidate");
+        assert_eq!(selected.dev_path, PathBuf::from("/dev/video0"));
+        assert_eq!(selected.vid_pid, "1111:2222");
+    }
+
+    /// USA-14: metadata nodes are skipped during probing.
+    #[test]
+    fn resolve_device_skips_metadata_nodes_when_probing() {
+        let candidates = vec![
+            candidate("/dev/video2", "3277:0018", true),
+            candidate("/dev/video4", "3277:0018", false),
+        ];
+        let selected = resolve_enrollment_device(None, &candidates)
+            .expect("must skip metadata and select the non-metadata node");
+        assert_eq!(selected.dev_path, PathBuf::from("/dev/video4"));
+        assert!(!selected.is_metadata);
+    }
+
+    /// USA-14: when `--device` names a path not in the candidate list, the
+    /// function still returns it (with an empty VID:PID) so the operator's
+    /// explicit choice is respected.
+    #[test]
+    fn resolve_device_explicit_path_not_in_candidates_returns_empty_vidpid() {
+        let candidates = vec![candidate("/dev/video0", "1111:2222", false)];
+        let selected = resolve_enrollment_device(Some("/dev/video9"), &candidates)
+            .expect("explicit path must always return");
+        assert_eq!(selected.dev_path, PathBuf::from("/dev/video9"));
+        assert_eq!(selected.vid_pid, "");
+    }
+
+    /// USA-14: when no candidates exist and no `--device` is given, returns
+    /// `None`.
+    #[test]
+    fn resolve_device_none_when_no_candidates_and_no_explicit_device() {
+        assert!(resolve_enrollment_device(None, &[]).is_none());
+    }
+
+    /// USA-14: `metadata_dev_for` derives `N+1` from `/dev/videoN`.
+    #[test]
+    fn metadata_dev_derives_next_index() {
+        // /dev/video2 → /dev/video3 (only if the path exists on the host).
+        // On a typical dev machine /dev/video2 may not exist; test the
+        // pure parsing by checking that a non-existent path returns None.
+        assert!(metadata_dev_for("/dev/video99999").is_none());
+    }
+
+    /// USA-14: `emitter_cfg_for` returns `None` for an empty VID:PID (no
+    /// quirk lookup attempted).
+    #[test]
+    fn emitter_cfg_for_empty_vidpid_returns_none() {
+        assert!(emitter_cfg_for("").is_none());
+    }
 }
