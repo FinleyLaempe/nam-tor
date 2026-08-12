@@ -52,20 +52,32 @@ enum Command {
         #[arg(long)]
         user: Option<String>,
     },
-    /// List enrolled users.
+    /// List enrolled profiles. Defaults to the D-Bus daemon (`ListProfiles`);
+    /// use `--local` for the direct-store recovery path.
     List {
         #[arg(long)]
         templates_dir: Option<PathBuf>,
         #[arg(long)]
         key_path: Option<PathBuf>,
+        /// Use the direct-store path (recovery; default is the D-Bus daemon).
+        #[arg(long)]
+        local: bool,
     },
-    /// Remove an enrollment.
+    /// Remove an enrollment. Defaults to the D-Bus daemon (`DeleteProfile`);
+    /// use `--local` for the direct-store recovery path (deletes all profiles
+    /// for the uid).
     Remove {
         uid: u32,
+        /// Profile id to delete (daemon mode). Defaults to "default".
+        #[arg(default_value = "default")]
+        profile_id: String,
         #[arg(long)]
         templates_dir: Option<PathBuf>,
         #[arg(long)]
         key_path: Option<PathBuf>,
+        /// Use the direct-store path (recovery; default is the D-Bus daemon).
+        #[arg(long)]
+        local: bool,
     },
     /// Generate a privacy-safe diagnostics support bundle.
     Diagnostics {
@@ -111,24 +123,49 @@ fn main() -> ExitCode {
         Command::List {
             templates_dir,
             key_path,
+            local,
         } => {
-            let layout = installed_layout();
-            namtor_cli::list::run_list(
-                &templates_dir.unwrap_or(layout.templates_dir),
-                &key_path.unwrap_or(layout.key_path),
-            )
+            if local {
+                let layout = installed_layout();
+                namtor_cli::list::run_list_local(
+                    &templates_dir.unwrap_or(layout.templates_dir),
+                    &key_path.unwrap_or(layout.key_path),
+                )
+            } else {
+                match namtor_cli::list::DbusProfileSource::connect() {
+                    Ok(source) => namtor_cli::list::run_list_daemon(&source),
+                    Err(e) => {
+                        eprintln!("list: {e}");
+                        std::process::ExitCode::FAILURE
+                    }
+                }
+            }
         }
         Command::Remove {
             uid,
+            profile_id,
             templates_dir,
             key_path,
+            local,
         } => {
-            let layout = installed_layout();
-            namtor_cli::enroll::run_remove(
-                uid,
-                &templates_dir.unwrap_or(layout.templates_dir),
-                &key_path.unwrap_or(layout.key_path),
-            )
+            if local {
+                let layout = installed_layout();
+                namtor_cli::list::run_remove_local(
+                    uid,
+                    &templates_dir.unwrap_or(layout.templates_dir),
+                    &key_path.unwrap_or(layout.key_path),
+                )
+            } else {
+                match namtor_cli::list::DbusProfileSource::connect() {
+                    Ok(source) => {
+                        namtor_cli::list::run_remove_daemon(&source, uid, &profile_id)
+                    }
+                    Err(e) => {
+                        eprintln!("remove: {e}");
+                        std::process::ExitCode::FAILURE
+                    }
+                }
+            }
         }
         Command::Diagnostics { out_dir } => cmd_diagnostics(out_dir),
     }
