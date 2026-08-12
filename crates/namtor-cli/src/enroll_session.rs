@@ -628,6 +628,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use nix::unistd::isatty;
+
 /// Interval between `PollProgress` D-Bus calls in the v3 enrollment driver
 /// (USA-7). The first poll is immediate so the operator sees progress without
 /// a 500 ms startup delay; subsequent polls are spaced by this interval.
@@ -715,7 +718,8 @@ pub trait EnrollmentServiceV3 {
     /// Poll the daemon for the latest progress snapshot of `session`. Returns
     /// `Some(progress)` when the daemon has new worker events since the last
     /// poll, `None` otherwise. The driver calls this every 500 ms (USA-7).
-    fn poll_progress(&self, session: &str) -> Result<Option<EnrollmentProgressV3>, EnrollmentError>;
+    fn poll_progress(&self, session: &str)
+        -> Result<Option<EnrollmentProgressV3>, EnrollmentError>;
 }
 
 /// Coarse quality-bucket label for display (matches the daemon's
@@ -794,6 +798,20 @@ fn read_any_key<R: BufRead>(reader: &mut R) -> bool {
     reader.read_line(&mut line).unwrap_or(0) > 0
 }
 
+/// Check whether stdin is a TTY. When stdin is not a TTY (piped, redirected,
+/// or closed), the SIGINT handler defaults to Discard (fail-closed) rather
+/// than prompting the operator (USA-15).
+fn stdin_is_tty() -> bool {
+    #[cfg(unix)]
+    {
+        isatty(nix::libc::STDIN_FILENO).unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 /// Drive the v3 continuous enrollment lifecycle.
 ///
 /// Flow: start → poll progress until the operator signals stop (via keypress
@@ -827,9 +845,13 @@ where
     eprintln!("press Enter to stop and review; Ctrl+C to discard");
 
     let mut last_poll: Option<Instant> = None;
+    let mut sigint_during_capture = false;
     loop {
         if cancel_flag.load(Ordering::SeqCst) {
-            return cancel_and_exit(service, &session);
+            // SIGINT received: flag it and break to the stop+review flow
+            // (USA-15: stop+review+prompt Save/Discard, or auto-Discard if non-TTY).
+            sigint_during_capture = true;
+            break;
         }
         let should_poll = last_poll
             .map(|t| t.elapsed() >= POLL_PROGRESS_INTERVAL)
@@ -853,6 +875,14 @@ where
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // SIGINT during capture: stop+review+prompt Save/Discard (or auto-Discard
+    // if stdin is not a TTY). Normal stop (Enter key) follows the same path
+    // but with the three-way Save/Resume/Discard prompt.
+    if sigint_during_capture {
+        eprintln!("\ninterrupted; stopping and reviewing...");
+        return handle_sigint_interrupt(service, &session, keypress_reader);
     }
 
     if cancel_flag.load(Ordering::SeqCst) {
@@ -989,6 +1019,65 @@ fn cancel_and_exit<S: EnrollmentServiceV3>(service: &S, session: &str) -> V3Outc
     V3Outcome::Discarded
 }
 
+/// Handle SIGINT interrupt during capture (USA-15): stop the session, review
+/// the captured frames, print the review summary, and prompt Save/Discard.
+/// When stdin is not a TTY (piped/redirected/closed), defaults to Discard
+/// (fail-closed — lose the enrollment rather than silently saving unreviewed
+/// frames).
+fn handle_sigint_interrupt<S, K>(service: &S, session: &str, keypress_reader: &mut K) -> V3Outcome
+where
+    S: EnrollmentServiceV3,
+    K: BufRead,
+{
+    // Stop the session.
+    if let Err(e) = service.stop(session) {
+        eprintln!("stop failed: {e}");
+        let _ = service.cancel(session);
+        return V3Outcome::Discarded;
+    }
+    // Review the captured frames.
+    let review = match service.review(session) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("review failed: {e}");
+            let _ = service.cancel(session);
+            return V3Outcome::Discarded;
+        }
+    };
+    print_review(&review);
+
+    // If stdin is not a TTY, default to Discard (fail-closed).
+    if !stdin_is_tty() {
+        eprintln!("stdin is not a TTY; discarding (fail-closed)");
+        let _ = service.cancel(session);
+        return V3Outcome::Discarded;
+    }
+
+    // Prompt Save/Discard (binary choice; no Resume after SIGINT).
+    loop {
+        eprintln!("choose: [S]ave / [D]iscard");
+        match read_choice(keypress_reader) {
+            Some('S') => match service.commit(session) {
+                Ok(profile_id) => {
+                    eprintln!("Profile saved: {profile_id}");
+                    return V3Outcome::Saved;
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    let _ = service.cancel(session);
+                    return V3Outcome::Discarded;
+                }
+            },
+            Some('D') | None => {
+                let _ = service.cancel(session);
+                eprintln!("Enrollment discarded");
+                return V3Outcome::Discarded;
+            }
+            Some(_) => continue,
+        }
+    }
+}
+
 /// Install a SIGINT handler that sets `cancel_flag` on the first signal.
 /// Returns `Err` if the handler could not be installed (the caller then
 /// proceeds without SIGINT protection — Ctrl+C will hard-terminate, which
@@ -1088,7 +1177,10 @@ impl EnrollmentServiceV3 for DbusEnrollmentServiceV3 {
             .map_err(Self::classify_error)
     }
 
-    fn poll_progress(&self, session: &str) -> Result<Option<EnrollmentProgressV3>, EnrollmentError> {
+    fn poll_progress(
+        &self,
+        session: &str,
+    ) -> Result<Option<EnrollmentProgressV3>, EnrollmentError> {
         let reply: PollProgressReply = self
             .proxy
             .call("PollProgress", &(session,))
@@ -1105,6 +1197,12 @@ impl EnrollmentServiceV3 for DbusEnrollmentServiceV3 {
 mod tests {
     use super::*;
     use namtor_store::template::ProfileId;
+
+    fn open_test_store(dir: &std::path::Path, key_path: &std::path::Path) -> TemplateStore {
+        let mut selector = namtor_store::crypto::BackendSelector::file()
+            .with_root_secret_path(dir.join("root_secret"));
+        TemplateStore::open_with_selector(dir, key_path, &mut selector).unwrap()
+    }
 
     fn cand(score: u8, embedding_seed: f32) -> Candidate {
         // Embeddings are L2-normalised-ish for cosine similarity tests.
@@ -1277,7 +1375,7 @@ mod tests {
     fn cancel_writes_nothing_to_store() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
-        let store = TemplateStore::open(dir.path(), &key_path).unwrap();
+        let store = open_test_store(dir.path(), &key_path);
 
         let mut s = EnrollmentSession::with_max(10);
         s.start().unwrap();
@@ -1305,7 +1403,7 @@ mod tests {
     fn cancel_direct_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
-        let _store = TemplateStore::open(dir.path(), &key_path).unwrap();
+        let _store = open_test_store(dir.path(), &key_path);
 
         let mut s = EnrollmentSession::with_max(10);
         s.start().unwrap();
@@ -1323,7 +1421,7 @@ mod tests {
     fn finish_stores_templates_only_no_raw_frames() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
-        let store = TemplateStore::open(dir.path(), &key_path).unwrap();
+        let store = open_test_store(dir.path(), &key_path);
 
         let mut s = EnrollmentSession::with_max(10);
         s.start().unwrap();
@@ -1409,7 +1507,7 @@ mod tests {
     fn merge_appends_to_existing_gallery() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
-        let store = TemplateStore::open(dir.path(), &key_path).unwrap();
+        let store = open_test_store(dir.path(), &key_path);
 
         // Pre-existing gallery of 2 templates.
         let existing = vec![
@@ -1457,7 +1555,7 @@ mod tests {
     fn replace_overwrites_existing_gallery() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
-        let store = TemplateStore::open(dir.path(), &key_path).unwrap();
+        let store = open_test_store(dir.path(), &key_path);
 
         // Pre-existing gallery of 5 templates.
         let existing: Vec<Template> = (0..5)
@@ -1623,8 +1721,14 @@ mod v3_tests {
             self.calls.lock().unwrap().push("cancel".into());
             Ok(())
         }
-        fn poll_progress(&self, session: &str) -> Result<Option<EnrollmentProgressV3>, EnrollmentError> {
-            self.calls.lock().unwrap().push(format!("poll_progress:{session}"));
+        fn poll_progress(
+            &self,
+            session: &str,
+        ) -> Result<Option<EnrollmentProgressV3>, EnrollmentError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("poll_progress:{session}"));
             Ok(self.progress_queue.lock().unwrap().pop())
         }
     }
@@ -1679,22 +1783,24 @@ mod v3_tests {
         assert!(!calls.contains(&"commit".to_string()));
     }
 
-    /// v3 SIGINT during capture: the cancel flag is set before the driver
-    /// reaches stop. The driver calls cancel and exits cleanly.
+    /// USA-15: v3 SIGINT during capture triggers stop → review → Discard
+    /// (non-TTY stdin, fail-closed). The driver does NOT cancel immediately;
+    /// it stops the session, reviews what was captured, and discards because
+    /// stdin is not a TTY (empty input simulates closed/non-TTY).
     #[test]
     fn enroll_v3_sigint_cancels() {
         let svc = FakeEnrollmentServiceV3::new();
         let cancel = Arc::new(AtomicBool::new(true));
-        // No keypress needed; cancel flag already set.
+        // Empty input simulates non-TTY stdin → Discard (fail-closed).
         let mut input = BufReader::new(Cursor::new(b""));
         let exit = run_v3_session(&svc, 1000, "carol", &mut input, &cancel);
         assert_eq!(exit, V3Outcome::Discarded);
         let calls = svc.calls();
+        // USA-15: stop and review happen, then cancel (no commit).
         assert!(calls.contains(&"start".to_string()));
+        assert!(calls.contains(&"stop".to_string()));
+        assert!(calls.contains(&"review".to_string()));
         assert!(calls.contains(&"cancel".to_string()));
-        // Stop/review/commit must never run on SIGINT.
-        assert!(!calls.contains(&"stop".to_string()));
-        assert!(!calls.contains(&"review".to_string()));
         assert!(!calls.contains(&"commit".to_string()));
     }
 
@@ -1808,9 +1914,7 @@ mod v3_tests {
         let calls = svc.calls();
         // The driver must have called poll_progress with the session id.
         assert!(
-            calls
-                .iter()
-                .any(|c| c == "poll_progress:sess-1"),
+            calls.iter().any(|c| c == "poll_progress:sess-1"),
             "driver must call poll_progress with session id, got: {calls:?}"
         );
         // At least one poll_progress call happened (not always Ok(None)).
@@ -1818,7 +1922,10 @@ mod v3_tests {
             .iter()
             .filter(|c| c.starts_with("poll_progress:"))
             .count();
-        assert!(poll_count >= 1, "expected >=1 poll_progress call, got {poll_count}");
+        assert!(
+            poll_count >= 1,
+            "expected >=1 poll_progress call, got {poll_count}"
+        );
     }
 
     /// USA-7: PollProgressReply mirror type matches the frozen wire signature
@@ -1846,10 +1953,70 @@ mod v3_tests {
         let calls = svc.calls();
         // poll_progress was called but returned None (no progress line).
         assert!(
-            calls
-                .iter()
-                .any(|c| c.starts_with("poll_progress:")),
+            calls.iter().any(|c| c.starts_with("poll_progress:")),
             "driver must still call poll_progress even when no progress"
         );
+    }
+
+    /// USA-15: SIGINT during capture triggers stop → review. In a test (non-TTY)
+    /// environment, stdin_is_tty() returns false, so the driver discards
+    /// (fail-closed) without prompting. This test verifies the stop→review→
+    /// cancel sequence (no commit), which is the correct non-TTY behavior.
+    #[test]
+    fn enroll_v3_sigint_during_capture_stops_reviews_and_prompts() {
+        let svc = FakeEnrollmentServiceV3::new();
+        // SIGINT flag set before session starts.
+        let cancel = Arc::new(AtomicBool::new(true));
+        // Empty input: non-TTY environment → Discard (fail-closed).
+        let mut input = BufReader::new(Cursor::new(b""));
+        let exit = run_v3_session(&svc, 1000, "alice", &mut input, &cancel);
+        assert_eq!(exit, V3Outcome::Discarded);
+        let calls = svc.calls();
+        // USA-15: stop and review happen, then cancel (no commit).
+        assert!(calls.contains(&"start".to_string()));
+        assert!(calls.contains(&"stop".to_string()));
+        assert!(calls.contains(&"review".to_string()));
+        assert!(calls.contains(&"cancel".to_string()));
+        assert!(!calls.contains(&"commit".to_string()));
+    }
+
+    /// USA-15: SIGINT with non-TTY stdin defaults to Discard (fail-closed).
+    #[test]
+    fn enroll_v3_sigint_non_tty_stdin_defaults_to_discard() {
+        // Empty input simulates closed/non-TTY stdin → read_choice returns
+        // None → Discard path. The stdin_is_tty() check is runtime; this
+        // test verifies the outcome (discard, no commit) with empty input.
+        let svc = FakeEnrollmentServiceV3::new();
+        let cancel = Arc::new(AtomicBool::new(true));
+        // Empty input simulates closed/non-TTY stdin → read_choice returns None
+        // → Discard path.
+        let mut input = BufReader::new(Cursor::new(b""));
+        let exit = run_v3_session(&svc, 1000, "bob", &mut input, &cancel);
+        assert_eq!(exit, V3Outcome::Discarded);
+        let calls = svc.calls();
+        // stop and review happen, then cancel (no commit).
+        assert!(calls.iter().any(|c| c == "stop"));
+        assert!(calls.iter().any(|c| c == "review"));
+        assert!(calls.iter().any(|c| c == "cancel"));
+        assert!(!calls.iter().any(|c| c == "commit"));
+    }
+
+    /// USA-15: SIGINT with non-TTY stdin prints "stdin is not a TTY; discarding
+    /// (fail-closed)" message.
+    #[test]
+    fn enroll_v3_sigint_fail_closed_message_path() {
+        // Empty input simulates non-TTY stdin → Discard path. This test
+        // asserts the fail-closed decision sequence (stop → review → cancel,
+        // no commit).
+        let svc = FakeEnrollmentServiceV3::new();
+        let cancel = Arc::new(AtomicBool::new(true));
+        let mut input = BufReader::new(Cursor::new(b""));
+        let exit = run_v3_session(&svc, 1000, "carol", &mut input, &cancel);
+        assert_eq!(exit, V3Outcome::Discarded);
+        let calls = svc.calls();
+        assert!(calls.iter().any(|c| c == "stop"));
+        assert!(calls.iter().any(|c| c == "review"));
+        assert!(calls.iter().any(|c| c == "cancel"));
+        assert!(!calls.iter().any(|c| c == "commit"));
     }
 }

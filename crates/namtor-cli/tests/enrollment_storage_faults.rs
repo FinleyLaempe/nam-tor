@@ -17,7 +17,11 @@
 
 use std::path::Path;
 
-use namtor_cli::enroll::{commit_enrollment, resolve_identity, EnrollmentIdentity, IdentityError};
+use namtor_cli::enroll::{
+    commit_enrollment_with_selector, resolve_identity, EnrollmentIdentity,
+    IdentityError,
+};
+use namtor_store::crypto::BackendSelector;
 use namtor_store::template::{EnrollmentMeta, Template, TemplateRecord};
 use namtor_store::{StoreError, TemplateStore};
 
@@ -50,7 +54,27 @@ fn current_euid() -> u32 {
 
 fn set_mode(path: &Path, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+}
+
+fn test_selector(dir: &Path) -> BackendSelector {
+    BackendSelector::file().with_root_secret_path(dir.join("root_secret"))
+}
+
+fn commit_test_enrollment(
+    dir: &Path,
+    key_path: &Path,
+    id: &EnrollmentIdentity,
+    record: &TemplateRecord,
+) {
+    let mut selector = test_selector(dir);
+    commit_enrollment_with_selector(dir, key_path, id, record, &mut selector).unwrap()
+}
+
+fn open_test_store(dir: &Path, key_path: &Path, owner_uid: u32) -> TemplateStore {
+    let mut selector = test_selector(dir);
+    TemplateStore::open_with_owner_and_selector(dir, key_path, Some(owner_uid), &mut selector)
+        .unwrap()
 }
 
 /// Self-enrollment resolves to the current euid as both the enrolled uid and
@@ -101,20 +125,18 @@ fn re_enrollment_overwrites_and_daemon_reads() {
 
     let mut first = test_record(1000);
     first.templates[0].quality = 0.80;
-    commit_enrollment(dir.path(), &key_path, &id, &first).unwrap();
+    commit_test_enrollment(dir.path(), &key_path, &id, &first);
 
     // Daemon perspective: open with the same owner enrollment used.
-    let daemon =
-        TemplateStore::open_with_owner(dir.path(), &key_path, Some(id.store_owner_uid)).unwrap();
+    let daemon = open_test_store(dir.path(), &key_path, id.store_owner_uid);
     let loaded = daemon.load(1000).unwrap();
     assert_eq!(loaded.templates[0].quality, 0.80);
 
     let mut second = test_record(1000);
     second.templates[0].quality = 0.42;
-    commit_enrollment(dir.path(), &key_path, &id, &second).unwrap();
+    commit_test_enrollment(dir.path(), &key_path, &id, &second);
 
-    let daemon2 =
-        TemplateStore::open_with_owner(dir.path(), &key_path, Some(id.store_owner_uid)).unwrap();
+    let daemon2 = open_test_store(dir.path(), &key_path, id.store_owner_uid);
     let loaded2 = daemon2.load(1000).unwrap();
     assert_eq!(loaded2.templates[0].quality, 0.42);
 }
@@ -133,14 +155,18 @@ fn write_failure_preserves_old_enrollment_and_cleans_temps() {
     };
 
     let first = test_record(1000);
-    commit_enrollment(dir.path(), &key_path, &id, &first).unwrap();
+    commit_test_enrollment(dir.path(), &key_path, &id, &first);
     let sealed = dir.path().join("1000.sealed");
     let first_bytes = std::fs::read(&sealed).unwrap();
 
     set_mode(dir.path(), 0o500);
     let mut second = test_record(1000);
     second.templates[0].quality = 0.11;
-    let err = commit_enrollment(dir.path(), &key_path, &id, &second).unwrap_err();
+    let err = {
+        let mut selector = test_selector(dir.path());
+        commit_enrollment_with_selector(dir.path(), &key_path, &id, &second, &mut selector)
+            .unwrap_err()
+    };
     assert!(matches!(err, StoreError::Io(_)), "got {err:?}");
 
     set_mode(dir.path(), 0o755);
@@ -178,7 +204,17 @@ fn symlink_record_rejected_by_enrollment() {
     let link = dir.path().join("1000.sealed");
     std::os::unix::fs::symlink(&target, &link).unwrap();
 
-    let err = commit_enrollment(dir.path(), &key_path, &id, &test_record(1000)).unwrap_err();
+    let err = {
+        let mut selector = test_selector(dir.path());
+        commit_enrollment_with_selector(
+            dir.path(),
+            &key_path,
+            &id,
+            &test_record(1000),
+            &mut selector,
+        )
+        .unwrap_err()
+    };
     assert!(matches!(err, StoreError::Symlink(_)), "got {err:?}");
 }
 
@@ -196,12 +232,22 @@ fn corrupt_key_fails_open_actionably() {
     };
 
     // First enrollment creates a valid key + record.
-    commit_enrollment(dir.path(), &key_path, &id, &test_record(1000)).unwrap();
+    commit_test_enrollment(dir.path(), &key_path, &id, &test_record(1000));
 
     // Corrupt the key file (truncate to garbage).
     std::fs::write(&key_path, b"not-a-valid-sealed-blob").unwrap();
 
-    let err = commit_enrollment(dir.path(), &key_path, &id, &test_record(1000)).unwrap_err();
+    let err = {
+        let mut selector = test_selector(dir.path());
+        commit_enrollment_with_selector(
+            dir.path(),
+            &key_path,
+            &id,
+            &test_record(1000),
+            &mut selector,
+        )
+        .unwrap_err()
+    };
     assert!(
         matches!(err, StoreError::Crypto(_) | StoreError::Io(_)),
         "got {err:?}"
@@ -220,14 +266,13 @@ fn interrupted_write_detected_on_daemon_read() {
         username: "test".into(),
         store_owner_uid: current_euid(),
     };
-    commit_enrollment(dir.path(), &key_path, &id, &test_record(1000)).unwrap();
+    commit_test_enrollment(dir.path(), &key_path, &id, &test_record(1000));
 
     let sealed = dir.path().join("1000.sealed");
     let raw = std::fs::read(&sealed).unwrap();
     std::fs::write(&sealed, &raw[..raw.len() / 2]).unwrap();
 
-    let daemon =
-        TemplateStore::open_with_owner(dir.path(), &key_path, Some(id.store_owner_uid)).unwrap();
+    let daemon = open_test_store(dir.path(), &key_path, id.store_owner_uid);
     let err = daemon.load(1000).unwrap_err();
     assert!(
         matches!(err, StoreError::Crypto(_) | StoreError::Serde(_)),
@@ -248,11 +293,10 @@ fn daemon_reads_enrollment_with_matching_owner() {
         username: "test".into(),
         store_owner_uid: current_euid(),
     };
-    commit_enrollment(dir.path(), &key_path, &id, &test_record(1000)).unwrap();
+    commit_test_enrollment(dir.path(), &key_path, &id, &test_record(1000));
 
     // Daemon opens with the SAME expected owner enrollment used.
-    let daemon =
-        TemplateStore::open_with_owner(dir.path(), &key_path, Some(id.store_owner_uid)).unwrap();
+    let daemon = open_test_store(dir.path(), &key_path, id.store_owner_uid);
     let loaded = daemon.load(1000).unwrap();
     assert_eq!(loaded.meta.uid, 1000);
     assert_eq!(loaded.templates.len(), 1);
@@ -270,10 +314,10 @@ fn daemon_rejects_enrollment_with_mismatched_owner() {
         username: "test".into(),
         store_owner_uid: current_euid(),
     };
-    commit_enrollment(dir.path(), &key_path, &id, &test_record(1000)).unwrap();
+    commit_test_enrollment(dir.path(), &key_path, &id, &test_record(1000));
 
     let wrong_owner = current_euid().wrapping_add(9999);
-    let daemon = TemplateStore::open_with_owner(dir.path(), &key_path, Some(wrong_owner)).unwrap();
+    let daemon = open_test_store(dir.path(), &key_path, wrong_owner);
     let err = daemon.load(1000).unwrap_err();
     assert!(
         matches!(err, StoreError::WrongOwner { expected, actual, .. }
