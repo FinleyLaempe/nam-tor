@@ -1228,18 +1228,22 @@ mod tests {
         let sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
         let raw_key = sk.key();
         let state = sk.protection_state();
-        let debug_str = format!("{state:?}");
+        // Only check the `warning` String field — the sealing enum and has_tpm bool
+        // cannot carry key data, and the struct/field names in Debug output contain
+        // static substrings (e.g. "ec" in "ProtectionState") that false-positive against
+        // arbitrary key bytes like 0xec.
+        let warning = &state.warning;
         for byte in raw_key.iter() {
             let hex_lower = format!("{byte:02x}");
             let hex_upper = format!("{byte:02X}");
             assert!(
-                !debug_str.contains(&hex_lower) && !debug_str.contains(&hex_upper),
-                "protection state debug leaks key byte {byte:#x}"
+                !warning.contains(&hex_lower) && !warning.contains(&hex_upper),
+                "protection state warning leaks key byte {byte:#x}"
             );
         }
         assert!(
-            !debug_str.contains(key_path.to_str().unwrap()),
-            "protection state must not expose the key path"
+            !warning.contains(key_path.to_str().unwrap()),
+            "protection state warning must not expose the key path"
         );
     }
 
