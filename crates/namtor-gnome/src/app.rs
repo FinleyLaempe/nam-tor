@@ -106,7 +106,9 @@ impl AppController {
                 let p = Rc::new(RefCell::new(ProfilePresenter::new(client, uid)));
                 self.presenter = Some(p);
                 self.offline = false;
-                self.presenter.as_ref().unwrap().borrow_mut().refresh();
+                if let Some(presenter) = self.presenter.as_ref() {
+                    presenter.borrow_mut().refresh();
+                }
                 self.render_all(rc);
             }
             Err(err) => {
