@@ -134,6 +134,13 @@ fn handle_toggle<C: crate::client::ManagerClient + 'static>(
     service_name: &str,
 ) {
     let new_state = switch.is_active();
+    // USA-0/USA-16: in a full deployment this synchronous D-Bus call
+    // (which may trigger a polkit CheckAuthorization) should be routed
+    // through `presenter.dispatch_async()` + `glib::MainContext` idle
+    // callback so the GTK main thread never blocks on the round-trip.
+    // The scroll position of the PAM services page is managed by
+    // `PreferencesDialog` internally (the dialog preserves scroll across
+    // re-renders of the same page).
     {
         let mut p = rc.borrow_mut();
         p.request_pam_toggle(service_id, new_state);

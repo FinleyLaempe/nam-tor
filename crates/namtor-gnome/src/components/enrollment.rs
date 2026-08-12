@@ -166,11 +166,6 @@ impl EnrollmentViewComponent {
         // (>= 2), show a completion cue and style the Stop button as
         // suggested-action.
         let complete = view.diversity_percent >= 100 && view.quality_bucket >= 2;
-        let stop_css = if complete {
-            ["suggested-action"]
-        } else {
-            ["suggested-action"]
-        };
         let stop_label = if complete {
             tr("Enrollment complete — press Stop to review")
         } else {
@@ -191,7 +186,7 @@ impl EnrollmentViewComponent {
 
         let stop_btn = gtk4::Button::builder()
             .label(&stop_label)
-            .css_classes(stop_css)
+            .css_classes(["suggested-action"])
             .use_underline(!complete)
             .tooltip_text(tr("Stop capture and review the result"))
             .build();
@@ -220,6 +215,85 @@ impl EnrollmentViewComponent {
 
         self.page.add(&group);
         self.group = Some(group);
+    }
+
+    /// Render the stopped state with a summary, optional error (USA-5),
+    /// and Review + Cancel buttons.
+    pub fn render_stopped(
+        &mut self,
+        view: Option<&EnrollmentViewV3>,
+        error: Option<&crate::view_model::ErrorView>,
+        on_review: impl Fn() + 'static,
+        on_cancel: impl Fn() + 'static,
+    ) -> &adw::PreferencesPage {
+        self.clear();
+
+        let group = adw::PreferencesGroup::builder()
+            .title(tr("Enrollment stopped"))
+            .build();
+        group.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Enrollment stopped group",
+        ))]);
+
+        // USA-5: render the error at the top of the Stopped branch so
+        // save errors are visible in the enrollment view.
+        if let Some(err) = error {
+            let err_row = adw::ActionRow::builder()
+                .title(tr(&format!("{}: {}", err.title, err.detail)))
+                .css_classes(["error"])
+                .build();
+            err_row.set_accessible_role(gtk4::AccessibleRole::Alert);
+            group.add(&err_row);
+        }
+
+        if let Some(v) = view {
+            let quality_row = adw::ActionRow::builder()
+                .title(tr(&format!("Quality: {}%", v.quality_percent)))
+                .build();
+            group.add(&quality_row);
+
+            let diversity_row = adw::ActionRow::builder()
+                .title(tr(&format!("Diversity: {}%", v.diversity_percent)))
+                .build();
+            group.add(&diversity_row);
+
+            let counts_row = adw::ActionRow::builder()
+                .title(tr(&format!(
+                    "Accepted: {} / Seen: {}",
+                    v.frames_accepted, v.frames_seen
+                )))
+                .build();
+            group.add(&counts_row);
+        }
+
+        let review_btn = gtk4::Button::builder()
+            .label(tr("_Review Enrollment"))
+            .css_classes(["suggested-action"])
+            .use_underline(true)
+            .tooltip_text(tr("Review the captured enrollment"))
+            .build();
+        review_btn.update_property(&[
+            gtk4::accessible::Property::Label(&tr("Review enrollment")),
+            gtk4::accessible::Property::Description(&tr(
+                "Review the captured frames before saving",
+            )),
+        ]);
+        review_btn.connect_clicked(move |_| on_review());
+
+        let cancel_btn = gtk4::Button::builder()
+            .label(tr("Cancel"))
+            .tooltip_text(tr("Cancel enrollment and discard frames"))
+            .build();
+        cancel_btn.update_property(&[gtk4::accessible::Property::Label(&tr("Cancel enrollment"))]);
+        cancel_btn.connect_clicked(move |_| on_cancel());
+
+        group.add(&review_btn);
+        group.add(&cancel_btn);
+
+        self.page.add(&group);
+        self.group = Some(group);
+
+        &self.page
     }
 
     fn clear(&mut self) {

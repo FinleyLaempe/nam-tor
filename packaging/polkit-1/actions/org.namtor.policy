@@ -68,4 +68,16 @@
     </defaults>
   </action>
 
+  <!-- Restart the Nam-tor daemon service. System-level change — requires
+       admin auth, retained for the session. USA-8. -->
+  <action id="org.namtor.restart-daemon">
+    <description>Restart the Nam-tor daemon</description>
+    <message>Authentication is required to restart the Nam-tor system daemon.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
 </policyconfig>

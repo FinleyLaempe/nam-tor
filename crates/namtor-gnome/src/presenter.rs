@@ -413,6 +413,29 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             return &self.model;
         }
 
+        // USA-3: duplicate-name check. If the name matches an existing
+        // profile, stage a `PendingReplace` so the UI can prompt the user
+        // to confirm overwriting the old profile (not a silent duplicate).
+        if self.name_index.values().any(|n| n == name) {
+            let existing_id = self
+                .name_index
+                .iter()
+                .find(|(_, n)| n.as_str() == name)
+                .map(|(id, _)| id.clone())
+                .unwrap_or_default();
+            self.model.pending_replace = Some(PendingReplace {
+                id: existing_id,
+                old_name: name.to_string(),
+                new_name: name.to_string(),
+            });
+            self.model.error = Some(ErrorView {
+                title: "Duplicate name".into(),
+                detail: format!("A profile named '{name}' already exists. Replace it?"),
+                recovery: None,
+            });
+            return &self.model;
+        }
+
         match self.client.start_enrollment_v3(self.uid, name) {
             Ok(session) => {
                 self.model.enrollment_state = EnrollmentState::Capturing;
@@ -708,6 +731,28 @@ impl<C: ManagerClient> ProfilePresenter<C> {
 
     pub fn cancel_replace(&mut self) -> &PresenterModel {
         self.model.pending_replace = None;
+        &self.model
+    }
+
+    /// USA-3: Confirm a replace triggered by a duplicate-name enrollment
+    /// attempt. Deletes the old profile and starts a fresh v3 enrollment
+    /// with the same name so the user goes through the normal capture flow.
+    pub fn confirm_replace_v3(&mut self) -> &PresenterModel {
+        let Some(pending) = self.model.pending_replace.clone() else {
+            return &self.model;
+        };
+        match self
+            .client
+            .delete_profile(self.uid, &ProfileId(pending.id.clone()))
+        {
+            Ok(()) => {
+                self.model.pending_replace = None;
+                self.model.error = None;
+                self.name_index.remove(&pending.id);
+                self.start_enrollment_v3(&pending.new_name);
+            }
+            Err(err) => self.set_error(&err),
+        }
         &self.model
     }
 

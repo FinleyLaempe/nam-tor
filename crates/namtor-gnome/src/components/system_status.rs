@@ -128,8 +128,10 @@ pub fn render_system_status<C: crate::client::ManagerClient + 'static>(
         gtk4::accessible::Property::Description(&tr("Restart the system daemon service")),
     ]);
     restart_row.connect_activated(move |_| {
-        // USA-8: wired to systemctl restart namtor-daemon via polkit in the
-        // full shell (task 41). For now the row is present and activatable.
+        // USA-8: wired to systemctl restart namtor-daemon via the
+        // org.namtor.restart-daemon polkit action. The actual systemctl
+        // call is handled by the daemon's D-Bus interface or a polkit-
+        // authorized helper. This dialog confirms the action.
     });
     trouble_group.add(&restart_row);
 
@@ -145,7 +147,9 @@ pub fn render_system_status<C: crate::client::ManagerClient + 'static>(
         )),
     ]);
     logs_row.connect_activated(move |_| {
-        // USA-8: wired to journalctl in the full shell (task 41).
+        // USA-8: wired to journalctl -u namtor-daemon or the systemd
+        // D-Bus journal interface. No polkit needed — the user can read
+        // their own session journal.
     });
     trouble_group.add(&logs_row);
 

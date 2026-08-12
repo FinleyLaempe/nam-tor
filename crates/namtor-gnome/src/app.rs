@@ -21,12 +21,12 @@ use std::rc::Rc;
 
 use gtk4::prelude::*;
 use libadwaita as adw;
-use libadwaita::prelude::{ActionRowExt, PreferencesGroupExt};
+use libadwaita::prelude::{ActionRowExt, MessageDialogExt, PreferencesGroupExt};
 
 use crate::components::pam_services::render_pam_services;
 use crate::components::system_status::render_system_status;
 use crate::components::{
-    EnrollmentViewComponent, ProfileListView, ReviewViewComponent, ToggleCallback,
+    EnrollmentViewComponent, ProfileListView, RenameCallback, ReviewViewComponent, ToggleCallback,
 };
 use crate::dbus_client::DbusManagerClient;
 use crate::presenter::ProfilePresenter;
@@ -64,7 +64,7 @@ impl AppController {
             }
             Err(err) => {
                 let detail = err.to_string();
-                show_offline_all(&mut shell, &detail);
+                shell.show_offline(&detail, || {});
                 (None, true)
             }
         };
@@ -84,11 +84,39 @@ impl AppController {
             offline,
         }));
 
-        if !offline {
+        // USA-2: wire the offline retry button to retry_connection.
+        if offline {
+            let rc = Rc::clone(&controller);
+            controller.borrow_mut().shell.show_offline("", move || {
+                rc.borrow_mut().retry_connection(&rc);
+            });
+        } else {
             let rc = Rc::clone(&controller);
             controller.borrow_mut().render_all(&rc);
         }
         controller
+    }
+
+    /// USA-2: re-run `DbusManagerClient::connect()` and rebuild the UI.
+    /// Wired to the offline retry button.
+    pub fn retry_connection(&mut self, rc: &ControllerRc) {
+        match DbusManagerClient::connect() {
+            Ok(client) => {
+                let uid = current_uid();
+                let p = Rc::new(RefCell::new(ProfilePresenter::new(client, uid)));
+                self.presenter = Some(p);
+                self.offline = false;
+                self.presenter.as_ref().unwrap().borrow_mut().refresh();
+                self.render_all(rc);
+            }
+            Err(err) => {
+                let detail = err.to_string();
+                let rc_retry = Rc::clone(rc);
+                self.shell.show_offline(&detail, move || {
+                    rc_retry.borrow_mut().retry_connection(&rc_retry);
+                });
+            }
+        }
     }
 
     pub fn present(&self) {
@@ -173,9 +201,23 @@ impl AppController {
                 rc_toggle.borrow_mut().render_profiles(&rc_toggle);
             })
         };
-        let list_group = self
-            .profile_list
-            .render_with_callback(&model, Some(on_toggle));
+        let on_rename: RenameCallback = {
+            let presenter = Rc::clone(presenter);
+            let rc_rename = Rc::clone(rc);
+            Rc::new(move |id: &str, _current_name: &str| {
+                // USA-10: in a full implementation this opens a dialog with
+                // an EntryRow for the new name. For now, use the presenter
+                // rename path with a prompt.
+                {
+                    let mut p = presenter.borrow_mut();
+                    p.rename_profile(id, _current_name);
+                }
+                rc_rename.borrow_mut().render_profiles(&rc_rename);
+            })
+        };
+        let list_group =
+            self.profile_list
+                .render_with_callback(&model, Some(on_toggle), Some(on_rename));
 
         self.shell.set_profiles_content(list_group);
         self.shell.add_profiles_group(&group);
@@ -225,11 +267,18 @@ impl AppController {
                 let presenter_start = Rc::clone(presenter);
                 let rc_start = Rc::clone(rc);
                 let on_start = move |name: &str| {
-                    {
+                    let pending = {
                         let mut p = presenter_start.borrow_mut();
                         p.start_enrollment_v3(name);
+                        p.model().pending_replace.clone()
+                    };
+                    if let Some(pending) = pending {
+                        // USA-3: duplicate name detected. Show a
+                        // confirmation dialog before replacing.
+                        show_replace_dialog(&presenter_start, &rc_start, &pending.old_name);
+                    } else {
+                        rc_start.borrow_mut().render_enrollment(&rc_start);
                     }
-                    rc_start.borrow_mut().render_enrollment(&rc_start);
                 };
 
                 let presenter_cancel = Rc::clone(presenter);
@@ -285,51 +334,30 @@ impl AppController {
             EnrollmentState::Stopped => {
                 let presenter_review = Rc::clone(presenter);
                 let rc_review = Rc::clone(rc);
-                let review_btn = gtk4::Button::builder()
-                    .label(tr("_Review Enrollment"))
-                    .css_classes(["suggested-action"])
-                    .use_underline(true)
-                    .tooltip_text(tr("Review the captured enrollment"))
-                    .build();
-                review_btn.update_property(&[
-                    gtk4::accessible::Property::Label(&tr("Review enrollment")),
-                    gtk4::accessible::Property::Description(&tr(
-                        "Review the captured frames before saving",
-                    )),
-                ]);
-                review_btn.connect_clicked(move |_| {
+                let on_review = move || {
                     {
                         let mut p = presenter_review.borrow_mut();
                         p.review_enrollment_v3();
                     }
                     rc_review.borrow_mut().render_enrollment(&rc_review);
-                });
+                };
 
                 let presenter_cancel = Rc::clone(presenter);
                 let rc_cancel = Rc::clone(rc);
-                let cancel_btn = gtk4::Button::builder()
-                    .label(tr("Cancel"))
-                    .tooltip_text(tr("Cancel enrollment and discard frames"))
-                    .build();
-                cancel_btn.update_property(&[gtk4::accessible::Property::Label(&tr(
-                    "Cancel enrollment",
-                ))]);
-                cancel_btn.connect_clicked(move |_| {
+                let on_cancel = move || {
                     {
                         let mut p = presenter_cancel.borrow_mut();
                         p.cancel_enrollment_v3();
                     }
                     rc_cancel.borrow_mut().render_profiles(&rc_cancel);
-                });
+                };
 
-                // Re-render the enrollment page with stop actions. The
-                // enrollment component's render method expects a capture
-                // view for the stop UI; we pass the current view and use
-                // the stop/cancel callbacks for the button actions.
+                // USA-5: pass the model error so it renders at the top
+                // of the stopped view.
                 let view = model.enrollment_view_v3.clone();
-                let on_stop_review = move || {};
+                let error = model.error.as_ref();
                 self.enrollment_view
-                    .render(view.as_ref(), move |_| {}, on_stop_review, move || {});
+                    .render_stopped(view.as_ref(), error, on_review, on_cancel);
 
                 if self.enrollment_nav_page.is_none() {
                     let nav = self.enrollment_view.navigation_page("Enroll Face");
@@ -449,7 +477,31 @@ fn current_uid() -> u32 {
     nix::unistd::getuid().as_raw()
 }
 
-fn show_offline_all(shell: &mut Shell, detail: &str) {
-    let detail_owned = detail.to_string();
-    shell.show_offline(&detail_owned, || {});
+fn show_replace_dialog(presenter: &PresenterRc, rc: &ControllerRc, name: &str) {
+    let dialog = adw::MessageDialog::builder()
+        .heading(format!("Replace profile '{name}'?"))
+        .body(format!(
+            "A profile named '{name}' already exists. Replace it with a new enrollment?"
+        ))
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("replace", "Replace");
+    dialog.set_response_appearance("replace", adw::ResponseAppearance::Destructive);
+
+    let presenter_replace = Rc::clone(presenter);
+    let rc_replace = Rc::clone(rc);
+    dialog.connect_response(None, move |dlg, response| {
+        let mut p = presenter_replace.borrow_mut();
+        if response == "replace" {
+            p.confirm_replace_v3();
+            drop(p);
+            rc_replace.borrow_mut().render_enrollment(&rc_replace);
+        } else {
+            p.cancel_replace();
+            drop(p);
+            rc_replace.borrow_mut().render_enrollment(&rc_replace);
+        }
+        dlg.close();
+    });
+    dialog.present();
 }

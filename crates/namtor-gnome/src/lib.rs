@@ -28,6 +28,7 @@ pub mod client;
 pub mod components;
 pub mod fake;
 pub mod navigation;
+pub mod polkit_auth;
 pub mod presenter;
 pub mod privacy;
 pub mod shell;
