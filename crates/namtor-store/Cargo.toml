@@ -19,6 +19,7 @@ rand = "0.8"
 aes-gcm = "0.10"
 sha2 = "0.10"
 hmac = "0.12"
+argon2 = "0.5"
 zeroize = { version = "1", features = ["derive"] }
 
 [target.'cfg(unix)'.dependencies]

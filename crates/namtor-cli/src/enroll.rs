@@ -142,8 +142,23 @@ pub fn commit_enrollment(
     identity: &EnrollmentIdentity,
     record: &TemplateRecord,
 ) -> Result<(), StoreError> {
-    let store =
-        TemplateStore::open_with_owner(templates_dir, key_path, Some(identity.store_owner_uid))?;
+    let mut selector = namtor_store::crypto::BackendSelector::default();
+    commit_enrollment_with_selector(templates_dir, key_path, identity, record, &mut selector)
+}
+
+pub fn commit_enrollment_with_selector(
+    templates_dir: &Path,
+    key_path: &Path,
+    identity: &EnrollmentIdentity,
+    record: &TemplateRecord,
+    selector: &mut namtor_store::crypto::BackendSelector,
+) -> Result<(), StoreError> {
+    let store = TemplateStore::open_with_owner_and_selector(
+        templates_dir,
+        key_path,
+        Some(identity.store_owner_uid),
+        selector,
+    )?;
     store.update(record)
 }
 
@@ -393,11 +408,13 @@ pub fn resolve_enrollment_device(
             .iter()
             .find(|c| c.dev_path == parsed)
             .cloned()
-            .or_else(|| Some(DeviceCandidate {
-                dev_path: parsed.to_path_buf(),
-                vid_pid: String::new(),
-                is_metadata: false,
-            }));
+            .or_else(|| {
+                Some(DeviceCandidate {
+                    dev_path: parsed.to_path_buf(),
+                    vid_pid: String::new(),
+                    is_metadata: false,
+                })
+            });
     }
     candidates
         .iter()
@@ -435,9 +452,8 @@ fn capture_enrollment_frames(device: Option<&str>) -> Result<Vec<CapturedFrame>,
         Some(d) => d.to_string(),
         None => {
             let candidates = enumerate_device_candidates();
-            let selected =
-                resolve_enrollment_device(None, &candidates)
-                    .ok_or_else(|| "no IR camera device found".to_string())?;
+            let selected = resolve_enrollment_device(None, &candidates)
+                .ok_or_else(|| "no IR camera device found".to_string())?;
             eprintln!(
                 "selected IR camera {} (vid:pid {})",
                 selected.dev_path.display(),
@@ -468,13 +484,14 @@ fn capture_enrollment_frames(device: Option<&str>) -> Result<Vec<CapturedFrame>,
     let emitter = activate_emitter(&dev, &vid_pid).unwrap_or_else(|e| {
         eprintln!("warning: emitter activation failed: {e}");
         eprintln!("capturing without IR illumination (faces may not be visible)");
-        EmitterGuard { xu: None, vid_pid: vid_pid.clone() }
+        EmitterGuard {
+            xu: None,
+            vid_pid: vid_pid.clone(),
+        }
     });
     let streamer = V4l2IrStream::open(
         std::path::Path::new(&dev),
-        meta_dev
-            .as_ref()
-            .map(std::path::Path::new),
+        meta_dev.as_ref().map(std::path::Path::new),
         width,
         height,
     )
@@ -607,8 +624,8 @@ fn activate_emitter(dev: &str, vid_pid: &str) -> Result<EmitterGuard, String> {
     use namtor_uvc::device::V4l2Device;
     use namtor_uvc::probe::SafeXu;
 
-    let cfg = emitter_cfg_for(vid_pid)
-        .ok_or_else(|| format!("no quirk entry for vid:pid {vid_pid}"))?;
+    let cfg =
+        emitter_cfg_for(vid_pid).ok_or_else(|| format!("no quirk entry for vid:pid {vid_pid}"))?;
 
     let v4l2_dev = V4l2Device::open(std::path::Path::new(dev))
         .map_err(|e| format!("open {dev} for XU control: {e}"))?;
@@ -626,7 +643,10 @@ fn activate_emitter(dev: &str, vid_pid: &str) -> Result<EmitterGuard, String> {
         .map_err(|e| format!("emitter write failed: {e}"))?;
     restorer.keep();
 
-    Ok(EmitterGuard { xu: Some(xu), vid_pid: vid_pid.to_string() })
+    Ok(EmitterGuard {
+        xu: Some(xu),
+        vid_pid: vid_pid.to_string(),
+    })
 }
 
 fn variance_of_laplacian(data: &[u8], width: u32, height: u32) -> f32 {

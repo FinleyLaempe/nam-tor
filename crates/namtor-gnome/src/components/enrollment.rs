@@ -162,10 +162,37 @@ impl EnrollmentViewComponent {
         ))]);
         group.add(&bar);
 
+        // USA-9: when diversity_percent >= 100 and quality_bucket is good
+        // (>= 2), show a completion cue and style the Stop button as
+        // suggested-action.
+        let complete = view.diversity_percent >= 100 && view.quality_bucket >= 2;
+        let stop_css = if complete {
+            ["suggested-action"]
+        } else {
+            ["suggested-action"]
+        };
+        let stop_label = if complete {
+            tr("Enrollment complete — press Stop to review")
+        } else {
+            tr("_Stop")
+        };
+
+        if complete {
+            let cue_row = adw::ActionRow::builder()
+                .title(tr("Enrollment complete — press Stop to review"))
+                .css_classes(["success"])
+                .build();
+            cue_row.set_accessible_role(gtk4::AccessibleRole::Status);
+            cue_row.update_property(&[gtk4::accessible::Property::Label(&tr(
+                "Enrollment complete",
+            ))]);
+            group.add(&cue_row);
+        }
+
         let stop_btn = gtk4::Button::builder()
-            .label(tr("_Stop"))
-            .css_classes(["suggested-action"])
-            .use_underline(true)
+            .label(&stop_label)
+            .css_classes(stop_css)
+            .use_underline(!complete)
             .tooltip_text(tr("Stop capture and review the result"))
             .build();
         stop_btn.update_property(&[

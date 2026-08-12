@@ -652,7 +652,9 @@ mod tests {
 
     fn open_store(dir: &Path) -> TemplateStore {
         let key_path = dir.join("key");
-        TemplateStore::open(dir, &key_path).unwrap()
+        let mut selector =
+            crate::crypto::BackendSelector::file().with_root_secret_path(dir.join("root_secret"));
+        TemplateStore::open_with_selector(dir, &key_path, &mut selector).unwrap()
     }
 
     #[test]

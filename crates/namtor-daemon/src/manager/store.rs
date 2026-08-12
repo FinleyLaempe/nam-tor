@@ -271,7 +271,9 @@ mod tests {
     use super::*;
 
     fn open_test_store(dir: &std::path::Path) -> Arc<TemplateStore> {
-        Arc::new(TemplateStore::open(dir, &dir.join("key")).unwrap())
+        let mut selector = namtor_store::crypto::BackendSelector::file()
+            .with_root_secret_path(dir.join("root_secret"));
+        Arc::new(TemplateStore::open_with_selector(dir, &dir.join("key"), &mut selector).unwrap())
     }
 
     fn sample_profile(uid: u32, id: &str) -> ProfileRecord {

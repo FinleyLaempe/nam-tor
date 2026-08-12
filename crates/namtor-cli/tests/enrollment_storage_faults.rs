@@ -18,8 +18,7 @@
 use std::path::Path;
 
 use namtor_cli::enroll::{
-    commit_enrollment_with_selector, resolve_identity, EnrollmentIdentity,
-    IdentityError,
+    commit_enrollment_with_selector, resolve_identity, EnrollmentIdentity, IdentityError,
 };
 use namtor_store::crypto::BackendSelector;
 use namtor_store::template::{EnrollmentMeta, Template, TemplateRecord};

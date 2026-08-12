@@ -20,16 +20,34 @@
 //!   Requires libtss2-fapi + `tss` group + `/dev/tpmrm0` at runtime.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce};
+use argon2::{Algorithm, Argon2, Params, Version};
 use hmac::{Hmac, Mac};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use crate::StoreError;
+
+/// Default path for the root secret file (SEC-3). The daemon running as the
+/// `namtor` user owns this file with mode 0600. Tests override via
+/// [`BackendSelector::with_root_secret_path`].
+const DEFAULT_ROOT_SECRET_PATH: &str = "/var/lib/namtor/root_secret";
+
+/// Argon2id parameters for SEC-3 key wrapping (OWASP-recommended minimum):
+/// m_cost = 19456 KiB (19 MiB), t_cost = 2, p_cost = 1, output = 32 bytes.
+/// Note: the plan text says "64 MiB" but 19456 KiB = 19 MiB, which is the
+/// actual OWASP value. We follow the numeric parameter (19456).
+const ARGON2_M_COST: u32 = 19456;
+const ARGON2_T_COST: u32 = 2;
+const ARGON2_P_COST: u32 = 1;
+const ARGON2_OUTPUT_LEN: usize = 32;
+const ROOT_SECRET_LEN: usize = 32;
+const SALT_LEN: usize = 16;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -131,6 +149,11 @@ impl SealedKey {
                 Err(e) => return Err(e),
             };
             let key = backend.unseal(&blob)?;
+            if blob.backend_id() == FileBackend::BACKEND_ID {
+                let mut new_backend = selector.open(FileBackend::BACKEND_ID_V2)?;
+                let new_blob = new_backend.seal(&key)?;
+                atomic_write_key(key_path, &new_blob.encode())?;
+            }
             let mut sk = Self::from_unsealed(key, backend.source());
             sk.lock_memory();
             return Ok(sk);
@@ -203,6 +226,7 @@ pub struct BackendSelector {
     force_backend: Option<&'static str>,
     mock_seed: Option<[u8; 32]>,
     pcr_selection: Option<PcrSelection>,
+    root_secret_path: Option<PathBuf>,
 }
 
 impl BackendSelector {
@@ -211,6 +235,7 @@ impl BackendSelector {
             force_backend: None,
             mock_seed: None,
             pcr_selection: None,
+            root_secret_path: None,
         }
     }
 
@@ -219,6 +244,7 @@ impl BackendSelector {
             force_backend: Some(MockTpm::BACKEND_ID),
             mock_seed: Some(seed),
             pcr_selection: None,
+            root_secret_path: None,
         }
     }
 
@@ -227,6 +253,7 @@ impl BackendSelector {
             force_backend: Some(MockTpm::BACKEND_ID),
             mock_seed: Some(seed),
             pcr_selection: Some(pcrs),
+            root_secret_path: None,
         }
     }
 
@@ -235,11 +262,17 @@ impl BackendSelector {
             force_backend: Some(FileBackend::BACKEND_ID),
             mock_seed: None,
             pcr_selection: None,
+            root_secret_path: None,
         }
     }
 
     pub fn with_pcrs(mut self, pcrs: PcrSelection) -> Self {
         self.pcr_selection = Some(pcrs);
+        self
+    }
+
+    pub fn with_root_secret_path(mut self, path: PathBuf) -> Self {
+        self.root_secret_path = Some(path);
         self
     }
 
@@ -259,6 +292,10 @@ impl BackendSelector {
     }
 
     fn open(&self, id: &str) -> Result<Box<dyn KeyBackend>, StoreError> {
+        let root_secret_path = self
+            .root_secret_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_ROOT_SECRET_PATH));
         match id {
             MockTpm::BACKEND_ID => {
                 let seed = self.mock_seed.ok_or_else(|| {
@@ -266,7 +303,9 @@ impl BackendSelector {
                 })?;
                 Ok(Box::new(MockTpm::new(seed, self.pcr_selection.clone())))
             }
-            FileBackend::BACKEND_ID => Ok(Box::new(FileBackend::new())),
+            FileBackend::BACKEND_ID | FileBackend::BACKEND_ID_V2 => Ok(Box::new(
+                FileBackend::with_root_secret_path(root_secret_path),
+            )),
             #[cfg(feature = "tpm2")]
             TPM2_BACKEND_ID => Ok(Box::new(Tpm2Backend::new(self.pcr_selection.clone())?)),
             _ => Err(StoreError::Crypto(format!("unknown backend id: {id}"))),
@@ -562,17 +601,161 @@ impl KeyBackend for MockTpm {
     }
 }
 
-// --- FileBackend: root-only key file, always available, reduced protection ---
+// --- FileBackend: argon2id-wrapped key file (SEC-3, file-v2 format) ---
+//
+// Old format ("file"): payload = raw 32-byte AES key (no protection).
+// New format ("file-v2"): payload = salt(16) || nonce(12) || AES-256-GCM
+//   ciphertext+tag(48). The KEK is argon2id(root_secret, salt, m=19456,
+//   t=2, p=1, out=32). The root_secret is a 32-byte random file at
+//   /var/lib/namtor/root_secret (namtor-owned, 0600), separate from the
+//   key file. An attacker who steals the key file alone cannot decrypt
+//   templates; they also need the root_secret file (defense-in-depth, not
+//   a full disk-theft mitigation — only TPM2 sealing defeats disk theft).
+//
+// Migration: old "file" blobs auto-migrate on load. The raw key is read,
+// re-wrapped with argon2id, and written back atomically (temp + fsync +
+// rename). If any step fails, the old blob remains on disk.
+
+/// The root secret used to derive argon2id KEKs for FileBackend key
+/// wrapping. Loaded from disk with mlock; zeroised on drop.
+struct RootSecret {
+    bytes: [u8; ROOT_SECRET_LEN],
+}
+
+impl RootSecret {
+    fn load_or_create(path: &Path) -> Result<Self, StoreError> {
+        if path.exists() {
+            let raw = std::fs::read(path)?;
+            if raw.len() != ROOT_SECRET_LEN {
+                return Err(StoreError::Crypto(format!(
+                    "root secret at {} is {} bytes, expected {ROOT_SECRET_LEN}",
+                    path.display(),
+                    raw.len()
+                )));
+            }
+            let mut bytes = [0u8; ROOT_SECRET_LEN];
+            bytes.copy_from_slice(&raw);
+            let mut s = Self { bytes };
+            s.lock_memory();
+            return Ok(s);
+        }
+        let mut bytes = [0u8; ROOT_SECRET_LEN];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, bytes)?;
+        set_root_only(path)?;
+        let mut s = Self { bytes };
+        s.lock_memory();
+        Ok(s)
+    }
+
+    fn lock_memory(&mut self) {
+        lock_bytes(&self.bytes);
+    }
+
+    fn derive_kek(&self, salt: &[u8]) -> Result<[u8; ARGON2_OUTPUT_LEN], StoreError> {
+        let params = Params::new(
+            ARGON2_M_COST,
+            ARGON2_T_COST,
+            ARGON2_P_COST,
+            Some(ARGON2_OUTPUT_LEN),
+        )
+        .map_err(|e| StoreError::Crypto(format!("argon2 params: {e}")))?;
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+        let mut out = [0u8; ARGON2_OUTPUT_LEN];
+        argon2
+            .hash_password_into(&self.bytes, salt, &mut out)
+            .map_err(|e| StoreError::Crypto(format!("argon2id derive: {e}")))?;
+        Ok(out)
+    }
+}
+
+impl Drop for RootSecret {
+    fn drop(&mut self) {
+        unlock_bytes(&self.bytes);
+        self.bytes.zeroize();
+    }
+}
 
 pub struct FileBackend {
-    _priv: (),
+    root_secret_path: PathBuf,
 }
 
 impl FileBackend {
     pub const BACKEND_ID: &'static str = "file";
+    pub const BACKEND_ID_V2: &'static str = "file-v2";
 
     pub fn new() -> Self {
-        Self { _priv: () }
+        Self {
+            root_secret_path: PathBuf::from(DEFAULT_ROOT_SECRET_PATH),
+        }
+    }
+
+    pub fn with_root_secret_path(path: PathBuf) -> Self {
+        Self {
+            root_secret_path: path,
+        }
+    }
+
+    fn seal_v2(&mut self, key: &[u8; 32]) -> Result<SealedBlob, StoreError> {
+        let root_secret = RootSecret::load_or_create(&self.root_secret_path)?;
+        let mut salt = [0u8; SALT_LEN];
+        rand::thread_rng().fill_bytes(&mut salt);
+        let kek = root_secret.derive_kek(&salt)?;
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        let cipher =
+            Aes256Gcm::new_from_slice(&kek).map_err(|e| StoreError::Crypto(e.to_string()))?;
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ct = cipher
+            .encrypt(nonce, key.as_ref())
+            .map_err(|e| StoreError::Crypto(format!("aes-gcm seal: {e}")))?;
+        let mut payload = Vec::with_capacity(SALT_LEN + 12 + ct.len());
+        payload.extend_from_slice(&salt);
+        payload.extend_from_slice(&nonce_bytes);
+        payload.extend_from_slice(&ct);
+        Ok(SealedBlob::new(Self::BACKEND_ID_V2.into(), payload))
+    }
+
+    fn unseal_v2(&self, payload: &[u8]) -> Result<[u8; 32], StoreError> {
+        if payload.len() < SALT_LEN + 12 + 32 + 16 {
+            return Err(StoreError::Crypto(
+                "file-v2 payload too short (expected salt+nonce+ct)".into(),
+            ));
+        }
+        let salt = &payload[..SALT_LEN];
+        let nonce_bytes = &payload[SALT_LEN..SALT_LEN + 12];
+        let ct = &payload[SALT_LEN + 12..];
+        let root_secret = RootSecret::load_or_create(&self.root_secret_path)?;
+        let kek = root_secret.derive_kek(salt)?;
+        let cipher =
+            Aes256Gcm::new_from_slice(&kek).map_err(|e| StoreError::Crypto(e.to_string()))?;
+        let nonce = Nonce::from_slice(nonce_bytes);
+        let pt = cipher.decrypt(nonce, ct).map_err(|_| {
+            StoreError::Crypto("file-v2 unseal failed (wrong root secret or corrupted)".into())
+        })?;
+        if pt.len() != 32 {
+            return Err(StoreError::Crypto(format!(
+                "file-v2 unsealed key is {} bytes, expected 32",
+                pt.len()
+            )));
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&pt);
+        Ok(key)
+    }
+
+    fn unseal_v1(&self, payload: &[u8]) -> Result<[u8; 32], StoreError> {
+        if payload.len() != 32 {
+            return Err(StoreError::Crypto(
+                "file backend payload not 32 bytes".into(),
+            ));
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(payload);
+        Ok(key)
     }
 }
 
@@ -584,26 +767,19 @@ impl Default for FileBackend {
 
 impl KeyBackend for FileBackend {
     fn id(&self) -> &'static str {
-        Self::BACKEND_ID
+        Self::BACKEND_ID_V2
     }
 
     fn seal(&mut self, key: &[u8; 32]) -> Result<SealedBlob, StoreError> {
-        Ok(SealedBlob::new(Self::BACKEND_ID.into(), key.to_vec()))
+        self.seal_v2(key)
     }
 
     fn unseal(&self, blob: &SealedBlob) -> Result<[u8; 32], StoreError> {
-        if blob.backend_id() != Self::BACKEND_ID {
-            return Err(StoreError::Crypto("backend id mismatch".into()));
+        match blob.backend_id() {
+            Self::BACKEND_ID => self.unseal_v1(blob.payload()),
+            Self::BACKEND_ID_V2 => self.unseal_v2(blob.payload()),
+            _ => Err(StoreError::Crypto("backend id mismatch".into())),
         }
-        let p = blob.payload();
-        if p.len() != 32 {
-            return Err(StoreError::Crypto(
-                "file backend payload not 32 bytes".into(),
-            ));
-        }
-        let mut key = [0u8; 32];
-        key.copy_from_slice(p);
-        Ok(key)
     }
 
     fn source(&self) -> KeySource {
@@ -627,6 +803,26 @@ fn is_tpm2_type_backend(backend_id: &str) -> bool {
 fn set_root_only(path: &Path) -> Result<(), StoreError> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+fn atomic_write_key(path: &Path, data: &[u8]) -> Result<(), StoreError> {
+    let stem = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "key".to_string());
+    let mut tmp = path.to_path_buf();
+    tmp.set_file_name(format!(".{stem}.tmp"));
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 
@@ -912,10 +1108,11 @@ mod tests {
 
     #[test]
     fn file_backend_seal_unseal_round_trip() {
-        let mut fb = FileBackend::new();
+        let dir = tempfile::tempdir().unwrap();
+        let mut fb = FileBackend::with_root_secret_path(dir.path().join("root_secret"));
         let key = round_trip_key();
         let blob = fb.seal(&key).unwrap();
-        assert_eq!(blob.backend_id(), FileBackend::BACKEND_ID);
+        assert_eq!(blob.backend_id(), FileBackend::BACKEND_ID_V2);
         let recovered = fb.unseal(&blob).unwrap();
         assert_eq!(recovered, key);
     }
@@ -937,7 +1134,8 @@ mod tests {
     fn sealed_key_file_round_trip_via_selector() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
-        let mut selector = BackendSelector::file();
+        let mut selector =
+            BackendSelector::file().with_root_secret_path(dir.path().join("root_secret"));
         let k1 = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
         assert_eq!(k1.source(), KeySource::File);
         let k2 = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
@@ -948,7 +1146,9 @@ mod tests {
     fn sealed_key_default_selector_uses_file() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
-        let k1 = SealedKey::load_or_create(&key_path).unwrap();
+        let mut selector =
+            BackendSelector::new().with_root_secret_path(dir.path().join("root_secret"));
+        let k1 = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
         assert_eq!(k1.source(), KeySource::File);
     }
 
@@ -998,7 +1198,8 @@ mod tests {
     fn protection_state_software_has_visible_warning() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
-        let mut selector = BackendSelector::file();
+        let mut selector =
+            BackendSelector::file().with_root_secret_path(dir.path().join("root_secret"));
         let sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
         let state = sk.protection_state();
         assert_eq!(state.sealing, KeySource::File);
@@ -1012,7 +1213,8 @@ mod tests {
     fn protection_state_has_tpm_reflects_device_presence() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
-        let mut selector = BackendSelector::file();
+        let mut selector =
+            BackendSelector::file().with_root_secret_path(dir.path().join("root_secret"));
         let sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
         let state = sk.protection_state();
         assert_eq!(state.has_tpm, tpm2_device_present());
@@ -1045,7 +1247,8 @@ mod tests {
     fn fallback_key_file_is_0600() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
-        let mut selector = BackendSelector::file();
+        let mut selector =
+            BackendSelector::file().with_root_secret_path(dir.path().join("root_secret"));
         let _sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
         let mode = std::fs::metadata(&key_path).unwrap().mode();
         assert_eq!(
@@ -1063,7 +1266,8 @@ mod tests {
         let mut tpm_selector = BackendSelector::mock([7u8; 32]);
         let _sk = SealedKey::load_or_create_with(&key_path, &mut tpm_selector).unwrap();
         assert_eq!(_sk.source(), KeySource::Tpm2);
-        let mut file_selector = BackendSelector::file();
+        let mut file_selector =
+            BackendSelector::file().with_root_secret_path(dir.path().join("root_secret"));
         let err = SealedKey::load_or_create_with(&key_path, &mut file_selector).unwrap_err();
         assert!(
             matches!(err, StoreError::DowngradeRefused(ref m) if !m.is_empty()),
@@ -1090,10 +1294,11 @@ mod tests {
     fn file_blob_reloads_without_downgrade_error() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
-        let mut file_selector = BackendSelector::file();
+        let root_secret = dir.path().join("root_secret");
+        let mut file_selector = BackendSelector::file().with_root_secret_path(root_secret.clone());
         let k1 = SealedKey::load_or_create_with(&key_path, &mut file_selector).unwrap();
         assert_eq!(k1.source(), KeySource::File);
-        let mut default_selector = BackendSelector::new();
+        let mut default_selector = BackendSelector::new().with_root_secret_path(root_secret);
         let k2 = SealedKey::load_or_create_with(&key_path, &mut default_selector).unwrap();
         assert_eq!(k2.source(), KeySource::File);
         assert_eq!(k1.key(), k2.key());
@@ -1110,6 +1315,201 @@ mod tests {
         assert!(
             matches!(err, StoreError::Tpm2(ref m) if m.contains("PCR policy mismatch")),
             "expected PCR mismatch denial, got {err:?}"
+        );
+    }
+
+    // --- SEC-3: argon2id-wrapped FileBackend (file-v2) tests ---
+
+    #[test]
+    fn file_v2_seal_produces_file_v2_backend_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut fb = FileBackend::with_root_secret_path(dir.path().join("root_secret"));
+        let key = round_trip_key();
+        let blob = fb.seal(&key).unwrap();
+        assert_eq!(blob.backend_id(), FileBackend::BACKEND_ID_V2);
+    }
+
+    #[test]
+    fn file_v2_payload_format_is_salt_nonce_ciphertext() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut fb = FileBackend::with_root_secret_path(dir.path().join("root_secret"));
+        let key = round_trip_key();
+        let blob = fb.seal(&key).unwrap();
+        let payload = blob.payload();
+        assert_eq!(
+            payload.len(),
+            SALT_LEN + 12 + 32 + 16,
+            "file-v2 payload must be salt(16)+nonce(12)+ct(32+16)=76 bytes"
+        );
+    }
+
+    #[test]
+    fn file_v2_tamper_wrong_root_secret_fails() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let key = round_trip_key();
+        let blob = {
+            let mut fb = FileBackend::with_root_secret_path(dir_a.path().join("root_secret"));
+            fb.seal(&key).unwrap()
+        };
+        let other_key = round_trip_key();
+        let _ = {
+            let mut fb = FileBackend::with_root_secret_path(dir_b.path().join("root_secret"));
+            fb.seal(&other_key).unwrap()
+        };
+        let fb_wrong = FileBackend::with_root_secret_path(dir_b.path().join("root_secret"));
+        let err = fb_wrong.unseal(&blob).unwrap_err();
+        assert!(
+            matches!(err, StoreError::Crypto(_)),
+            "expected crypto error with wrong root secret, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn file_v2_tamper_corrupted_payload_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut fb = FileBackend::with_root_secret_path(dir.path().join("root_secret"));
+        let key = round_trip_key();
+        let blob = fb.seal(&key).unwrap();
+        let mut tampered = blob.encode();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0xff;
+        let bad = SealedBlob::decode(&tampered).unwrap();
+        let err = fb.unseal(&bad).unwrap_err();
+        assert!(
+            matches!(err, StoreError::Crypto(_)),
+            "expected crypto error on corrupted payload, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn file_v2_migrates_old_file_blob_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let root_secret = dir.path().join("root_secret");
+        let key = round_trip_key();
+        let old_blob = SealedBlob::new("file".into(), key.to_vec());
+        std::fs::write(&key_path, old_blob.encode()).unwrap();
+        let mut selector = BackendSelector::file().with_root_secret_path(root_secret.clone());
+        let sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        assert_eq!(sk.key(), &key, "migrated key must match original");
+        assert_eq!(sk.source(), KeySource::File);
+        let raw = std::fs::read(&key_path).unwrap();
+        let new_blob = SealedBlob::decode(&raw).unwrap();
+        assert_eq!(new_blob.backend_id(), FileBackend::BACKEND_ID_V2);
+        let mut selector2 = BackendSelector::file().with_root_secret_path(root_secret);
+        let sk2 = SealedKey::load_or_create_with(&key_path, &mut selector2).unwrap();
+        assert_eq!(sk2.key(), &key, "reloaded key must match original");
+    }
+
+    #[test]
+    fn file_v2_old_file_blob_does_not_trigger_downgrade_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let key = round_trip_key();
+        let old_blob = SealedBlob::new("file".into(), key.to_vec());
+        std::fs::write(&key_path, old_blob.encode()).unwrap();
+        let mut selector =
+            BackendSelector::new().with_root_secret_path(dir.path().join("root_secret"));
+        let sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        assert_eq!(sk.key(), &key);
+        assert_eq!(sk.source(), KeySource::File);
+    }
+
+    #[test]
+    fn file_v2_root_secret_file_is_0600() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_secret_path = dir.path().join("root_secret");
+        let mut fb = FileBackend::with_root_secret_path(root_secret_path.clone());
+        let key = round_trip_key();
+        let _blob = fb.seal(&key).unwrap();
+        let mode = std::fs::metadata(&root_secret_path).unwrap().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "root_secret file must be 0600, got {:o}",
+            mode & 0o777
+        );
+    }
+
+    #[test]
+    fn file_v2_sealed_key_round_trip_via_selector() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let mut selector =
+            BackendSelector::file().with_root_secret_path(dir.path().join("root_secret"));
+        let k1 = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        assert_eq!(k1.source(), KeySource::File);
+        let k2 = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        assert_eq!(k1.key(), k2.key());
+    }
+
+    #[test]
+    fn file_v2_raw_key_not_in_payload_as_substring() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut fb = FileBackend::with_root_secret_path(dir.path().join("root_secret"));
+        let key = round_trip_key();
+        let blob = fb.seal(&key).unwrap();
+        let payload = blob.payload();
+        assert!(
+            !payload.windows(32).any(|w| w == &key[..]),
+            "raw 32-byte key must not appear as a contiguous substring in the payload"
+        );
+    }
+
+    #[test]
+    fn file_v2_migration_preserves_key_across_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let root_secret = dir.path().join("root_secret");
+        let key = round_trip_key();
+        let old_blob = SealedBlob::new("file".into(), key.to_vec());
+        std::fs::write(&key_path, old_blob.encode()).unwrap();
+        let mut selector = BackendSelector::file().with_root_secret_path(root_secret.clone());
+        let sk1 = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        let mut selector2 = BackendSelector::file().with_root_secret_path(root_secret);
+        let sk2 = SealedKey::load_or_create_with(&key_path, &mut selector2).unwrap();
+        assert_eq!(sk1.key(), sk2.key(), "key must survive migration + reload");
+        assert_eq!(sk1.key(), &key);
+    }
+
+    #[test]
+    fn file_v2_backend_id_distinguishable_from_old() {
+        assert_ne!(FileBackend::BACKEND_ID, FileBackend::BACKEND_ID_V2);
+        assert_eq!(FileBackend::BACKEND_ID, "file");
+        assert_eq!(FileBackend::BACKEND_ID_V2, "file-v2");
+    }
+
+    #[test]
+    fn file_v2_can_unseal_old_file_blob_for_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let fb = FileBackend::with_root_secret_path(dir.path().join("root_secret"));
+        let key = round_trip_key();
+        let old_blob = SealedBlob::new("file".into(), key.to_vec());
+        let recovered = fb.unseal(&old_blob).unwrap();
+        assert_eq!(
+            recovered, key,
+            "FileBackend must unseal old 'file' blobs for migration"
+        );
+    }
+
+    #[test]
+    fn file_v2_no_temp_file_remains_after_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key");
+        let root_secret = dir.path().join("root_secret");
+        let key = round_trip_key();
+        let old_blob = SealedBlob::new("file".into(), key.to_vec());
+        std::fs::write(&key_path, old_blob.encode()).unwrap();
+        let mut selector = BackendSelector::file().with_root_secret_path(root_secret);
+        let _sk = SealedKey::load_or_create_with(&key_path, &mut selector).unwrap();
+        let tmp = key_path.with_file_name(format!(
+            ".{}.tmp",
+            key_path.file_name().unwrap().to_string_lossy()
+        ));
+        assert!(
+            !tmp.exists(),
+            "temp file must not remain after successful migration"
         );
     }
 }

@@ -38,7 +38,8 @@ fn test_record(uid: u32) -> TemplateRecord {
 
 fn open_store(dir: &Path) -> TemplateStore {
     let key_path = dir.join("key");
-    TemplateStore::open(dir, &key_path).unwrap()
+    let mut selector = BackendSelector::file().with_root_secret_path(dir.join("root_secret"));
+    TemplateStore::open_with_selector(dir, &key_path, &mut selector).unwrap()
 }
 
 fn current_euid() -> u32 {
@@ -125,7 +126,15 @@ fn wrong_owner_rejected_on_read() {
     let dir = tempfile::tempdir().unwrap();
     let key_path = dir.path().join("key");
     let wrong_uid = current_euid().wrapping_add(9999);
-    let store = TemplateStore::open_with_owner(dir.path(), &key_path, Some(wrong_uid)).unwrap();
+    let mut selector =
+        BackendSelector::file().with_root_secret_path(dir.path().join("root_secret"));
+    let store = TemplateStore::open_with_owner_and_selector(
+        dir.path(),
+        &key_path,
+        Some(wrong_uid),
+        &mut selector,
+    )
+    .unwrap();
     store.store(&test_record(1000)).unwrap();
 
     // Not running as root -> chown skipped -> file owned by current user,
@@ -142,8 +151,15 @@ fn wrong_owner_rejected_on_read() {
 fn correct_owner_accepted() {
     let dir = tempfile::tempdir().unwrap();
     let key_path = dir.path().join("key");
-    let store =
-        TemplateStore::open_with_owner(dir.path(), &key_path, Some(current_euid())).unwrap();
+    let mut selector =
+        BackendSelector::file().with_root_secret_path(dir.path().join("root_secret"));
+    let store = TemplateStore::open_with_owner_and_selector(
+        dir.path(),
+        &key_path,
+        Some(current_euid()),
+        &mut selector,
+    )
+    .unwrap();
     store.store(&test_record(1000)).unwrap();
     let loaded = store.load(1000).unwrap();
     assert_eq!(loaded.meta.uid, 1000);
@@ -255,7 +271,7 @@ fn reads_legacy_nmt1_file() {
 
     let dir = tempfile::tempdir().unwrap();
     let key_path = dir.path().join("key");
-    let mut sel = BackendSelector::file();
+    let mut sel = BackendSelector::file().with_root_secret_path(dir.path().join("root_secret"));
     let store = TemplateStore::open_with_selector(dir.path(), &key_path, &mut sel).unwrap();
 
     // Hand-craft an NMT1 file using the v1 AAD layout that the pre-task-12

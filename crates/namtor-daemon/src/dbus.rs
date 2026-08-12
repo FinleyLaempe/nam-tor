@@ -1023,7 +1023,10 @@ mod tests {
 
     fn test_store() -> (tempfile::TempDir, Arc<dyn ProfileStore>) {
         let dir = tempfile::tempdir().unwrap();
-        let ts = TemplateStore::open(dir.path(), &dir.path().join("key")).unwrap();
+        let key_path = dir.path().join("key");
+        let mut selector = namtor_store::crypto::BackendSelector::file()
+            .with_root_secret_path(dir.path().join("root_secret"));
+        let ts = TemplateStore::open_with_selector(dir.path(), &key_path, &mut selector).unwrap();
         (dir, Arc::new(TemplateProfileStore::new(Arc::new(ts))))
     }
 

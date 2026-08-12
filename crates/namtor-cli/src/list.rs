@@ -318,9 +318,7 @@ mod tests {
     fn list_local_returns_failure_when_store_unopenable() {
         // Pointing at a path that cannot be opened (under a read-only dir)
         // exercises the error path. The happy path (open a real store and
-        // list uids) is tested in namtor-store itself; SEC-3 argon2id root
-        // secret changes currently block TemplateStore::open in CLI tests
-        // until the store test infrastructure is updated.
+        // list uids) is tested in namtor-store itself.
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("key");
         // Opening with a nonexistent path that can't be auto-created (under
