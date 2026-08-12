@@ -626,6 +626,12 @@ use std::io::BufRead;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// Interval between `PollProgress` D-Bus calls in the v3 enrollment driver
+/// (USA-7). The first poll is immediate so the operator sees progress without
+/// a 500 ms startup delay; subsequent polls are spaced by this interval.
+const POLL_PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 
 /// v3 enrollment progress mirror (frozen wire `(ssuuuuuys)`). Matches
 /// `namtor-daemon::manager::contract::EnrollmentProgressV3` and
@@ -654,6 +660,16 @@ pub struct EnrollmentReviewV3 {
     pub diversity_percent: u32,
     pub frames_accepted: u32,
     pub guidance: String,
+}
+
+/// v3 `PollProgress` reply mirror (frozen wire `b(ssuuuuuys)`). Matches
+/// `namtor-daemon::manager::contract::PollProgressReply`. `has_progress` is
+/// `false` when no new worker events arrived since the last poll; the driver
+/// prints only when `has_progress` is true.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, zvariant::Type)]
+pub struct PollProgressReply {
+    pub has_progress: bool,
+    pub progress: EnrollmentProgressV3,
 }
 
 /// Errors surfaced by an [`EnrollmentServiceV3`] implementation. The driver
@@ -687,8 +703,8 @@ impl std::error::Error for EnrollmentError {}
 /// (see [`DbusEnrollmentServiceV3`]); tests use [`FakeEnrollmentServiceV3`].
 ///
 /// Methods are synchronous because the CLI blocks on each daemon round-trip.
-/// Progress signals are pulled (not pushed) via [`next_progress`] so the
-/// driver loop can interleave keypress/SIGINT polling with signal draining.
+/// Progress is pulled (not pushed) via [`poll_progress`] on a 500 ms timer so
+/// the driver loop can interleave keypress/SIGINT polling with daemon polls.
 pub trait EnrollmentServiceV3 {
     fn start(&self, uid: u32, name: &str) -> Result<String, EnrollmentError>;
     fn stop(&self, session: &str) -> Result<(), EnrollmentError>;
@@ -696,9 +712,10 @@ pub trait EnrollmentServiceV3 {
     fn review(&self, session: &str) -> Result<EnrollmentReviewV3, EnrollmentError>;
     fn commit(&self, session: &str) -> Result<String, EnrollmentError>;
     fn cancel(&self, session: &str) -> Result<(), EnrollmentError>;
-    /// Drain one progress signal. Returns `Ok(None)` when no signal is
-    /// pending (so the driver can poll keypress/SIGINT and loop).
-    fn next_progress(&self) -> Result<Option<EnrollmentProgressV3>, EnrollmentError>;
+    /// Poll the daemon for the latest progress snapshot of `session`. Returns
+    /// `Some(progress)` when the daemon has new worker events since the last
+    /// poll, `None` otherwise. The driver calls this every 500 ms (USA-7).
+    fn poll_progress(&self, session: &str) -> Result<Option<EnrollmentProgressV3>, EnrollmentError>;
 }
 
 /// Coarse quality-bucket label for display (matches the daemon's
@@ -809,21 +826,28 @@ where
     eprintln!("enrollment session {session} started for uid={uid} ({name})");
     eprintln!("press Enter to stop and review; Ctrl+C to discard");
 
+    let mut last_poll: Option<Instant> = None;
     loop {
         if cancel_flag.load(Ordering::SeqCst) {
             return cancel_and_exit(service, &session);
         }
-        match service.next_progress() {
-            Ok(Some(p)) => print_progress(&p),
-            Ok(None) => {}
-            Err(EnrollmentError::MalformedTuple(m)) => {
-                eprintln!("\nerror: {m}");
-                return cancel_and_exit(service, &session);
+        let should_poll = last_poll
+            .map(|t| t.elapsed() >= POLL_PROGRESS_INTERVAL)
+            .unwrap_or(true);
+        if should_poll {
+            match service.poll_progress(&session) {
+                Ok(Some(p)) => print_progress(&p),
+                Ok(None) => {}
+                Err(EnrollmentError::MalformedTuple(m)) => {
+                    eprintln!("\nerror: {m}");
+                    return cancel_and_exit(service, &session);
+                }
+                Err(e) => {
+                    eprintln!("\nerror: {e}");
+                    return cancel_and_exit(service, &session);
+                }
             }
-            Err(e) => {
-                eprintln!("\nerror: {e}");
-                return cancel_and_exit(service, &session);
-            }
+            last_poll = Some(Instant::now());
         }
         if read_any_key(keypress_reader) {
             break;
@@ -891,17 +915,24 @@ where
     S: EnrollmentServiceV3,
     K: BufRead,
 {
+    let mut last_poll: Option<Instant> = None;
     loop {
         if cancel_flag.load(Ordering::SeqCst) {
             return cancel_and_exit(service, session);
         }
-        match service.next_progress() {
-            Ok(Some(p)) => print_progress(&p),
-            Ok(None) => {}
-            Err(e) => {
-                eprintln!("\nerror: {e}");
-                return cancel_and_exit(service, session);
+        let should_poll = last_poll
+            .map(|t| t.elapsed() >= POLL_PROGRESS_INTERVAL)
+            .unwrap_or(true);
+        if should_poll {
+            match service.poll_progress(session) {
+                Ok(Some(p)) => print_progress(&p),
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("\nerror: {e}");
+                    return cancel_and_exit(service, session);
+                }
             }
+            last_poll = Some(Instant::now());
         }
         if read_any_key(keypress_reader) {
             break;
@@ -1057,11 +1088,16 @@ impl EnrollmentServiceV3 for DbusEnrollmentServiceV3 {
             .map_err(Self::classify_error)
     }
 
-    fn next_progress(&self) -> Result<Option<EnrollmentProgressV3>, EnrollmentError> {
-        // The blocking proxy does not expose a non-blocking signal drain. The
-        // CLI prints progress opportunistically; the daemon's ReviewEnrollment
-        // snapshot is the authoritative summary shown to the operator.
-        Ok(None)
+    fn poll_progress(&self, session: &str) -> Result<Option<EnrollmentProgressV3>, EnrollmentError> {
+        let reply: PollProgressReply = self
+            .proxy
+            .call("PollProgress", &(session,))
+            .map_err(Self::classify_error)?;
+        Ok(if reply.has_progress {
+            Some(reply.progress)
+        } else {
+            None
+        })
     }
 }
 
@@ -1587,7 +1623,8 @@ mod v3_tests {
             self.calls.lock().unwrap().push("cancel".into());
             Ok(())
         }
-        fn next_progress(&self) -> Result<Option<EnrollmentProgressV3>, EnrollmentError> {
+        fn poll_progress(&self, session: &str) -> Result<Option<EnrollmentProgressV3>, EnrollmentError> {
+            self.calls.lock().unwrap().push(format!("poll_progress:{session}"));
             Ok(self.progress_queue.lock().unwrap().pop())
         }
     }
@@ -1753,5 +1790,66 @@ mod v3_tests {
             assert!(!pj.contains(forbidden), "progress leaked `{forbidden}`");
             assert!(!rj.contains(forbidden), "review leaked `{forbidden}`");
         }
+    }
+
+    /// USA-7: the v3 driver calls `poll_progress(session)` on the service and
+    /// emits progress lines when the daemon reports new worker events. This
+    /// replaces the old `next_progress` signal-drain path that always returned
+    /// `Ok(None)` on the D-Bus impl. The fake records the call with the
+    /// session id so we can assert the driver passed the right session.
+    #[test]
+    fn enroll_v3_poll_progress_emits_progress_lines() {
+        let svc = FakeEnrollmentServiceV3::new();
+        svc.enqueue_progress(progress("sess-1", "capturing"));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut input = BufReader::new(Cursor::new(b"\nS\n"));
+        let exit = run_v3_session(&svc, 1000, "alice", &mut input, &cancel);
+        assert_eq!(exit, V3Outcome::Saved);
+        let calls = svc.calls();
+        // The driver must have called poll_progress with the session id.
+        assert!(
+            calls
+                .iter()
+                .any(|c| c == "poll_progress:sess-1"),
+            "driver must call poll_progress with session id, got: {calls:?}"
+        );
+        // At least one poll_progress call happened (not always Ok(None)).
+        let poll_count = calls
+            .iter()
+            .filter(|c| c.starts_with("poll_progress:"))
+            .count();
+        assert!(poll_count >= 1, "expected >=1 poll_progress call, got {poll_count}");
+    }
+
+    /// USA-7: PollProgressReply mirror type matches the frozen wire signature
+    /// `b(ssuuuuuys)`.
+    #[test]
+    fn poll_progress_reply_signature() {
+        assert_eq!(
+            PollProgressReply::SIGNATURE,
+            "b(ssuuuuuys)",
+            "PollProgressReply signature drifted"
+        );
+    }
+
+    /// USA-7: when the daemon reports no new progress (`has_progress = false`),
+    /// the driver does not print a progress line. The fake returns `None` from
+    /// `poll_progress` when its queue is empty; the driver completes normally.
+    #[test]
+    fn enroll_v3_poll_progress_none_when_no_new_events() {
+        let svc = FakeEnrollmentServiceV3::new();
+        // No progress enqueued — poll_progress returns None every time.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut input = BufReader::new(Cursor::new(b"\nS\n"));
+        let exit = run_v3_session(&svc, 1000, "alice", &mut input, &cancel);
+        assert_eq!(exit, V3Outcome::Saved);
+        let calls = svc.calls();
+        // poll_progress was called but returned None (no progress line).
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.starts_with("poll_progress:")),
+            "driver must still call poll_progress even when no progress"
+        );
     }
 }
