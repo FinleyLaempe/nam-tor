@@ -5,6 +5,8 @@
 //! [`adw::ActionRow`] per profile, with an [`adw::SwitchRow`] suffix to
 //! toggle the profile on or off, and a rename button suffix (USA-10).
 
+use std::cell::RefCell;
+
 use crate::tr;
 use crate::view_model::PresenterModel;
 use gtk4::prelude::*;
@@ -16,6 +18,7 @@ pub type RenameCallback = std::rc::Rc<dyn Fn(&str, &str)>;
 
 pub struct ProfileListView {
     group: adw::PreferencesGroup,
+    added_rows: RefCell<Vec<gtk4::Widget>>,
 }
 
 impl ProfileListView {
@@ -23,7 +26,10 @@ impl ProfileListView {
         let group = adw::PreferencesGroup::builder()
             .title(tr("Enrolled Profiles"))
             .build();
-        Self { group }
+        Self {
+            group,
+            added_rows: RefCell::new(Vec::new()),
+        }
     }
 
     pub fn render(&self, model: &PresenterModel) -> &adw::PreferencesGroup {
@@ -51,6 +57,7 @@ impl ProfileListView {
                 "Reduced emitter protection warning",
             ))]);
             self.group.add(&warn);
+            self.added_rows.borrow_mut().push(warn.clone().upcast());
         }
 
         if model.profiles.is_empty() {
@@ -59,6 +66,7 @@ impl ProfileListView {
                 .build();
             l.update_property(&[gtk4::accessible::Property::Label(&tr("Empty profile list"))]);
             self.group.add(&l);
+            self.added_rows.borrow_mut().push(l.clone().upcast());
         } else {
             for row in &model.profiles {
                 let action_row = adw::ActionRow::builder()
@@ -120,14 +128,18 @@ impl ProfileListView {
                 action_row.add_suffix(&rename_btn);
                 action_row.set_activatable_widget(Some(&toggle));
                 self.group.add(&action_row);
+                self.added_rows
+                    .borrow_mut()
+                    .push(action_row.clone().upcast());
             }
         }
         &self.group
     }
 
     fn clear(&self) {
-        while let Some(child) = self.group.first_child() {
-            self.group.remove(&child);
+        let rows = std::mem::take(&mut *self.added_rows.borrow_mut());
+        for row in rows {
+            self.group.remove(&row);
         }
     }
 

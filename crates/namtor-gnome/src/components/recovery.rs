@@ -5,6 +5,8 @@
 //! shown once (USA-12: the old code rendered `hint.title` twice) and the
 //! recovery steps as a subtitle/row.
 
+use std::cell::RefCell;
+
 use crate::tr;
 use crate::view_model::RecoveryHint;
 use gtk4::prelude::*;
@@ -13,12 +15,16 @@ use libadwaita::prelude::PreferencesGroupExt;
 
 pub struct RecoveryView {
     group: adw::PreferencesGroup,
+    added_rows: RefCell<Vec<gtk4::Widget>>,
 }
 
 impl RecoveryView {
     pub fn new() -> Self {
         let group = adw::PreferencesGroup::new();
-        Self { group }
+        Self {
+            group,
+            added_rows: RefCell::new(Vec::new()),
+        }
     }
 
     pub fn render(&self, hint: &RecoveryHint) -> &adw::PreferencesGroup {
@@ -39,13 +45,17 @@ impl RecoveryView {
             "Recovery guidance steps",
         ))]);
         self.group.add(&steps_row);
+        self.added_rows
+            .borrow_mut()
+            .push(steps_row.clone().upcast());
 
         &self.group
     }
 
     fn clear(&self) {
-        while let Some(child) = self.group.first_child() {
-            self.group.remove(&child);
+        let rows = std::mem::take(&mut *self.added_rows.borrow_mut());
+        for row in rows {
+            self.group.remove(&row);
         }
     }
 
