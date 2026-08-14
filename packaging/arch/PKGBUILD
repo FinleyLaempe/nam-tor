@@ -48,7 +48,7 @@ pkgname=(
     namtor-kde
 )
 pkgver=0.1.0
-pkgrel=1
+pkgrel=3
 epoch=0
 arch=('x86_64' 'aarch64')
 url="https://github.com/namtor/nam-tor"
@@ -81,7 +81,7 @@ noextract=()
 # (build-model-archive.sh yields a byte-identical tarball every build). The
 # source tarball hash is pinned at release time by the release workflow.
 sha256sums=(
-    '95c909329ff98cefae324f30937804d9a85802554ee2aa04cc8e4f0dd770e058'
+    'af75e58363b856adf0fd40caf9c3cf3d00724a44340ccf34f845f4db9d90eddd'
     '7bc800dea9d4b1eb5ce5dabc8c5197aeac81482ac80e3fcd27f0f71879a803be'
 )
 

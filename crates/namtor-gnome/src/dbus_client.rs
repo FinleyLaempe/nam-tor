@@ -20,9 +20,9 @@ use std::sync::Mutex;
 use zbus::blocking::Connection;
 
 use crate::client::{
-    EnrollmentProgress, EnrollmentReviewV3, ManagerClient, ManagerError, ManagerResult,
-    PamServiceInfo, ProfileId, ProfileInfo, ProtectionStatus, ReviewOutcome, SessionId,
-    StatusReport,
+    EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, ManagerClient, ManagerError,
+    ManagerResult, PamServiceInfo, ProfileId, ProfileInfo, ProtectionStatus, ReviewOutcome,
+    SessionId, StatusReport,
 };
 
 /// v1 interface name.
@@ -268,6 +268,19 @@ impl ManagerClient for DbusManagerClient {
     fn cancel_enrollment_v3(&self, session: &str) -> ManagerResult<()> {
         let _body: () = self.call_v3::<(), _>("CancelEnrollment", &session.to_string())?;
         Ok(())
+    }
+
+    fn poll_progress_v3(&self, session: &str) -> ManagerResult<Option<EnrollmentProgressV3>> {
+        let (has_progress, progress): (bool, EnrollmentProgressV3) =
+            self.call_v3::<(bool, EnrollmentProgressV3), _>(
+                "PollProgress",
+                &(session.to_string(),),
+            )?;
+        if has_progress {
+            Ok(Some(progress))
+        } else {
+            Ok(None)
+        }
     }
 
     fn negotiate_v3(&self, version: u32) -> ManagerResult<u32> {

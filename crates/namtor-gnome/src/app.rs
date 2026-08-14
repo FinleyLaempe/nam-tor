@@ -18,7 +18,9 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
+use glib::ControlFlow;
 use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::{ActionRowExt, MessageDialogExt, PreferencesGroupExt};
@@ -332,6 +334,27 @@ impl AppController {
                     self.shell.push_subpage(&nav);
                     self.enrollment_nav_page = Some(nav);
                 }
+
+                let presenter_poll = Rc::clone(presenter);
+                let rc_poll = Rc::clone(rc);
+                let _source_id = glib::timeout_add_local(Duration::from_millis(500), move || {
+                    let still_capturing = {
+                        let p = presenter_poll.borrow();
+                        matches!(p.model().enrollment_state, EnrollmentState::Capturing)
+                    };
+                    if still_capturing {
+                        let has_progress = {
+                            let mut p = presenter_poll.borrow_mut();
+                            p.poll_progress_v3()
+                        };
+                        if has_progress {
+                            rc_poll.borrow_mut().render_enrollment(&rc_poll);
+                        }
+                        ControlFlow::Continue
+                    } else {
+                        ControlFlow::Break
+                    }
+                });
             }
             EnrollmentState::Stopped => {
                 let presenter_review = Rc::clone(presenter);

@@ -335,9 +335,10 @@ impl Shell {
         }
     }
 
-    /// Present the window and the preferences dialog on screen.
+    /// Present the preferences dialog on screen.
+    /// The window exists as a transient parent for session integration but
+    /// is not shown separately — the dialog handles all user-facing UI.
     pub fn present(&self) {
-        self.window.present();
         self.dialog.present(Some(&self.window));
     }
 

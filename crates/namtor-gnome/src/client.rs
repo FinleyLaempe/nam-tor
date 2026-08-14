@@ -505,6 +505,15 @@ pub trait ManagerClient {
         ))
     }
 
+    /// v3: `PollProgress(session) → (has_progress, EnrollmentProgressV3)`.
+    /// Polls the daemon for the latest enrollment progress. Returns
+    /// `Ok(None)` when the session has no progress available.
+    fn poll_progress_v3(&self, _session: &str) -> ManagerResult<Option<EnrollmentProgressV3>> {
+        Err(ManagerError::Unsupported(
+            "v3 poll_progress not implemented".into(),
+        ))
+    }
+
     /// v3: `NegotiateVersion(version) → agreed_version`. Handshake for the
     /// v3 interface.
     fn negotiate_v3(&self, _version: u32) -> ManagerResult<u32> {

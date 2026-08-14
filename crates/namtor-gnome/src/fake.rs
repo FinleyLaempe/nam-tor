@@ -736,6 +736,15 @@ impl ManagerClient for FakeManagerClient {
         Ok(())
     }
 
+    fn poll_progress_v3(&self, session: &str) -> ManagerResult<Option<EnrollmentProgressV3>> {
+        self.check_read()?;
+        Ok(self
+            .v3_progress
+            .lock()
+            .expect("v3 progress poisoned")
+            .remove(session))
+    }
+
     fn negotiate_v3(&self, version: u32) -> ManagerResult<u32> {
         self.check_read()?;
         if version == crate::client::API_VERSION_V3 {

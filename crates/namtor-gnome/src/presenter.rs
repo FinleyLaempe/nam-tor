@@ -460,6 +460,23 @@ impl<C: ManagerClient> ProfilePresenter<C> {
         &self.model
     }
 
+    pub fn poll_progress_v3(&mut self) -> bool {
+        let Some(ref session) = self.model.enrollment_session_v3 else {
+            return false;
+        };
+        if self.model.enrollment_state != EnrollmentState::Capturing {
+            return true;
+        }
+        match self.client.poll_progress_v3(session) {
+            Ok(Some(progress)) => {
+                self.model.enrollment_view_v3 = Some(EnrollmentViewV3::from_progress(&progress));
+                true
+            }
+            Ok(None) => false,
+            Err(_) => true,
+        }
+    }
+
     /// v3: Handle a progress signal from the daemon. Ignores stale signals
     /// (session id does not match the active session). The view calls this
     /// from a glib idle callback after receiving the D-Bus signal.
