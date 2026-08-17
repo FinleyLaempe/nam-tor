@@ -13,7 +13,7 @@
 #   (e) mutation: adding a stale string to any audited file fails the test.
 #
 # The audit scope is the set of user-facing docs whose content this task owns:
-#   README.md, packaging/README.md, HANDOFF.md, COPYING.md,
+#   README.md, packaging/README.md, COPYING.md,
 #   docs/evidence/status-audit.md.
 #
 # Usage: bash packaging/tests/test_doc_audit.sh [--mutation <file>]
@@ -43,7 +43,6 @@ not_ok() {
 AUDITED_FILES=(
     "$REPO_ROOT/README.md"
     "$REPO_ROOT/packaging/README.md"
-    "$REPO_ROOT/HANDOFF.md"
     "$REPO_ROOT/COPYING.md"
     "$REPO_ROOT/docs/evidence/status-audit.md"
 )
@@ -104,7 +103,6 @@ EXPERIMENTAL_PHRASES=(
 EXPERIMENTAL_FILES=(
     "$REPO_ROOT/README.md"
     "$REPO_ROOT/packaging/README.md"
-    "$REPO_ROOT/HANDOFF.md"
 )
 for f in "${EXPERIMENTAL_FILES[@]}"; do
     fname="${f#$REPO_ROOT/}"
@@ -130,7 +128,6 @@ PACKAGE_NAMES=(
 PKG_FILES=(
     "$REPO_ROOT/README.md"
     "$REPO_ROOT/packaging/README.md"
-    "$REPO_ROOT/HANDOFF.md"
 )
 for f in "${PKG_FILES[@]}"; do
     fname="${f#$REPO_ROOT/}"

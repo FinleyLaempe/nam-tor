@@ -408,6 +408,7 @@ for f in \
     packaging/sysusers.d/namtor.conf \
     packaging/tmpfiles.d/namtor.conf \
     packaging/dbus-1/org.namtor.Manager.service \
+    packaging/dbus-1/org.namtor.Manager.conf \
     packaging/polkit-1/actions/org.namtor.policy \
     packaging/applications/org.namtor.Wizard.desktop \
     packaging/applications/org.namtor.kcm.desktop \
@@ -417,6 +418,7 @@ for f in \
     packaging/pam-install.sh \
     packaging/pam-uninstall.sh \
     packaging/pam-preflight.sh \
+    quirks/devices/3277-0018.toml \
     packaging/README.md \
     COPYING.md \
     docs/evidence/packaging/namtor.spdx.json \

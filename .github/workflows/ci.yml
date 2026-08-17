@@ -60,6 +60,13 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install system deps (GTK4, libadwaita, pam, openssl)
+        run: |
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+                libgtk-4-dev libadwaita-1-dev libpam0g-dev libssl-dev \
+                pkg-config
+
       # Gate 6a — SPDX license headers on every Rust source file.
       - name: SPDX headers
         run: ./scripts/check-spdx.sh
@@ -68,9 +75,11 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
-      # Gate 6c — clippy with -D warnings.
+      # Gate 6c — clippy with -D warnings. Excludes namtor-kde (needs KF6/Qt6
+      # dev packages unavailable on Ubuntu; covered by the `build` job on
+      # archlinux:latest).
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --exclude namtor-kde -- -D warnings
 
       # Gate 6d — test suite.
       # `--skip concurrent_connections_serialise` avoids a pre-existing deadlock
@@ -79,8 +88,9 @@ jobs:
       # `--test-threads=1` serialises tests that mutate process-global env vars
       # (licence tests set/remove NAMTOR_ACCEPT_LICENCE); without it those races
       # produce spurious failures under the parallel executor.
+      # Excludes namtor-kde (KF6 unavailable on Ubuntu; covered by `build` job).
       - name: cargo test --all
-        run: cargo test --all -- --skip concurrent_connections_serialise --test-threads=1
+        run: cargo test --all --exclude namtor-kde -- --skip concurrent_connections_serialise --test-threads=1
 
       # Gate 1a — namtor-proto carries no ML deps (existing G5.1 check).
       - name: G5.1 — namtor-proto carries no ML deps
