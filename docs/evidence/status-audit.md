@@ -169,22 +169,19 @@ state, not a gate pass.
   evaluation remain WITHHELD and are unchanged by the redesign. See
   `enrollment-redesign/16-visual-review.md` for the visual review.
 
-The production plan
-([`.omo/plans/namtor-complete-product.md`](../../.omo/plans/namtor-complete-product.md))
-is the path to closing these gaps. It comprises 49 tasks plus a 4-task final
-verification wave (F1-F4). As of this audit, all 49 implementation tasks are
-complete. The Final Verification Wave (F1-F4) is in progress; this ledger
-was updated as part of F1 (plan compliance and evidence audit) and the
-enrollment redesign certification (task 16). Owner-gated inputs (signing
-keys, hardware access, consented data, S3 cycles, second TPM) remain
-WITHHELD and block the corresponding production gates.
+The production plan (49 tasks plus a 4-task final verification wave F1-F4)
+is the path to closing these gaps. As of this audit, all 49 implementation
+tasks are complete. The Final Verification Wave (F1-F4) is in progress;
+this ledger was updated as part of F1 (plan compliance and evidence audit)
+and the enrollment redesign certification (task 16). Owner-gated inputs
+(signing keys, hardware access, consented data, S3 cycles, second TPM)
+remain WITHHELD and block the corresponding production gates.
 
-The enrollment redesign plan
-([`.omo/plans/namtor-usable-intuitive-enrollment.md`](../../.omo/plans/namtor-usable-intuitive-enrollment.md))
-comprises 16 tasks. Tasks 1-14 are complete and committed. Task 15 (installed
-HIL) is WITHHELD (no root, no camera, no AT-SPI). Task 16 (screenshot review
-and evidence reconciliation) is certified by this update. The enrollment
-redesign is UI and software completion, not a biometric accuracy gate pass.
+The enrollment redesign plan comprises 16 tasks. Tasks 1-14 are complete
+and committed. Task 15 (installed HIL) is WITHHELD (no root, no camera, no
+AT-SPI). Task 16 (screenshot review and evidence reconciliation) is
+certified by this update. The enrollment redesign is UI and software
+completion, not a biometric accuracy gate pass.
 
 For the current RC gate snapshot, see `docs/evidence/rc-g2-g5.md`.
 
