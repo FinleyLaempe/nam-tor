@@ -529,10 +529,13 @@ fi
 
 echo "--- (k) makepkg --printsrcinfo ---"
 
-srcinfo_output="$(cd "$ARCH_DIR" && makepkg --printsrcinfo 2>/dev/null || true)"
-if [[ -z "$srcinfo_output" ]]; then
-    not_ok "makepkg --printsrcinfo produced no output"
+if ! command -v makepkg >/dev/null 2>&1; then
+    ok "makepkg not installed (CI without Arch toolchain) — skipping printsrcinfo"
 else
+    srcinfo_output="$(cd "$ARCH_DIR" && makepkg --printsrcinfo 2>/dev/null || true)"
+    if [[ -z "$srcinfo_output" ]]; then
+        not_ok "makepkg --printsrcinfo produced no output"
+    else
     # Count pkgname entries in the .SRCINFO output. In .SRCINFO format,
     # pkgbase and pkgname are at column 0; other fields are tab-indented.
     srcinfo_pkgnames="$(printf '%s\n' "$srcinfo_output" | awk '/^pkgname = /{print $3}')"
@@ -558,6 +561,7 @@ else
             not_ok "makepkg --printsrcinfo missing pkgname = $pkg"
         fi
     done
+    fi
 fi
 
 # --- summary ----------------------------------------------------------------

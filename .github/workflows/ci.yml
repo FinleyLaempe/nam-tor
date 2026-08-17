@@ -37,8 +37,8 @@ jobs:
               test -x "target/release/$bin" || {
                 echo "::error::missing $bin"; exit 1; }
             done
-            test -f target/release/libpam_namtor.so || {
-              echo "::error::missing libpam_namtor.so"; exit 1; }
+            test -f target/release/libnamtor_pam.so || {
+              echo "::error::missing libnamtor_pam.so"; exit 1; }
             test -f target/release/libnamtor_kde.so || {
               echo "::error::missing libnamtor_kde.so"; exit 1; }
       - name: CMake build — KDE KCM QML module
@@ -79,7 +79,7 @@ jobs:
       # dev packages unavailable on Ubuntu; covered by the `build` job on
       # archlinux:latest).
       - name: cargo clippy
-        run: cargo clippy --all-targets --exclude namtor-kde -- -D warnings
+        run: cargo clippy --all-targets --workspace --exclude namtor-kde -- -D warnings
 
       # Gate 6d — test suite.
       # `--skip concurrent_connections_serialise` avoids a pre-existing deadlock
@@ -90,7 +90,7 @@ jobs:
       # produce spurious failures under the parallel executor.
       # Excludes namtor-kde (KF6 unavailable on Ubuntu; covered by `build` job).
       - name: cargo test --all
-        run: cargo test --all --exclude namtor-kde -- --skip concurrent_connections_serialise --test-threads=1
+        run: cargo test --workspace --exclude namtor-kde -- --skip concurrent_connections_serialise --test-threads=1
 
       # Gate 1a — namtor-proto carries no ML deps (existing G5.1 check).
       - name: G5.1 — namtor-proto carries no ML deps
