@@ -16,7 +16,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install build toolchain
         run: |
-            pacman -Syu --noconfirm
+            for i in 1 2 3; do
+              pacman -Syu --noconfirm && break || {
+                echo "::warning::pacman -Syu failed (attempt $i), retrying in 10s"
+                sleep 10
+              }
+            done
             pacman -S --noconfirm --needed base-devel rust cargo cmake ninja \
                 qt6-base kirigami kcoreaddons extra-cmake-modules \
                 gtk4 libadwaita pam openssl onnxruntime
