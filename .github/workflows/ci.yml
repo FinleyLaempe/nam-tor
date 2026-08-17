@@ -150,8 +150,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install gpg (release-signature gate)
-        run: sudo apt-get update && sudo apt-get install -y gnupg
+      - name: Install gpg + Rust toolchain + system deps (support bundle gate)
+        run: |
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends gnupg \
+                libgtk-4-dev libadwaita-1-dev libpam0g-dev libssl-dev \
+                libudev-dev libseccomp-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Gate — Arch split package structure
         run: bash packaging/tests/test_arch_split.sh
