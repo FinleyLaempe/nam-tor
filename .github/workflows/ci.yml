@@ -160,6 +160,7 @@ jobs:
         run: bash packaging/tests/test_lifecycle.sh
       - name: "Gate — model archive reproducibility + tamper (hw-gated: 77 = skip)"
         run: |
+          set +e
           bash packaging/tests/test_model_archive.sh
           rc=$?
           # 77 = models absent (hardware-gated). Treat as skip, not failure.
