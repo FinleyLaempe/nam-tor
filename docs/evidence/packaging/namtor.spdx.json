@@ -110,6 +110,17 @@
       "versionInfo": "3.0.11"
     },
     {
+      "SPDXID": "SPDXRef-argon2-0-5-3",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://crates.io/crates/argon2/0.5.3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "name": "argon2",
+      "packageVerificationCode": "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072",
+      "versionInfo": "0.5.3"
+    },
+    {
       "SPDXID": "SPDXRef-async-broadcast-0-7-2",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "https://crates.io/crates/async-broadcast/0.7.2",
@@ -253,6 +264,17 @@
       "versionInfo": "0.22.1"
     },
     {
+      "SPDXID": "SPDXRef-base64ct-1-8-3",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://crates.io/crates/base64ct/1.8.3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0 OR MIT",
+      "licenseDeclared": "Apache-2.0 OR MIT",
+      "name": "base64ct",
+      "packageVerificationCode": "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06",
+      "versionInfo": "1.8.3"
+    },
+    {
       "SPDXID": "SPDXRef-bitflags-2-13-1",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "https://crates.io/crates/bitflags/2.13.1",
@@ -262,6 +284,17 @@
       "name": "bitflags",
       "packageVerificationCode": "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da",
       "versionInfo": "2.13.1"
+    },
+    {
+      "SPDXID": "SPDXRef-blake2-0-10-6",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://crates.io/crates/blake2/0.10.6",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "name": "blake2",
+      "packageVerificationCode": "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe",
+      "versionInfo": "0.10.6"
     },
     {
       "SPDXID": "SPDXRef-block-buffer-0-10-4",
@@ -1972,6 +2005,17 @@
       "versionInfo": "2.2.1"
     },
     {
+      "SPDXID": "SPDXRef-password-hash-0-5-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://crates.io/crates/password-hash/0.5.0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "name": "password-hash",
+      "packageVerificationCode": "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166",
+      "versionInfo": "0.5.0"
+    },
+    {
       "SPDXID": "SPDXRef-percent-encoding-2-3-2",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "https://crates.io/crates/percent-encoding/2.3.2",
@@ -2498,6 +2542,17 @@
       "name": "shlex",
       "packageVerificationCode": "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba",
       "versionInfo": "2.0.1"
+    },
+    {
+      "SPDXID": "SPDXRef-signal-hook-0-3-18",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://crates.io/crates/signal-hook/0.3.18",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0/MIT",
+      "licenseDeclared": "Apache-2.0/MIT",
+      "name": "signal-hook",
+      "packageVerificationCode": "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2",
+      "versionInfo": "0.3.18"
     },
     {
       "SPDXID": "SPDXRef-signal-hook-registry-1-4-8",
@@ -3314,6 +3369,17 @@
       "versionInfo": "0.52.0"
     },
     {
+      "SPDXID": "SPDXRef-windows-sys-0-59-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://crates.io/crates/windows-sys/0.59.0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "name": "windows-sys",
+      "packageVerificationCode": "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b",
+      "versionInfo": "0.59.0"
+    },
+    {
       "SPDXID": "SPDXRef-windows-sys-0-61-2",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "https://crates.io/crates/windows-sys/0.61.2",
@@ -3774,7 +3840,7 @@
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-cli",
-      "packageVerificationCode": "638d4f71315002cf31bafef17de4373a93967a13ab7fe20553147b893aae9ed6",
+      "packageVerificationCode": "79587b4c24eaaf3484aab7c9459bff1a6c85ffa6d813c7b1d4e054dfc5a1aab9",
       "sourceInfo": "Built from Nam-tor source (cargo build --release)",
       "versionInfo": "0.1.0"
     },
@@ -3786,7 +3852,7 @@
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-daemon",
-      "packageVerificationCode": "105f9742ba472871adc27427e8ffa7ef106f29b43d7acd1fd2f8bcc470fad488",
+      "packageVerificationCode": "c61dfafc2bc66c8175b014ab9fb4dc7f37a09fa4096c3adafb73329ad369c47e",
       "sourceInfo": "Built from Nam-tor source (cargo build --release)",
       "versionInfo": "0.1.0"
     },
@@ -3798,7 +3864,7 @@
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-enroll-wizard",
-      "packageVerificationCode": "eeb4c01779e168d5f42ba05c4aba591b6d85038cdee2b62e8a7a5f1a451fb57e",
+      "packageVerificationCode": "1c73aea57937f4d5a77d7d9e297e3fa272108e36c5650ce1675c5b22260cd1c7",
       "sourceInfo": "Built from Nam-tor source (cargo build --release)",
       "versionInfo": "0.1.0"
     },
@@ -3834,8 +3900,8 @@
       "licenseConcluded": "Apache-2.0",
       "licenseDeclared": "Apache-2.0",
       "name": "minifasnet_pad",
-      "packageVerificationCode": "3f86c8e4bb1138098ed2f8dc1682c6e1e1d6c5fffcf65dd6955c0cd60579a155",
-      "sourceInfo": "Built from Nam-tor commit 5e3727edf5f966a8aa0df3f060aeb93be4bce535; licence_sha256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30; model_card=ml/reports/learned-pad.md",
+      "packageVerificationCode": "686b6671578a1f6b7b8e018bf12136dfb4fd41671f5a377b96ce15c650306cf6",
+      "sourceInfo": "Built from Nam-tor commit 9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef; licence_sha256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30; model_card=ml/reports/learned-pad.md",
       "versionInfo": "0.1.0"
     },
     {
@@ -3847,7 +3913,7 @@
       "licenseDeclared": "Apache-2.0",
       "name": "sface_2021dec",
       "packageVerificationCode": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
-      "sourceInfo": "Built from Nam-tor commit 5e3727edf5f966a8aa0df3f060aeb93be4bce535; licence_sha256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "sourceInfo": "Built from Nam-tor commit 9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef; licence_sha256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
       "versionInfo": "0.1.0"
     },
     {
@@ -3859,7 +3925,7 @@
       "licenseDeclared": "MIT",
       "name": "yunet_2023mar",
       "packageVerificationCode": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
-      "sourceInfo": "Built from Nam-tor commit 5e3727edf5f966a8aa0df3f060aeb93be4bce535; licence_sha256=c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958",
+      "sourceInfo": "Built from Nam-tor commit 9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef; licence_sha256=c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958",
       "versionInfo": "0.1.0"
     }
   ],
@@ -3983,6 +4049,26 @@
       "relatedSpdxElement": "SPDXRef-windows-sys-0-61-2",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-anstyle-wincon-3-0-11"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-base64ct-1-8-3",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-argon2-0-5-3"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-blake2-0-10-6",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-argon2-0-5-3"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-cpufeatures-0-2-17",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-argon2-0-5-3"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-password-hash-0-5-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-argon2-0-5-3"
     },
     {
       "relatedSpdxElement": "SPDXRef-event-listener-5-4-2",
@@ -4248,6 +4334,11 @@
       "relatedSpdxElement": "SPDXRef-syn-3-0-3",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-async-trait-0-1-91"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-digest-0-10-7",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-blake2-0-10-6"
     },
     {
       "relatedSpdxElement": "SPDXRef-generic-array-0-14-7",
@@ -4975,7 +5066,7 @@
       "spdxElementId": "SPDXRef-gio-sys-0-20-10"
     },
     {
-      "relatedSpdxElement": "SPDXRef-windows-sys-0-52-0",
+      "relatedSpdxElement": "SPDXRef-windows-sys-0-59-0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-gio-sys-0-20-10"
     },
@@ -6070,7 +6161,17 @@
       "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
     },
     {
+      "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+    },
+    {
       "relatedSpdxElement": "SPDXRef-sha2-0-10-9",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-signal-hook-0-3-18",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
     },
@@ -6085,7 +6186,17 @@
       "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
     },
     {
+      "relatedSpdxElement": "SPDXRef-zbus-5-18-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+    },
+    {
       "relatedSpdxElement": "SPDXRef-zeroize-1-9-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-zvariant-5-13-1",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
     },
@@ -6118,6 +6229,11 @@
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-namtor-collect-0-1-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-libc-0-2-189",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-namtor-camera-0-1-0",
@@ -6295,6 +6411,11 @@
       "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
     },
     {
+      "relatedSpdxElement": "SPDXRef-nix-0-29-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
+    },
+    {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
@@ -6351,6 +6472,11 @@
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-kde-0-1-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-namtor-kde-0-1-0"
     },
@@ -6565,6 +6691,11 @@
       "spdxElementId": "SPDXRef-namtor-store-0-1-0"
     },
     {
+      "relatedSpdxElement": "SPDXRef-argon2-0-5-3",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+    },
+    {
       "relatedSpdxElement": "SPDXRef-hmac-0-12-1",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-namtor-store-0-1-0"
@@ -6641,6 +6772,11 @@
     },
     {
       "relatedSpdxElement": "SPDXRef-landlock-0-4-7",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-libc-0-2-189",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
     },
@@ -6858,6 +6994,21 @@
       "relatedSpdxElement": "SPDXRef-system-deps-7-0-8",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-pango-sys-0-20-10"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-base64ct-1-8-3",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-password-hash-0-5-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-rand-core-0-6-4",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-password-hash-0-5-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-subtle-2-6-1",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-password-hash-0-5-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-atomic-waker-1-1-2",
@@ -7578,6 +7729,16 @@
       "relatedSpdxElement": "SPDXRef-lazy-static-1-5-0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-sharded-slab-0-1-7"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-libc-0-2-189",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-signal-hook-0-3-18"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-signal-hook-registry-1-4-8",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-signal-hook-0-3-18"
     },
     {
       "relatedSpdxElement": "SPDXRef-errno-0-3-14",
@@ -8378,6 +8539,11 @@
       "relatedSpdxElement": "SPDXRef-windows-targets-0-52-6",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-windows-sys-0-52-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-windows-targets-0-52-6",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-windows-sys-0-59-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-windows-link-0-2-1",

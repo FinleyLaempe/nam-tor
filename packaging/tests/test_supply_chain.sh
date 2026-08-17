@@ -152,8 +152,8 @@ assert "CycloneDX deterministic (two runs identical)" \
 assert "SPDX deterministic (two runs identical)" \
     "$(diff -q "$tmp1/namtor.spdx.json" "$tmp2/namtor.spdx.json" >/dev/null && echo true || echo false)"
 
-python3 "${SRCDIR}/packaging/generate-provenance.py" --out "$tmp1/prov.json" >/dev/null 2>&1
-python3 "${SRCDIR}/packaging/generate-provenance.py" --out "$tmp2/prov.json" >/dev/null 2>&1
+python3 "${SRCDIR}/packaging/generate-provenance.py" --allow-no-models --out "$tmp1/prov.json" >/dev/null 2>&1
+python3 "${SRCDIR}/packaging/generate-provenance.py" --allow-no-models --out "$tmp2/prov.json" >/dev/null 2>&1
 assert "Provenance deterministic (two runs identical)" \
     "$(diff -q "$tmp1/prov.json" "$tmp2/prov.json" >/dev/null && echo true || echo false)"
 

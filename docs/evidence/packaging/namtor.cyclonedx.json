@@ -236,6 +236,32 @@
       "version": "3.0.11"
     },
     {
+      "bom-ref": "argon2@0.5.3",
+      "externalRefs": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/argon2/0.5.3"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "name": "argon2",
+      "purl": "pkg:cargo/argon2@0.5.3",
+      "type": "library",
+      "version": "0.5.3"
+    },
+    {
       "bom-ref": "async-broadcast@0.7.2",
       "externalRefs": [
         {
@@ -574,6 +600,32 @@
       "version": "0.22.1"
     },
     {
+      "bom-ref": "base64ct@1.8.3",
+      "externalRefs": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/base64ct/1.8.3"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 OR MIT"
+          }
+        }
+      ],
+      "name": "base64ct",
+      "purl": "pkg:cargo/base64ct@1.8.3",
+      "type": "library",
+      "version": "1.8.3"
+    },
+    {
       "bom-ref": "bitflags@2.13.1",
       "externalRefs": [
         {
@@ -598,6 +650,32 @@
       "purl": "pkg:cargo/bitflags@2.13.1",
       "type": "library",
       "version": "2.13.1"
+    },
+    {
+      "bom-ref": "blake2@0.10.6",
+      "externalRefs": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/blake2/0.10.6"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "name": "blake2",
+      "purl": "pkg:cargo/blake2@0.10.6",
+      "type": "library",
+      "version": "0.10.6"
     },
     {
       "bom-ref": "block-buffer@0.10.4",
@@ -4335,6 +4413,32 @@
       "version": "2.2.1"
     },
     {
+      "bom-ref": "password-hash@0.5.0",
+      "externalRefs": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/password-hash/0.5.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "name": "password-hash",
+      "purl": "pkg:cargo/password-hash@0.5.0",
+      "type": "library",
+      "version": "0.5.0"
+    },
+    {
       "bom-ref": "percent-encoding@2.3.2",
       "externalRefs": [
         {
@@ -5515,6 +5619,32 @@
       "purl": "pkg:cargo/shlex@2.0.1",
       "type": "library",
       "version": "2.0.1"
+    },
+    {
+      "bom-ref": "signal-hook@0.3.18",
+      "externalRefs": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/signal-hook/0.3.18"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0/MIT"
+          }
+        }
+      ],
+      "name": "signal-hook",
+      "purl": "pkg:cargo/signal-hook@0.3.18",
+      "type": "library",
+      "version": "0.3.18"
     },
     {
       "bom-ref": "signal-hook-registry@1.4.8",
@@ -7321,6 +7451,32 @@
       "version": "0.52.0"
     },
     {
+      "bom-ref": "windows-sys@0.59.0",
+      "externalRefs": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/windows-sys/0.59.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT OR Apache-2.0"
+          }
+        }
+      ],
+      "name": "windows-sys",
+      "purl": "pkg:cargo/windows-sys@0.59.0",
+      "type": "library",
+      "version": "0.59.0"
+    },
+    {
       "bom-ref": "windows-sys@0.61.2",
       "externalRefs": [
         {
@@ -8329,7 +8485,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "638d4f71315002cf31bafef17de4373a93967a13ab7fe20553147b893aae9ed6"
+          "content": "79587b4c24eaaf3484aab7c9459bff1a6c85ffa6d813c7b1d4e054dfc5a1aab9"
         }
       ],
       "licenses": [
@@ -8348,7 +8504,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "105f9742ba472871adc27427e8ffa7ef106f29b43d7acd1fd2f8bcc470fad488"
+          "content": "c61dfafc2bc66c8175b014ab9fb4dc7f37a09fa4096c3adafb73329ad369c47e"
         }
       ],
       "licenses": [
@@ -8367,7 +8523,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "eeb4c01779e168d5f42ba05c4aba591b6d85038cdee2b62e8a7a5f1a451fb57e"
+          "content": "1c73aea57937f4d5a77d7d9e297e3fa272108e36c5650ce1675c5b22260cd1c7"
         }
       ],
       "licenses": [
@@ -8425,7 +8581,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "3f86c8e4bb1138098ed2f8dc1682c6e1e1d6c5fffcf65dd6955c0cd60579a155"
+          "content": "686b6671578a1f6b7b8e018bf12136dfb4fd41671f5a377b96ce15c650306cf6"
         }
       ],
       "licenses": [
@@ -8439,7 +8595,7 @@
       "properties": [
         {
           "name": "namtor:builtFromCommit",
-          "value": "5e3727edf5f966a8aa0df3f060aeb93be4bce535"
+          "value": "9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef"
         },
         {
           "name": "namtor:licenceSha256",
@@ -8478,7 +8634,7 @@
       "properties": [
         {
           "name": "namtor:builtFromCommit",
-          "value": "5e3727edf5f966a8aa0df3f060aeb93be4bce535"
+          "value": "9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef"
         },
         {
           "name": "namtor:licenceSha256",
@@ -8513,7 +8669,7 @@
       "properties": [
         {
           "name": "namtor:builtFromCommit",
-          "value": "5e3727edf5f966a8aa0df3f060aeb93be4bce535"
+          "value": "9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef"
         },
         {
           "name": "namtor:licenceSha256",
@@ -8592,6 +8748,15 @@
         "windows-sys@0.61.2"
       ],
       "ref": "anstyle-wincon@3.0.11"
+    },
+    {
+      "dependsOn": [
+        "base64ct@1.8.3",
+        "blake2@0.10.6",
+        "cpufeatures@0.2.17",
+        "password-hash@0.5.0"
+      ],
+      "ref": "argon2@0.5.3"
     },
     {
       "dependsOn": [
@@ -8709,7 +8874,17 @@
     },
     {
       "dependsOn": [],
+      "ref": "base64ct@1.8.3"
+    },
+    {
+      "dependsOn": [],
       "ref": "bitflags@2.13.1"
+    },
+    {
+      "dependsOn": [
+        "digest@0.10.7"
+      ],
+      "ref": "blake2@0.10.6"
     },
     {
       "dependsOn": [
@@ -9156,7 +9331,7 @@
         "gobject-sys@0.20.10",
         "libc@0.2.189",
         "system-deps@7.0.8",
-        "windows-sys@0.52.0"
+        "windows-sys@0.59.0"
       ],
       "ref": "gio-sys@0.20.10"
     },
@@ -9664,10 +9839,14 @@
         "namtor-uvc@0.1.0",
         "nix@0.29.0",
         "serde@1.0.229",
+        "serde_json@1.0.151",
         "sha2@0.10.9",
+        "signal-hook@0.3.18",
         "tempfile@3.27.0",
         "toml@0.8.23",
-        "zeroize@1.9.0"
+        "zbus@5.18.0",
+        "zeroize@1.9.0",
+        "zvariant@5.13.1"
       ],
       "ref": "namtor-cli@0.1.0"
     },
@@ -9684,6 +9863,7 @@
     },
     {
       "dependsOn": [
+        "libc@0.2.189",
         "namtor-camera@0.1.0",
         "namtor-capture@0.1.0",
         "namtor-eval@0.1.0",
@@ -9729,6 +9909,7 @@
         "gtk4@0.9.7",
         "libadwaita@0.7.2",
         "namtor-proto@0.1.0",
+        "nix@0.29.0",
         "serde@1.0.229",
         "serde_json@1.0.151",
         "tempfile@3.27.0",
@@ -9751,6 +9932,7 @@
       "dependsOn": [
         "futures-util@0.3.33",
         "serde@1.0.229",
+        "serde_json@1.0.151",
         "tracing@0.1.44",
         "zbus@5.18.0"
       ],
@@ -9833,6 +10015,7 @@
     {
       "dependsOn": [
         "aes-gcm@0.10.3",
+        "argon2@0.5.3",
         "hmac@0.12.1",
         "libc@0.2.189",
         "namtor-proto@0.1.0",
@@ -9859,6 +10042,7 @@
     {
       "dependsOn": [
         "landlock@0.4.7",
+        "libc@0.2.189",
         "libseccomp@0.4.0",
         "namtor-capture@0.1.0",
         "namtor-proto@0.1.0",
@@ -9975,6 +10159,14 @@
     {
       "dependsOn": [],
       "ref": "parking@2.2.1"
+    },
+    {
+      "dependsOn": [
+        "base64ct@1.8.3",
+        "rand_core@0.6.4",
+        "subtle@2.6.1"
+      ],
+      "ref": "password-hash@0.5.0"
     },
     {
       "dependsOn": [],
@@ -10346,6 +10538,13 @@
     {
       "dependsOn": [],
       "ref": "shlex@2.0.1"
+    },
+    {
+      "dependsOn": [
+        "libc@0.2.189",
+        "signal-hook-registry@1.4.8"
+      ],
+      "ref": "signal-hook@0.3.18"
     },
     {
       "dependsOn": [
@@ -10854,6 +11053,12 @@
     },
     {
       "dependsOn": [
+        "windows-targets@0.52.6"
+      ],
+      "ref": "windows-sys@0.59.0"
+    },
+    {
+      "dependsOn": [
         "windows-link@0.2.1"
       ],
       "ref": "windows-sys@0.61.2"
@@ -11182,6 +11387,7 @@
         "anstyle-parse@1.0.0",
         "anstyle-query@1.1.5",
         "anstyle-wincon@3.0.11",
+        "argon2@0.5.3",
         "async-broadcast@0.7.2",
         "async-channel@2.5.0",
         "async-executor@1.14.0",
@@ -11195,7 +11401,9 @@
         "atomic-waker@1.1.2",
         "autocfg@1.5.1",
         "base64@0.22.1",
+        "base64ct@1.8.3",
         "bitflags@2.13.1",
+        "blake2@0.10.6",
         "block-buffer@0.10.4",
         "blocking@1.6.2",
         "bumpalo@3.20.3",
@@ -11353,6 +11561,7 @@
         "pango@0.20.12",
         "pango-sys@0.20.10",
         "parking@2.2.1",
+        "password-hash@0.5.0",
         "percent-encoding@2.3.2",
         "pin-project-lite@0.2.17",
         "piper@0.2.5",
@@ -11401,6 +11610,7 @@
         "sha2@0.10.9",
         "sharded-slab@0.1.7",
         "shlex@2.0.1",
+        "signal-hook@0.3.18",
         "signal-hook-registry@1.4.8",
         "slab@0.4.12",
         "smallvec@1.15.2",
@@ -11475,6 +11685,7 @@
         "windows-link@0.2.1",
         "windows-sys@0.48.0",
         "windows-sys@0.52.0",
+        "windows-sys@0.59.0",
         "windows-sys@0.61.2",
         "windows-targets@0.48.5",
         "windows-targets@0.52.6",
