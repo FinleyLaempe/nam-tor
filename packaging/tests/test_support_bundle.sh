@@ -35,6 +35,20 @@ not_ok() {
     FAILED_TESTS+=("$1")
 }
 
+# Run a cargo test and check pass/fail. Shows output on failure for debugging.
+run_test() {
+    local test_name="$1"
+    local desc="$2"
+    local out
+    out=$(cargo test -p namtor-cli --lib -- "$test_name" 2>&1)
+    if echo "$out" | grep -q "test result: ok"; then
+        ok "$desc"
+    else
+        not_ok "$desc"
+        echo "$out" | tail -20 | sed 's/^/    /'
+    fi
+}
+
 # Forbidden tokens that must NOT appear in diagnostic output.
 FORBIDDEN_TOKENS=(
     "embedding"
@@ -86,149 +100,71 @@ for token in "${FORBIDDEN_TOKENS[@]}"; do
     fi
 done
 
-# Verify the privacy scanner test explicitly passes
-if cargo test -p namtor-cli --lib -- full_report_passes_privacy_scanner 2>&1 | grep -q "ok"; then
-    ok "full_report_passes_privacy_scanner test passes"
-else
-    not_ok "full_report_passes_privacy_scanner test failed"
-fi
+run_test full_report_passes_privacy_scanner "full_report_passes_privacy_scanner test passes"
 
 # Verify bundle passes privacy scan
-if cargo test -p namtor-cli --lib -- full_bundle_passes_privacy_scanner 2>&1 | grep -q "ok"; then
-    ok "full_bundle_passes_privacy_scanner test passes"
-else
-    not_ok "full_bundle_passes_privacy_scanner test failed"
-fi
+run_test full_bundle_passes_privacy_scanner "full_bundle_passes_privacy_scanner test passes"
 
 # --- (c) hex redaction — model hashes truncated ----------------------------
 
 echo "== (c) hex redaction — model hashes truncated =="
 
-# Verify the redact_hex_id test passes
-if cargo test -p namtor-cli --lib -- redact_hex_id_long_truncated 2>&1 | grep -q "ok"; then
-    ok "redact_hex_id_long_truncated test passes"
-else
-    not_ok "redact_hex_id_long_truncated test failed"
-fi
+run_test redact_hex_id_long_truncated "redact_hex_id_long_truncated test passes"
 
 # Verify SHA-256 is redacted in model info
-if cargo test -p namtor-cli --lib -- model_sha256_does_not_trigger_privacy_scanner 2>&1 | grep -q "ok"; then
-    ok "model_sha256_does_not_trigger_privacy_scanner test passes"
-else
-    not_ok "model_sha256_does_not_trigger_privacy_scanner test failed"
-fi
+run_test model_sha256_does_not_trigger_privacy_scanner "model_sha256_does_not_trigger_privacy_scanner test passes"
 
 # Verify collect_model_info produces redacted hashes
-if cargo test -p namtor-cli --lib -- collect_model_info_reads_onnx_files 2>&1 | grep -q "ok"; then
-    ok "collect_model_info_reads_onnx_files test passes (redacted sha256)"
-else
-    not_ok "collect_model_info_reads_onnx_files test failed"
-fi
+run_test collect_model_info_reads_onnx_files "collect_model_info_reads_onnx_files test passes (redacted sha256)"
 
 # --- (d) migration detection — old artifacts detected ---------------------
 
 echo "== (d) migration detection — old artifacts detected =="
 
 # Verify legacy setuid detection
-if cargo test -p namtor-cli --lib -- detect_legacy_setuid_artifact 2>&1 | grep -q "ok"; then
-    ok "detect_legacy_setuid_artifact test passes"
-else
-    not_ok "detect_legacy_setuid_artifact test failed"
-fi
+run_test detect_legacy_setuid_artifact "detect_legacy_setuid_artifact test passes"
 
 # Verify legacy install script detection
-if cargo test -p namtor-cli --lib -- detect_legacy_install_script 2>&1 | grep -q "ok"; then
-    ok "detect_legacy_install_script test passes"
-else
-    not_ok "detect_legacy_install_script test failed"
-fi
+run_test detect_legacy_install_script "detect_legacy_install_script test passes"
 
 # Verify manual install detection
-if cargo test -p namtor-cli --lib -- detect_manual_install_artifact 2>&1 | grep -q "ok"; then
-    ok "detect_manual_install_artifact test passes"
-else
-    not_ok "detect_manual_install_artifact test failed"
-fi
+run_test detect_manual_install_artifact "detect_manual_install_artifact test passes"
 
 # Verify clean install has no migration artifacts
-if cargo test -p namtor-cli --lib -- no_artifacts_when_clean_split_install 2>&1 | grep -q "ok"; then
-    ok "no_artifacts_when_clean_split_install test passes"
-else
-    not_ok "no_artifacts_when_clean_split_install test failed"
-fi
+run_test no_artifacts_when_clean_split_install "no_artifacts_when_clean_split_install test passes"
 
 # Verify migration artifacts in full doctor report
-if cargo test -p namtor-cli --lib -- doctor_report_detects_migration_artifacts 2>&1 | grep -q "ok"; then
-    ok "doctor_report_detects_migration_artifacts test passes"
-else
-    not_ok "doctor_report_detects_migration_artifacts test failed"
-fi
+run_test doctor_report_detects_migration_artifacts "doctor_report_detects_migration_artifacts test passes"
 
 # Verify migration display is privacy-safe
-if cargo test -p namtor-cli --lib -- migration_artifact_display_is_privacy_safe 2>&1 | grep -q "ok"; then
-    ok "migration_artifact_display_is_privacy_safe test passes"
-else
-    not_ok "migration_artifact_display_is_privacy_safe test failed"
-fi
+run_test migration_artifact_display_is_privacy_safe "migration_artifact_display_is_privacy_safe test passes"
 
 # --- (e) forbidden-data mutation — scanner rejects injected tokens ---------
 
 echo "== (e) forbidden-data mutation — scanner rejects injected tokens =="
 
 # Verify the bundle rejects content with biometric terms
-if cargo test -p namtor-cli --lib -- bundle_rejects_content_with_biometric_term 2>&1 | grep -q "ok"; then
-    ok "bundle_rejects_content_with_biometric_term test passes"
-else
-    not_ok "bundle_rejects_content_with_biometric_term test failed"
-fi
+run_test bundle_rejects_content_with_biometric_term "bundle_rejects_content_with_biometric_term test passes"
 
 # Verify the privacy scanner rejects each forbidden term
-if cargo test -p namtor-cli --lib -- privacy_scanner_rejects_embedding_template_pixel 2>&1 | grep -q "ok"; then
-    ok "privacy_scanner_rejects_embedding_template_pixel test passes"
-else
-    not_ok "privacy_scanner_rejects_embedding_template_pixel test failed"
-fi
+run_test privacy_scanner_rejects_embedding_template_pixel "privacy_scanner_rejects_embedding_template_pixel test passes"
 
-if cargo test -p namtor-cli --lib -- privacy_scanner_rejects_frame_and_crop_and_threshold_and_nonce 2>&1 | grep -q "ok"; then
-    ok "privacy_scanner_rejects_frame_and_crop_and_threshold_and_nonce test passes"
-else
-    not_ok "privacy_scanner_rejects_frame_and_crop_and_threshold_and_nonce test failed"
-fi
+run_test privacy_scanner_rejects_frame_and_crop_and_threshold_and_nonce "privacy_scanner_rejects_frame_and_crop_and_threshold_and_nonce test passes"
 
 # Verify log filtering removes biometric terms
-if cargo test -p namtor-cli --lib -- filter_log_lines_removes_biometric_terms 2>&1 | grep -q "ok"; then
-    ok "filter_log_lines_removes_biometric_terms test passes"
-else
-    not_ok "filter_log_lines_removes_biometric_terms test failed"
-fi
+run_test filter_log_lines_removes_biometric_terms "filter_log_lines_removes_biometric_terms test passes"
 
 # --- (f) package detection and PAM count -----------------------------------
 
 echo "== (f) package detection and PAM count =="
 
-if cargo test -p namtor-cli --lib -- detect_all_three_split_packages 2>&1 | grep -q "ok"; then
-    ok "detect_all_three_split_packages test passes"
-else
-    not_ok "detect_all_three_split_packages test failed"
-fi
+run_test detect_all_three_split_packages "detect_all_three_split_packages test passes"
 
-if cargo test -p namtor-cli --lib -- count_enabled_pam_services_counts_namtor_entries 2>&1 | grep -q "ok"; then
-    ok "count_enabled_pam_services_counts_namtor_entries test passes"
-else
-    not_ok "count_enabled_pam_services_counts_namtor_entries test failed"
-fi
+run_test count_enabled_pam_services_counts_namtor_entries "count_enabled_pam_services_counts_namtor_entries test passes"
 
-if cargo test -p namtor-cli --lib -- doctor_report_includes_package_state 2>&1 | grep -q "ok"; then
-    ok "doctor_report_includes_package_state test passes"
-else
-    not_ok "doctor_report_includes_package_state test failed"
-fi
+run_test doctor_report_includes_package_state "doctor_report_includes_package_state test passes"
 
-if cargo test -p namtor-cli --lib -- doctor_report_includes_pam_count 2>&1 | grep -q "ok"; then
-    ok "doctor_report_includes_pam_count test passes"
-else
-    not_ok "doctor_report_includes_pam_count test failed"
-fi
+run_test doctor_report_includes_pam_count "doctor_report_includes_pam_count test passes"
 
 # --- summary ---------------------------------------------------------------
 
