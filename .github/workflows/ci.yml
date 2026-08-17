@@ -60,12 +60,12 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Install system deps (GTK4, libadwaita, pam, openssl)
+      - name: Install system deps (GTK4, libadwaita, pam, openssl, udev)
         run: |
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends \
                 libgtk-4-dev libadwaita-1-dev libpam0g-dev libssl-dev \
-                pkg-config
+                libudev-dev pkg-config
 
       # Gate 6a — SPDX license headers on every Rust source file.
       - name: SPDX headers
