@@ -31,7 +31,7 @@ Requires: `namtor-eval` (`pip install -e ml/eval`), `numpy`.
 
 Blocked on: Python `onnxruntime` binding fix + model selection + licence
 acceptance (`NAMTOR_ACCEPT_LICENCE=1`) + R5 cohort dataset decision. See
-`AGENTS.md` "What M3 needs from the human".
+the project docs for owner-gated inputs.
 
 ## `eval_int8_vs_fp32.py`
 

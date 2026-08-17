@@ -45,3 +45,8 @@ packaging/arch/*.tar.gz
 # IDE / editor local state
 .idea/
 .vscode/
+
+# Internal agent / planning notes — kept locally, not published.
+/AGENTS.md
+/todo.md
+/HANDOFF.md

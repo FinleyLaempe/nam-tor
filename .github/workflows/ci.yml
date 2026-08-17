@@ -2,6 +2,56 @@ name: CI
 on: [push, pull_request]
 
 jobs:
+  # Full compile-pipeline gate: builds every shippable binary + the KDE KCM
+  # CMake module on a real distro that has all the KF6/Qt6/GTK4 dev deps.
+  # Uses archlinux:latest because Ubuntu 24.04 does not ship the full KF6
+  # -dev set and this matches the Arch cell of the release matrix. Verifies
+  # the whole workspace compiles end-to-end on every PR, not just
+  # pam_namtor.so (which the rust job below builds for the structural gate).
+  build:
+    name: full compile pipeline
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build toolchain
+        run: |
+            pacman -Syu --noconfirm
+            pacman -S --noconfirm --needed base-devel rust cargo cmake ninja \
+                qt6-base kirigami kcoreaddons extra-cmake-modules \
+                gtk4 libadwaita pam openssl onnxruntime
+      - name: cargo build --release (all shippable crates)
+        run: |
+            cargo build --release --locked \
+                -p namtor-daemon \
+                -p namtor-worker \
+                -p namtor-cli \
+                -p namtor-camera \
+                -p namtor-pam \
+                -p namtor-gnome \
+                -p namtor-kde
+      - name: Verify shippable binaries exist
+        run: |
+            for bin in namtor-daemon namtor-worker namtor-cli \
+                       namtor-camera-emitter-off namtor-enroll-wizard; do
+              test -x "target/release/$bin" || {
+                echo "::error::missing $bin"; exit 1; }
+            done
+            test -f target/release/libpam_namtor.so || {
+              echo "::error::missing libpam_namtor.so"; exit 1; }
+            test -f target/release/libnamtor_kde.so || {
+              echo "::error::missing libnamtor_kde.so"; exit 1; }
+      - name: CMake build — KDE KCM QML module
+        run: |
+            cmake -S crates/namtor-kde -B build-kde \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_INSTALL_PREFIX=/usr \
+                -DNAMTOR_KDE_RUST_SO="$PWD/target/release/libnamtor_kde.so"
+            cmake --build build-kde --parallel
+      - name: KDE ABI smoke test
+        run: |
+            ctest --test-dir build-kde --output-on-failure
+
   rust:
     runs-on: ubuntu-latest
     steps:

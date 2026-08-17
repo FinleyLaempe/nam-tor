@@ -10,7 +10,7 @@ Branch: `master` (commits `feat(uvc): …` through `docs: M1 spike findings …`
 This milestone retired the three design risks that could have invalidated the
 Nam-tor architecture (R1, R2, R3) and produced quirks database entry #1 for
 the reference camera. R1/R2/R3 were already resolved PASS on the reference
-machine before this run (see `HANDOFF.md`); M1 codifies them as executable
+machine before this run (see the project README); M1 codifies them as executable
 Rust in the new `namtor-uvc` crate and reproduces the measurements via the
 `scripts/spike-*.sh` harness.
 

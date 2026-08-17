@@ -10,7 +10,7 @@ Infrared face authentication for Linux. A privilege-separated daemon, a PAM modu
 > hardening measure. See the [WITHHELD gates](#withheld-gates) list below and
 > the [authoritative readiness ledger](docs/evidence/status-audit.md).
 
-**Status: experimental preview.** M0-M9 are complete and committed on the reference hardware (400+ tests green, clippy/fmt/SPDX clean, CI security gates enforced). A production-readiness program is underway to close the remaining gates with measured evidence. No gate claim is published unless evidenced. The authoritative readiness ledger is [`docs/evidence/status-audit.md`](docs/evidence/status-audit.md); see also [`HANDOFF.md`](HANDOFF.md) for the cold-start entry point.
+**Status: experimental preview.** M0-M9 are complete and committed on the reference hardware (400+ tests green, clippy/fmt/SPDX clean, CI security gates enforced). A production-readiness program is underway to close the remaining gates with measured evidence. No gate claim is published unless evidenced. The authoritative readiness ledger is [`docs/evidence/status-audit.md`](docs/evidence/status-audit.md); the milestone roadmap is [`docs/roadmap.md`](docs/roadmap.md).
 
 ---
 
@@ -116,9 +116,8 @@ It is designed around four commitments, each expressed as a measurable acceptanc
 | [`docs/superpowers/specs/2026-08-04-nam-tor-design.md`](docs/superpowers/specs/2026-08-04-nam-tor-design.md) | The specification. Read first. |
 | [`docs/architecture.md`](docs/architecture.md) | Navigational map into the spec |
 | [`docs/threat-model.md`](docs/threat-model.md) | What Nam-tor defends against, and explicitly what it does not |
-| [`docs/superpowers/plans/`](docs/superpowers/plans/) | Milestone roadmap and executable implementation plans |
+| [`docs/roadmap.md`](docs/roadmap.md) | Milestone roadmap and global constraints |
 | [`ml/DATASETS.md`](ml/DATASETS.md) | Dataset licensing status — read before touching training data |
-| [`HANDOFF.md`](HANDOFF.md) | Cold-start entry point for a new contributor or agent |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to contribute, including hardware reports |
 
 ## Hardware support

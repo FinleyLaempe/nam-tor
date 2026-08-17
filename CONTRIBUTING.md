@@ -21,8 +21,8 @@ A report from a camera that *doesn't* work is just as useful as one that does.
 Read, in order:
 
 1. [`docs/superpowers/specs/2026-08-04-nam-tor-design.md`](docs/superpowers/specs/2026-08-04-nam-tor-design.md) — the specification
-2. [`docs/superpowers/plans/2026-08-04-nam-tor-roadmap.md`](docs/superpowers/plans/2026-08-04-nam-tor-roadmap.md) — milestone structure
-3. The plan for the milestone you are working on
+2. [`docs/roadmap.md`](docs/roadmap.md) — milestone structure
+3. The plan for the milestone you are working on (if available)
 
 Then run `./scripts/check-env.sh`. It reports what your machine is missing and which milestone each gap blocks.
 

@@ -61,7 +61,7 @@ unchanged.
 The harness for a real HIL run consists of:
 
 1. **Reference camera present** — Sonix `3277:0018` on USB `3-8`, IR at
-   `/dev/video2`, RGB at `/dev/video0` (per AGENTS.md hardware facts).
+   `/dev/video2`, RGB at `/dev/video0` (per the project's hardware facts).
 2. **strace capture** — run `namtor-probe --describe` (or the daemon's
    inventory path) under `strace -f -e openat` and record the `/dev/video*`
    open syscalls. The capture must show `/dev/video2` (IR) and

@@ -133,10 +133,10 @@ To use the real TPM2 backend (`--features tpm2`):
 
 1. `tpm2-tools` installed (`tpm2` binary on PATH).
 2. `/dev/tpmrm0` present (TPM 2.0 resource manager).
-3. The `namtor` system user in the `tss` group (per AGENTS.md M3 notes:
-   "desktop TPM access works via logind seat ACL, which does NOT extend to
-   system daemons. The `namtor` system user needs real `tss` group
-   membership").
+3. The `namtor` system user in the `tss` group (per the project's hardware
+   notes: "desktop TPM access works via logind seat ACL, which does NOT
+   extend to system daemons. The `namtor` system user needs real `tss`
+   group membership").
 4. Run `namtor-cli enroll` — it will print `key source: Tpm2` when the
    backend is active, or `key source: File` (reduced protection) when it is
    not.

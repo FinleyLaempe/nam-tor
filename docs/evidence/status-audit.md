@@ -27,12 +27,7 @@ Baseline commits: `98da82e` (Task 1, live-auth baseline), `c0ebc9c` (Task 2, CI
 security gates), `4d8af1b` (release candidate evidence), `9630ee1` (enrollment
 redesign packaging certification, task 14). Inputs:
 [`w1-auth.txt`](w1-auth.txt), [`ci-baseline.md`](ci-baseline.md),
-[`AGENTS.md`](../../AGENTS.md),
-[`../superpowers/plans/2026-08-04-nam-tor-roadmap.md`](../superpowers/plans/2026-08-04-nam-tor-roadmap.md),
-[`.omo/plans/namtor-complete-product.md`](../../.omo/plans/namtor-complete-product.md)
-(the 49-task plus 4-final-wave production plan),
-[`.omo/plans/namtor-usable-intuitive-enrollment.md`](../../.omo/plans/namtor-usable-intuitive-enrollment.md)
-(the 16-task enrollment redesign plan).
+[`../roadmap.md`](../roadmap.md).
 
 ---
 
@@ -42,7 +37,7 @@ redesign packaging certification, task 14). Inputs:
 |---|---|---|
 | **M0** — eval harness | `implemented` | `namtor_eval::score` shipped (`ScoreRecord`, `LatencyBreakdown`, `write_jsonl`, `read_jsonl`). 4 lib tests green. Commit history: M0 plan executed before M1. Harness is a foundation; no G2-G4 production run has been published through it yet, so it advances but does not pass G2-G4. |
 | **M1** — hardware spike | `implemented` (reference hardware only) | `namtor-uvc` XU ioctls, `namtor-hwdb` descriptor parse, `namtor-probe`. R1/R3 RESOLVED PASS, R2 RESOLVED Tier 0 on the Sonix `3277:0018` reference device (`../m1-spike-report.md`, `quirks/devices/3277-0018.toml`). R10 (S3 emitter survival) WITHHELD below. HW-gated tests `#[ignore]`. |
-| **M2** — detection + capture | `implemented` | `namtor_capture` (IrUvc/RgbUvc/CaptureSession), `namtor_camera` (emitter_ctrl, watchdog, resume, hotplug, selection, always_on). 38+40 lib tests green. See M2 shipped API in `AGENTS.md`. |
+| **M2** — detection + capture | `implemented` | `namtor_capture` (IrUvc/RgbUvc/CaptureSession), `namtor_camera` (emitter_ctrl, watchdog, resume, hotplug, selection, always_on). 38+40 lib tests green. See M2 shipped API in the spec (`docs/superpowers/specs/2026-08-04-nam-tor-design.md`). |
 | **M3** — daemon + sandboxed worker | `implemented` (complete) | `namtor_daemon` (acl, nonce, listener, models, licence, lifecycle, supervisor, daemon, manager), `namtor_worker` (infer, sandbox: seccomp + landlock). Daemon complete including system-bus `org.namtor.Manager` service (tasks 8-12). 55+ daemon lib tests + e2e green. Production daemon installation and HIL WITHHELD (see §4). |
 | **M4** — enrollment + template storage | `implemented` (complete) | `namtor_store` (AES-256-GCM, per-uid, AAD binds uid+model_id, Zeroize) and `namtor_recog` (YuNet + SFace + alignment + cosine) shipped; CLI enroll/list/remove shipped; named profiles, ranked enrollment, temporal consensus shipped (tasks 14-15, 18). **TPM2 sealing complete** (task 26; software/reference TPM tested, cross-hardware WITHHELD). **Per-user z-norm/t-norm WITHHELD** (task 16; no lawful cohort). **RGB-IR fusion WITHHELD** (task 17; extrinsics unmeasured). |
 | **M5** — PAM module | `implemented` (complete) | `namtor_pam` ships `pam_namtor.so` 457920 bytes < 500 KB budget, fail-closed, no ML deps, stdin keypress fallback, socket client drives Prepare→Verify→Release. G5.1 structural test green (`g5_structural.rs`). Production PAM-stack installation is owner-gated (WITHHELD, see §4). |

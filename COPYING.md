@@ -24,6 +24,18 @@ Nam-tor is dual-licensed by component. The split is deliberate and load-bearing 
 
 Every source file carries an `SPDX-License-Identifier` header. CI enforces this via `scripts/check-spdx.sh`.
 
+## Licence texts
+
+The canonical licence texts live at the repository root:
+
+```
+LICENSE-GPL-3.0      — GNU General Public License v3.0
+LICENSE-Apache-2.0   — Apache License 2.0
+LICENSE-MIT          — MIT License
+```
+
+Model-specific licence texts (YuNet MIT licence, SFace Apache-2.0 licence, MiniFASNet PAD provenance notice) are in [`packaging/licences/`](packaging/licences/) and their SHA-256 hashes are recorded in [`packaging/model-manifest.toml`](packaging/model-manifest.toml). Do not edit those files — they are the canonical bytes the manifest hashes are computed from.
+
 ## Why split
 
 **GPL-3.0 for the security core.** This is authentication software. Copyleft keeps derivatives auditable and prevents a vendor shipping a closed fork of an authentication stack that users are asked to trust with a biometric they cannot rotate.
@@ -38,7 +50,7 @@ Apache-2.0 was chosen over MIT for its explicit patent grant, which matters for 
 
 ## Missing licence texts
 
-The canonical licence texts are installed in [`packaging/licences/`](packaging/licences/):
+The model-specific licence texts are installed in [`packaging/licences/`](packaging/licences/):
 
 ```
 packaging/licences/MIT.txt         — MIT License (SPDX template)

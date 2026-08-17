@@ -61,7 +61,7 @@ The dispatch logic is shipped and tested (12 unit tests in `dispatch.rs`),
 but the actual FP32-vs-INT8 measurement still requires:
 
 1. A working Python `onnxruntime` binding (currently broken on Python 3.14;
-   see AGENTS.md).
+   see the project docs).
 2. Accepted upstream model licences (`NAMTOR_ACCEPT_LICENCE=1`).
 3. An FP32 + INT8 ONNX model pair staged under `var/lib/namtor/r4-embed/`.
 4. A licence-verified comparison cohort (R5 dataset decision).
@@ -75,7 +75,7 @@ runs on the architectural default — `Quant::Int8` on the reference i9-13900H
 It is filled by running:
 
 ```bash
-# 1. Fix Python onnxruntime binding (see AGENTS.md)
+# 1. Fix Python onnxruntime binding (see project docs)
 # 2. Accept model licences: NAMTOR_ACCEPT_LICENCE=1
 # 3. Place FP32 + INT8 ONNX models in var/lib/namtor/r4-embed/
 # 4. Place labelled comparison set in fixtures/r4/{probes,gallery}/

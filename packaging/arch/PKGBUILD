@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-only
-# Maintainer: Nam-tor Project <https://github.com/namtor/nam-tor>
+# Maintainer: Nam-tor Project <https://github.com/FinleyLaempe/nam-tor>
 #
 # Arch Linux SPLIT package for Nam-tor — IR face authentication.
 #
@@ -51,7 +51,7 @@ pkgver=0.1.0
 pkgrel=3
 epoch=0
 arch=('x86_64' 'aarch64')
-url="https://github.com/namtor/nam-tor"
+url="https://github.com/FinleyLaempe/nam-tor"
 license=('GPL-3.0-only' 'MIT' 'Apache-2.0')
 groups=()
 checkdepends=('cargo')
@@ -81,7 +81,7 @@ noextract=()
 # (build-model-archive.sh yields a byte-identical tarball every build). The
 # source tarball hash is pinned at release time by the release workflow.
 sha256sums=(
-    'af75e58363b856adf0fd40caf9c3cf3d00724a44340ccf34f845f4db9d90eddd'
+    '121d51354fe052c922ebb2aaa361e3367f555f09e40b4ee16964e1db1fd1157e'
     '7bc800dea9d4b1eb5ce5dabc8c5197aeac81482ac80e3fcd27f0f71879a803be'
 )
 
