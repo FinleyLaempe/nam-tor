@@ -16,11 +16,11 @@ use zbus::MessageStream;
 
 use crate::bridge::{EnrollmentController, EnrollmentState, KcmBridge, ProfileList};
 use crate::fake::{FakeBus, FakeHandle, FakeManagerSignals};
-use namtor_client::contract::ScenarioHook;
 use crate::types::{
     EnrollOutcome, EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, KcmError,
     ProfileInfo, QualityLabel, ReviewOutcome, StatusReport,
 };
+use namtor_client::contract::ScenarioHook;
 
 /// UID used by tests (matches `contract::TEST_UID`).
 const TEST_UID: u32 = 1000;
@@ -129,7 +129,11 @@ fn privacy_scan_no_biometric_data() {
         );
     }
     // quality must be a non-numeric bucket, never a score.
-    assert!(!progress.quality.as_str().chars().any(|c| c.is_ascii_digit()));
+    assert!(!progress
+        .quality
+        .as_str()
+        .chars()
+        .any(|c| c.is_ascii_digit()));
     // Review quality is a bucket, never a numeric score.
     assert!(!review.quality.as_str().chars().any(|c| c.is_ascii_digit()));
     // EnrollmentController stores only a session id and an outcome — no frames.
@@ -209,7 +213,7 @@ fn daemon_restart_old_bridge_errors_new_bridge_works() {
         // Daemon goes away.
         drop(bus);
         match bridge.list_profiles().await {
-            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) => {}
+            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) | Err(KcmError::Io(_)) => {}
             Ok(v) => panic!("expected error after daemon drop, got {v:?}"),
         }
 
@@ -263,7 +267,7 @@ fn error_handling_surfaces_kcm_error() {
         handle.set_daemon_unavailable();
         let (_bus, bridge) = rig(&handle).await;
         match bridge.list_profiles().await {
-            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) => {}
+            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) | Err(KcmError::Io(_)) => {}
             Ok(v) => panic!("expected error when daemon unavailable, got {v:?}"),
         }
     });
@@ -310,7 +314,7 @@ fn offline_denied_cancel_keeps_state_safe() {
         bridge.list_profiles().await
     });
     match res {
-        Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) => {}
+        Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) | Err(KcmError::Io(_)) => {}
         Ok(v) => panic!("expected error after server drop, got {v:?}"),
     }
 
@@ -445,6 +449,61 @@ fn profile_and_status_changed_signals_round_trip() {
         }
         assert!(got_profile_changed, "did not receive ProfileChanged");
         assert!(got_status_changed, "did not receive StatusChanged");
+    });
+}
+
+/// Unique temp dir per test so parallel `cargo test` runs never collide, and
+/// the real `$HOME/.config/kscreenlockerrc` is never touched.
+fn temp_home(tag: &str) -> std::path::PathBuf {
+    let unique = format!(
+        "namtor-kde-face-unlock-test-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    std::env::temp_dir().join(unique)
+}
+
+/// Enabling face unlock must both call `SetPamServiceEnabled("kde-face",
+/// true)` over D-Bus and write `Face=true` under `[Authenticators]` in
+/// `kscreenlockerrc`. Disabling must reverse both.
+#[test]
+fn set_face_unlock_enabled_toggles_pam_and_kscreenlockerrc() {
+    let handle = FakeHandle::new();
+    handle.reset(&[]);
+    let home = temp_home("toggle");
+    zbus::block_on(async {
+        let (_bus, bridge) = rig(&handle).await;
+
+        bridge.set_face_unlock_enabled(&home, true).await.unwrap();
+        assert_eq!(handle.pam_service_enabled("kde-face"), Some(true));
+        let content = std::fs::read_to_string(home.join(".config/kscreenlockerrc")).unwrap();
+        assert!(content.contains("[Authenticators]"));
+        assert!(content.contains("Face=true"));
+
+        bridge.set_face_unlock_enabled(&home, false).await.unwrap();
+        assert_eq!(handle.pam_service_enabled("kde-face"), Some(false));
+        let content = std::fs::read_to_string(home.join(".config/kscreenlockerrc")).unwrap();
+        assert!(!content.contains("Face="));
+    });
+}
+
+/// If the PAM D-Bus call fails (e.g. `kde-face` service management is
+/// unavailable), the local `kscreenlockerrc` must be left untouched — the two
+/// stay consistent rather than the file drifting ahead of D-Bus state.
+#[test]
+fn set_face_unlock_enabled_leaves_file_untouched_when_pam_call_fails() {
+    let handle = FakeHandle::new();
+    handle.reset(&[]);
+    handle.set_daemon_unavailable();
+    let home = temp_home("pam-fails");
+    zbus::block_on(async {
+        let (_bus, bridge) = rig(&handle).await;
+        let result = bridge.set_face_unlock_enabled(&home, true).await;
+        assert!(result.is_err());
+        assert!(!home.join(".config/kscreenlockerrc").exists());
     });
 }
 
@@ -657,7 +716,7 @@ fn v3_bridge_malformed_tuple_fails_closed() {
         // Drop the server to simulate a malformed/transport failure on review.
         drop(bus);
         match bridge.review_enrollment_v3(&session).await {
-            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) => {}
+            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) | Err(KcmError::Io(_)) => {}
             Ok(v) => panic!("expected error on malformed review, got {v:?}"),
         }
         // No profile could have been committed by a failed review.

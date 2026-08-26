@@ -3,4 +3,4 @@
 //!
 //! Both GUI front-ends share the same proxy definitions to prevent drift.
 
-pub use namtor_client::proxy::{Manager3Proxy, ManagerProxy};
+pub use namtor_client::proxy::{Manager2Proxy, Manager3Proxy, ManagerProxy};

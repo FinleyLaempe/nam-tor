@@ -37,6 +37,8 @@ pub struct FakeState {
     pub next_session: u32,
     /// v3 session state: session_id → phase ("capturing" or "stopped").
     pub v3_sessions: std::collections::HashMap<String, V3Phase>,
+    /// v2 PAM service enabled state: service_id → enabled.
+    pub pam_services: std::collections::HashMap<String, bool>,
 }
 
 /// v3 enrollment session phase tracked by the fake.
@@ -255,6 +257,16 @@ impl FakeHandle {
     pub fn state_arc(&self) -> Arc<Mutex<FakeState>> {
         self.state.clone()
     }
+
+    /// Read back the last `SetPamServiceEnabled` call for `service_id`, if any.
+    pub fn pam_service_enabled(&self, service_id: &str) -> Option<bool> {
+        self.state
+            .lock()
+            .unwrap()
+            .pam_services
+            .get(service_id)
+            .copied()
+    }
 }
 
 impl Default for FakeHandle {
@@ -271,6 +283,7 @@ impl ScenarioHook for FakeHandle {
             auth_denied: false,
             next_session: 0,
             v3_sessions: std::collections::HashMap::new(),
+            pam_services: std::collections::HashMap::new(),
         };
     }
 
@@ -307,6 +320,10 @@ impl FakeBus {
             .serve_at(
                 crate::bridge::MANAGER_OBJECT_PATH,
                 FakeManager3::new(handle.state_arc()),
+            )?
+            .serve_at(
+                crate::bridge::MANAGER_OBJECT_PATH,
+                FakeManager2::new(handle.state_arc()),
             )?;
         let client_b = zbus::connection::Builder::unix_stream(b).p2p();
         let (server, client) = futures_util::try_join!(server_b.build(), client_b.build())?;
@@ -497,6 +514,55 @@ impl FakeManager3 {
         _emitter: zbus::object_server::SignalEmitter<'_>,
         status: StatusReport,
     ) -> zbus::Result<()>;
+}
+
+// ---------------------------------------------------------------------------
+// v2 fake interface: org.namtor.Manager2 (PAM service management)
+// ---------------------------------------------------------------------------
+
+/// Fake `org.namtor.Manager2` service. Shares [`FakeState`] with the v1/v3
+/// fakes so a test's `reset()` clears every surface together.
+pub struct FakeManager2 {
+    state: Arc<Mutex<FakeState>>,
+}
+
+impl FakeManager2 {
+    pub fn new(state: Arc<Mutex<FakeState>>) -> Self {
+        Self { state }
+    }
+
+    fn denied(&self) -> Option<zbus::fdo::Error> {
+        let s = self.state.lock().unwrap();
+        if s.daemon_unavailable {
+            Some(zbus::fdo::Error::ServiceUnknown(
+                "org.namtor.Manager".to_string(),
+            ))
+        } else if s.auth_denied {
+            Some(zbus::fdo::Error::AccessDenied("polkit denied".to_string()))
+        } else {
+            None
+        }
+    }
+}
+
+#[interface(name = "org.namtor.Manager2")]
+impl FakeManager2 {
+    fn set_pam_service_enabled(&self, service_id: &str, enabled: bool) -> zbus::fdo::Result<bool> {
+        if let Some(e) = self.denied() {
+            return Err(e);
+        }
+        self.state
+            .lock()
+            .unwrap()
+            .pam_services
+            .insert(service_id.to_string(), enabled);
+        Ok(true)
+    }
+
+    #[zbus(property)]
+    fn api_version(&self) -> zbus::fdo::Result<u32> {
+        Ok(FAKE_API_VERSION)
+    }
 }
 
 fn name_from_session(session: &str) -> String {

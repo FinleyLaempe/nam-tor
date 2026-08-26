@@ -18,6 +18,7 @@
 pub mod abi;
 mod bridge;
 pub mod contract;
+mod kscreenlocker;
 mod proxy;
 mod types;
 

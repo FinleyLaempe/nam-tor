@@ -51,6 +51,8 @@ pub enum KcmError {
     DaemonUnavailable,
     /// A method call failed (transport or daemon-reported).
     Call(String),
+    /// A local filesystem operation failed (e.g. writing `kscreenlockerrc`).
+    Io(String),
 }
 
 impl fmt::Display for KcmError {
@@ -58,7 +60,14 @@ impl fmt::Display for KcmError {
         match self {
             Self::DaemonUnavailable => f.write_str("namtor daemon unavailable"),
             Self::Call(msg) => write!(f, "namtor D-Bus call failed: {msg}"),
+            Self::Io(msg) => write!(f, "local filesystem operation failed: {msg}"),
         }
+    }
+}
+
+impl From<std::io::Error> for KcmError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Io(err.to_string())
     }
 }
 
