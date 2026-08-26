@@ -1577,6 +1577,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "namtor-client"
+version = "0.1.0"
+dependencies = [
+ "namtor-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "zbus",
+]
+
+[[package]]
 name = "namtor-collect"
 version = "0.1.0"
 dependencies = [
@@ -2665,7 +2677,9 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -3379,6 +3393,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_repr",
+ "tokio",
  "tracing",
  "uds_windows",
  "uuid",

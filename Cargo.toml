@@ -4,6 +4,7 @@ members = [
     "crates/namtor-camera",
     "crates/namtor-capture",
     "crates/namtor-cli",
+    "crates/namtor-client",
     "crates/namtor-collect",
     "crates/namtor-daemon",
     "crates/namtor-eval",
