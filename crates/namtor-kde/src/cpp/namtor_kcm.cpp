@@ -351,6 +351,75 @@ NamtorKcm::NamtorKcm(QObject *parent)
     connectDBusSignals();
 }
 
+#ifdef NAMTOR_KDE_WITH_KCM
+NamtorKcm::NamtorKcm(QObject *parent, const KPluginMetaData &metaData)
+    : KQuickConfigModule(parent, metaData)
+    , m_abiOk(false)
+    , m_profileModel(new NamtorProfileModel(this))
+    , m_iface(nullptr)
+    , m_iface2(nullptr)
+    , m_iface3(nullptr)
+    , m_daemonReachable(false)
+    , m_cameraPresent(false)
+    , m_emitterArmed(false)
+    , m_apiVersion(0)
+    , m_loading(false)
+    , m_currentUid(static_cast<quint32>(getuid()))
+    , m_enrollmentActive(false)
+    , m_framesCaptured(0)
+    , m_coveragePercent(0)
+    , m_reviewNeedsReenroll(false)
+    , m_protectionHasTpm(false)
+    , m_qualityPercent(0)
+    , m_diversityPercent(0)
+    , m_framesSeen(0)
+    , m_framesAccepted(0)
+    , m_framesRejected(0)
+    , m_qualityBucket(0)
+    , m_reviewReadyToSave(false)
+    , m_reviewQualityPercent(0)
+    , m_reviewDiversityPercent(0)
+    , m_reviewFramesAccepted(0)
+    , m_generation(0)
+{
+    registerWireTypes();
+
+    const uint32_t got = namtor_kde_abi_version();
+    if (got == NAMTOR_KDE_ABI_VERSION) {
+        m_abiOk = true;
+    } else {
+        m_abiOk = false;
+        m_abiError = QStringLiteral(
+            "Nam-tor KCM ABI mismatch: header=%1 cdylib=%2. "
+            "Reinstall the namtor-kde package."
+        ).arg(NAMTOR_KDE_ABI_VERSION).arg(got);
+    }
+
+    m_iface = new QDBusInterface(
+        QString::fromUtf8(namtor_kde_manager_bus_name()),
+        QString::fromUtf8(namtor_kde_manager_object_path()),
+        QStringLiteral("org.namtor.Manager"),
+        QDBusConnection::systemBus(),
+        this);
+
+    m_iface2 = new QDBusInterface(
+        QString::fromUtf8(namtor_kde_manager_bus_name()),
+        QString::fromUtf8(namtor_kde_manager_object_path()),
+        QStringLiteral("org.namtor.Manager2"),
+        QDBusConnection::systemBus(),
+        this);
+
+    m_iface3 = new QDBusInterface(
+        QString::fromUtf8(namtor_kde_manager_bus_name()),
+        QString::fromUtf8(namtor_kde_manager_object_path()),
+        QStringLiteral("org.namtor.Manager3"),
+        QDBusConnection::systemBus(),
+        this);
+
+    connectDBusSignals();
+}
+#endif
+
 NamtorKcm::~NamtorKcm()
 {
     cancelAllPending();
