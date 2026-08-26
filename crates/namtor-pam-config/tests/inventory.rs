@@ -532,6 +532,56 @@ fn sshd_is_unsupported_due_to_rhost() {
     assert!(info.reason.contains("PAM_RHOST"));
 }
 
+// --- KDE face service (local, display-attached) ----------------------------
+
+/// Write a minimal local `kde-face` service (password fallback, no `pam_deny`,
+/// no substack) into a temp pam.d directory.
+fn write_kde_face(pamd: &Path) {
+    fs::write(
+        pamd.join("kde-face"),
+        "#%PAM-1.0\nauth required pam_unix.so\naccount required pam_unix.so\npassword required pam_unix.so\nsession required pam_unix.so\n",
+    )
+    .expect("write kde-face");
+}
+
+#[test]
+fn kde_face_classified_safe() {
+    let tmp = TempDir::new().expect("tempdir");
+    let pamd = tmp.path().join("pam.d");
+    fs::create_dir_all(&pamd).expect("mkdir");
+    write_kde_face(&pamd);
+
+    let info = classify_service("kde-face", &pamd.join("kde-face"), &pamd).expect("classify");
+    assert_eq!(info.id, "kde-face");
+    // Security invariant (ADR §4): OFF by default — never enabled at install.
+    assert!(!info.enabled, "kde-face must be OFF by default");
+    assert_eq!(
+        info.compatibility,
+        PamServiceCompatibility::Safe,
+        "kde-face should be safe: {}",
+        info.reason
+    );
+    assert_eq!(info.status(), ServiceStatus::Disabled);
+    assert!(
+        info.label.contains("KDE"),
+        "label should mention KDE: {}",
+        info.label
+    );
+    assert!(
+        info.label.contains("Face"),
+        "label should mention Face: {}",
+        info.label
+    );
+}
+
+#[test]
+fn kde_face_has_known_label() {
+    assert_eq!(
+        known_service_label("kde-face"),
+        "KDE Face Unlock (KDE Lock Screen)"
+    );
+}
+
 // --- Backup file inside pam.d is not scanned -------------------------------
 
 #[test]

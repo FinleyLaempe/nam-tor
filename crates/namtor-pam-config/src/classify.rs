@@ -25,6 +25,7 @@ pub fn known_service_label(id: &str) -> &'static str {
         "sddm" => "SDDM (Simple Desktop Display Manager)",
         "lightdm" => "LightDM (Light Display Manager)",
         "lxdm" => "LXDM (LXDE Display Manager)",
+        "kde-face" => "KDE Face Unlock (KDE Lock Screen)",
         "sudo" => "sudo",
         "su" => "su",
         "polkit-1" => "Polkit (PolicyKit Authentication Agent)",

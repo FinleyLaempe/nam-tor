@@ -1110,6 +1110,37 @@ mod tests {
         assert!(!gdm.enabled);
     }
 
+    #[test]
+    fn kde_face_enable_disable_cycle() {
+        let tmp = TempDir::new().unwrap();
+        let pamd = tmp.path().join("pam.d");
+        let registry = tmp.path().join("registry");
+        fs::create_dir_all(&pamd).unwrap();
+        write_service(&pamd, "kde-face");
+
+        let svc = new_svc(&pamd, &registry);
+        let root = peer(0);
+
+        let services = svc.list_pam_services(&root).unwrap();
+        let kde = services.iter().find(|s| s.id == "kde-face").unwrap();
+        assert!(!kde.enabled);
+        assert_eq!(kde.compatibility, PamServiceCompatibility::Safe);
+
+        assert!(svc
+            .set_pam_service_enabled(&root, "kde-face", true)
+            .unwrap());
+        let services = svc.list_pam_services(&root).unwrap();
+        let kde = services.iter().find(|s| s.id == "kde-face").unwrap();
+        assert!(kde.enabled);
+
+        assert!(svc
+            .set_pam_service_enabled(&root, "kde-face", false)
+            .unwrap());
+        let services = svc.list_pam_services(&root).unwrap();
+        let kde = services.iter().find(|s| s.id == "kde-face").unwrap();
+        assert!(!kde.enabled);
+    }
+
     // ---- PamServicesChanged signal ----
 
     #[test]
