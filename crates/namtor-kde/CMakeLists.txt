@@ -113,7 +113,6 @@ qt_add_qml_module(namtorqml
         src/cpp/profile_model.cpp
     QML_FILES
         qml/main.qml
-    NO_PLUGIN
 )
 
 target_include_directories(namtorqml PRIVATE src/cpp)
@@ -124,10 +123,22 @@ target_link_libraries(namtorqml
         Qt6::Gui
         Qt6::Qml
         Qt6::DBus
-)
+    )
 
 if(EXISTS "${NAMTOR_KDE_RUST_SO}")
     target_link_libraries(namtorqml PRIVATE "${NAMTOR_KDE_RUST_SO}")
+endif()
+
+
+if(BUILD_KCM_PLUGIN)
+    kcmutils_add_qml_kcm(kcm_namtor
+        SOURCES src/cpp/namtor_kcm.cpp
+        QMLMODULE namtorqml
+        METADATA metadata.json
+    )
+    target_compile_definitions(kcm_namtor PRIVATE NAMTOR_KDE_WITH_KCM)
+    install(TARGETS kcm_namtor
+        DESTINATION ${KDE_INSTALL_QTPLUGINDIR}/plasma/kcms/systemsettings/)
 endif()
 
 # --- Install rules -----------------------------------------------------------

@@ -54,10 +54,18 @@
 #include <QtQml/qqmlregistration.h>
 #include <QtDBus/QDBusMessage>
 
+#ifdef NAMTOR_KDE_WITH_KCM
+#include <KQuickConfigModule>
+#include <KPluginMetaData>
+using NamtorKcmBase = KQuickConfigModule;
+#else
+using NamtorKcmBase = QObject;
+#endif
+
 class QDBusInterface;
 class QDBusPendingCallWatcher;
 
-class NamtorKcm : public QObject {
+class NamtorKcm : public NamtorKcmBase {
     Q_OBJECT
     QML_ELEMENT
     QML_SINGLETON
@@ -117,6 +125,10 @@ class NamtorKcm : public QObject {
 
 public:
     explicit NamtorKcm(QObject *parent = nullptr);
+#ifdef NAMTOR_KDE_WITH_KCM
+    explicit NamtorKcm(QObject *parent, const KPluginMetaData &metaData);
+    QUrl sourceUrl() const override { return QUrl(QStringLiteral("qrc:/qt/qml/org/namtor/main.qml")); }
+#endif
     ~NamtorKcm() override;
 
     // ABI properties

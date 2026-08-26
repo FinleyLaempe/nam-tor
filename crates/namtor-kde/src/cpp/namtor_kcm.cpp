@@ -247,6 +247,8 @@ const QDBusArgument &operator>>(const QDBusArgument &arg, WireEnrollmentReviewV3
     return arg;
 }
 
+#include "namtor_kcm.moc"
+
 // --- NamtorKcm ---
 
 static bool s_typesRegistered = false;
@@ -279,7 +281,11 @@ static void registerWireTypes()
 }
 
 NamtorKcm::NamtorKcm(QObject *parent)
+#ifdef NAMTOR_KDE_WITH_KCM
+    : KQuickConfigModule(parent, KPluginMetaData())
+#else
     : QObject(parent)
+#endif
     , m_abiOk(false)
     , m_profileModel(new NamtorProfileModel(this))
     , m_iface(nullptr)
@@ -1354,6 +1360,11 @@ void NamtorKcm::handleCancelEnrollmentV3Reply(QDBusPendingCallWatcher *watcher, 
     }
     setError({});
 }
+
+#ifdef NAMTOR_KDE_WITH_KCM
+#include <KPluginFactory>
+K_PLUGIN_CLASS_WITH_JSON(NamtorKcm, "metadata.json")
+#endif
 
 // --- v3 D-Bus signal handler ---
 
