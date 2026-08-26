@@ -18,8 +18,8 @@ use zbus::zvariant::Type;
 
 use crate::contract::ScenarioHook;
 use crate::types::{
-    EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, ProfileInfo, ReviewOutcome,
-    StatusReport,
+    EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, ProfileInfo, QualityLabel,
+    ReviewOutcome, StatusReport,
 };
 
 /// Frozen API version (matches `namtor-daemon::manager::contract::API_VERSION`).
@@ -125,7 +125,7 @@ impl FakeManager {
         Ok(ReviewOutcome {
             profile_id: id.to_string(),
             needs_reenroll,
-            quality: "high".to_string(),
+            quality: QualityLabel::High,
         })
     }
 

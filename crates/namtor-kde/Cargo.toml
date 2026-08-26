@@ -13,6 +13,7 @@ description = "KDE System Settings KCM bridge for Nam-tor face profile managemen
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+namtor-client = { path = "../namtor-client" }
 serde = { workspace = true }
 tracing = "0.1"
 zbus = { version = "5", default-features = false, features = [

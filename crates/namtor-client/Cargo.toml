@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-zbus = { version = "5.18", features = ["tokio"] }
+zbus = { version = "5.18", features = ["option-as-array"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

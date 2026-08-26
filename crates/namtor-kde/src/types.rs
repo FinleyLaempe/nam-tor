@@ -1,113 +1,45 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! D-Bus contract types shared between the KCM bridge and the (test) fake
-//! service. These mirror the frozen `org.namtor.Manager` wire format from
-//! Task 8 exactly (`docs/evidence/dbus-contract.xml`). They MUST stay free of
-//! biometric payload: no embeddings, frames, raw match scores, or thresholds
-//! (spec §9.4, privacy scan enforced in [`crate::tests`]).
+//! service.
 //!
-//! ## Frozen wire signatures (Task 8)
-//!
-//! | Type | Wire | Fields |
-//! |---|---|---|
-//! | `ProfileInfo` | `(ssbtt)` | id, name, enabled, created, last_used |
-//! | `EnrollmentProgress` | `(susu)` | session_id, frames_captured, quality_label, coverage_percent |
-//! | `ReviewOutcome` | `(sbs)` | profile_id, needs_reenroll, quality |
-//! | `StatusReport` | `(ua(ssbtt)b)` | api_version, profiles, emitter_armed |
-//!
-//! ## v3 wire signatures (enrollment redesign)
-//!
-//! | Type | Wire | Fields |
-//! |---|---|---|
-//! | `EnrollmentProgressV3` | `(ssuuuuuys)` | session, phase, quality_percent, diversity_percent, frames_seen, frames_accepted, frames_rejected, quality_bucket, guidance |
-//! | `EnrollmentReviewV3` | `(sbuuus)` | session, ready_to_save, quality_percent, diversity_percent, frames_accepted, guidance |
+//! The shared wire types (`ProfileInfo`, `EnrollmentProgress`, `ReviewOutcome`,
+//! `StatusReport`, `EnrollmentProgressV3`, `EnrollmentReviewV3`) are re-exported
+//! from [`namtor_client`] so both GUI front-ends share a single source of truth.
+//! KDE-specific types ([`EnrollOutcome`], [`KcmError`]) remain here.
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
-use zbus::zvariant::Type;
-
 /// One enrolled face profile as exposed to the UI (frozen wire `(ssbtt)`).
-///
-/// `last_used` is `0` when the profile has never authenticated. It is the
-/// only timestamp surfaced; creation/modification of templates stays daemon
-/// side.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct ProfileInfo {
-    pub id: String,
-    pub name: String,
-    pub enabled: bool,
-    pub created: u64,
-    pub last_used: u64,
-}
+pub use namtor_client::types::ProfileInfo;
 
-/// Live enrollment progress emitted as the `EnrollmentProgress` signal (frozen
-/// wire `(susu)`). `quality_label` is a human-readable bucket
-/// ("low" / "medium" / "high") chosen by the daemon, never a numeric score.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct EnrollmentProgress {
-    pub session_id: String,
-    pub frames_captured: u32,
-    pub quality_label: String,
-    pub coverage_percent: u32,
-}
+/// Live enrollment progress emitted as the `EnrollmentProgress` signal.
+pub use namtor_client::types::EnrollmentProgress;
 
-/// Coarse outcome of `ReviewProfile` (frozen wire `(sbs)`): the reviewed
-/// profile id, whether re-enrollment is recommended, and a quality bucket.
-/// No score, no threshold, no embedding.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct ReviewOutcome {
-    pub profile_id: String,
-    pub needs_reenroll: bool,
-    pub quality: String,
-}
+/// Coarse outcome of `ReviewProfile` (frozen wire `(sbs)`).
+pub use namtor_client::types::ReviewOutcome;
 
-/// Snapshot returned by `GetStatus` (frozen wire `(ua(ssbtt)b)`): API version,
-/// the caller's profiles, and whether the IR emitter is armed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct StatusReport {
-    pub api_version: u32,
-    pub profiles: Vec<ProfileInfo>,
-    pub emitter_armed: bool,
-}
+/// Snapshot returned by `GetStatus` (frozen wire `(ua(ssbtt)b)`).
+pub use namtor_client::types::StatusReport;
 
-/// v3 enrollment progress emitted as the `EnrollmentProgress` signal on
-/// `org.namtor.Manager3` (frozen wire `(ssuuuuuys)`). `quality_percent` is
-/// capture suitability, NOT authentication accuracy. `quality_bucket` is a
-/// coarse byte label (0=low, 1=medium, 2=high). `guidance` is a closed enum
-/// mapped client-side.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct EnrollmentProgressV3 {
-    pub session: String,
-    pub phase: String,
-    pub quality_percent: u32,
-    pub diversity_percent: u32,
-    pub frames_seen: u32,
-    pub frames_accepted: u32,
-    pub frames_rejected: u32,
-    pub quality_bucket: u8,
-    pub guidance: String,
-}
+/// v3 enrollment progress (frozen wire `(ssuuuuuys)`).
+pub use namtor_client::types::EnrollmentProgressV3;
 
-/// v3 review snapshot returned by `ReviewEnrollment` on `org.namtor.Manager3`
-/// (frozen wire `(sbuuus)`). Session-scoped summary of a stopped enrollment,
-/// distinct from v1's profile-scoped `ReviewOutcome`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct EnrollmentReviewV3 {
-    pub session: String,
-    pub ready_to_save: bool,
-    pub quality_percent: u32,
-    pub diversity_percent: u32,
-    pub frames_accepted: u32,
-    pub guidance: String,
-}
+/// v3 review snapshot (frozen wire `(sbuuus)`).
+pub use namtor_client::types::EnrollmentReviewV3;
+
+/// Re-export `QualityLabel` for constructing `EnrollmentProgress`/`ReviewOutcome`.
+pub use namtor_client::types::QualityLabel;
 
 /// Outcome of an enrollment attempt as the KCM surfaces it to QML. Distinct
 /// from the wire types so the UI layer can model cancel and auth-loss without
 /// inspecting D-Bus errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnrollOutcome {
+    /// Enrollment succeeded.
     Success,
+    /// User cancelled.
     Cancelled,
+    /// Enrollment failed.
     Failed,
 }
 
@@ -134,11 +66,6 @@ impl std::error::Error for KcmError {}
 
 impl From<zbus::Error> for KcmError {
     fn from(err: zbus::Error) -> Self {
-        // A method call against a missing well-known name surfaces as a
-        // ServiceUnknown / NameHasNoOwner fdo error (or the lower-level
-        // MethodError carrying the same error name). Treat all of these as
-        // "daemon down" so the KCM renders its offline state (§9.4) without
-        // leaking the underlying transport detail to QML.
         let down = match &err {
             zbus::Error::Address(_) => true,
             zbus::Error::FDO(boxed) => matches!(

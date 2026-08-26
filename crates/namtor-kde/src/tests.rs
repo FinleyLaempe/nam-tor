@@ -19,7 +19,7 @@ use crate::contract::{self, ScenarioHook};
 use crate::fake::{FakeBus, FakeHandle, FakeManagerSignals};
 use crate::types::{
     EnrollOutcome, EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, KcmError,
-    ProfileInfo, ReviewOutcome, StatusReport,
+    ProfileInfo, QualityLabel, ReviewOutcome, StatusReport,
 };
 
 /// UID used by tests (matches `contract::TEST_UID`).
@@ -172,13 +172,13 @@ fn privacy_scan_no_biometric_data() {
     let progress = EnrollmentProgress {
         session_id: "s1".to_string(),
         frames_captured: 1,
-        quality_label: "good".to_string(),
+        quality: QualityLabel::High,
         coverage_percent: 50,
     };
     let review = ReviewOutcome {
         profile_id: "p1".to_string(),
         needs_reenroll: false,
-        quality: "high".to_string(),
+        quality: QualityLabel::High,
     };
     let status = StatusReport {
         api_version: 1,
@@ -209,10 +209,10 @@ fn privacy_scan_no_biometric_data() {
             "ProfileInfo leaked biometric term `{forbidden}`"
         );
     }
-    // quality_label must be a non-numeric bucket, never a score.
-    assert!(!progress.quality_label.chars().any(|c| c.is_ascii_digit()));
+    // quality must be a non-numeric bucket, never a score.
+    assert!(!progress.quality.as_str().chars().any(|c| c.is_ascii_digit()));
     // Review quality is a bucket, never a numeric score.
-    assert!(!review.quality.chars().any(|c| c.is_ascii_digit()));
+    assert!(!review.quality.as_str().chars().any(|c| c.is_ascii_digit()));
     // EnrollmentController stores only a session id and an outcome — no frames.
     let ctrl = EnrollmentController::new("s1".to_string(), TEST_UID);
     assert_eq!(ctrl.session_id(), "s1");
@@ -315,7 +315,7 @@ fn stale_progress_signal_ignored() {
     let stale = EnrollmentProgress {
         session_id: "sess-old".to_string(),
         frames_captured: 5,
-        quality_label: "fair".to_string(),
+        quality: QualityLabel::Medium,
         coverage_percent: 40,
     };
     assert!(!ctrl.set_progress(&stale));
@@ -325,7 +325,7 @@ fn stale_progress_signal_ignored() {
     let current = EnrollmentProgress {
         session_id: "sess-current".to_string(),
         frames_captured: 12,
-        quality_label: "good".to_string(),
+        quality: QualityLabel::High,
         coverage_percent: 80,
     };
     assert!(ctrl.set_progress(&current));
@@ -432,7 +432,7 @@ fn enrollment_signals_round_trip() {
         let progress = EnrollmentProgress {
             session_id: "s1".to_string(),
             frames_captured: 5,
-            quality_label: "fair".to_string(),
+            quality: QualityLabel::Medium,
             coverage_percent: 40,
         };
         iface
@@ -454,7 +454,7 @@ fn enrollment_signals_round_trip() {
             match msg.header().member().map(|m| m.as_str()) {
                 Some("EnrollmentProgress") => {
                     let (_sid, p): (String, EnrollmentProgress) = msg.body().deserialize().unwrap();
-                    assert_eq!(p.quality_label, "fair");
+                    assert_eq!(p.quality, QualityLabel::Medium);
                     got_progress = true;
                 }
                 Some("EnrollmentCompleted") => {

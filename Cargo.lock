@@ -1651,6 +1651,7 @@ dependencies = [
  "glib",
  "gtk4",
  "libadwaita",
+ "namtor-client",
  "namtor-proto",
  "nix",
  "serde",
@@ -1676,6 +1677,7 @@ name = "namtor-kde"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "namtor-client",
  "serde",
  "serde_json",
  "tracing",
@@ -2677,9 +2679,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
- "signal-hook-registry",
  "socket2",
- "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -3393,7 +3393,6 @@ dependencies = [
  "rustix",
  "serde",
  "serde_repr",
- "tokio",
  "tracing",
  "uds_windows",
  "uuid",

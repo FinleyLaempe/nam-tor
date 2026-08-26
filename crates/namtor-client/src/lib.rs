@@ -1,33 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Nam-tor Project
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Shared D-Bus client crate for Nam-tor UIs — wire types, zbus proxies, and contract test suite.
+//! Shared D-Bus client crate for Nam-tor UIs — wire types, zbus proxies,
+//! [`ManagerClient`] trait, live D-Bus backend, and test fake.
+//!
+//! Both GUI crates (`namtor-gnome`, `namtor-kde`) depend on this crate so
+//! the two front-ends cannot drift in their D-Bus contract surface.
 
 #![warn(missing_docs)]
 
-use zbus::proxy;
-use zbus::Result as ZResult;
+pub mod client;
+pub mod dbus_client;
+pub mod fake;
+pub mod proxy;
+pub mod types;
 
-/// Nam-tor D-Bus Manager interface.
-#[proxy(
-    default_service = "org.namtor.Manager",
-    default_path = "/org/namtor/Manager",
-    interface = "org.namtor.Manager2",
-    gen_blocking = false
-)]
-pub trait Manager {
-    /// Request an authentication session.
-    async fn prepare_for_auth(&self, uid: u32) -> ZResult<()>;
-}
-
-/// Placeholder test ensuring the crate builds and links correctly.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_crate_compiles() {
-        // Trivial smoke test to keep the test suite green while the crate is a stub.
-        assert!(true);
-    }
-}
+// Re-export key types at the crate root for convenience.
+pub use client::ManagerClient;
+pub use dbus_client::DbusManagerClient;
+pub use fake::{FakeManagerClient, Mode as FakeMode};
+pub use types::{
+    EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, Guidance, ManagerError,
+    ManagerResult, PamServiceCompatibility, PamServiceInfo, ProfileId, ProfileInfo,
+    ProtectionKeyKind, ProtectionStatus, QualityLabel, ReviewOutcome, SessionId, StatusReport,
+    API_VERSION_V3,
+};

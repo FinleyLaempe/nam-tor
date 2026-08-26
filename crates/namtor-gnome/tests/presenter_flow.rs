@@ -388,7 +388,7 @@ fn pam_service_row_view_has_no_biometrics() {
 /// dbus_client uses the system bus, not the session bus.
 #[test]
 fn dbus_client_uses_system_bus() {
-    let source = include_str!("../src/dbus_client.rs");
+    let source = include_str!("../../namtor-client/src/dbus_client.rs");
     assert!(
         source.contains("Connection::system()"),
         "dbus_client must use Connection::system(), not Connection::session()"

@@ -222,7 +222,7 @@ where
     assert_eq!(review.profile_id, "p1");
     assert!(!review.needs_reenroll);
     // quality is a bucket string, never a numeric score.
-    assert!(!review.quality.chars().any(|c| c.is_ascii_digit()));
+    assert!(!review.quality.as_str().chars().any(|c| c.is_ascii_digit()));
 }
 
 /// GetStatus returns a StatusReport with the API version, profile list, and
