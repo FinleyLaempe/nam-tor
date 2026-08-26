@@ -14,6 +14,7 @@ pub mod dbus_client;
 pub mod fake;
 pub mod proxy;
 pub mod types;
+pub mod contract;
 
 // Re-export key types at the crate root for convenience.
 pub use client::ManagerClient;

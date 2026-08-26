@@ -198,6 +198,21 @@ impl FakeManagerClient {
     pub fn set_mode(&self, mode: Mode) {
         *self.mode.lock().expect("fake mode poisoned") = mode;
     }
+    /// Reset the fake to a clean state with seeded profiles (for contract suite).
+    pub fn reset(&self, seed: &[crate::types::ProfileInfo]) {
+        self.set_mode(Mode::Normal);
+        self.profiles.lock().expect("profiles mutex poisoned").clear();
+        self.sessions.lock().expect("sessions mutex poisoned").clear();
+        let mut profiles = self.profiles.lock().expect("profiles mutex poisoned");
+        for p in seed {
+            profiles.insert(p.id.clone(), ProfileRow {
+                name: p.name.clone(),
+                enabled: p.enabled,
+                created: p.created,
+                last_used: p.last_used,
+            });
+        }
+    }
 
     /// Set the protection status returned by `get_protection_status`.
     pub fn set_protection_status(&self, status: ProtectionStatus) {

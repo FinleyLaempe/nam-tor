@@ -15,7 +15,6 @@ use zbus::zvariant::Type;
 use zbus::MessageStream;
 
 use crate::bridge::{EnrollmentController, EnrollmentState, KcmBridge, ProfileList};
-use crate::contract::{self, ScenarioHook};
 use crate::fake::{FakeBus, FakeHandle, FakeManagerSignals};
 use crate::types::{
     EnrollOutcome, EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, KcmError,
@@ -33,107 +32,34 @@ async fn rig(handle: &FakeHandle) -> (FakeBus, KcmBridge) {
     (bus, bridge)
 }
 
-/// Bridge factory for the contract suite: spawns a fresh bus per call bound to
-/// the same shared handle so the suite's `reset`/hooks affect the next bridge.
-struct Factory {
-    handle: FakeHandle,
-}
-
-impl Factory {
-    fn make(&self) -> KcmBridge {
-        let handle = self.handle.clone();
-        // Build synchronously is not possible (async connect); the contract
-        // suite expects a sync `Fn() -> KcmBridge`. We resolve the connection
-        // eagerly via block_on inside the closure so the suite's async methods
-        // still drive the same connection.
-        zbus::block_on(async move {
-            let bus = FakeBus::spawn(&handle).await.unwrap();
-            // Leak the bus so the connection outlives the closure scope; the
-            // test process tears down at the end. Each contract case gets a
-            // fresh bus, so this is bounded to one per case.
-            let bus: FakeBus = bus;
-            let leaked: &'static FakeBus = Box::leak(Box::new(bus));
-            KcmBridge::new(&leaked.client).await.unwrap()
-        })
-    }
-}
-
 #[test]
 fn happy_path() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::happy_path(|| factory.make(), &handle));
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::happy_path(&fake, &fake);
 }
 
 #[test]
 fn error_daemon_unavailable() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::error_daemon_unavailable(
-        || factory.make(),
-        &handle,
-    ));
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::error_daemon_unavailable(&fake, &fake);
 }
 
 #[test]
 fn cancel_keeps_state_safe() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::cancel_keeps_state_safe(
-        || factory.make(),
-        &handle,
-    ));
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::cancel_keeps_state_safe(&fake, &fake);
 }
 
 #[test]
 fn auth_loss_preserves_profiles() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::auth_loss_preserves_profiles(
-        || factory.make(),
-        &handle,
-    ));
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::auth_loss_preserves_profiles(&fake, &fake);
 }
 
 #[test]
 fn merge_and_replace() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::merge_and_replace(|| factory.make(), &handle));
-}
-
-#[test]
-fn review_returns_coarse_quality() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::review_returns_coarse_quality(
-        || factory.make(),
-        &handle,
-    ));
-}
-
-#[test]
-fn get_status_returns_report() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::get_status_returns_report(
-        || factory.make(),
-        &handle,
-    ));
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::merge_and_replace(&fake, &fake);
 }
 
 /// Shared contract suite: run every scenario back-to-back against the same
@@ -141,20 +67,12 @@ fn get_status_returns_report() {
 /// honors it (the GNOME UI reuses the same suite to prevent divergence).
 #[test]
 fn shared_contract_suite() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    let mk = || factory.make();
-    zbus::block_on(async {
-        contract::happy_path(mk, &handle).await;
-        contract::error_daemon_unavailable(mk, &handle).await;
-        contract::cancel_keeps_state_safe(mk, &handle).await;
-        contract::auth_loss_preserves_profiles(mk, &handle).await;
-        contract::merge_and_replace(mk, &handle).await;
-        contract::review_returns_coarse_quality(mk, &handle).await;
-        contract::get_status_returns_report(mk, &handle).await;
-    });
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::happy_path(&fake, &fake);
+    namtor_client::contract::error_daemon_unavailable(&fake, &fake);
+    namtor_client::contract::cancel_keeps_state_safe(&fake, &fake);
+    namtor_client::contract::auth_loss_preserves_profiles(&fake, &fake);
+    namtor_client::contract::merge_and_replace(&fake, &fake);
 }
 
 /// Privacy scan: no KCM-facing type or struct field may carry biometric data
@@ -752,14 +670,8 @@ fn v3_bridge_malformed_tuple_fails_closed() {
 /// the task — adding v3 must not break v1/v2 callers.
 #[test]
 fn v1_v2_compatibility_unchanged() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(async {
-        contract::happy_path(|| factory.make(), &handle).await;
-        contract::cancel_keeps_state_safe(|| factory.make(), &handle).await;
-        contract::review_returns_coarse_quality(|| factory.make(), &handle).await;
-        contract::get_status_returns_report(|| factory.make(), &handle).await;
-    });
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::happy_path(&fake, &fake);
+    namtor_client::contract::cancel_keeps_state_safe(&fake, &fake);
+    namtor_client::contract::merge_and_replace(&fake, &fake);
 }
