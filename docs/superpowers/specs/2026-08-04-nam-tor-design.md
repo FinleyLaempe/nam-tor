@@ -1304,7 +1304,7 @@ polkit actions: `org.namtor.enroll-self`, `enroll-other`, `delete`, `configure`.
 
 - **KCM** in QML with a thin C++ `KCModule` shim, integrated into System Settings
   under Users / Security.
-- Same D-Bus API, so the two UIs share no code and neither is privileged.
+- Same D-Bus API, so the two UIs share a common client crate (`namtor-client`) for wire types and D-Bus proxies, but neither UI process is privileged — all privileged operations go through the polkit-gated system bus.
 
 ### 9.4 Enrollment wizard
 
@@ -1312,7 +1312,7 @@ Identical flow on both desktops:
 
 1. Device detection and status (with `namtor-probe` invocation offered if the
    device is unknown).
-2. Live IR preview with face bounding box and quality indicator.
+2. Non-image framing guidance: a face-position outline and coarse guidance labels (from the daemon's Guidance enum) are shown during capture. No camera preview is displayed; no pixel data crosses the D-Bus boundary into any UI process.
 3. Guided pose capture — centre, then ±yaw, ±pitch, near, far.
 4. Optional glasses pass.
 5. Optional RGB pass for fusion, with an explicit note that the camera LED will light.
