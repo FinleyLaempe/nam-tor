@@ -20,8 +20,8 @@ Task 14 deletes.
 
 | Location | Pattern | Match count |
 |---|---|---|
-| `crates/namtor-gnome/tests/gnome_bug_fixes.rs` | `src.contains` | 29 |
-| `crates/namtor-gnome/tests/shell_navigation.rs` | `src.contains` | 35 |
+| `crates/namtor-gnome/tests/gnome_bug_fixes.rs` | `src.contains` | 30 |
+| `crates/namtor-gnome/tests/shell_navigation.rs` | `src.contains` | 34 |
 | `crates/namtor-gnome/tests/presenter_flow.rs` | `source.contains` (include_str) | 1 (not in grep count) |
 | `crates/namtor-gnome/tests/wizard_integration.rs` | `*.contains` (include_str, varied names) | 14 (not in grep count) |
 | `crates/namtor-kde/tests/abi_smoke.rs` | none (behavioural) | 0 |
