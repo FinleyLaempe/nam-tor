@@ -16,6 +16,7 @@ use zbus::MessageStream;
 
 use crate::bridge::{EnrollmentController, EnrollmentState, KcmBridge, ProfileList};
 use crate::fake::{FakeBus, FakeHandle, FakeManagerSignals};
+use namtor_client::contract::ScenarioHook;
 use crate::types::{
     EnrollOutcome, EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, KcmError,
     ProfileInfo, QualityLabel, ReviewOutcome, StatusReport,
