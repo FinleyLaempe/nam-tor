@@ -143,7 +143,7 @@ if(ECM_FOUND)
     install(FILES qml/main.qml
         DESTINATION "${KDE_INSTALL_QMLDIR}/org/namtor")
     install(FILES metadata.json
-        DESTINATION "${KDE_INSTALL_DATADIR}/kpackage/kcms/kcm_namtor")
+        DESTINATION "${KDE_INSTALL_METADATADIR}/kpackage/kcms/systemsettings/kcm_namtor/")
     install(FILES "${CMAKE_SOURCE_DIR}/../../packaging/applications/org.namtor.kcm.desktop"
         DESTINATION "${KDE_INSTALL_APPDIR}")
     install(FILES "${CMAKE_SOURCE_DIR}/../../packaging/metainfo/org.namtor.kcm.metainfo.xml"
@@ -157,7 +157,7 @@ else()
     install(FILES qml/main.qml
         DESTINATION "${CMAKE_INSTALL_DATADIR}/qt6/qml/org/namtor")
     install(FILES metadata.json
-        DESTINATION "${CMAKE_INSTALL_DATADIR}/kpackage/kcms/kcm_namtor")
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/kpackage/kcms/systemsettings/kcm_namtor/")
     install(FILES "${CMAKE_SOURCE_DIR}/../../packaging/applications/org.namtor.kcm.desktop"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
     install(FILES "${CMAKE_SOURCE_DIR}/../../packaging/metainfo/org.namtor.kcm.metainfo.xml"
