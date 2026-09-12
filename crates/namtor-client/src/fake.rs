@@ -98,6 +98,8 @@ pub struct FakeManagerClient {
     progress_signals: Mutex<HashMap<String, EnrollmentProgress>>,
     v3_sessions: Mutex<HashMap<String, V3Session>>,
     v3_progress: Mutex<HashMap<String, EnrollmentProgressV3>>,
+    /// Delay injected on set_pam_service_enabled to simulate slow polkit.
+    pam_toggle_delay_ms: AtomicU64,
     seq: AtomicU64,
     clock: AtomicU64,
 }
@@ -189,6 +191,7 @@ impl FakeManagerClient {
             progress_signals: Mutex::new(HashMap::new()),
             v3_sessions: Mutex::new(HashMap::new()),
             v3_progress: Mutex::new(HashMap::new()),
+            pam_toggle_delay_ms: AtomicU64::new(0),
             seq: AtomicU64::new(1),
             clock: AtomicU64::new(1_700_000_000),
         }
@@ -201,16 +204,25 @@ impl FakeManagerClient {
     /// Reset the fake to a clean state with seeded profiles (for contract suite).
     pub fn reset(&self, seed: &[crate::types::ProfileInfo]) {
         self.set_mode(Mode::Normal);
-        self.profiles.lock().expect("profiles mutex poisoned").clear();
-        self.sessions.lock().expect("sessions mutex poisoned").clear();
+        self.profiles
+            .lock()
+            .expect("profiles mutex poisoned")
+            .clear();
+        self.sessions
+            .lock()
+            .expect("sessions mutex poisoned")
+            .clear();
         let mut profiles = self.profiles.lock().expect("profiles mutex poisoned");
         for p in seed {
-            profiles.insert(p.id.clone(), ProfileRow {
-                name: p.name.clone(),
-                enabled: p.enabled,
-                created: p.created,
-                last_used: p.last_used,
-            });
+            profiles.insert(
+                p.id.clone(),
+                ProfileRow {
+                    name: p.name.clone(),
+                    enabled: p.enabled,
+                    created: p.created,
+                    last_used: p.last_used,
+                },
+            );
         }
     }
 
@@ -278,6 +290,13 @@ impl FakeManagerClient {
             .lock()
             .expect("v3 sessions poisoned")
             .contains_key(session)
+    }
+
+    /// Test helper: set a delay (in milliseconds) on set_pam_service_enabled
+    /// to simulate slow polkit authorization. Default is 0 (no delay).
+    pub fn set_pam_toggle_delay_ms(&self, delay_ms: u64) {
+        self.pam_toggle_delay_ms
+            .store(delay_ms, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Test helper: what phase is the v3 session in?
@@ -572,6 +591,13 @@ impl ManagerClient for FakeManagerClient {
 
     fn set_pam_service_enabled(&self, service_id: &str, enabled: bool) -> ManagerResult<bool> {
         self.check_mut()?;
+        // Simulate slow polkit authorization if delay is configured.
+        let delay_ms = self
+            .pam_toggle_delay_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if delay_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
         let mut services = self.pam_services.lock().expect("pam services poisoned");
         match services.get_mut(service_id) {
             Some(row) => {

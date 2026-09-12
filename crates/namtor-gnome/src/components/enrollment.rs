@@ -113,12 +113,49 @@ impl EnrollmentViewComponent {
         F1: Fn() + 'static,
         F2: Fn() + 'static,
     {
+        let is_good_position = view.guidance.to_lowercase().contains("looking good");
+        let face_icon = gtk4::Image::from_icon_name("avatar-default-symbolic");
+        face_icon.set_pixel_size(128);
+        if is_good_position {
+            face_icon.set_css_classes(&["success"]);
+        } else {
+            face_icon.set_css_classes(&["dim-label"]);
+        }
+        face_icon.set_accessible_role(gtk4::AccessibleRole::Img);
+        face_icon.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Face position outline — center your face in the frame",
+        ))]);
+
+        let icon_clamp = adw::Clamp::builder()
+            .child(&face_icon)
+            .halign(gtk4::Align::Center)
+            .margin_top(24)
+            .margin_bottom(24)
+            .build();
+
+        let guidance_label = gtk4::Label::builder().label(tr(&view.guidance)).build();
+        if is_good_position {
+            guidance_label.set_css_classes(&["heading", "success"]);
+        } else {
+            guidance_label.set_css_classes(&["body"]);
+        }
+        guidance_label.set_accessible_role(gtk4::AccessibleRole::Status);
+        guidance_label.update_property(&[
+            gtk4::accessible::Property::Label(&tr("Live capture guidance")),
+            gtk4::accessible::Property::Description(&tr(
+                "Real-time positioning feedback during enrollment",
+            )),
+        ]);
+
         let group = adw::PreferencesGroup::builder()
             .title(tr("Capturing enrollment"))
             .build();
         group.update_property(&[gtk4::accessible::Property::Label(&tr(
             "Capture progress group",
         ))]);
+
+        group.add(&icon_clamp);
+        group.add(&guidance_label);
 
         let quality_row = adw::ActionRow::builder()
             .title(tr(&format!("Quality: {}%", view.quality_percent)))
@@ -146,13 +183,6 @@ impl EnrollmentViewComponent {
             "Frames accepted and seen counts",
         ))]);
         group.add(&counts_row);
-
-        let guidance_row = adw::ActionRow::builder().title(tr(&view.guidance)).build();
-        guidance_row.set_accessible_role(gtk4::AccessibleRole::Status);
-        guidance_row.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Live capture guidance",
-        ))]);
-        group.add(&guidance_row);
 
         let bar = gtk4::ProgressBar::builder()
             .fraction(view.diversity_percent as f64 / 100.0)

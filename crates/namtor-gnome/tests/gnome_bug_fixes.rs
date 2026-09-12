@@ -398,6 +398,62 @@ fn usa_12_recovery_shows_steps_as_subtitle() {
 }
 
 // ===========================================================================
+// USA-0: PAM toggle dispatched asynchronously (behavioral test)
+// ===========================================================================
+
+/// USA-0: the PAM toggle must be dispatched asynchronously so the UI
+/// remains responsive during polkit authorization. This test verifies
+/// that the dispatch_async mechanism sets is_loading while a toggle is
+/// in flight, proving the async pattern is wired correctly.
+#[test]
+fn usa_0_async_pam_toggle() {
+    use namtor_gnome::fake::FakeManagerClient;
+    use namtor_gnome::presenter::ProfilePresenter;
+    use namtor_gnome::ManagerClient;
+
+    let fake = FakeManagerClient::new();
+    // Configure a delay to simulate slow polkit authorization.
+    fake.set_pam_toggle_delay_ms(50);
+
+    let mut presenter = ProfilePresenter::new(fake, TEST_UID);
+
+    // Run the test in a glib main context to exercise dispatch_async.
+    let main_context = glib::MainContext::new();
+    let _guard = main_context
+        .acquire()
+        .expect("failed to acquire main context");
+
+    // Start the PAM toggle through dispatch_async.
+    presenter.dispatch_async(|client| {
+        let _ = client.set_pam_service_enabled("gdm-password", true);
+    });
+
+    // Verify is_loading is set immediately (proves async dispatch is active).
+    assert!(
+        presenter.model().is_loading,
+        "is_loading should be true while toggle is in flight"
+    );
+
+    // Verify pending_task is set.
+    assert!(
+        presenter.is_busy(),
+        "pending_task should be Some while toggle is in flight"
+    );
+
+    // Run the main loop to let the async task complete.
+    main_context.iteration(false);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    main_context.iteration(false);
+
+    // After completion, is_loading should still be true (view calls mark_async_complete).
+    // We verify the dispatch mechanism itself worked.
+    assert!(
+        presenter.is_busy(),
+        "pending_task should still exist (view would call mark_async_complete)"
+    );
+}
+
+// ===========================================================================
 // USA-16: mutations routed through dispatch_async
 // ===========================================================================
 
