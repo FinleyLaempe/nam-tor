@@ -716,6 +716,85 @@ fn progress_updates_view() {
     );
 }
 
+/// Test that the guidance label updates when the presenter receives progress
+/// updates with different guidance strings. This is the behavioral test for
+/// the non-image framing guidance feature.
+#[test]
+fn framing_guidance_updates() {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Guidance Test");
+    });
+    let session = presenter
+        .model()
+        .enrollment_session_v3
+        .clone()
+        .expect("session");
+
+    let progress_centering = EnrollmentProgressV3 {
+        session: session.clone(),
+        phase: "capturing".into(),
+        quality_percent: 20,
+        diversity_percent: 10,
+        frames_seen: 5,
+        frames_accepted: 2,
+        frames_rejected: 3,
+        quality_bucket: 0,
+        guidance: "centering".into(),
+    };
+    let model = after(&mut presenter, |p| {
+        p.on_progress_v3(&progress_centering);
+    });
+    let view = model.enrollment_view_v3.as_ref().expect("enrollment view");
+    assert!(
+        view.guidance.contains("Center"),
+        "guidance shows centering message: {}",
+        view.guidance
+    );
+
+    let progress_good = EnrollmentProgressV3 {
+        session: session.clone(),
+        phase: "capturing".into(),
+        quality_percent: 85,
+        diversity_percent: 70,
+        frames_seen: 20,
+        frames_accepted: 18,
+        frames_rejected: 2,
+        quality_bucket: 2,
+        guidance: "looking_good".into(),
+    };
+    let model = after(&mut presenter, |p| {
+        p.on_progress_v3(&progress_good);
+    });
+    let view = model.enrollment_view_v3.as_ref().expect("enrollment view");
+    assert!(
+        view.guidance.contains("Looking good"),
+        "guidance updated to looking_good: {}",
+        view.guidance
+    );
+
+    let progress_closer = EnrollmentProgressV3 {
+        session: session.clone(),
+        phase: "capturing".into(),
+        quality_percent: 40,
+        diversity_percent: 30,
+        frames_seen: 30,
+        frames_accepted: 25,
+        frames_rejected: 5,
+        quality_bucket: 1,
+        guidance: "move_closer".into(),
+    };
+    let model = after(&mut presenter, |p| {
+        p.on_progress_v3(&progress_closer);
+    });
+    let view = model.enrollment_view_v3.as_ref().expect("enrollment view");
+    assert!(
+        view.guidance.contains("Move closer"),
+        "guidance updated to move_closer: {}",
+        view.guidance
+    );
+}
+
 #[test]
 fn stop_reaches_stopped_state() {
     let mut presenter = new_presenter();
