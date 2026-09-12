@@ -346,6 +346,65 @@ fn usa_10_rename_button_present() {
 }
 
 // ===========================================================================
+// USA-10: Rename dialog with AdwEntryRow (behavioural)
+// ===========================================================================
+
+/// USA-10: behavioural test proving the rename dialog flow:
+/// 1. Create a profile via FakeManagerClient
+/// 2. Call presenter.rename_profile() (what the dialog confirm would do)
+/// 3. Assert the model shows the updated name after refresh
+#[test]
+fn usa_10_rename_dialog() {
+    use namtor_gnome::presenter::after;
+
+    let mut presenter = namtor_gnome::ProfilePresenter::new(FakeManagerClient::new(), TEST_UID);
+
+    // Create an initial profile via v3 enrollment
+    after(&mut presenter, |p| {
+        p.refresh();
+    });
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Test User");
+    });
+    after(&mut presenter, |p| {
+        p.stop_enrollment_v3();
+    });
+    after(&mut presenter, |p| {
+        p.review_enrollment_v3();
+    });
+    after(&mut presenter, |p| {
+        p.save_profile_v3();
+    });
+
+    // Verify profile was created
+    let model = presenter.model();
+    assert_eq!(model.profiles.len(), 1, "should have one profile");
+    let profile_id = model.profiles[0].id.clone();
+    let original_name = model.profiles[0].name.clone();
+    assert_eq!(original_name, "Test User");
+
+    // Simulate the rename dialog callback being triggered
+    // This is what happens when the user clicks rename, enters a new name, and confirms
+    let new_name = "Renamed User";
+    after(&mut presenter, |p| {
+        p.rename_profile(&profile_id, new_name);
+    });
+
+    // Verify the profile name was updated
+    let model = presenter.model();
+    assert_eq!(model.profiles.len(), 1, "should still have one profile");
+    assert_eq!(
+        model.profiles[0].name, new_name,
+        "profile name should be updated to the new name"
+    );
+    assert_eq!(
+        model.message,
+        Some(format!("Renamed profile to '{new_name}'")),
+        "should show success message"
+    );
+}
+
+// ===========================================================================
 // USA-11: polkit_auth distinguishes Bus/Check/Denied/Cancelled
 // ===========================================================================
 

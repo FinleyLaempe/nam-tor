@@ -256,15 +256,9 @@ impl AppController {
         let on_rename: RenameCallback = {
             let presenter = Rc::clone(presenter);
             let rc_rename = Rc::clone(rc);
-            Rc::new(move |id: &str, _current_name: &str| {
-                // USA-10: in a full implementation this opens a dialog with
-                // an EntryRow for the new name. For now, use the presenter
-                // rename path with a prompt.
-                {
-                    let mut p = presenter.borrow_mut();
-                    p.rename_profile(id, _current_name);
-                }
-                rc_rename.borrow_mut().render_profiles(&rc_rename);
+            Rc::new(move |id: &str, current_name: &str| {
+                // USA-10: open a rename dialog with an EntryRow pre-filled
+                show_rename_dialog(&presenter, &rc_rename, id, current_name);
             })
         };
         let list_group =
@@ -573,6 +567,66 @@ fn show_replace_dialog(presenter: &PresenterRc, rc: &ControllerRc, name: &str) {
             p.cancel_replace();
             drop(p);
             rc_replace.borrow_mut().render_enrollment(&rc_replace);
+        }
+        dlg.close();
+    });
+    dialog.present();
+}
+
+/// USA-10: Shows a rename dialog with an AdwEntryRow pre-filled with the
+/// current profile name. On confirm, validates non-empty and calls
+/// presenter.rename_profile(). On cancel, closes with no mutation.
+/// Empty names show an inline error and do not close the dialog.
+fn show_rename_dialog(
+    presenter: &PresenterRc,
+    rc: &ControllerRc,
+    profile_id: &str,
+    current_name: &str,
+) {
+    let dialog = adw::MessageDialog::builder()
+        .heading(tr("Rename Profile"))
+        .body(tr("Enter a new name for this profile:"))
+        .build();
+    dialog.set_accessible_role(gtk4::AccessibleRole::Dialog);
+    dialog.update_property(&[gtk4::accessible::Property::Label(&tr("Rename profile"))]);
+
+    // Create an EntryRow for the new name input
+    let entry_row = adw::EntryRow::builder()
+        .title(tr("Profile _Name"))
+        .use_underline(true)
+        .text(current_name)
+        .build();
+    entry_row.update_property(&[
+        gtk4::accessible::Property::Label(&tr("Profile name")),
+        gtk4::accessible::Property::Description(&tr("Enter a descriptive name for this profile")),
+    ]);
+
+    // Wrap the entry row in a preferences group for proper styling
+    let group = adw::PreferencesGroup::new();
+    group.add(&entry_row);
+    dialog.set_extra_child(Some(&group));
+
+    dialog.add_response("cancel", &tr("Cancel"));
+    dialog.add_response("rename", &tr("Rename"));
+    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("rename"));
+    dialog.set_close_response("cancel");
+
+    let presenter_rename = Rc::clone(presenter);
+    let rc_rename = Rc::clone(rc);
+    let profile_id = profile_id.to_string();
+    dialog.connect_response(None, move |dlg, response| {
+        if response == "rename" {
+            let new_name = entry_row.text().to_string();
+            if new_name.trim().is_empty() {
+                // Show inline error - do not close dialog
+                entry_row.add_css_class("error");
+                return;
+            }
+            let mut p = presenter_rename.borrow_mut();
+            p.rename_profile(&profile_id, &new_name);
+            drop(p);
+            rc_rename.borrow_mut().render_profiles(&rc_rename);
         }
         dlg.close();
     });
