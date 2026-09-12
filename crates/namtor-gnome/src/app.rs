@@ -102,7 +102,22 @@ impl AppController {
     /// USA-2: re-run `DbusManagerClient::connect()` and rebuild the UI.
     /// Wired to the offline retry button.
     pub fn retry_connection(&mut self, rc: &ControllerRc) {
-        match DbusManagerClient::connect() {
+        self.apply_connect_result(rc, DbusManagerClient::connect());
+    }
+
+    /// Handle a connect attempt's result: on success, swap to the online
+    /// presenter and re-render; on failure, show the offline page with the
+    /// error detail and re-arm retry. Extracted from `retry_connection` so
+    /// tests can drive both outcomes without a real D-Bus connection.
+    ///
+    /// **This is primarily for testing** — production code should call
+    /// `retry_connection()` which wraps this method.
+    pub fn apply_connect_result(
+        &mut self,
+        rc: &ControllerRc,
+        result: namtor_client::types::ManagerResult<DbusManagerClient>,
+    ) {
+        match result {
             Ok(client) => {
                 let uid = current_uid();
                 let p = Rc::new(RefCell::new(ProfilePresenter::new(client, uid)));
@@ -121,6 +136,39 @@ impl AppController {
                 });
             }
         }
+    }
+
+    /// Test-only constructor for behavioural tests. Constructs an
+    /// `AppController` in offline state with no presenter, so tests
+    /// can drive `apply_connect_result` with fake D-Bus clients.
+    ///
+    /// **This is for tests only** — production code must use `build()`.
+    pub fn new_offline_for_test(app: &adw::Application) -> ControllerRc {
+        let shell = Shell::new(app);
+        Rc::new(RefCell::new(Self {
+            shell,
+            presenter: None,
+            profile_list: ProfileListView::new(),
+            enrollment_view: EnrollmentViewComponent::new(),
+            review_view: ReviewViewComponent::new(),
+            enrollment_nav_page: None,
+            review_nav_page: None,
+            offline: true,
+        }))
+    }
+
+    /// Test-only accessor for behavioural tests.
+    ///
+    /// **This is for tests only** — not part of the production API.
+    pub fn is_offline_for_test(&self) -> bool {
+        self.offline
+    }
+
+    /// Test-only accessor for behavioural tests.
+    ///
+    /// **This is for tests only** — not part of the production API.
+    pub fn has_presenter_for_test(&self) -> bool {
+        self.presenter.is_some()
     }
 
     pub fn present(&self) {

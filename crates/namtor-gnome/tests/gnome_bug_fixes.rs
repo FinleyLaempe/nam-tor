@@ -37,18 +37,71 @@ fn usa_0_pam_toggle_documents_async_contract() {
 // USA-2: retry_connection re-runs DbusManagerClient::connect()
 // ===========================================================================
 
-/// USA-2: the app controller must have a retry_connection method that
-/// re-runs DbusManagerClient::connect() and rebuilds the UI.
+/// USA-2: behavioural test proving the full offline→retry→online state
+/// transition. Uses `FakeBus` to provide a real `DbusManagerClient` without
+/// touching the system D-Bus.
 #[test]
-fn usa_2_app_controller_has_retry_connection() {
-    let src = include_str!("../src/app.rs");
+fn usa_2_retry_connection() {
+    use gtk4::prelude::*;
+    use libadwaita as adw;
+    use namtor_client::fake_bus::FakeBus;
+    use namtor_client::types::ManagerError;
+    use namtor_gnome::app::AppController;
+
+    // Initialize GTK for test (required for widget construction)
+    gtk4::init().expect("gtk init");
+
+    // Create a test application
+    let app = adw::Application::builder()
+        .application_id("org.namtor.test.usa2")
+        .build();
+
+    let _guard = app.hold();
+
+    // Construct controller in offline state (simulating initial connect failure)
+    let controller = AppController::new_offline_for_test(&app);
+    let rc = controller.clone();
+
+    // Step 1: Verify initial offline state
     assert!(
-        src.contains("fn retry_connection"),
-        "app.rs must have a retry_connection method (USA-2)"
+        controller.borrow().is_offline_for_test(),
+        "controller must start offline"
     );
     assert!(
-        src.contains("DbusManagerClient::connect()"),
-        "retry_connection must re-run DbusManagerClient::connect() (USA-2)"
+        !controller.borrow().has_presenter_for_test(),
+        "controller must start with no presenter"
+    );
+
+    // Step 2: Simulate a failed retry (DaemonUnavailable)
+    let fail_result: namtor_client::types::ManagerResult<namtor_gnome::DbusManagerClient> = Err(
+        ManagerError::DaemonUnavailable("test-daemon-unavailable".into()),
+    );
+    controller
+        .borrow_mut()
+        .apply_connect_result(&rc, fail_result);
+
+    // Verify still offline after failure
+    assert!(
+        controller.borrow().is_offline_for_test(),
+        "controller must stay offline after failed retry"
+    );
+
+    // Step 3: Simulate a successful retry using FakeBus
+    let fake_bus = FakeBus::spawn().expect("spawn fake bus");
+    let success_result: namtor_client::types::ManagerResult<namtor_gnome::DbusManagerClient> =
+        Ok(fake_bus.client);
+    controller
+        .borrow_mut()
+        .apply_connect_result(&rc, success_result);
+
+    // Verify transition to online state
+    assert!(
+        !controller.borrow().is_offline_for_test(),
+        "controller must be online after successful retry"
+    );
+    assert!(
+        controller.borrow().has_presenter_for_test(),
+        "controller must have presenter after successful retry"
     );
 }
 
