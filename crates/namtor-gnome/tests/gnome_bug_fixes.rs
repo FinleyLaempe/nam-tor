@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Tests for the GNOME bug fixes (USA-0/2/3/5/6/8/9/10/11/12/16).
 //!
-//! These tests verify the bug fixes via source-contract scans (no display
-//! server needed) and presenter-level tests where the fix is in the
-//! headless presenter logic.
+//! All tests are behavioural: they construct real presenter/model state,
+//! real GTK widgets (headlessly), or real enum values — never scanning
+//! source text.
 
 mod common;
 
 use common::after;
+use namtor_gnome::view_model::{EnrollmentViewV3, ErrorView, RecoveryHint};
 use namtor_gnome::{
-    fake::FakeManagerClient, polkit_auth::PolkitAuthError, EnrollmentState, ManagerError,
+    fake::FakeManagerClient, polkit_auth::PolkitAuthError, EnrollmentState, ManagerClient,
+    ManagerError, ProfilePresenter,
 };
 
 const TEST_UID: u32 = 1000;
@@ -18,18 +20,42 @@ const TEST_UID: u32 = 1000;
 // USA-0: polkit CheckAuthorization off the GTK main thread
 // ===========================================================================
 
-/// USA-0: the PAM services component must document the async contract —
-/// the synchronous D-Bus call should be routed through dispatch_async.
+/// USA-0: the PAM toggle must be dispatched asynchronously so the UI
+/// remains responsive during polkit authorization. This test verifies
+/// that the dispatch_async mechanism sets is_loading while a toggle is
+/// in flight, proving the async pattern is wired correctly.
 #[test]
-fn usa_0_pam_toggle_documents_async_contract() {
-    let src = include_str!("../src/components/pam_services.rs");
+fn usa_0_async_pam_toggle() {
+    let fake = FakeManagerClient::new();
+    fake.set_pam_toggle_delay_ms(50);
+
+    let mut presenter = ProfilePresenter::new(fake, TEST_UID);
+
+    let main_context = glib::MainContext::new();
+    let _guard = main_context
+        .acquire()
+        .expect("failed to acquire main context");
+
+    presenter.dispatch_async(|client| {
+        let _ = client.set_pam_service_enabled("gdm-password", true);
+    });
+
     assert!(
-        src.contains("USA-0"),
-        "pam_services.rs must document the USA-0 async contract"
+        presenter.model().is_loading,
+        "is_loading should be true while toggle is in flight"
     );
     assert!(
-        src.contains("dispatch_async"),
-        "pam_services.rs must reference dispatch_async for the async pattern"
+        presenter.is_busy(),
+        "pending_task should be Some while toggle is in flight"
+    );
+
+    main_context.iteration(false);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    main_context.iteration(false);
+
+    assert!(
+        presenter.is_busy(),
+        "pending_task should still exist (view would call mark_async_complete)"
     );
 }
 
@@ -42,67 +68,58 @@ fn usa_0_pam_toggle_documents_async_contract() {
 /// touching the system D-Bus.
 #[test]
 fn usa_2_retry_connection() {
-    use gtk4::prelude::*;
-    use libadwaita as adw;
     use namtor_client::fake_bus::FakeBus;
     use namtor_client::types::ManagerError;
     use namtor_gnome::app::AppController;
 
-    // Initialize GTK for test (required for widget construction)
-    gtk4::init().expect("gtk init");
+    common::run_gtk_test(move || {
+        use gtk4::prelude::*;
 
-    // Create a test application
-    let app = adw::Application::builder()
-        .application_id("org.namtor.test.usa2")
-        .build();
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.usa2")
+            .build();
+        let _guard = app.hold();
 
-    let _guard = app.hold();
+        let controller = AppController::new_offline_for_test(&app);
+        let rc = controller.clone();
 
-    // Construct controller in offline state (simulating initial connect failure)
-    let controller = AppController::new_offline_for_test(&app);
-    let rc = controller.clone();
+        assert!(
+            controller.borrow().is_offline_for_test(),
+            "controller must start offline"
+        );
+        assert!(
+            !controller.borrow().has_presenter_for_test(),
+            "controller must start with no presenter"
+        );
 
-    // Step 1: Verify initial offline state
-    assert!(
-        controller.borrow().is_offline_for_test(),
-        "controller must start offline"
-    );
-    assert!(
-        !controller.borrow().has_presenter_for_test(),
-        "controller must start with no presenter"
-    );
+        let fail_result: namtor_client::types::ManagerResult<namtor_gnome::DbusManagerClient> = Err(
+            ManagerError::DaemonUnavailable("test-daemon-unavailable".into()),
+        );
+        controller
+            .borrow_mut()
+            .apply_connect_result(&rc, fail_result);
 
-    // Step 2: Simulate a failed retry (DaemonUnavailable)
-    let fail_result: namtor_client::types::ManagerResult<namtor_gnome::DbusManagerClient> = Err(
-        ManagerError::DaemonUnavailable("test-daemon-unavailable".into()),
-    );
-    controller
-        .borrow_mut()
-        .apply_connect_result(&rc, fail_result);
+        assert!(
+            controller.borrow().is_offline_for_test(),
+            "controller must stay offline after failed retry"
+        );
 
-    // Verify still offline after failure
-    assert!(
-        controller.borrow().is_offline_for_test(),
-        "controller must stay offline after failed retry"
-    );
+        let fake_bus = FakeBus::spawn().expect("spawn fake bus");
+        let success_result: namtor_client::types::ManagerResult<namtor_gnome::DbusManagerClient> =
+            Ok(fake_bus.client);
+        controller
+            .borrow_mut()
+            .apply_connect_result(&rc, success_result);
 
-    // Step 3: Simulate a successful retry using FakeBus
-    let fake_bus = FakeBus::spawn().expect("spawn fake bus");
-    let success_result: namtor_client::types::ManagerResult<namtor_gnome::DbusManagerClient> =
-        Ok(fake_bus.client);
-    controller
-        .borrow_mut()
-        .apply_connect_result(&rc, success_result);
-
-    // Verify transition to online state
-    assert!(
-        !controller.borrow().is_offline_for_test(),
-        "controller must be online after successful retry"
-    );
-    assert!(
-        controller.borrow().has_presenter_for_test(),
-        "controller must have presenter after successful retry"
-    );
+        assert!(
+            !controller.borrow().is_offline_for_test(),
+            "controller must be online after successful retry"
+        );
+        assert!(
+            controller.borrow().has_presenter_for_test(),
+            "controller must have presenter after successful retry"
+        );
+    });
 }
 
 // ===========================================================================
@@ -113,7 +130,7 @@ fn usa_2_retry_connection() {
 /// pending_replace instead of silently creating a duplicate.
 #[test]
 fn usa_3_duplicate_name_stages_pending_replace() {
-    let mut presenter = namtor_gnome::ProfilePresenter::new(FakeManagerClient::new(), TEST_UID);
+    let mut presenter = ProfilePresenter::new(FakeManagerClient::new(), TEST_UID);
     after(&mut presenter, |p| {
         p.refresh();
     });
@@ -129,7 +146,6 @@ fn usa_3_duplicate_name_stages_pending_replace() {
     after(&mut presenter, |p| {
         p.save_profile_v3();
     });
-    // Now "Alice V3" exists. Try to enroll again with the same name.
     let model = after(&mut presenter, |p| {
         p.start_enrollment_v3("Alice V3");
     });
@@ -152,7 +168,7 @@ fn usa_3_duplicate_name_stages_pending_replace() {
 /// enrollment.
 #[test]
 fn usa_3_confirm_replace_v3_starts_fresh_enrollment() {
-    let mut presenter = namtor_gnome::ProfilePresenter::new(FakeManagerClient::new(), TEST_UID);
+    let mut presenter = ProfilePresenter::new(FakeManagerClient::new(), TEST_UID);
     after(&mut presenter, |p| {
         p.refresh();
     });
@@ -170,13 +186,11 @@ fn usa_3_confirm_replace_v3_starts_fresh_enrollment() {
     });
     assert_eq!(presenter.model().profiles.len(), 1);
 
-    // Stage the replace.
     after(&mut presenter, |p| {
         p.start_enrollment_v3("Bob V3");
     });
     assert!(presenter.model().pending_replace.is_some());
 
-    // Confirm the replace.
     let model = after(&mut presenter, |p| {
         p.confirm_replace_v3();
     });
@@ -194,7 +208,7 @@ fn usa_3_confirm_replace_v3_starts_fresh_enrollment() {
 /// USA-3: cancel_replace clears the pending replace without enrolling.
 #[test]
 fn usa_3_cancel_replace_clears_pending() {
-    let mut presenter = namtor_gnome::ProfilePresenter::new(FakeManagerClient::new(), TEST_UID);
+    let mut presenter = ProfilePresenter::new(FakeManagerClient::new(), TEST_UID);
     after(&mut presenter, |p| {
         p.refresh();
     });
@@ -226,35 +240,85 @@ fn usa_3_cancel_replace_clears_pending() {
 // USA-5: error visible in the Stopped branch
 // ===========================================================================
 
-/// USA-5: the enrollment component must have a render_stopped method that
-/// accepts an optional error parameter so save errors are visible.
+/// USA-5: `render_stopped` must accept an optional error and render it as
+/// an alert row. Verified by constructing a real `EnrollmentViewComponent`
+/// headlessly, calling `render_stopped` with and without an error, and
+/// asserting the rendered widget tree contains the error text only when
+/// an error is provided.
 #[test]
 fn usa_5_render_stopped_shows_error() {
-    let src = include_str!("../src/components/enrollment.rs");
-    assert!(
-        src.contains("fn render_stopped"),
-        "enrollment component must have render_stopped (USA-5)"
-    );
-    assert!(
-        src.contains("error") && src.contains("USA-5"),
-        "render_stopped must accept an error parameter (USA-5)"
-    );
+    use gtk4::prelude::*;
+    use namtor_gnome::components::EnrollmentViewComponent;
+
+    let view = EnrollmentViewV3 {
+        phase: "capture".into(),
+        quality_percent: 80,
+        diversity_percent: 60,
+        frames_seen: 10,
+        frames_accepted: 8,
+        frames_rejected: 2,
+        quality_bucket: 2,
+        guidance: "Looking good".into(),
+    };
+    let error = ErrorView {
+        title: "Save failed".into(),
+        detail: "Store error".into(),
+        recovery: None,
+    };
+
+    common::run_gtk_test(move || {
+        // With error: the rendered page must contain the error text.
+        let mut comp = EnrollmentViewComponent::new();
+        let page = comp.render_stopped(Some(&view), Some(&error), || {}, || {});
+        let texts = common::collect_widget_text(page.upcast_ref::<gtk4::Widget>());
+        assert!(
+            texts.iter().any(|t| t.contains("Save failed")),
+            "render_stopped with error must show error title: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("Store error")),
+            "render_stopped with error must show error detail: {texts:?}"
+        );
+
+        // Without error: the rendered page must NOT contain the error text.
+        let page_no_err = comp.render_stopped(Some(&view), None, || {}, || {});
+        let texts_no_err = common::collect_widget_text(page_no_err.upcast_ref::<gtk4::Widget>());
+        assert!(
+            !texts_no_err.iter().any(|t| t.contains("Save failed")),
+            "render_stopped without error must not show error text: {texts_no_err:?}"
+        );
+    });
 }
 
 // ===========================================================================
 // USA-6: auto-reconnect on ServiceNotRegistered/Transport
 // ===========================================================================
 
-/// USA-6: the app controller must have retry_connection (the reconnect
-/// mechanism). This is the same method as USA-2 — the retry button is the
-/// user-facing reconnect path.
+/// USA-6: `AppController::retry_connection` must exist and be callable —
+/// it is the user-facing reconnect path. Verified by constructing a real
+/// `AppController` headlessly and calling `retry_connection`.
 #[test]
 fn usa_6_reconnect_mechanism_present() {
-    let src = include_str!("../src/app.rs");
-    assert!(
-        src.contains("retry_connection"),
-        "app.rs must have retry_connection for auto-reconnect (USA-6)"
-    );
+    use namtor_gnome::app::AppController;
+
+    common::run_gtk_test(move || {
+        use gtk4::prelude::*;
+
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.usa6")
+            .build();
+        let _guard = app.hold();
+
+        let controller = AppController::new_offline_for_test(&app);
+        let rc = controller.clone();
+
+        controller.borrow_mut().retry_connection(&rc);
+
+        assert!(
+            controller.borrow().is_offline_for_test(),
+            "controller stays offline after failed retry (no daemon in test)"
+        );
+    });
 }
 
 // ===========================================================================
@@ -262,7 +326,8 @@ fn usa_6_reconnect_mechanism_present() {
 // ===========================================================================
 
 /// USA-8: the polkit policy file must include the org.namtor.restart-daemon
-/// action.
+/// action. This is a documentation/resource file check, not a source-code
+/// scan — the policy XML is a build artifact, not Rust source.
 #[test]
 fn usa_8_polkit_restart_daemon_action_present() {
     let policy = include_str!("../../../packaging/polkit-1/actions/org.namtor.policy");
@@ -272,77 +337,136 @@ fn usa_8_polkit_restart_daemon_action_present() {
     );
 }
 
-/// USA-8: the system status component must have wired restart and logs
-/// action rows (connect_activated, not just placeholder comments).
+/// USA-8: `render_system_status` must produce a Troubleshooting group with
+/// "Restart Daemon" and "View System Logs" action rows. Verified by
+/// constructing a real presenter, calling `render_system_status`, and
+/// asserting the returned groups contain the expected row titles.
 #[test]
 fn usa_8_restart_and_logs_rows_wired() {
-    let src = include_str!("../src/components/system_status.rs");
-    assert!(
-        src.contains("restart_row") && src.contains("connect_activated"),
-        "system_status must wire the restart row with connect_activated (USA-8)"
-    );
-    assert!(
-        src.contains("logs_row") && src.contains("connect_activated"),
-        "system_status must wire the logs row with connect_activated (USA-8)"
-    );
-    assert!(
-        src.contains("USA-8"),
-        "system_status must document the USA-8 wiring"
-    );
+    use gtk4::prelude::*;
+    use namtor_gnome::components::system_status::render_system_status;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    common::run_gtk_test(move || {
+        let mut presenter = ProfilePresenter::new(FakeManagerClient::new(), TEST_UID);
+        presenter.refresh();
+        let presenter_rc = Rc::new(RefCell::new(presenter));
+
+        let groups = render_system_status(&presenter_rc);
+        assert!(
+            groups.len() >= 2,
+            "system_status must return at least 2 groups"
+        );
+
+        let mut all_texts = Vec::new();
+        for group in &groups {
+            let texts = common::collect_widget_text(group.upcast_ref::<gtk4::Widget>());
+            all_texts.extend(texts);
+        }
+
+        assert!(
+            all_texts.iter().any(|t| t.contains("Restart Daemon")),
+            "troubleshooting group must have 'Restart Daemon' row: {all_texts:?}"
+        );
+        assert!(
+            all_texts.iter().any(|t| t.contains("View System Logs")),
+            "troubleshooting group must have 'View System Logs' row: {all_texts:?}"
+        );
+    });
 }
 
 // ===========================================================================
 // USA-9: completion cue when diversity >= 100 and quality good
 // ===========================================================================
 
-/// USA-9: the enrollment component must show a completion cue when
-/// diversity_percent >= 100 and quality_bucket is good.
+/// USA-9: the enrollment capture phase must show a completion cue when
+/// `diversity_percent >= 100` and `quality_bucket >= 2`. Verified by
+/// constructing a real `EnrollmentViewComponent`, rendering with a
+/// complete view and an incomplete view, and asserting the completion
+/// text appears only in the complete case.
 #[test]
 fn usa_9_completion_cue_present() {
-    let src = include_str!("../src/components/enrollment.rs");
-    assert!(
-        src.contains("USA-9"),
-        "enrollment component must implement the USA-9 completion cue"
-    );
-    assert!(
-        src.contains("diversity_percent >= 100"),
-        "completion cue must check diversity_percent >= 100 (USA-9)"
-    );
-    assert!(
-        src.contains("quality_bucket >= 2"),
-        "completion cue must check quality_bucket >= 2 (USA-9)"
-    );
-    assert!(
-        src.contains("Enrollment complete"),
-        "completion cue must show 'Enrollment complete' text (USA-9)"
-    );
+    use gtk4::prelude::*;
+    use namtor_gnome::components::EnrollmentViewComponent;
+
+    let complete_view = EnrollmentViewV3 {
+        phase: "capture".into(),
+        quality_percent: 95,
+        diversity_percent: 100,
+        frames_seen: 20,
+        frames_accepted: 18,
+        frames_rejected: 2,
+        quality_bucket: 2,
+        guidance: "Looking good".into(),
+    };
+    let incomplete_view = EnrollmentViewV3 {
+        diversity_percent: 50,
+        quality_bucket: 1,
+        ..complete_view.clone()
+    };
+
+    common::run_gtk_test(move || {
+        let mut comp = EnrollmentViewComponent::new();
+
+        // Complete view: must show completion cue.
+        let page = comp.render(Some(&complete_view), |_| {}, || {}, || {});
+        let texts = common::collect_widget_text(page.upcast_ref::<gtk4::Widget>());
+        assert!(
+            texts.iter().any(|t| t.contains("Enrollment complete")),
+            "complete view must show completion cue: {texts:?}"
+        );
+
+        // Incomplete view: must NOT show completion cue.
+        let page_incomplete = comp.render(Some(&incomplete_view), |_| {}, || {}, || {});
+        let texts_incomplete =
+            common::collect_widget_text(page_incomplete.upcast_ref::<gtk4::Widget>());
+        assert!(
+            !texts_incomplete
+                .iter()
+                .any(|t| t.contains("Enrollment complete")),
+            "incomplete view must NOT show completion cue: {texts_incomplete:?}"
+        );
+    });
 }
 
 // ===========================================================================
 // USA-10: Rename button in profile list
 // ===========================================================================
 
-/// USA-10: the profile list component must have a rename button and a
-/// RenameCallback type.
+/// USA-10: the profile list component must render a rename button for each
+/// profile. Verified by constructing a real `ProfileListView`, rendering
+/// with a model that has a profile, and asserting the rendered widget tree
+/// contains the rename accessible label.
 #[test]
 fn usa_10_rename_button_present() {
-    let src = include_str!("../src/components/profile_list.rs");
-    assert!(
-        src.contains("RenameCallback"),
-        "profile_list must define RenameCallback (USA-10)"
-    );
-    assert!(
-        src.contains("rename_btn"),
-        "profile_list must have a rename button (USA-10)"
-    );
-    assert!(
-        src.contains("document-edit-symbolic"),
-        "rename button must use the edit icon (USA-10)"
-    );
-    assert!(
-        src.contains("Rename profile"),
-        "rename button must have an accessible label (USA-10)"
-    );
+    use gtk4::prelude::*;
+    use namtor_gnome::components::ProfileListView;
+    use namtor_gnome::view_model::{PresenterModel, ProfileRowView};
+
+    let mut model = PresenterModel::default();
+    model.profiles.push(ProfileRowView {
+        id: "test-id".into(),
+        name: "Test User".into(),
+        enabled: true,
+        created: 0,
+        last_used: 0,
+    });
+
+    common::run_gtk_test(move || {
+        let view = ProfileListView::new();
+        let group = view.render(&model);
+        let texts = common::collect_widget_text(group.upcast_ref::<gtk4::Widget>());
+
+        assert!(
+            texts.iter().any(|t| t.contains("Rename profile")),
+            "profile list must show 'Rename profile' in tooltip/label: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("Test User")),
+            "profile list must show the profile name: {texts:?}"
+        );
+    });
 }
 
 // ===========================================================================
@@ -357,9 +481,8 @@ fn usa_10_rename_button_present() {
 fn usa_10_rename_dialog() {
     use namtor_gnome::presenter::after;
 
-    let mut presenter = namtor_gnome::ProfilePresenter::new(FakeManagerClient::new(), TEST_UID);
+    let mut presenter = ProfilePresenter::new(FakeManagerClient::new(), TEST_UID);
 
-    // Create an initial profile via v3 enrollment
     after(&mut presenter, |p| {
         p.refresh();
     });
@@ -376,26 +499,21 @@ fn usa_10_rename_dialog() {
         p.save_profile_v3();
     });
 
-    // Verify profile was created
     let model = presenter.model();
     assert_eq!(model.profiles.len(), 1, "should have one profile");
     let profile_id = model.profiles[0].id.clone();
-    let original_name = model.profiles[0].name.clone();
-    assert_eq!(original_name, "Test User");
+    assert_eq!(model.profiles[0].name, "Test User");
 
-    // Simulate the rename dialog callback being triggered
-    // This is what happens when the user clicks rename, enters a new name, and confirms
     let new_name = "Renamed User";
     after(&mut presenter, |p| {
         p.rename_profile(&profile_id, new_name);
     });
 
-    // Verify the profile name was updated
     let model = presenter.model();
-    assert_eq!(model.profiles.len(), 1, "should still have one profile");
+    assert_eq!(model.profiles.len(), 1);
     assert_eq!(
         model.profiles[0].name, new_name,
-        "profile name should be updated to the new name"
+        "profile name should be updated"
     );
     assert_eq!(
         model.message,
@@ -408,21 +526,24 @@ fn usa_10_rename_dialog() {
 // USA-11: polkit_auth distinguishes Bus/Check/Denied/Cancelled
 // ===========================================================================
 
-/// USA-11: the polkit_auth module must exist with all four error variants.
+/// USA-11: `PolkitAuthError` must have all four variants. Verified by
+/// constructing each variant and asserting via `matches!`.
 #[test]
 fn usa_11_polkit_auth_has_four_variants() {
-    let src = include_str!("../src/polkit_auth.rs");
-    assert!(
-        src.contains("enum PolkitAuthError"),
-        "polkit_auth must define PolkitAuthError enum (USA-11)"
-    );
-    assert!(src.contains("Bus"), "must have Bus variant (USA-11)");
-    assert!(src.contains("Check"), "must have Check variant (USA-11)");
-    assert!(src.contains("Denied"), "must have Denied variant (USA-11)");
-    assert!(
-        src.contains("Cancelled"),
-        "must have Cancelled variant (USA-11)"
-    );
+    let bus = PolkitAuthError::Bus;
+    let check = PolkitAuthError::Check;
+    let denied = PolkitAuthError::Denied("test".into());
+    let cancelled = PolkitAuthError::Cancelled;
+
+    assert!(matches!(bus, PolkitAuthError::Bus));
+    assert!(matches!(check, PolkitAuthError::Check));
+    assert!(matches!(denied, PolkitAuthError::Denied(_)));
+    assert!(matches!(cancelled, PolkitAuthError::Cancelled));
+
+    assert_ne!(bus, check);
+    assert_ne!(bus, cancelled);
+    assert_ne!(check, denied);
+    assert_ne!(denied, cancelled);
 }
 
 /// USA-11: the error variants must map to distinct user-facing messages.
@@ -474,122 +595,104 @@ fn usa_11_denied_without_cancel_maps_to_denied() {
 // USA-12: recovery view renders hint.title once (no double title)
 // ===========================================================================
 
-/// USA-12: the recovery component must NOT render hint.title as a Label
-/// twice. The old code had two `Label::builder().label(tr(&hint.title))`
-/// calls. The fix uses `set_title` on the group (not a Label) and shows
-/// steps as a row subtitle.
+/// USA-12: the recovery view must set the group title to `hint.title`
+/// via `set_title` (not render it as a separate Label). Verified by
+/// constructing a real `RecoveryView`, rendering with a hint, and
+/// asserting the group's title property equals the hint title.
 #[test]
 fn usa_12_recovery_no_double_title() {
-    let src = include_str!("../src/components/recovery.rs");
-    // The new code must NOT use Label::builder with hint.title — the old
-    // bug rendered hint.title as a Label twice.
-    assert!(
-        !src.contains(".label(tr(&hint.title))"),
-        "recovery.rs must not use Label with hint.title (USA-12 — use group set_title)"
-    );
-    // The new code uses set_title on the PreferencesGroup.
-    assert!(
-        src.contains("set_title"),
-        "recovery.rs must use set_title on the group (USA-12)"
-    );
+    use gtk4::prelude::*;
+    use libadwaita::prelude::*;
+    use namtor_gnome::components::RecoveryView;
+
+    let hint = RecoveryHint {
+        title: "Nam-tor daemon is not running".into(),
+        steps: vec!["Start the daemon".into()],
+    };
+
+    common::run_gtk_test(move || {
+        let view = RecoveryView::new();
+        let group = view.render(&hint);
+
+        assert_eq!(
+            group.title().to_string(),
+            hint.title,
+            "recovery group title must equal hint.title (USA-12 — set via set_title)"
+        );
+
+        // The steps must be rendered as a row subtitle, not as a
+        // duplicate title label. The row title is "Recovery Steps:".
+        let texts = common::collect_widget_text(group.upcast_ref::<gtk4::Widget>());
+        assert!(
+            texts.iter().any(|t| t.contains("Recovery Steps:")),
+            "recovery view must render steps as a row, not a duplicate title: {texts:?}"
+        );
+    });
 }
 
 /// USA-12: the recovery component must show the steps as a row subtitle,
 /// not as a duplicate title label.
 #[test]
 fn usa_12_recovery_shows_steps_as_subtitle() {
-    let src = include_str!("../src/components/recovery.rs");
-    assert!(
-        src.contains("Recovery Steps:"),
-        "recovery view must show 'Recovery Steps:' (USA-12)"
-    );
-    assert!(
-        src.contains("steps_row") || src.contains("hint.steps"),
-        "recovery view must render steps as a row (USA-12)"
-    );
-}
+    use gtk4::prelude::*;
+    use namtor_gnome::components::RecoveryView;
 
-// ===========================================================================
-// USA-0: PAM toggle dispatched asynchronously (behavioral test)
-// ===========================================================================
+    let hint = RecoveryHint {
+        title: "Daemon unreachable".into(),
+        steps: vec!["Check the daemon status".into(), "Start the daemon".into()],
+    };
 
-/// USA-0: the PAM toggle must be dispatched asynchronously so the UI
-/// remains responsive during polkit authorization. This test verifies
-/// that the dispatch_async mechanism sets is_loading while a toggle is
-/// in flight, proving the async pattern is wired correctly.
-#[test]
-fn usa_0_async_pam_toggle() {
-    use namtor_gnome::fake::FakeManagerClient;
-    use namtor_gnome::presenter::ProfilePresenter;
-    use namtor_gnome::ManagerClient;
+    common::run_gtk_test(move || {
+        let view = RecoveryView::new();
+        let group = view.render(&hint);
+        let texts = common::collect_widget_text(group.upcast_ref::<gtk4::Widget>());
 
-    let fake = FakeManagerClient::new();
-    // Configure a delay to simulate slow polkit authorization.
-    fake.set_pam_toggle_delay_ms(50);
-
-    let mut presenter = ProfilePresenter::new(fake, TEST_UID);
-
-    // Run the test in a glib main context to exercise dispatch_async.
-    let main_context = glib::MainContext::new();
-    let _guard = main_context
-        .acquire()
-        .expect("failed to acquire main context");
-
-    // Start the PAM toggle through dispatch_async.
-    presenter.dispatch_async(|client| {
-        let _ = client.set_pam_service_enabled("gdm-password", true);
+        assert!(
+            texts.iter().any(|t| t.contains("Recovery Steps:")),
+            "recovery view must show 'Recovery Steps:' row: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("Check the daemon status")),
+            "recovery view must show step text: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("Start the daemon")),
+            "recovery view must show all steps: {texts:?}"
+        );
     });
-
-    // Verify is_loading is set immediately (proves async dispatch is active).
-    assert!(
-        presenter.model().is_loading,
-        "is_loading should be true while toggle is in flight"
-    );
-
-    // Verify pending_task is set.
-    assert!(
-        presenter.is_busy(),
-        "pending_task should be Some while toggle is in flight"
-    );
-
-    // Run the main loop to let the async task complete.
-    main_context.iteration(false);
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    main_context.iteration(false);
-
-    // After completion, is_loading should still be true (view calls mark_async_complete).
-    // We verify the dispatch mechanism itself worked.
-    assert!(
-        presenter.is_busy(),
-        "pending_task should still exist (view would call mark_async_complete)"
-    );
 }
 
 // ===========================================================================
 // USA-16: mutations routed through dispatch_async
 // ===========================================================================
 
-/// USA-16: the pam_services component must document the dispatch_async
-/// contract for mutations.
-#[test]
-fn usa_16_dispatch_async_contract_documented() {
-    let src = include_str!("../src/components/pam_services.rs");
-    assert!(
-        src.contains("USA-16"),
-        "pam_services.rs must document the USA-16 dispatch_async contract"
-    );
-    assert!(
-        src.contains("dispatch_async"),
-        "pam_services.rs must reference dispatch_async (USA-16)"
-    );
-}
-
-/// USA-16: the presenter must have a dispatch_async method.
+/// USA-16: the presenter must have a `dispatch_async` method that sets
+/// `is_loading` while a mutation is in flight.
 #[test]
 fn usa_16_presenter_has_dispatch_async() {
-    let src = include_str!("../src/presenter.rs");
+    let fake = FakeManagerClient::new();
+    let mut presenter = ProfilePresenter::new(fake, TEST_UID);
+
+    let main_context = glib::MainContext::new();
+    let _guard = main_context
+        .acquire()
+        .expect("failed to acquire main context");
+
     assert!(
-        src.contains("fn dispatch_async"),
-        "presenter must have dispatch_async method (USA-16)"
+        !presenter.model().is_loading,
+        "presenter must start with is_loading=false"
+    );
+
+    presenter.dispatch_async(|client| {
+        let _ = client.set_pam_service_enabled("gdm-password", true);
+    });
+
+    assert!(
+        presenter.model().is_loading,
+        "dispatch_async must set is_loading=true (USA-16)"
+    );
+    assert!(
+        presenter.is_busy(),
+        "dispatch_async must set pending_task (USA-16)"
     );
 }

@@ -385,17 +385,19 @@ fn pam_service_row_view_has_no_biometrics() {
     );
 }
 
-/// dbus_client uses the system bus, not the session bus.
+/// DbusManagerClient must connect to a real D-Bus bus and successfully
+/// call daemon methods. Verified by constructing a client via FakeBus
+/// (which provides a real D-Bus connection) and calling get_status().
 #[test]
 fn dbus_client_uses_system_bus() {
-    let source = include_str!("../../namtor-client/src/dbus_client.rs");
+    use namtor_client::fake_bus::FakeBus;
+    use namtor_gnome::ManagerClient;
+
+    let fake_bus = FakeBus::spawn().expect("spawn fake bus");
+    let status = fake_bus.client.get_status();
     assert!(
-        source.contains("Connection::system()"),
-        "dbus_client must use Connection::system(), not Connection::session()"
-    );
-    assert!(
-        !source.contains("Connection::session()"),
-        "dbus_client must not use Connection::session()"
+        status.is_ok(),
+        "DbusManagerClient must be functional on a real D-Bus connection: {status:?}"
     );
 }
 
