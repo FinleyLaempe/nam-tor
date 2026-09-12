@@ -119,6 +119,20 @@ impl KcmBridge {
         crate::kscreenlocker::set_face(home, enabled).map_err(KcmError::from)
     }
 
+    /// Lockout-safety check: reads `home/.config/kscreenlockerrc` and returns
+    /// `true` if `Face=true` is the only enabled authenticator — a state with
+    /// no password fallback that would lock the user out if face unlock
+    /// fails. The KCM must call this before allowing any action that disables
+    /// a non-face authenticator and refuse (or require explicit confirmation)
+    /// when it returns `true`.
+    pub fn check_lockout_safety(&self, home: &Path) -> bool {
+        let path = home.join(".config/kscreenlockerrc");
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return false;
+        };
+        crate::kscreenlocker::would_cause_lockout(&content)
+    }
+
     /// `ListProfiles` → [`ProfileInfo`] list for the QML model.
     pub async fn list_profiles(&self) -> Result<Vec<ProfileInfo>, KcmError> {
         self.proxy.list_profiles().await.map_err(KcmError::from)

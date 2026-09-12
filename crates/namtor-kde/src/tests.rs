@@ -735,3 +735,111 @@ fn v1_v2_compatibility_unchanged() {
     namtor_client::contract::cancel_keeps_state_safe(&fake, &fake);
     namtor_client::contract::merge_and_replace(&fake, &fake);
 }
+
+// ---------------------------------------------------------------------------
+// Lockout-safety: Face must never be the sole enabled authenticator
+// ---------------------------------------------------------------------------
+
+/// Lockout-safety check: a `kscreenlockerrc` with only `Face=true` under
+/// `[Authenticators]` (no password fallback) is a lockout-unsafe state.
+/// The KCM must call [`kscreenlocker::would_cause_lockout`] before allowing
+/// any authenticator-disabling action and refuse (or confirm) if it would
+/// produce this state.
+#[test]
+fn lockout_safety_face_only_is_unsafe() {
+    let home = temp_home("lockout-face-only");
+    let config_dir = home.join(".config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("kscreenlockerrc"),
+        "[Greeter]\nWallpaperPlugin=org.kde.image\n\n[Authenticators]\nFace=true\n",
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+    assert!(
+        crate::kscreenlocker::would_cause_lockout(&content),
+        "Face=true with no other enabled authenticator must be lockout-unsafe"
+    );
+}
+
+/// Lockout-safety check: `Face=true` alongside `Password=true` is safe —
+/// the password authenticator is an explicit fallback.
+#[test]
+fn lockout_safety_face_plus_password_is_safe() {
+    let home = temp_home("lockout-face-plus-password");
+    let config_dir = home.join(".config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("kscreenlockerrc"),
+        "[Authenticators]\nFace=true\nPassword=true\n",
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+    assert!(
+        !crate::kscreenlocker::would_cause_lockout(&content),
+        "Face=true + Password=true must be safe (password fallback exists)"
+    );
+}
+
+/// Lockout-safety check: no `[Authenticators]` section at all is safe —
+/// password is the implicit default authenticator in `kscreenlockerd`.
+#[test]
+fn lockout_safety_no_authenticators_section_is_safe() {
+    let home = temp_home("lockout-no-section");
+    let config_dir = home.join(".config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("kscreenlockerrc"),
+        "[Greeter]\nWallpaperPlugin=org.kde.image\n",
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+    assert!(
+        !crate::kscreenlocker::would_cause_lockout(&content),
+        "No [Authenticators] section means password is the implicit default — safe"
+    );
+}
+
+/// Lockout-safety check: `Face=true` alongside `Fingerprint=true` is safe —
+/// any non-face authenticator enabled counts as a fallback.
+#[test]
+fn lockout_safety_face_plus_fingerprint_is_safe() {
+    let home = temp_home("lockout-face-plus-fingerprint");
+    let config_dir = home.join(".config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("kscreenlockerrc"),
+        "[Authenticators]\nFace=true\nFingerprint=true\n",
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+    assert!(
+        !crate::kscreenlocker::would_cause_lockout(&content),
+        "Face=true + Fingerprint=true must be safe (non-face fallback exists)"
+    );
+}
+
+/// Lockout-safety check: `Face=false` alone is not a lockout risk — Face is
+/// not enabled, so the lockout condition (Face as sole authenticator) does
+/// not apply.
+#[test]
+fn lockout_safety_face_disabled_is_safe() {
+    let home = temp_home("lockout-face-disabled");
+    let config_dir = home.join(".config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("kscreenlockerrc"),
+        "[Authenticators]\nFace=false\n",
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+    assert!(
+        !crate::kscreenlocker::would_cause_lockout(&content),
+        "Face=false must be safe (face not enabled)"
+    );
+}

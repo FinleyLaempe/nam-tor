@@ -35,6 +35,49 @@ pub fn set_face(home: &Path, enabled: bool) -> io::Result<()> {
     fs::write(&path, updated)
 }
 
+/// Returns `true` if `Face=true` is the only enabled authenticator in the
+/// `[Authenticators]` section — a lockout-unsafe state with no password
+/// fallback. The KCM must call this before allowing any action that would
+/// disable a non-face authenticator and refuse (or require explicit
+/// confirmation) when it returns `true`.
+///
+/// Returns `false` when there is no `[Authenticators]` section (password is
+/// the implicit default in `kscreenlockerd`) or when any non-face key is also
+/// set to `true`.
+pub fn would_cause_lockout(content: &str) -> bool {
+    let lines: Vec<&str> = content.lines().collect();
+
+    let Some(start) = lines.iter().position(|l| l.trim() == "[Authenticators]") else {
+        return false;
+    };
+
+    let section_end = lines
+        .iter()
+        .skip(start + 1)
+        .position(|l| l.trim_start().starts_with('['))
+        .map_or(lines.len(), |offset| start + 1 + offset);
+
+    let mut face_enabled = false;
+    let mut other_enabled = false;
+
+    for line in &lines[start + 1..section_end] {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if key == "Face" {
+            if value == "true" {
+                face_enabled = true;
+            }
+        } else if value == "true" {
+            other_enabled = true;
+        }
+    }
+
+    face_enabled && !other_enabled
+}
+
 /// Pure text transform: given the current file content, return the new
 /// content with `Face=true` set or cleared in `[Authenticators]`.
 fn apply_face_setting(content: &str, enabled: bool) -> String {
