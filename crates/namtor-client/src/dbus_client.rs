@@ -75,6 +75,15 @@ impl DbusManagerClient {
         })
     }
 
+    /// Build a client from an existing connection (used by hermetic tests
+    /// that spawn a p2p fake bus instead of the system bus).
+    pub fn from_connection(conn: zbus::blocking::Connection) -> Self {
+        Self {
+            conn,
+            progress_cache: Mutex::new(HashMap::new()),
+        }
+    }
+
     fn call<R, B>(&self, method: &str, body: &B) -> ManagerResult<R>
     where
         R: for<'de> serde::Deserialize<'de> + zbus::zvariant::Type + 'static,

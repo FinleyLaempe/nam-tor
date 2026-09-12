@@ -12,6 +12,7 @@
 pub mod client;
 pub mod dbus_client;
 pub mod fake;
+pub mod fake_bus;
 pub mod proxy;
 pub mod types;
 pub mod contract;
