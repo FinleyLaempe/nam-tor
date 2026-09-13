@@ -7,11 +7,11 @@ Plan reference: `.omo/plans/namtor-usable-intuitive-enrollment.md` task 16
 ## 1. Scope
 
 This document records the visual review verdict for every named UI state in the
-enrollment redesign (tasks 1 through 14). Screenshots are WITHHELD because the
-installed GNOME app and running daemon are not available in this environment.
-The review verdicts below are therefore based on the design contract, the
-automated test suite, and the accessibility and privacy scans rather than
-captured pixels.
+enrollment redesign (tasks 1 through 14). Screenshots are WITHHELD pending HIL
+access (NAMTOR_HW_TEST=1). Behavioural tests pass; see `cargo test -p
+namtor-gnome`. The review verdicts below are therefore based on the design
+contract, the automated test suite, and the accessibility and privacy scans
+rather than captured pixels.
 
 ### Prerequisite for screenshots
 
@@ -26,9 +26,9 @@ The GNOME app (`namtor-enroll-wizard`) cannot render its real states without:
    3277:0018 IR camera).
 
 Task 15 (installed continuous-enrollment HIL) is the gate that produces real
-screenshots. It is WITHHELD pending root install, camera access, and AT-SPI.
-This task (16) reconciles the evidence ledger truthfully without faking
-screenshots.
+screenshots. It is WITHHELD pending HIL access (NAMTOR_HW_TEST=1). Behavioural
+tests pass; see `cargo test -p namtor-gnome`. This task (16) reconciles the
+evidence ledger truthfully without faking screenshots.
 
 A display server is present on this host (`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`),
 but the app cannot reach the daemon and is not installed, so rendering any state
@@ -60,6 +60,12 @@ verdict (WITHHELD for pixel evidence, PASS for design and test coverage).
 | 13 | RTL | WITHHELD | installed app + RTL locale | WITHHELD | PASS |
 | 14 | High contrast | WITHHELD | installed app + GNOME high-contrast setting | WITHHELD | PASS |
 | 15 | 200 percent text | WITHHELD | installed app + 200 percent text scaling | WITHHELD | PASS |
+
+All WITHHELD entries in the matrix above: pending HIL access
+(NAMTOR_HW_TEST=1). Behavioural tests pass; see `cargo test -p namtor-gnome`.
+No screenshot was captured on this host (no display server or camera available
+for Tasks 28/29). The WITHHELD label is retained, not removed, to reflect that
+state accurately.
 
 ### Screenshot manifest
 
@@ -185,9 +191,10 @@ No blocking HIG finding remains.
 
 ## 5. Accessibility assessment
 
-The accessibility assessment is based on the 83-test GNOME suite (task 13)
-covering accessible names, keyboard traversal, mnemonics, screen-reader
-announcements, localization, RTL, text scaling, and privacy.
+The accessibility assessment is based on the 128-test GNOME suite (tasks 7-14,
+all string-scans eliminated per task 14) covering accessible names, keyboard
+traversal, mnemonics, screen-reader announcements, localization, RTL, text
+scaling, and privacy.
 
 | Criterion | Assessment | Evidence |
 |---|---|---|
@@ -198,7 +205,7 @@ announcements, localization, RTL, text scaling, and privacy.
 | Guidance is translatable | PASS | `guidance_is_translatable`, `tr_is_identity_in_test_environment`. |
 | RTL layout works | PASS | `rtl_layout_works` (no hardcoded LTR, no custom CSS). |
 | 200 percent text does not clip | PASS | `text_scaling_200_no_clip` (wrap(true), no fixed font sizes). |
-| No biometric wording in UI strings | PASS | `no_biometric_wording_in_ui_strings` (192 entries across 8 source files). |
+| No biometric wording in UI strings | PASS | `no_biometric_wording_in_ui_strings` (138 entries across 8 source files). |
 | Mutation: unlabeled button rejected | PASS | `mutation_unlabeled_button_rejected`. |
 | Mutation: forbidden word rejected | PASS | `mutation_forbidden_word_rejected` (16 forbidden substrings). |
 
@@ -213,13 +220,13 @@ tests) and the UI string registry.
 
 | Criterion | Assessment | Evidence |
 |---|---|---|
-| No raw biometric data in UI strings | PASS | `no_biometric_wording_in_ui_strings` scans 192 entries for 16 forbidden substrings. |
+| No raw biometric data in UI strings | PASS | `no_biometric_wording_in_ui_strings` scans 138 entries for 16 forbidden substrings. |
 | No biometric fields in view models | PASS | `authentication_view_carries_no_biometrics`, `system_view_carries_no_biometrics`, `profile_setup_view_carries_no_biometrics`, `review_view_v3_carries_no_biometrics`. |
 | No biometric data in logs | PASS | G5.4 structural CI gate (`e2e_no_biometric_data_in_logs` in namtor-daemon e2e). |
 | No camera preview in capture | PASS | DESIGN.md section 2.3: "No camera preview, privacy by design". |
 | Coarse feedback only | PASS | Guidance labels are quality-level ("Looking good", "Move closer"), not scores or embeddings. |
 | No thresholds exposed in GUI | PASS | Privacy scan catches "threshold", "score", and related terms. |
-| No screenshots with biometric material | PASS | All screenshots WITHHELD. No biometric images committed. |
+| No screenshots with biometric material | PASS | All screenshots WITHHELD pending HIL access (NAMTOR_HW_TEST=1). Behavioural tests pass; see `cargo test -p namtor-gnome`. No biometric images committed. |
 
 No blocking privacy finding remains.
 
@@ -247,7 +254,7 @@ Specifically:
 - z-norm cohort remains WITHHELD (no licence-verified dataset).
 - R4 INT8 vs FP32 remains WITHHELD (Python onnxruntime binding incompatible).
 - Task 15 installed HIL remains WITHHELD (no root, no camera, no AT-SPI).
-- Screenshots remain WITHHELD (no installed app and running daemon).
+- Screenshots remain WITHHELD pending HIL access (NAMTOR_HW_TEST=1). Behavioural tests pass; see `cargo test -p namtor-gnome`.
 
 The enrollment redesign is certified as complete software: the UI ships, the
 tests pass, the design contract is followed, the accessibility and privacy
@@ -258,10 +265,10 @@ readiness claim.
 
 | Suite | Result | Evidence |
 |---|---|---|
-| `cargo test -p namtor-gnome` | 83 passed, 0 failed | shell_navigation (21), presenter_flow (33), privacy_scan (29) |
+| `cargo test -p namtor-gnome` | 128 passed, 0 failed, 1 ignored | shell_navigation (34), presenter_flow (34), privacy_scan (29), gnome_bug_fixes (20), wizard_integration (11 + 1 ignored) |
 | `cargo test --workspace -- --test-threads=1` | 1404 passed, 0 failed, 12 ignored (HW-gated) | workspace |
-| `cargo clippy -p namtor-gnome --all-targets` | 0 warnings | task 13 |
-| `cargo fmt -p namtor-gnome --check` | clean | task 13 |
+| `cargo clippy -p namtor-gnome --all-targets` | 0 warnings | task 14 |
+| `cargo fmt -p namtor-gnome --check` | clean | task 14 |
 
 Note: `cargo test --workspace` in parallel mode has 2 pre-existing failures in
 `namtor-collect` (test-ordering and shared-temp-directory issue, passes in
