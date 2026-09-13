@@ -23,7 +23,7 @@ use std::time::Duration;
 use glib::ControlFlow;
 use gtk4::prelude::*;
 use libadwaita as adw;
-use libadwaita::prelude::{ActionRowExt, MessageDialogExt, PreferencesGroupExt};
+use libadwaita::prelude::{ActionRowExt, AdwDialogExt, AlertDialogExt, PreferencesGroupExt};
 
 use crate::components::pam_services::render_pam_services;
 use crate::components::system_status::render_system_status;
@@ -545,7 +545,7 @@ fn current_uid() -> u32 {
 }
 
 fn show_replace_dialog(presenter: &PresenterRc, rc: &ControllerRc, name: &str) {
-    let dialog = adw::MessageDialog::builder()
+    let dialog = adw::AlertDialog::builder()
         .heading(format!("Replace profile '{name}'?"))
         .body(format!(
             "A profile named '{name}' already exists. Replace it with a new enrollment?"
@@ -570,7 +570,8 @@ fn show_replace_dialog(presenter: &PresenterRc, rc: &ControllerRc, name: &str) {
         }
         dlg.close();
     });
-    dialog.present();
+    let parent = rc.borrow().shell.window().clone();
+    dialog.present(Some(&parent));
 }
 
 /// USA-10: Shows a rename dialog with an AdwEntryRow pre-filled with the
@@ -583,7 +584,7 @@ fn show_rename_dialog(
     profile_id: &str,
     current_name: &str,
 ) {
-    let dialog = adw::MessageDialog::builder()
+    let dialog = adw::AlertDialog::builder()
         .heading(tr("Rename Profile"))
         .body(tr("Enter a new name for this profile:"))
         .build();
@@ -630,5 +631,6 @@ fn show_rename_dialog(
         }
         dlg.close();
     });
-    dialog.present();
+    let parent = rc.borrow().shell.window().clone();
+    dialog.present(Some(&parent));
 }
