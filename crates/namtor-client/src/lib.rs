@@ -10,12 +10,12 @@
 #![warn(missing_docs)]
 
 pub mod client;
+pub mod contract;
 pub mod dbus_client;
 pub mod fake;
 pub mod fake_bus;
 pub mod proxy;
 pub mod types;
-pub mod contract;
 
 // Re-export key types at the crate root for convenience.
 pub use client::ManagerClient;

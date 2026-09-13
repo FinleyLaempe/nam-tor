@@ -7,7 +7,8 @@
 
 pub use namtor_client::client::ManagerClient;
 pub use namtor_client::types::{
-    API_VERSION_V3, EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, Guidance,
-    ManagerError, ManagerResult, PamServiceCompatibility, PamServiceInfo, ProfileId, ProfileInfo,
+    EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, Guidance, ManagerError,
+    ManagerResult, PamServiceCompatibility, PamServiceInfo, ProfileId, ProfileInfo,
     ProtectionKeyKind, ProtectionStatus, QualityLabel, ReviewOutcome, SessionId, StatusReport,
+    API_VERSION_V3,
 };

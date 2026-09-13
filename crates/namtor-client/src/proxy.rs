@@ -95,11 +95,7 @@ pub mod v2 {
         fn list_pam_services(&self) -> zbus::Result<Vec<crate::types::PamServiceInfo>>;
 
         /// Toggle namtor for a PAM service.
-        fn set_pam_service_enabled(
-            &self,
-            service_id: &str,
-            enabled: bool,
-        ) -> zbus::Result<bool>;
+        fn set_pam_service_enabled(&self, service_id: &str, enabled: bool) -> zbus::Result<bool>;
 
         /// Template storage protection status.
         fn get_protection_status(&self) -> zbus::Result<crate::types::ProtectionStatus>;
@@ -117,8 +113,10 @@ pub mod v2 {
 
         /// Protection status changed signal.
         #[zbus(signal)]
-        fn protection_status_changed(&self, status: crate::types::ProtectionStatus)
-            -> zbus::Result<()>;
+        fn protection_status_changed(
+            &self,
+            status: crate::types::ProtectionStatus,
+        ) -> zbus::Result<()>;
     }
 }
 
@@ -165,8 +163,10 @@ pub mod v3 {
 
         /// Single `(ssuuuuuys)` argument; session is the struct's first field.
         #[zbus(signal)]
-        fn enrollment_progress(&self, progress: crate::types::EnrollmentProgressV3)
-            -> zbus::Result<()>;
+        fn enrollment_progress(
+            &self,
+            progress: crate::types::EnrollmentProgressV3,
+        ) -> zbus::Result<()>;
 
         /// Enrollment completed signal.
         #[zbus(signal)]

@@ -155,8 +155,10 @@ impl InferenceBackend for OnnxCpu {
             .ok_or_else(|| WorkerError::Infer(format!("model not loaded: {key}")))?;
         let mut session = cell.borrow_mut();
         let input_vec: Vec<f32> = frame
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect();
         let input_name = session
             .inputs()
@@ -209,8 +211,10 @@ impl OnnxCpu {
             .ok_or_else(|| WorkerError::Infer(format!("model not loaded: {key}")))?;
         let mut session = cell.borrow_mut();
         let input_vec: Vec<f32> = frame
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect();
         let input_name = session
             .inputs()
