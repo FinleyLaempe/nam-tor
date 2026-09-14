@@ -103,7 +103,8 @@ jobs:
             pacman -Syu --noconfirm
             pacman -S --noconfirm --needed base-devel rust cargo python namcap \
                 onnxruntime openssl gtk4 libadwaita cmake qt6-base kirigami \
-                kcoreaddons extra-cmake-modules systemd xorg-server-xvfb curl
+                kcoreaddons extra-cmake-modules systemd xorg-server-xvfb \
+                github-cli
 
       - name: Install build toolchain (Fedora)
         if: startsWith(matrix.distro, 'fedora')
@@ -169,6 +170,7 @@ jobs:
       - name: Create source tarball, fetch model archive
         env:
           NAMTOR_MODELS_SHA256: d5920792513eaa6f4728826dd9e3fe32586c18b48d8fe4ed76a03ae8ffc71416
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
             cd "$GITHUB_WORKSPACE"
             # Plain tar, not `git archive`: actions/checkout@v4 falls back to
@@ -181,9 +183,15 @@ jobs:
             # The raw .onnx model weights are gitignored (never committed —
             # see AGENTS.md), so build-model-archive.sh cannot run inside
             # this checkout. The deterministic archive is instead hosted as
-            # a standing release asset (models-v0.1.0); fetch and verify it.
-            curl -fsSL -o /tmp/namtor-models-0.1.0.tar.gz \
-                "https://github.com/${{ github.repository }}/releases/download/models-v0.1.0/namtor-models-0.1.0.tar.gz"
+            # a standing release asset (models-v0.1.0). This is a private
+            # repo, so release-asset downloads need auth — plain curl gets
+            # a 404 (GitHub hides asset existence from unauthenticated
+            # requests). Use `gh release download`, which handles the
+            # GH_TOKEN auth automatically.
+            gh release download models-v0.1.0 \
+                --repo "${{ github.repository }}" \
+                --pattern 'namtor-models-0.1.0.tar.gz' \
+                --dir /tmp --clobber
             echo "$NAMTOR_MODELS_SHA256  /tmp/namtor-models-0.1.0.tar.gz" | sha256sum -c -
 
             cd /tmp
