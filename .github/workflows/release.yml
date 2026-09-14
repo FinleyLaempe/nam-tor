@@ -76,6 +76,7 @@ jobs:
   build:
     name: ${{ matrix.distro }}/${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     container:
       image: ${{ matrix.container }}
       env:
@@ -238,37 +239,44 @@ jobs:
             mv ../namtor_*.deb /tmp/
 
       # --- Install in a disposable container + smoke test ---
+      # No systemd PID 1 is running in these bare containers (no init
+      # system, no D-Bus daemon), so anything that tries to reach a live
+      # systemd/D-Bus connection (`systemctl cat`, an unbounded D-Bus
+      # dial in `namtor-cli status`) can hang instead of failing fast.
+      # Every command below is `timeout`-bounded for that reason.
+      # `systemd-analyze verify` only parses the unit file statically —
+      # no live bus needed — so it's safe without a timeout guard too,
+      # but it's wrapped anyway for defense in depth.
       - name: Install + smoke test (Arch)
         if: matrix.distro == 'arch'
         run: |
             pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
-            /usr/lib/namtor/namtor-daemon --version || \
-              /usr/lib/namtor/namtor-daemon --help || true
-            namtor-cli status || true
+            timeout 10 /usr/lib/namtor/namtor-daemon --version || \
+              timeout 10 /usr/lib/namtor/namtor-daemon --help || true
+            timeout 10 namtor-cli status || true
             ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
-            systemctl cat namtor-daemon.service 2>/dev/null || \
-              systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+            timeout 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
 
       - name: Install + smoke test (Fedora)
         if: startsWith(matrix.distro, 'fedora')
         run: |
             dnf install -y /tmp/namtor-*.rpm
-            /usr/lib/namtor/namtor-daemon --version || \
-              /usr/lib/namtor/namtor-daemon --help || true
-            namtor-cli status || true
+            timeout 10 /usr/lib/namtor/namtor-daemon --version || \
+              timeout 10 /usr/lib/namtor/namtor-daemon --help || true
+            timeout 10 namtor-cli status || true
             ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
-            systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+            timeout 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
 
       - name: Install + smoke test (Debian)
         if: startsWith(matrix.distro, 'debian')
         run: |
             dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb || \
               apt-get install -y -f --no-install-recommends
-            /usr/lib/namtor/namtor-daemon --version || \
-              /usr/lib/namtor/namtor-daemon --help || true
-            namtor-cli status || true
+            timeout 10 /usr/lib/namtor/namtor-daemon --version || \
+              timeout 10 /usr/lib/namtor/namtor-daemon --help || true
+            timeout 10 namtor-cli status || true
             ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
-            systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+            timeout 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
 
       # --- Upgrade test: rebuild with a bumped pkgrel and reinstall ---
       - name: Upgrade test (rebuild with bumped release + reinstall)
@@ -284,7 +292,7 @@ jobs:
                 dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb
                 ;;
             esac
-            namtor-cli status || true
+            timeout 10 namtor-cli status || true
             ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
 
       # --- Uninstall test ---
