@@ -102,7 +102,22 @@ impl AppController {
     /// USA-2: re-run `DbusManagerClient::connect()` and rebuild the UI.
     /// Wired to the offline retry button.
     pub fn retry_connection(&mut self, rc: &ControllerRc) {
-        match DbusManagerClient::connect() {
+        self.apply_connect_result(rc, DbusManagerClient::connect());
+    }
+
+    /// Handle a connect attempt's result: on success, swap to the online
+    /// presenter and re-render; on failure, show the offline page with the
+    /// error detail and re-arm retry. Extracted from `retry_connection` so
+    /// tests can drive both outcomes without a real D-Bus connection.
+    ///
+    /// **This is primarily for testing** — production code should call
+    /// `retry_connection()` which wraps this method.
+    pub fn apply_connect_result(
+        &mut self,
+        rc: &ControllerRc,
+        result: namtor_client::types::ManagerResult<DbusManagerClient>,
+    ) {
+        match result {
             Ok(client) => {
                 let uid = current_uid();
                 let p = Rc::new(RefCell::new(ProfilePresenter::new(client, uid)));
@@ -121,6 +136,39 @@ impl AppController {
                 });
             }
         }
+    }
+
+    /// Test-only constructor for behavioural tests. Constructs an
+    /// `AppController` in offline state with no presenter, so tests
+    /// can drive `apply_connect_result` with fake D-Bus clients.
+    ///
+    /// **This is for tests only** — production code must use `build()`.
+    pub fn new_offline_for_test(app: &adw::Application) -> ControllerRc {
+        let shell = Shell::new(app);
+        Rc::new(RefCell::new(Self {
+            shell,
+            presenter: None,
+            profile_list: ProfileListView::new(),
+            enrollment_view: EnrollmentViewComponent::new(),
+            review_view: ReviewViewComponent::new(),
+            enrollment_nav_page: None,
+            review_nav_page: None,
+            offline: true,
+        }))
+    }
+
+    /// Test-only accessor for behavioural tests.
+    ///
+    /// **This is for tests only** — not part of the production API.
+    pub fn is_offline_for_test(&self) -> bool {
+        self.offline
+    }
+
+    /// Test-only accessor for behavioural tests.
+    ///
+    /// **This is for tests only** — not part of the production API.
+    pub fn has_presenter_for_test(&self) -> bool {
+        self.presenter.is_some()
     }
 
     pub fn present(&self) {
@@ -208,15 +256,9 @@ impl AppController {
         let on_rename: RenameCallback = {
             let presenter = Rc::clone(presenter);
             let rc_rename = Rc::clone(rc);
-            Rc::new(move |id: &str, _current_name: &str| {
-                // USA-10: in a full implementation this opens a dialog with
-                // an EntryRow for the new name. For now, use the presenter
-                // rename path with a prompt.
-                {
-                    let mut p = presenter.borrow_mut();
-                    p.rename_profile(id, _current_name);
-                }
-                rc_rename.borrow_mut().render_profiles(&rc_rename);
+            Rc::new(move |id: &str, current_name: &str| {
+                // USA-10: open a rename dialog with an EntryRow pre-filled
+                show_rename_dialog(&presenter, &rc_rename, id, current_name);
             })
         };
         let list_group =
@@ -525,6 +567,66 @@ fn show_replace_dialog(presenter: &PresenterRc, rc: &ControllerRc, name: &str) {
             p.cancel_replace();
             drop(p);
             rc_replace.borrow_mut().render_enrollment(&rc_replace);
+        }
+        dlg.close();
+    });
+    dialog.present();
+}
+
+/// USA-10: Shows a rename dialog with an AdwEntryRow pre-filled with the
+/// current profile name. On confirm, validates non-empty and calls
+/// presenter.rename_profile(). On cancel, closes with no mutation.
+/// Empty names show an inline error and do not close the dialog.
+fn show_rename_dialog(
+    presenter: &PresenterRc,
+    rc: &ControllerRc,
+    profile_id: &str,
+    current_name: &str,
+) {
+    let dialog = adw::MessageDialog::builder()
+        .heading(tr("Rename Profile"))
+        .body(tr("Enter a new name for this profile:"))
+        .build();
+    dialog.set_accessible_role(gtk4::AccessibleRole::Dialog);
+    dialog.update_property(&[gtk4::accessible::Property::Label(&tr("Rename profile"))]);
+
+    // Create an EntryRow for the new name input
+    let entry_row = adw::EntryRow::builder()
+        .title(tr("Profile _Name"))
+        .use_underline(true)
+        .text(current_name)
+        .build();
+    entry_row.update_property(&[
+        gtk4::accessible::Property::Label(&tr("Profile name")),
+        gtk4::accessible::Property::Description(&tr("Enter a descriptive name for this profile")),
+    ]);
+
+    // Wrap the entry row in a preferences group for proper styling
+    let group = adw::PreferencesGroup::new();
+    group.add(&entry_row);
+    dialog.set_extra_child(Some(&group));
+
+    dialog.add_response("cancel", &tr("Cancel"));
+    dialog.add_response("rename", &tr("Rename"));
+    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("rename"));
+    dialog.set_close_response("cancel");
+
+    let presenter_rename = Rc::clone(presenter);
+    let rc_rename = Rc::clone(rc);
+    let profile_id = profile_id.to_string();
+    dialog.connect_response(None, move |dlg, response| {
+        if response == "rename" {
+            let new_name = entry_row.text().to_string();
+            if new_name.trim().is_empty() {
+                // Show inline error - do not close dialog
+                entry_row.add_css_class("error");
+                return;
+            }
+            let mut p = presenter_rename.borrow_mut();
+            p.rename_profile(&profile_id, &new_name);
+            drop(p);
+            rc_rename.borrow_mut().render_profiles(&rc_rename);
         }
         dlg.close();
     });

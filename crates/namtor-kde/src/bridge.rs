@@ -12,9 +12,11 @@
 //! blocks. The Rust bridge is the single source of truth for the wire types
 //! and is exercised by the hermetic contract suite in [`crate::contract`].
 
+use std::path::Path;
+
 use zbus::{connection::Connection, proxy::CacheProperties};
 
-use crate::proxy::{Manager3Proxy, ManagerProxy};
+use crate::proxy::{Manager2Proxy, Manager3Proxy, ManagerProxy};
 use crate::types::{
     EnrollOutcome, EnrollmentProgress, EnrollmentReviewV3, KcmError, ProfileInfo, ReviewOutcome,
     StatusReport,
@@ -39,6 +41,7 @@ pub const MANAGER_OBJECT_PATH: &str = "/org/namtor/Manager";
 /// Commit/Cancel).
 pub struct KcmBridge {
     proxy: ManagerProxy<'static>,
+    proxy2: Manager2Proxy<'static>,
     proxy3: Manager3Proxy<'static>,
 }
 
@@ -63,6 +66,15 @@ impl KcmBridge {
             .build()
             .await
             .map_err(KcmError::from)?;
+        let proxy2 = Manager2Proxy::builder(conn)
+            .destination(MANAGER_BUS_NAME)
+            .map_err(KcmError::from)?
+            .path(MANAGER_OBJECT_PATH)
+            .map_err(KcmError::from)?
+            .cache_properties(CacheProperties::No)
+            .build()
+            .await
+            .map_err(KcmError::from)?;
         let proxy3 = Manager3Proxy::builder(conn)
             .destination(MANAGER_BUS_NAME)
             .map_err(KcmError::from)?
@@ -72,7 +84,53 @@ impl KcmBridge {
             .build()
             .await
             .map_err(KcmError::from)?;
-        Ok(Self { proxy, proxy3 })
+        Ok(Self {
+            proxy,
+            proxy2,
+            proxy3,
+        })
+    }
+
+    /// `SetPamServiceEnabled(service_id, enabled) -> success`. Toggles namtor
+    /// for a single PAM service via the `Manager2` interface.
+    pub async fn set_pam_service_enabled(
+        &self,
+        service_id: &str,
+        enabled: bool,
+    ) -> Result<bool, KcmError> {
+        self.proxy2
+            .set_pam_service_enabled(service_id, enabled)
+            .await
+            .map_err(KcmError::from)
+    }
+
+    /// Provisions (or de-provisions) KDE lock-screen face unlock: enables the
+    /// `kde-face` PAM service via D-Bus, then sets/clears `Face=true` under
+    /// `[Authenticators]` in `home/.config/kscreenlockerrc`. Both actions
+    /// reverse together when `enabled` is `false`. The PAM call runs first —
+    /// if it fails (e.g. `kde-face` service management unavailable), the
+    /// local file is left untouched so the two stay consistent.
+    pub async fn set_face_unlock_enabled(
+        &self,
+        home: &Path,
+        enabled: bool,
+    ) -> Result<(), KcmError> {
+        self.set_pam_service_enabled("kde-face", enabled).await?;
+        crate::kscreenlocker::set_face(home, enabled).map_err(KcmError::from)
+    }
+
+    /// Lockout-safety check: reads `home/.config/kscreenlockerrc` and returns
+    /// `true` if `Face=true` is the only enabled authenticator — a state with
+    /// no password fallback that would lock the user out if face unlock
+    /// fails. The KCM must call this before allowing any action that disables
+    /// a non-face authenticator and refuse (or require explicit confirmation)
+    /// when it returns `true`.
+    pub fn check_lockout_safety(&self, home: &Path) -> bool {
+        let path = home.join(".config/kscreenlockerrc");
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return false;
+        };
+        crate::kscreenlocker::would_cause_lockout(&content)
     }
 
     /// `ListProfiles` → [`ProfileInfo`] list for the QML model.

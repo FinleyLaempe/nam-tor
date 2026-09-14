@@ -1,0 +1,151 @@
+// SPDX-FileCopyrightText: 2026 Nam-tor Project
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! Hermetic p2p `FakeBus` — an in-process `org.namtor.Manager` service for
+//! testing [`crate::dbus_client::DbusManagerClient`] without a real D-Bus
+//! daemon. No `DBUS_SESSION_BUS_ADDRESS` or system bus is touched.
+
+use std::os::unix::net::UnixStream;
+use std::sync::{Arc, Mutex};
+
+use crate::dbus_client::DbusManagerClient;
+use crate::types::{ProfileInfo, StatusReport};
+
+/// Mutable state behind the fake `org.namtor.Manager` service.
+#[derive(Debug, Default)]
+struct FakeState {
+    profiles: Vec<ProfileInfo>,
+    daemon_unavailable: bool,
+    next_session: u32,
+}
+
+/// The zbus interface implementation for the v1 `org.namtor.Manager` surface.
+struct FakeManagerV1 {
+    state: Arc<Mutex<FakeState>>,
+}
+
+#[zbus::interface(name = "org.namtor.Manager")]
+impl FakeManagerV1 {
+    fn list_profiles(&self) -> zbus::fdo::Result<Vec<ProfileInfo>> {
+        let s = self.state.lock().expect("fake state poisoned");
+        if s.daemon_unavailable {
+            return Err(zbus::fdo::Error::ServiceUnknown(
+                "org.namtor.Manager".to_string(),
+            ));
+        }
+        Ok(s.profiles.clone())
+    }
+
+    fn start_enrollment(&self, _uid: u32, name: &str) -> zbus::fdo::Result<String> {
+        let mut s = self.state.lock().expect("fake state poisoned");
+        s.next_session = s.next_session.wrapping_add(1);
+        Ok(format!("sess-{name}-{}", s.next_session))
+    }
+
+    fn cancel_enrollment(&self, _session: &str) -> zbus::fdo::Result<()> {
+        Ok(())
+    }
+
+    fn commit_profile(&self, _session: &str) -> zbus::fdo::Result<String> {
+        let mut s = self.state.lock().expect("fake state poisoned");
+        let id = format!("p{}", s.profiles.len() + 1);
+        s.profiles.push(ProfileInfo {
+            id: id.clone(),
+            name: "Alice".to_string(),
+            enabled: true,
+            created: 1,
+            last_used: 0,
+        });
+        Ok(id)
+    }
+
+    fn rename_profile(&self, _uid: u32, id: &str, new_name: &str) -> zbus::fdo::Result<()> {
+        let mut s = self.state.lock().expect("fake state poisoned");
+        for p in s.profiles.iter_mut() {
+            if p.id == id {
+                p.name = new_name.to_string();
+            }
+        }
+        Ok(())
+    }
+
+    fn enable_profile(&self, _uid: u32, id: &str, enabled: bool) -> zbus::fdo::Result<()> {
+        let mut s = self.state.lock().expect("fake state poisoned");
+        for p in s.profiles.iter_mut() {
+            if p.id == id {
+                p.enabled = enabled;
+            }
+        }
+        Ok(())
+    }
+
+    fn delete_profile(&self, _uid: u32, id: &str) -> zbus::fdo::Result<()> {
+        let mut s = self.state.lock().expect("fake state poisoned");
+        s.profiles.retain(|p| p.id != id);
+        Ok(())
+    }
+
+    fn get_status(&self) -> zbus::fdo::Result<StatusReport> {
+        let s = self.state.lock().expect("fake state poisoned");
+        Ok(StatusReport {
+            api_version: 1,
+            profiles: s.profiles.clone(),
+            emitter_armed: false,
+        })
+    }
+
+    #[zbus(property)]
+    fn api_version(&self) -> zbus::fdo::Result<u32> {
+        Ok(1)
+    }
+}
+
+/// A live p2p fake bus: owns the server connection and a ready-to-use
+/// [`DbusManagerClient`] wired to the client side of the socket pair.
+pub struct FakeBus {
+    /// Server-side connection; kept alive so the service stays up.
+    pub server: zbus::Connection,
+    /// A `DbusManagerClient` wired to the client side of the p2p pair.
+    pub client: DbusManagerClient,
+}
+
+impl FakeBus {
+    /// Spawn a fresh in-process fake bus. No real D-Bus daemon required.
+    ///
+    /// The server connection is built on a background thread so its handshake
+    /// can proceed concurrently with the client's handshake on this thread.
+    /// Both sides of a p2p pair must be built simultaneously — building one
+    /// before the other deadlocks the SASL handshake.
+    pub fn spawn() -> Result<Self, zbus::Error> {
+        let (a, b) = UnixStream::pair().map_err(|e| zbus::Error::Failure(e.to_string()))?;
+        let state = Arc::new(Mutex::new(FakeState::default()));
+        let guid = zbus::Guid::generate();
+
+        let (tx, rx) = std::sync::mpsc::channel::<Result<zbus::Connection, zbus::Error>>();
+        std::thread::Builder::new()
+            .name("fake_bus_server".into())
+            .spawn(move || {
+                let result = zbus::block_on(async {
+                    zbus::connection::Builder::unix_stream(a)
+                        .server(guid)
+                        .map_err(|e| zbus::Error::Failure(e.to_string()))?
+                        .p2p()
+                        .serve_at("/org/namtor/Manager", FakeManagerV1 { state })?
+                        .build()
+                        .await
+                });
+                let _ = tx.send(result);
+            })
+            .map_err(|e| zbus::Error::Failure(e.to_string()))?;
+
+        let client_conn = zbus::blocking::connection::Builder::unix_stream(b)
+            .p2p()
+            .build()?;
+
+        let server = rx
+            .recv()
+            .map_err(|e| zbus::Error::Failure(e.to_string()))??;
+        let client = DbusManagerClient::from_connection(client_conn);
+        Ok(Self { server, client })
+    }
+}

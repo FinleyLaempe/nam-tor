@@ -125,13 +125,16 @@ $ cargo fmt -p namtor-gnome -- --check                        # clean
 
 ## Residual risks / out-of-scope
 
-- The live `DbusManagerClient` is untested against a real session bus because
-  task 25 (the service side) is not yet implemented in this repo. The client
-  compiles and its error-name mapping is documented; integration against the
-  real service is deferred to task 25's QA.
-- The wizard binary's GTK rendering is not exercised in CI (no display
-  server). The presenter, which is the entire decision layer, is fully
-  covered; the view is a deterministic adapter.
+- The live `DbusManagerClient` is tested against a
+  `namtor_client::fake_bus::FakeBus` p2p socket pair (hermetic, no real D-Bus
+  daemon). `FakeBus::spawn()` produces a genuine `DbusManagerClient` wired to an
+  in-process fake service, exercised by the USA-2 `retry_connection` behavioural
+  test and the shared contract suite. Real system-bus integration is still
+  HIL-only.
+- GTK rendering is verified by HIL screenshots (WITHHELD, Tasks 28/29: no
+  display server or camera on this host) or by behavioural presenter tests (CI
+  fallback, Tasks 9-14, all DONE). The presenter is the entire decision layer
+  and is fully covered; the view is a deterministic adapter.
 - Signal-based progress (`enrollment_progress`, `enrollment_complete`) is
   surfaced via polled `get_progress` with a signal cache in the live client.
   A future task can add a `glib::MainLoop` signal subscription for lower

@@ -605,6 +605,28 @@ if [[ -f "$lifecycle_staged" ]]; then
 fi
 
 # ===========================================================================
+# (k+) namtor-client headless-safe core gate
+# ===========================================================================
+
+echo "--- (k+) namtor-client headless-safe core gate ---"
+
+CLIENT_TOML="$REPO_ROOT/crates/namtor-client/Cargo.toml"
+if [[ -f "$CLIENT_TOML" ]]; then
+    if grep -qE '^\s*(gtk4|libadwaita|qt6|gio|glib|x11|wayland|gtk-|libadwaita-|qt6-|glib2|gio2|qg\w+)' "$CLIENT_TOML"; then
+        not_ok "namtor-client has a forbidden desktop/GUI dependency"
+    else
+        ok "namtor-client has no gtk4/libadwaita/qt6/gio/glib/x11/wayland dependency"
+    fi
+    if grep -A20 '^zbus\s*=' "$CLIENT_TOML" | grep -qE '"(gio|glib)"'; then
+        not_ok "namtor-client's zbus dependency enables the gio/glib feature"
+    else
+        ok "namtor-client's zbus dependency does not enable gio/glib features"
+    fi
+else
+    not_ok "namtor-client/Cargo.toml not found"
+fi
+
+# ===========================================================================
 # Additional mandatory files: install-manifest, SBOM, COPYING, README
 # ===========================================================================
 

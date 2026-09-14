@@ -18,13 +18,14 @@
 pub mod abi;
 mod bridge;
 pub mod contract;
+mod kscreenlocker;
 mod proxy;
 mod types;
 
 pub use bridge::{EnrollmentController, EnrollmentState, KcmBridge, ProfileList};
 pub use types::{
     EnrollOutcome, EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, KcmError,
-    ProfileInfo, ReviewOutcome, StatusReport,
+    ProfileInfo, QualityLabel, ReviewOutcome, StatusReport,
 };
 
 #[cfg(test)]

@@ -6,7 +6,7 @@
         "Description": "Enroll and manage face profiles for login authentication",
         "Description[de]": "Gesichtsprofile für die Anmeldung anlegen und verwalten",
         "Icon": "preferences-system-user-authentication",
-        "Category": "user",
+
         "Keywords": "face;authentication;biometric;login;camera;ir;infrared",
         "Keywords[de]": "gesicht;authentifizierung;biometrie;anmeldung;kamera;infrarot",
         "License": "GPL-3.0-only",
@@ -20,7 +20,7 @@
         ]
     },
     "X-KDE-ParentApp": "kcontrol",
-    "X-KDE-System-Settings-Parent-Category": "user",
-    "X-KDE-System-Settings-Parent-Category-Id": "user",
+    "X-KDE-System-Settings-Parent-Category": "security-privacy",
+
     "X-KDE-Weight": 60
 }

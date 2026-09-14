@@ -15,12 +15,12 @@ use zbus::zvariant::Type;
 use zbus::MessageStream;
 
 use crate::bridge::{EnrollmentController, EnrollmentState, KcmBridge, ProfileList};
-use crate::contract::{self, ScenarioHook};
 use crate::fake::{FakeBus, FakeHandle, FakeManagerSignals};
 use crate::types::{
     EnrollOutcome, EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, KcmError,
-    ProfileInfo, ReviewOutcome, StatusReport,
+    ProfileInfo, QualityLabel, ReviewOutcome, StatusReport,
 };
+use namtor_client::contract::ScenarioHook;
 
 /// UID used by tests (matches `contract::TEST_UID`).
 const TEST_UID: u32 = 1000;
@@ -33,107 +33,34 @@ async fn rig(handle: &FakeHandle) -> (FakeBus, KcmBridge) {
     (bus, bridge)
 }
 
-/// Bridge factory for the contract suite: spawns a fresh bus per call bound to
-/// the same shared handle so the suite's `reset`/hooks affect the next bridge.
-struct Factory {
-    handle: FakeHandle,
-}
-
-impl Factory {
-    fn make(&self) -> KcmBridge {
-        let handle = self.handle.clone();
-        // Build synchronously is not possible (async connect); the contract
-        // suite expects a sync `Fn() -> KcmBridge`. We resolve the connection
-        // eagerly via block_on inside the closure so the suite's async methods
-        // still drive the same connection.
-        zbus::block_on(async move {
-            let bus = FakeBus::spawn(&handle).await.unwrap();
-            // Leak the bus so the connection outlives the closure scope; the
-            // test process tears down at the end. Each contract case gets a
-            // fresh bus, so this is bounded to one per case.
-            let bus: FakeBus = bus;
-            let leaked: &'static FakeBus = Box::leak(Box::new(bus));
-            KcmBridge::new(&leaked.client).await.unwrap()
-        })
-    }
-}
-
 #[test]
 fn happy_path() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::happy_path(|| factory.make(), &handle));
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::happy_path(&fake, &fake);
 }
 
 #[test]
 fn error_daemon_unavailable() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::error_daemon_unavailable(
-        || factory.make(),
-        &handle,
-    ));
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::error_daemon_unavailable(&fake, &fake);
 }
 
 #[test]
 fn cancel_keeps_state_safe() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::cancel_keeps_state_safe(
-        || factory.make(),
-        &handle,
-    ));
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::cancel_keeps_state_safe(&fake, &fake);
 }
 
 #[test]
 fn auth_loss_preserves_profiles() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::auth_loss_preserves_profiles(
-        || factory.make(),
-        &handle,
-    ));
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::auth_loss_preserves_profiles(&fake, &fake);
 }
 
 #[test]
 fn merge_and_replace() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::merge_and_replace(|| factory.make(), &handle));
-}
-
-#[test]
-fn review_returns_coarse_quality() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::review_returns_coarse_quality(
-        || factory.make(),
-        &handle,
-    ));
-}
-
-#[test]
-fn get_status_returns_report() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(contract::get_status_returns_report(
-        || factory.make(),
-        &handle,
-    ));
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::merge_and_replace(&fake, &fake);
 }
 
 /// Shared contract suite: run every scenario back-to-back against the same
@@ -141,20 +68,12 @@ fn get_status_returns_report() {
 /// honors it (the GNOME UI reuses the same suite to prevent divergence).
 #[test]
 fn shared_contract_suite() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    let mk = || factory.make();
-    zbus::block_on(async {
-        contract::happy_path(mk, &handle).await;
-        contract::error_daemon_unavailable(mk, &handle).await;
-        contract::cancel_keeps_state_safe(mk, &handle).await;
-        contract::auth_loss_preserves_profiles(mk, &handle).await;
-        contract::merge_and_replace(mk, &handle).await;
-        contract::review_returns_coarse_quality(mk, &handle).await;
-        contract::get_status_returns_report(mk, &handle).await;
-    });
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::happy_path(&fake, &fake);
+    namtor_client::contract::error_daemon_unavailable(&fake, &fake);
+    namtor_client::contract::cancel_keeps_state_safe(&fake, &fake);
+    namtor_client::contract::auth_loss_preserves_profiles(&fake, &fake);
+    namtor_client::contract::merge_and_replace(&fake, &fake);
 }
 
 /// Privacy scan: no KCM-facing type or struct field may carry biometric data
@@ -172,13 +91,13 @@ fn privacy_scan_no_biometric_data() {
     let progress = EnrollmentProgress {
         session_id: "s1".to_string(),
         frames_captured: 1,
-        quality_label: "good".to_string(),
+        quality: QualityLabel::High,
         coverage_percent: 50,
     };
     let review = ReviewOutcome {
         profile_id: "p1".to_string(),
         needs_reenroll: false,
-        quality: "high".to_string(),
+        quality: QualityLabel::High,
     };
     let status = StatusReport {
         api_version: 1,
@@ -209,10 +128,14 @@ fn privacy_scan_no_biometric_data() {
             "ProfileInfo leaked biometric term `{forbidden}`"
         );
     }
-    // quality_label must be a non-numeric bucket, never a score.
-    assert!(!progress.quality_label.chars().any(|c| c.is_ascii_digit()));
+    // quality must be a non-numeric bucket, never a score.
+    assert!(!progress
+        .quality
+        .as_str()
+        .chars()
+        .any(|c| c.is_ascii_digit()));
     // Review quality is a bucket, never a numeric score.
-    assert!(!review.quality.chars().any(|c| c.is_ascii_digit()));
+    assert!(!review.quality.as_str().chars().any(|c| c.is_ascii_digit()));
     // EnrollmentController stores only a session id and an outcome — no frames.
     let ctrl = EnrollmentController::new("s1".to_string(), TEST_UID);
     assert_eq!(ctrl.session_id(), "s1");
@@ -290,7 +213,7 @@ fn daemon_restart_old_bridge_errors_new_bridge_works() {
         // Daemon goes away.
         drop(bus);
         match bridge.list_profiles().await {
-            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) => {}
+            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) | Err(KcmError::Io(_)) => {}
             Ok(v) => panic!("expected error after daemon drop, got {v:?}"),
         }
 
@@ -315,7 +238,7 @@ fn stale_progress_signal_ignored() {
     let stale = EnrollmentProgress {
         session_id: "sess-old".to_string(),
         frames_captured: 5,
-        quality_label: "fair".to_string(),
+        quality: QualityLabel::Medium,
         coverage_percent: 40,
     };
     assert!(!ctrl.set_progress(&stale));
@@ -325,7 +248,7 @@ fn stale_progress_signal_ignored() {
     let current = EnrollmentProgress {
         session_id: "sess-current".to_string(),
         frames_captured: 12,
-        quality_label: "good".to_string(),
+        quality: QualityLabel::High,
         coverage_percent: 80,
     };
     assert!(ctrl.set_progress(&current));
@@ -344,7 +267,7 @@ fn error_handling_surfaces_kcm_error() {
         handle.set_daemon_unavailable();
         let (_bus, bridge) = rig(&handle).await;
         match bridge.list_profiles().await {
-            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) => {}
+            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) | Err(KcmError::Io(_)) => {}
             Ok(v) => panic!("expected error when daemon unavailable, got {v:?}"),
         }
     });
@@ -391,7 +314,7 @@ fn offline_denied_cancel_keeps_state_safe() {
         bridge.list_profiles().await
     });
     match res {
-        Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) => {}
+        Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) | Err(KcmError::Io(_)) => {}
         Ok(v) => panic!("expected error after server drop, got {v:?}"),
     }
 
@@ -432,7 +355,7 @@ fn enrollment_signals_round_trip() {
         let progress = EnrollmentProgress {
             session_id: "s1".to_string(),
             frames_captured: 5,
-            quality_label: "fair".to_string(),
+            quality: QualityLabel::Medium,
             coverage_percent: 40,
         };
         iface
@@ -454,7 +377,7 @@ fn enrollment_signals_round_trip() {
             match msg.header().member().map(|m| m.as_str()) {
                 Some("EnrollmentProgress") => {
                     let (_sid, p): (String, EnrollmentProgress) = msg.body().deserialize().unwrap();
-                    assert_eq!(p.quality_label, "fair");
+                    assert_eq!(p.quality, QualityLabel::Medium);
                     got_progress = true;
                 }
                 Some("EnrollmentCompleted") => {
@@ -526,6 +449,61 @@ fn profile_and_status_changed_signals_round_trip() {
         }
         assert!(got_profile_changed, "did not receive ProfileChanged");
         assert!(got_status_changed, "did not receive StatusChanged");
+    });
+}
+
+/// Unique temp dir per test so parallel `cargo test` runs never collide, and
+/// the real `$HOME/.config/kscreenlockerrc` is never touched.
+fn temp_home(tag: &str) -> std::path::PathBuf {
+    let unique = format!(
+        "namtor-kde-face-unlock-test-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    std::env::temp_dir().join(unique)
+}
+
+/// Enabling face unlock must both call `SetPamServiceEnabled("kde-face",
+/// true)` over D-Bus and write `Face=true` under `[Authenticators]` in
+/// `kscreenlockerrc`. Disabling must reverse both.
+#[test]
+fn set_face_unlock_enabled_toggles_pam_and_kscreenlockerrc() {
+    let handle = FakeHandle::new();
+    handle.reset(&[]);
+    let home = temp_home("toggle");
+    zbus::block_on(async {
+        let (_bus, bridge) = rig(&handle).await;
+
+        bridge.set_face_unlock_enabled(&home, true).await.unwrap();
+        assert_eq!(handle.pam_service_enabled("kde-face"), Some(true));
+        let content = std::fs::read_to_string(home.join(".config/kscreenlockerrc")).unwrap();
+        assert!(content.contains("[Authenticators]"));
+        assert!(content.contains("Face=true"));
+
+        bridge.set_face_unlock_enabled(&home, false).await.unwrap();
+        assert_eq!(handle.pam_service_enabled("kde-face"), Some(false));
+        let content = std::fs::read_to_string(home.join(".config/kscreenlockerrc")).unwrap();
+        assert!(!content.contains("Face="));
+    });
+}
+
+/// If the PAM D-Bus call fails (e.g. `kde-face` service management is
+/// unavailable), the local `kscreenlockerrc` must be left untouched — the two
+/// stay consistent rather than the file drifting ahead of D-Bus state.
+#[test]
+fn set_face_unlock_enabled_leaves_file_untouched_when_pam_call_fails() {
+    let handle = FakeHandle::new();
+    handle.reset(&[]);
+    handle.set_daemon_unavailable();
+    let home = temp_home("pam-fails");
+    zbus::block_on(async {
+        let (_bus, bridge) = rig(&handle).await;
+        let result = bridge.set_face_unlock_enabled(&home, true).await;
+        assert!(result.is_err());
+        assert!(!home.join(".config/kscreenlockerrc").exists());
     });
 }
 
@@ -738,7 +716,7 @@ fn v3_bridge_malformed_tuple_fails_closed() {
         // Drop the server to simulate a malformed/transport failure on review.
         drop(bus);
         match bridge.review_enrollment_v3(&session).await {
-            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) => {}
+            Err(KcmError::DaemonUnavailable) | Err(KcmError::Call(_)) | Err(KcmError::Io(_)) => {}
             Ok(v) => panic!("expected error on malformed review, got {v:?}"),
         }
         // No profile could have been committed by a failed review.
@@ -752,14 +730,116 @@ fn v3_bridge_malformed_tuple_fails_closed() {
 /// the task — adding v3 must not break v1/v2 callers.
 #[test]
 fn v1_v2_compatibility_unchanged() {
-    let handle = FakeHandle::new();
-    let factory = Factory {
-        handle: handle.clone(),
-    };
-    zbus::block_on(async {
-        contract::happy_path(|| factory.make(), &handle).await;
-        contract::cancel_keeps_state_safe(|| factory.make(), &handle).await;
-        contract::review_returns_coarse_quality(|| factory.make(), &handle).await;
-        contract::get_status_returns_report(|| factory.make(), &handle).await;
-    });
+    let fake = namtor_client::fake::FakeManagerClient::new();
+    namtor_client::contract::happy_path(&fake, &fake);
+    namtor_client::contract::cancel_keeps_state_safe(&fake, &fake);
+    namtor_client::contract::merge_and_replace(&fake, &fake);
+}
+
+// ---------------------------------------------------------------------------
+// Lockout-safety: Face must never be the sole enabled authenticator
+// ---------------------------------------------------------------------------
+
+/// Lockout-safety check: a `kscreenlockerrc` with only `Face=true` under
+/// `[Authenticators]` (no password fallback) is a lockout-unsafe state.
+/// The KCM must call [`kscreenlocker::would_cause_lockout`] before allowing
+/// any authenticator-disabling action and refuse (or confirm) if it would
+/// produce this state.
+#[test]
+fn lockout_safety_face_only_is_unsafe() {
+    let home = temp_home("lockout-face-only");
+    let config_dir = home.join(".config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("kscreenlockerrc"),
+        "[Greeter]\nWallpaperPlugin=org.kde.image\n\n[Authenticators]\nFace=true\n",
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+    assert!(
+        crate::kscreenlocker::would_cause_lockout(&content),
+        "Face=true with no other enabled authenticator must be lockout-unsafe"
+    );
+}
+
+/// Lockout-safety check: `Face=true` alongside `Password=true` is safe —
+/// the password authenticator is an explicit fallback.
+#[test]
+fn lockout_safety_face_plus_password_is_safe() {
+    let home = temp_home("lockout-face-plus-password");
+    let config_dir = home.join(".config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("kscreenlockerrc"),
+        "[Authenticators]\nFace=true\nPassword=true\n",
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+    assert!(
+        !crate::kscreenlocker::would_cause_lockout(&content),
+        "Face=true + Password=true must be safe (password fallback exists)"
+    );
+}
+
+/// Lockout-safety check: no `[Authenticators]` section at all is safe —
+/// password is the implicit default authenticator in `kscreenlockerd`.
+#[test]
+fn lockout_safety_no_authenticators_section_is_safe() {
+    let home = temp_home("lockout-no-section");
+    let config_dir = home.join(".config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("kscreenlockerrc"),
+        "[Greeter]\nWallpaperPlugin=org.kde.image\n",
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+    assert!(
+        !crate::kscreenlocker::would_cause_lockout(&content),
+        "No [Authenticators] section means password is the implicit default — safe"
+    );
+}
+
+/// Lockout-safety check: `Face=true` alongside `Fingerprint=true` is safe —
+/// any non-face authenticator enabled counts as a fallback.
+#[test]
+fn lockout_safety_face_plus_fingerprint_is_safe() {
+    let home = temp_home("lockout-face-plus-fingerprint");
+    let config_dir = home.join(".config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("kscreenlockerrc"),
+        "[Authenticators]\nFace=true\nFingerprint=true\n",
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+    assert!(
+        !crate::kscreenlocker::would_cause_lockout(&content),
+        "Face=true + Fingerprint=true must be safe (non-face fallback exists)"
+    );
+}
+
+/// Lockout-safety check: `Face=false` alone is not a lockout risk — Face is
+/// not enabled, so the lockout condition (Face as sole authenticator) does
+/// not apply.
+#[test]
+fn lockout_safety_face_disabled_is_safe() {
+    let home = temp_home("lockout-face-disabled");
+    let config_dir = home.join(".config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("kscreenlockerrc"),
+        "[Authenticators]\nFace=false\n",
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+    assert!(
+        !crate::kscreenlocker::would_cause_lockout(&content),
+        "Face=false must be safe (face not enabled)"
+    );
 }

@@ -65,12 +65,12 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Install system deps (GTK4, libadwaita, pam, openssl, udev, seccomp)
+      - name: Install system deps (GTK4, libadwaita, pam, openssl, udev, seccomp, xvfb)
         run: |
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends \
                 libgtk-4-dev libadwaita-1-dev libpam0g-dev libssl-dev \
-                libudev-dev libseccomp-dev pkg-config
+                libudev-dev libseccomp-dev pkg-config xvfb
 
       # Gate 6a — SPDX license headers on every Rust source file.
       - name: SPDX headers
@@ -95,7 +95,7 @@ jobs:
       # produce spurious failures under the parallel executor.
       # Excludes namtor-kde (KF6 unavailable on Ubuntu; covered by `build` job).
       - name: cargo test --all
-        run: cargo test --workspace --exclude namtor-kde -- --skip concurrent_connections_serialise --test-threads=1
+        run: xvfb-run -a cargo test --workspace --exclude namtor-kde -- --skip concurrent_connections_serialise --test-threads=1
 
       # Gate 1a — namtor-proto carries no ML deps (existing G5.1 check).
       - name: G5.1 — namtor-proto carries no ML deps

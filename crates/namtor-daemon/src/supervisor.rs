@@ -166,6 +166,12 @@ impl ChildSupervisor {
         drop(req_r);
         drop(rsp_w);
 
+        // Prevent the daemon-side fds from being closed when the OwnedFd
+        // wrappers go out of scope — File::from_raw_fd takes ownership of
+        // the raw fd, so the OwnedFd must not also close it.
+        std::mem::forget(req_w);
+        std::mem::forget(rsp_r);
+
         let daemon_reader = unsafe { std::fs::File::from_raw_fd(rsp_r_raw) };
         let daemon_writer = unsafe { std::fs::File::from_raw_fd(req_w_raw) };
 

@@ -30,7 +30,7 @@ type PresenterRc<C> = Rc<RefCell<ProfilePresenter<C>>>;
 
 /// Render the PAM services inventory as a `PreferencesGroup` and return it.
 /// The caller adds the group to the Authentication `PreferencesPage`.
-pub fn render_pam_services<C: crate::client::ManagerClient + 'static>(
+pub fn render_pam_services<C: crate::client::ManagerClient + Send + Sync + 'static>(
     presenter_rc: &PresenterRc<C>,
 ) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder()
@@ -59,7 +59,7 @@ pub fn render_pam_services<C: crate::client::ManagerClient + 'static>(
     group
 }
 
-fn create_pam_service_row<C: crate::client::ManagerClient + 'static>(
+fn create_pam_service_row<C: crate::client::ManagerClient + Send + Sync + 'static>(
     service: &crate::view_model::PamServiceRowView,
     presenter_rc: &PresenterRc<C>,
 ) -> adw::ActionRow {
@@ -127,25 +127,29 @@ fn create_pam_service_row<C: crate::client::ManagerClient + 'static>(
     row
 }
 
-fn handle_toggle<C: crate::client::ManagerClient + 'static>(
+fn handle_toggle<C: crate::client::ManagerClient + Send + Sync + 'static>(
     rc: &PresenterRc<C>,
     switch: &adw::SwitchRow,
     service_id: &str,
     service_name: &str,
 ) {
     let new_state = switch.is_active();
-    // USA-0/USA-16: in a full deployment this synchronous D-Bus call
-    // (which may trigger a polkit CheckAuthorization) should be routed
-    // through `presenter.dispatch_async()` + `glib::MainContext` idle
-    // callback so the GTK main thread never blocks on the round-trip.
-    // The scroll position of the PAM services page is managed by
-    // `PreferencesDialog` internally (the dialog preserves scroll across
-    // re-renders of the same page).
+
+    // USA-0/USA-16: Route the PAM toggle through dispatch_async so the
+    // GTK main thread never blocks on the D-Bus round-trip (which may
+    // trigger a polkit CheckAuthorization dialog). The staging logic
+    // (checking for confirmation, error handling) runs synchronously
+    // for immediate UI feedback, but the actual D-Bus call is async.
+    let service_id = service_id.to_string();
+    let service_name = service_name.to_string();
+
+    // Stage the toggle synchronously (for confirmation dialog).
     {
         let mut p = rc.borrow_mut();
-        p.request_pam_toggle(service_id, new_state);
+        p.request_pam_toggle(&service_id, new_state);
     }
 
+    // Check for errors or confirmation needs.
     let needs_confirmation = rc.borrow().model().pending_pam_toggle.is_some();
     let has_error = rc.borrow().model().error.is_some();
 
@@ -155,11 +159,29 @@ fn handle_toggle<C: crate::client::ManagerClient + 'static>(
     }
 
     if needs_confirmation {
-        show_high_impact_dialog(rc, switch, service_id, service_name);
+        // Confirmation dialog will call confirm_pam_toggle asynchronously.
+        show_high_impact_dialog(rc, switch, &service_id, &service_name);
+        return;
     }
+
+    // For non-risky toggles (and disables), dispatch the D-Bus call asynchronously.
+    let rc_dispatch = Rc::clone(rc);
+    let mut p = rc.borrow_mut();
+    p.dispatch_async(move |client| {
+        let _ = client.set_pam_service_enabled(&service_id, new_state);
+    });
+    drop(p);
+    // After dispatching, schedule a refresh on the main thread.
+    glib::MainContext::default().spawn_local(async move {
+        // Give the D-Bus call time to complete.
+        glib::timeout_future(std::time::Duration::from_millis(50)).await;
+        let mut p = rc_dispatch.borrow_mut();
+        p.refresh();
+        p.mark_async_complete();
+    });
 }
 
-fn show_high_impact_dialog<C: crate::client::ManagerClient + 'static>(
+fn show_high_impact_dialog<C: crate::client::ManagerClient + Send + Sync + 'static>(
     rc: &PresenterRc<C>,
     switch: &adw::SwitchRow,
     _service_id: &str,
@@ -184,15 +206,39 @@ fn show_high_impact_dialog<C: crate::client::ManagerClient + 'static>(
     let rc_dialog = Rc::clone(rc);
     let switch_dialog = switch.clone();
     dialog.connect_response(None, move |dlg, response| {
-        let mut p = rc_dialog.borrow_mut();
         if response == "confirm" {
-            p.confirm_pam_toggle();
+            // Dispatch the confirmation asynchronously (USA-0).
+            // Get the staged toggle info before dispatching.
+            let (staged_id, staged_enabled) = {
+                let p = rc_dialog.borrow();
+                p.model()
+                    .pending_pam_toggle
+                    .as_ref()
+                    .map(|t| (t.id.clone(), t.enabled))
+                    .unwrap_or_else(|| (String::new(), false))
+            };
+            if !staged_id.is_empty() {
+                let rc_confirm = Rc::clone(&rc_dialog);
+                let mut p = rc_dialog.borrow_mut();
+                p.dispatch_async(move |client| {
+                    let _ = client.set_pam_service_enabled(&staged_id, staged_enabled);
+                });
+                drop(p);
+                // Schedule refresh on the main thread after the D-Bus call completes.
+                glib::MainContext::default().spawn_local(async move {
+                    glib::timeout_future(std::time::Duration::from_millis(50)).await;
+                    let mut p = rc_confirm.borrow_mut();
+                    p.refresh();
+                    p.mark_async_complete();
+                });
+            }
             switch_dialog.set_active(true);
         } else {
+            let mut p = rc_dialog.borrow_mut();
             p.cancel_pam_toggle();
+            drop(p);
             switch_dialog.set_active(false);
         }
-        drop(p);
         dlg.close();
     });
 

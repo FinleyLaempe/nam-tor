@@ -277,6 +277,8 @@ echo '{"model_id":"sface_2021dec","licence_url":"https://www.apache.org/licenses
 %{_datadir}/applications/org.namtor.kcm.desktop
 %{_datadir}/metainfo/org.namtor.kcm.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/org.namtor.kcm.svg
+# KDE KCM plugin (CMake-installed to KDE_INSTALL_QTPLUGINDIR)
+%{_libdir}/qt6/plugins/plasma/kcms/systemsettings/kcm_namtor.so
 # KDE KCM QML module + KPlugin metadata (CMake-installed)
 %{_libdir}/qt6/qml/org/namtor/libnamtorqml.so
 %{_datadir}/qt6/qml/org/namtor/main.qml

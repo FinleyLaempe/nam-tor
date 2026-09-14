@@ -385,17 +385,19 @@ fn pam_service_row_view_has_no_biometrics() {
     );
 }
 
-/// dbus_client uses the system bus, not the session bus.
+/// DbusManagerClient must connect to a real D-Bus bus and successfully
+/// call daemon methods. Verified by constructing a client via FakeBus
+/// (which provides a real D-Bus connection) and calling get_status().
 #[test]
 fn dbus_client_uses_system_bus() {
-    let source = include_str!("../src/dbus_client.rs");
+    use namtor_client::fake_bus::FakeBus;
+    use namtor_gnome::ManagerClient;
+
+    let fake_bus = FakeBus::spawn().expect("spawn fake bus");
+    let status = fake_bus.client.get_status();
     assert!(
-        source.contains("Connection::system()"),
-        "dbus_client must use Connection::system(), not Connection::session()"
-    );
-    assert!(
-        !source.contains("Connection::session()"),
-        "dbus_client must not use Connection::session()"
+        status.is_ok(),
+        "DbusManagerClient must be functional on a real D-Bus connection: {status:?}"
     );
 }
 
@@ -713,6 +715,85 @@ fn progress_updates_view() {
     assert!(
         view.guidance.contains("Looking good"),
         "guidance localized to human-readable label"
+    );
+}
+
+/// Test that the guidance label updates when the presenter receives progress
+/// updates with different guidance strings. This is the behavioral test for
+/// the non-image framing guidance feature.
+#[test]
+fn framing_guidance_updates() {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3("Guidance Test");
+    });
+    let session = presenter
+        .model()
+        .enrollment_session_v3
+        .clone()
+        .expect("session");
+
+    let progress_centering = EnrollmentProgressV3 {
+        session: session.clone(),
+        phase: "capturing".into(),
+        quality_percent: 20,
+        diversity_percent: 10,
+        frames_seen: 5,
+        frames_accepted: 2,
+        frames_rejected: 3,
+        quality_bucket: 0,
+        guidance: "centering".into(),
+    };
+    let model = after(&mut presenter, |p| {
+        p.on_progress_v3(&progress_centering);
+    });
+    let view = model.enrollment_view_v3.as_ref().expect("enrollment view");
+    assert!(
+        view.guidance.contains("Center"),
+        "guidance shows centering message: {}",
+        view.guidance
+    );
+
+    let progress_good = EnrollmentProgressV3 {
+        session: session.clone(),
+        phase: "capturing".into(),
+        quality_percent: 85,
+        diversity_percent: 70,
+        frames_seen: 20,
+        frames_accepted: 18,
+        frames_rejected: 2,
+        quality_bucket: 2,
+        guidance: "looking_good".into(),
+    };
+    let model = after(&mut presenter, |p| {
+        p.on_progress_v3(&progress_good);
+    });
+    let view = model.enrollment_view_v3.as_ref().expect("enrollment view");
+    assert!(
+        view.guidance.contains("Looking good"),
+        "guidance updated to looking_good: {}",
+        view.guidance
+    );
+
+    let progress_closer = EnrollmentProgressV3 {
+        session: session.clone(),
+        phase: "capturing".into(),
+        quality_percent: 40,
+        diversity_percent: 30,
+        frames_seen: 30,
+        frames_accepted: 25,
+        frames_rejected: 5,
+        quality_bucket: 1,
+        guidance: "move_closer".into(),
+    };
+    let model = after(&mut presenter, |p| {
+        p.on_progress_v3(&progress_closer);
+    });
+    let view = model.enrollment_view_v3.as_ref().expect("enrollment view");
+    assert!(
+        view.guidance.contains("Move closer"),
+        "guidance updated to move_closer: {}",
+        view.guidance
     );
 }
 

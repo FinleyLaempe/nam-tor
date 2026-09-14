@@ -85,15 +85,21 @@ side-effect-free between cases (each builds a fresh `FakeBus`).
 
 ## What is NOT claimed here
 
-- **KCM does not load on a KDE image.** No C++ `KCModule` shim, no Qt resource
-  build, no install step. This deliverable is the Rust bridge + QML template +
-  contract suite; the C++ shim and packaging are out of scope for Task 27 and
-  not gated here.
-- **D-Bus service (`org.namtor.Manager`) is not implemented.** Task 25 is
-  scaffolding-only; tests drive a fake. The bridge is ready to talk to the real
-  service once Task 25 lands.
-- **Polkit is not exercised.** The fake simulates auth-loss by returning
-  `AccessDenied`; real polkit integration is daemon-side (Task 25).
+- **KCM builds and passes abi-smoke (CI); runtime load in System Settings
+  HIL-WITHHELD.** The KCM plugin build is wired via `kcmutils_add_qml_kcm`
+  (Task 16, DONE) and the CMake configure logic is correct, but this CI host
+  lacks ECM/KCMUtils so `kcm_namtor.so` cannot be produced here. The QML module
+  + abi-smoke tests (3/3 passing) build and run locally. Actual runtime load in
+  a live Plasma 6 System Settings session remains HIL-WITHHELD (no
+  ECM/KCMUtils on CI host, no kcmshell6 session, no display).
+- **D-Bus service is implemented and shared via `namtor-client`.** The
+  `org.namtor.Manager` service is fully implemented (Tasks 4, 5, 18, all DONE).
+  Both GUIs share wire types, proxies, and the contract test suite through the
+  `namtor-client` crate, preventing divergence.
+- **Polkit is exercised in the enable/disable PAM cycle tests (Task 21).** The
+  `kde_face_enable_disable_cycle` test drives a `StubPolkit` through the full
+  enable/disable PAM service cycle. A live polkit dialog interaction (real
+  `CheckAuthorization` prompt) is HIL-only.
 - **Accessibility is template-level.** `Accessible.name`/`description`/
   `announcements` are wired throughout the QML, but no assistive-technology
   driver exercised the loaded KCM (no loaded KCM to drive).
