@@ -5,11 +5,23 @@
 # Triggered ONLY by tag pushes (`v*`) — never on branch pushes. This
 # prevents accidental releases.
 #
-# Matrix (build against oldest supported version per distro family;
-# binaries are forward-compatible with newer releases):
-#   - Arch Linux latest  (x86_64)
-#   - Fedora 40          (x86_64, runs on 41+)
-#   - Debian 12          (x86_64, .deb installs on 13 + Ubuntu 22.04/24.04)
+# Matrix: Arch Linux only (x86_64) for now.
+#
+# Fedora and Debian cells are temporarily disabled — not a CI config
+# issue, a real packaging gap: Debian 12 bookworm has no KDE Frameworks
+# 6 packages in its repos at all (libkf6kirigami-dev etc. don't exist
+# until trixie/13), and the Fedora .spec needs further debugging. Re-add
+# their `include:` matrix entries once those are resolved; the lint/
+# build/install/smoke/upgrade/uninstall steps for both are already
+# written below and gated by `if: startsWith(matrix.distro, ...)`.
+#
+# The raw ONNX model weights (var/lib/namtor/models/*.onnx) are
+# gitignored and never committed (see AGENTS.md: "No model weights,
+# datasets, or biometric data committed"). The deterministic model
+# archive (packaging/build-model-archive.sh output) is instead hosted
+# as a standing release asset at tag `models-v0.1.0` and fetched by
+# fixed URL + sha256 verification — see the "Create source tarball,
+# fetch model archive" step.
 #
 # Per-cell pipeline:
 #   lint  →  build  →  install (disposable container)  →  smoke
@@ -71,7 +83,7 @@ jobs:
         NAMTOR_DISTRO: ${{ matrix.distro }}
         CARGO_NET_OFFLINE: 'false'   # release build needs to fetch deps on a fresh runner
     strategy:
-      fail-fast: false               # one distro failing shouldn't cancel the others
+      fail-fast: false
       matrix:
         include:
           # --- Arch Linux (rolling — one build covers it) ---
@@ -81,20 +93,6 @@ jobs:
             container: archlinux:latest
             lint: namcap
             build: makepkg
-          # --- Fedora 40 (oldest supported — binary runs on 41+) ---
-          - distro: fedora40
-            arch: x86_64
-            runner: ubuntu-latest
-            container: fedora:40
-            lint: rpmlint
-            build: rpmbuild
-          # --- Debian 12 (oldest supported — .deb installs on 13 + Ubuntu 22.04/24.04) ---
-          - distro: debian12
-            arch: x86_64
-            runner: ubuntu-latest
-            container: debian:12
-            lint: dpkg-checkbuilddeps
-            build: dpkg-buildpackage
     steps:
       - uses: actions/checkout@v4
 
@@ -105,7 +103,7 @@ jobs:
             pacman -Syu --noconfirm
             pacman -S --noconfirm --needed base-devel rust cargo python namcap \
                 onnxruntime openssl gtk4 libadwaita cmake qt6-base kirigami \
-                kcoreaddons extra-cmake-modules systemd
+                kcoreaddons extra-cmake-modules systemd xorg-server-xvfb curl
 
       - name: Install build toolchain (Fedora)
         if: startsWith(matrix.distro, 'fedora')
@@ -168,16 +166,26 @@ jobs:
               { echo "::error::onnxruntime shared lib not loadable — release blocked"; exit 1; }
 
       # --- Create source tarball + model archive (needed by all distro builds) ---
-      - name: Create source tarball and model archive
+      - name: Create source tarball, fetch model archive
+        env:
+          NAMTOR_MODELS_SHA256: d5920792513eaa6f4728826dd9e3fe32586c18b48d8fe4ed76a03ae8ffc71416
         run: |
             cd "$GITHUB_WORKSPACE"
-            # Source tarball: git archive from the current checkout
-            git archive --format=tar.gz --prefix=nam-tor-0.1.0/ HEAD \
-                -o /tmp/namtor-0.1.0.tar.gz
-            # Model archive: deterministic, reproducible
-            bash packaging/build-model-archive.sh
-            mv namtor-models-0.1.0.tar.gz /tmp/
-            # Compute sha256 for PKGBUILD
+            # Plain tar, not `git archive`: actions/checkout@v4 falls back to
+            # a REST API download (no .git dir) when git isn't preinstalled
+            # in the container, so git archive would fail even after
+            # installing git in the toolchain step above.
+            tar --exclude=.git --transform 's,^\.,nam-tor-0.1.0,' \
+                -czf /tmp/namtor-0.1.0.tar.gz .
+
+            # The raw .onnx model weights are gitignored (never committed —
+            # see AGENTS.md), so build-model-archive.sh cannot run inside
+            # this checkout. The deterministic archive is instead hosted as
+            # a standing release asset (models-v0.1.0); fetch and verify it.
+            curl -fsSL -o /tmp/namtor-models-0.1.0.tar.gz \
+                "https://github.com/${{ github.repository }}/releases/download/models-v0.1.0/namtor-models-0.1.0.tar.gz"
+            echo "$NAMTOR_MODELS_SHA256  /tmp/namtor-models-0.1.0.tar.gz" | sha256sum -c -
+
             cd /tmp
             sha256sum namtor-0.1.0.tar.gz namtor-models-0.1.0.tar.gz
 
@@ -185,19 +193,23 @@ jobs:
       - name: Build Arch package (makepkg)
         if: matrix.distro == 'arch'
         run: |
-            # Copy source + model tarballs into the PKGBUILD directory
             cp /tmp/namtor-0.1.0.tar.gz /tmp/namtor-models-0.1.0.tar.gz packaging/arch/
-            # Update sha256sums in PKGBUILD to match the actual tarballs
             cd packaging/arch
             src_sha=$(sha256sum namtor-0.1.0.tar.gz | awk '{print $1}')
             model_sha=$(sha256sum namtor-models-0.1.0.tar.gz | awk '{print $1}')
             sed -i "s/^[[:space:]]*'[a-f0-9]*'$/    '$src_sha'/" PKGBUILD
             sed -i "s/^[[:space:]]*'[a-f0-9]*'$/    '$model_sha'/" PKGBUILD
-            # makepkg needs a non-root user; create one.
+
+            # makepkg refuses to run as root; use a non-root builder.
             useradd -m builder || true
             chown -R builder .
-            su builder -c "makepkg --syncdeps --noconfirm --cleanbuild --nosign --skipinteg"
-            # Move the built packages to a predictable location.
+
+            # build() uses `cargo build --offline`, so the registry cache
+            # must be populated before makepkg runs. Fetch as the same
+            # user/HOME that will later run the offline build.
+            su builder -c "cd '$GITHUB_WORKSPACE' && cargo fetch --locked"
+
+            su builder -c "xvfb-run -a makepkg --syncdeps --noconfirm --cleanbuild --nosign --skipinteg"
             mv *.pkg.tar.zst /tmp/
 
       - name: Build Fedora RPM (rpmbuild)
