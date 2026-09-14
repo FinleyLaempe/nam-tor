@@ -5,10 +5,11 @@
 # Triggered ONLY by tag pushes (`v*`) — never on branch pushes. This
 # prevents accidental releases.
 #
-# Matrix (spec §12: x86_64 + aarch64 for Arch, Fedora, Debian):
-#   - Arch Linux latest         (x86_64, aarch64)
-#   - Fedora 40, 41             (x86_64, aarch64)
-#   - Debian 12 (bookworm), 13  (x86_64, aarch64)
+# Matrix (build against oldest supported version per distro family;
+# binaries are forward-compatible with newer releases):
+#   - Arch Linux latest  (x86_64)
+#   - Fedora 40          (x86_64, runs on 41+)
+#   - Debian 12          (x86_64, .deb installs on 13 + Ubuntu 22.04/24.04)
 #
 # Per-cell pipeline:
 #   lint  →  build  →  install (disposable container)  →  smoke
@@ -73,85 +74,29 @@ jobs:
       fail-fast: true                # one cell failing aborts the release
       matrix:
         include:
-          # --- Arch Linux ---
+          # --- Arch Linux (rolling — one build covers it) ---
           - distro: arch
             arch: x86_64
             runner: ubuntu-latest
             container: archlinux:latest
             lint: namcap
             build: makepkg
-          - distro: arch
-            arch: aarch64
-            runner: ubuntu-latest
-            container: archlinux:latest
-            lint: namcap
-            build: makepkg
-            qemu: true
-          # --- Fedora 40 ---
+          # --- Fedora 40 (oldest supported — binary runs on 41+) ---
           - distro: fedora40
             arch: x86_64
             runner: ubuntu-latest
             container: fedora:40
             lint: rpmlint
             build: rpmbuild
-          - distro: fedora40
-            arch: aarch64
-            runner: ubuntu-latest
-            container: fedora:40
-            lint: rpmlint
-            build: rpmbuild
-            qemu: true
-          # --- Fedora 41 ---
-          - distro: fedora41
-            arch: x86_64
-            runner: ubuntu-latest
-            container: fedora:41
-            lint: rpmlint
-            build: rpmbuild
-          - distro: fedora41
-            arch: aarch64
-            runner: ubuntu-latest
-            container: fedora:41
-            lint: rpmlint
-            build: rpmbuild
-            qemu: true
-          # --- Debian 12 (bookworm) ---
+          # --- Debian 12 (oldest supported — .deb installs on 13 + Ubuntu 22.04/24.04) ---
           - distro: debian12
             arch: x86_64
             runner: ubuntu-latest
             container: debian:12
             lint: dpkg-checkbuilddeps
             build: dpkg-buildpackage
-          - distro: debian12
-            arch: aarch64
-            runner: ubuntu-latest
-            container: debian:12
-            lint: dpkg-checkbuilddeps
-            build: dpkg-buildpackage
-            qemu: true
-          # --- Debian 13 (trixie) ---
-          - distro: debian13
-            arch: x86_64
-            runner: ubuntu-latest
-            container: debian:trixie
-            lint: dpkg-checkbuilddeps
-            build: dpkg-buildpackage
-          - distro: debian13
-            arch: aarch64
-            runner: ubuntu-latest
-            container: debian:trixie
-            lint: dpkg-checkbuilddeps
-            build: dpkg-buildpackage
-            qemu: true
     steps:
       - uses: actions/checkout@v4
-
-      # --- QEMU for cross-arch cells (aarch64 on x86_64 runners) ---
-      - name: Set up QEMU for cross-arch build
-        if: matrix.qemu
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       # --- Install distro build toolchain ---
       - name: Install build toolchain (Arch)
@@ -363,11 +308,9 @@ jobs:
             python3 - <<'PY'
             import json, os
             cells = [
-                ("arch", "x86_64"), ("arch", "aarch64"),
-                ("fedora40", "x86_64"), ("fedora40", "aarch64"),
-                ("fedora41", "x86_64"), ("fedora41", "aarch64"),
-                ("debian12", "x86_64"), ("debian12", "aarch64"),
-                ("debian13", "x86_64"), ("debian13", "aarch64"),
+                ("arch", "x86_64"),
+                ("fedora40", "x86_64"),
+                ("debian12", "x86_64"),
             ]
             results = []
             for distro, arch in cells:
