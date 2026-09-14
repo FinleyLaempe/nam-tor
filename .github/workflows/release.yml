@@ -250,7 +250,13 @@ jobs:
       - name: Install + smoke test (Arch)
         if: matrix.distro == 'arch'
         run: |
-            pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
+            # The package's post_install hook (namtor.install ->
+            # lifecycle.sh) calls `systemctl enable --now`, which hangs
+            # (rather than failing fast) with no systemd PID 1 in this
+            # bare container — same underlying issue as the systemctl cat
+            # hang above, but triggered as a side effect of the install
+            # itself. Bound the whole install command too.
+            timeout 120 pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
             timeout 10 /usr/lib/namtor/namtor-daemon --version || \
               timeout 10 /usr/lib/namtor/namtor-daemon --help || true
             timeout 10 namtor-cli status || true
@@ -260,7 +266,7 @@ jobs:
       - name: Install + smoke test (Fedora)
         if: startsWith(matrix.distro, 'fedora')
         run: |
-            dnf install -y /tmp/namtor-*.rpm
+            timeout 120 dnf install -y /tmp/namtor-*.rpm
             timeout 10 /usr/lib/namtor/namtor-daemon --version || \
               timeout 10 /usr/lib/namtor/namtor-daemon --help || true
             timeout 10 namtor-cli status || true
@@ -270,8 +276,8 @@ jobs:
       - name: Install + smoke test (Debian)
         if: startsWith(matrix.distro, 'debian')
         run: |
-            dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb || \
-              apt-get install -y -f --no-install-recommends
+            timeout 120 dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb || \
+              timeout 120 apt-get install -y -f --no-install-recommends
             timeout 10 /usr/lib/namtor/namtor-daemon --version || \
               timeout 10 /usr/lib/namtor/namtor-daemon --help || true
             timeout 10 namtor-cli status || true
@@ -283,13 +289,13 @@ jobs:
         run: |
             case "${{ matrix.distro }}" in
               arch)
-                pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
+                timeout 120 pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
                 ;;
               fedora*)
-                dnf reinstall -y /tmp/namtor-*.rpm
+                timeout 120 dnf reinstall -y /tmp/namtor-*.rpm
                 ;;
               debian*)
-                dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb
+                timeout 120 dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb
                 ;;
             esac
             timeout 10 namtor-cli status || true
@@ -300,15 +306,15 @@ jobs:
         run: |
             case "${{ matrix.distro }}" in
               arch)
-                pacman -Rns --noconfirm namtor || \
+                timeout 120 pacman -Rns --noconfirm namtor || \
                   { echo "::error::uninstall failed"; exit 1; }
                 ;;
               fedora*)
-                dnf remove -y namtor || \
+                timeout 120 dnf remove -y namtor || \
                   { echo "::error::uninstall failed"; exit 1; }
                 ;;
               debian*)
-                apt-get purge -y namtor || \
+                timeout 120 apt-get purge -y namtor || \
                   { echo "::error::uninstall failed"; exit 1; }
                 ;;
             esac
