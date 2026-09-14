@@ -256,49 +256,49 @@ jobs:
             # bare container — same underlying issue as the systemctl cat
             # hang above, but triggered as a side effect of the install
             # itself. Bound the whole install command too.
-            timeout 120 pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
-            timeout 10 /usr/lib/namtor/namtor-daemon --version || \
-              timeout 10 /usr/lib/namtor/namtor-daemon --help || true
-            timeout 10 namtor-cli status || true
+            timeout -k 10 120 pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
+            timeout -k 10 10 /usr/lib/namtor/namtor-daemon --version || \
+              timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
+            timeout -k 10 10 namtor-cli status || true
             ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
-            timeout 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+            timeout -k 10 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
 
       - name: Install + smoke test (Fedora)
         if: startsWith(matrix.distro, 'fedora')
         run: |
-            timeout 120 dnf install -y /tmp/namtor-*.rpm
-            timeout 10 /usr/lib/namtor/namtor-daemon --version || \
-              timeout 10 /usr/lib/namtor/namtor-daemon --help || true
-            timeout 10 namtor-cli status || true
+            timeout -k 10 120 dnf install -y /tmp/namtor-*.rpm
+            timeout -k 10 10 /usr/lib/namtor/namtor-daemon --version || \
+              timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
+            timeout -k 10 10 namtor-cli status || true
             ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
-            timeout 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+            timeout -k 10 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
 
       - name: Install + smoke test (Debian)
         if: startsWith(matrix.distro, 'debian')
         run: |
-            timeout 120 dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb || \
-              timeout 120 apt-get install -y -f --no-install-recommends
-            timeout 10 /usr/lib/namtor/namtor-daemon --version || \
-              timeout 10 /usr/lib/namtor/namtor-daemon --help || true
-            timeout 10 namtor-cli status || true
+            timeout -k 10 120 dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb || \
+              timeout -k 10 120 apt-get install -y -f --no-install-recommends
+            timeout -k 10 10 /usr/lib/namtor/namtor-daemon --version || \
+              timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
+            timeout -k 10 10 namtor-cli status || true
             ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
-            timeout 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+            timeout -k 10 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
 
       # --- Upgrade test: rebuild with a bumped pkgrel and reinstall ---
       - name: Upgrade test (rebuild with bumped release + reinstall)
         run: |
             case "${{ matrix.distro }}" in
               arch)
-                timeout 120 pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
+                timeout -k 10 120 pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
                 ;;
               fedora*)
-                timeout 120 dnf reinstall -y /tmp/namtor-*.rpm
+                timeout -k 10 120 dnf reinstall -y /tmp/namtor-*.rpm
                 ;;
               debian*)
-                timeout 120 dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb
+                timeout -k 10 120 dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb
                 ;;
             esac
-            timeout 10 namtor-cli status || true
+            timeout -k 10 10 namtor-cli status || true
             ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
 
       # --- Uninstall test ---
@@ -306,15 +306,15 @@ jobs:
         run: |
             case "${{ matrix.distro }}" in
               arch)
-                timeout 120 pacman -Rns --noconfirm namtor || \
+                timeout -k 10 120 pacman -Rns --noconfirm namtor || \
                   { echo "::error::uninstall failed"; exit 1; }
                 ;;
               fedora*)
-                timeout 120 dnf remove -y namtor || \
+                timeout -k 10 120 dnf remove -y namtor || \
                   { echo "::error::uninstall failed"; exit 1; }
                 ;;
               debian*)
-                timeout 120 apt-get purge -y namtor || \
+                timeout -k 10 120 apt-get purge -y namtor || \
                   { echo "::error::uninstall failed"; exit 1; }
                 ;;
             esac
