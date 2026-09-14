@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use gtk4::prelude::*;
 use libadwaita as adw;
-use libadwaita::prelude::{ActionRowExt, AdwDialogExt, AlertDialogExt, PreferencesGroupExt};
+use libadwaita::prelude::{ActionRowExt, MessageDialogExt, PreferencesGroupExt};
 
 use crate::client::PamServiceCompatibility;
 use crate::presenter::ProfilePresenter;
@@ -190,10 +190,14 @@ fn show_high_impact_dialog<C: crate::client::ManagerClient + Send + Sync + 'stat
     let root = switch.root();
     let parent = root.and_downcast_ref::<adw::ApplicationWindow>();
 
-    let dialog = adw::AlertDialog::builder()
+    let dialog = adw::MessageDialog::builder()
         .heading(format!("Enable {} — high-impact service", service_name))
         .body(HIGH_IMPACT_WARNING)
         .build();
+
+    if let Some(win) = parent {
+        dialog.set_transient_for(Some(win));
+    }
 
     dialog.add_response("cancel", "Cancel");
     dialog.add_response("confirm", "I understand, enable anyway");
@@ -238,5 +242,5 @@ fn show_high_impact_dialog<C: crate::client::ManagerClient + Send + Sync + 'stat
         dlg.close();
     });
 
-    dialog.present(parent);
+    dialog.present();
 }

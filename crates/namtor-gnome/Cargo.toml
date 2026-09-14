@@ -18,10 +18,10 @@ namtor-client = { path = "../namtor-client" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-gtk4 = "0.10"
-libadwaita = { version = "0.8", features = ["v1_6"] }
-gio = "0.21"
-glib = "0.21"
+gtk4 = "0.9"
+libadwaita = { version = "0.7", features = ["v1_5"] }
+gio = "0.20"
+glib = "0.20"
 gettext = "0.4.0"
 nix = { version = "0.29", features = ["user"] }
 zbus = { version = "5.18", features = ["option-as-array"], optional = true }
