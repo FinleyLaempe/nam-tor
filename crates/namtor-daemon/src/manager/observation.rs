@@ -19,6 +19,7 @@
 //! [`QUALITY_MEDIUM_MAX`] are the fixed bucket boundaries. Mapping functions
 //! are pure and order-deterministic.
 
+use namtor_recog::FrameMetrics;
 use serde::{Deserialize, Serialize};
 use zbus::zvariant::Type;
 
@@ -38,6 +39,33 @@ pub const W_ILLUMINATION: f32 = 0.20;
 pub const QUALITY_LOW_MAX: u32 = 33;
 /// Inclusive upper bound (percent) for the `Medium` quality bucket.
 pub const QUALITY_MEDIUM_MAX: u32 = 66;
+
+// --- metric → observation mapping constants (task 3.5) ---------------------
+
+/// Yaw magnitude, in degrees, at which pose frontality reaches 0.
+pub const POSE_YAW_LIMIT_DEG: f32 = 45.0;
+/// Roll magnitude, in degrees, at which pose frontality reaches 0. Tighter
+/// than yaw: a rolled face still shows both eyes, but the aligner's
+/// similarity transform amplifies roll error faster than yaw error.
+pub const POSE_ROLL_LIMIT_DEG: f32 = 30.0;
+/// Inter-ocular distance over box width that a well-framed frontal face
+/// produces. Used to normalise [`FrameMetrics::landmark_spread`] into the
+/// 0-100 `landmark_stability` field.
+pub const LANDMARK_SPREAD_IDEAL: f32 = 0.45;
+/// Below this [`FrameMetrics::landmark_spread`] the landmarks have collapsed
+/// and the geometry they imply is meaningless.
+///
+/// Review finding F8: coincident landmarks make `yaw_deg` and `roll_deg`
+/// report `0.0`, which is byte-for-byte what a perfect frontal pose reports.
+/// `landmark_spread` is the ONLY signal that tells the two apart, so pose is
+/// gated on it before yaw/roll are read at all.
+pub const MIN_LANDMARK_SPREAD: f32 = 0.05;
+/// Face-box area over frame area (as a percent) below which the subject is
+/// too far from the camera.
+pub const FACE_EXTENT_MIN: u8 = 4;
+/// Face-box area over frame area (as a percent) above which the subject is
+/// too close and the box is clipping.
+pub const FACE_EXTENT_MAX: u8 = 45;
 
 // ---------------------------------------------------------------------------
 // Internal observation type — daemon-internal, never crosses D-Bus
@@ -61,6 +89,12 @@ pub struct CaptureObservation {
     pub pose_frontality: u8,
     /// 0-100 lighting adequacy.
     pub illumination: u8,
+    /// Percent of the frame area covered by the face box — the distance
+    /// proxy. Small means "too far away", large means "too close". This is a
+    /// raw extent, not a goodness: both ends are bad, so it is read against
+    /// [`FACE_EXTENT_MIN`]/[`FACE_EXTENT_MAX`] rather than summed into the
+    /// quality aggregate.
+    pub face_extent: u8,
     /// 0-100 retained embedding diversity.
     pub embedding_spread: u8,
 }
@@ -96,7 +130,7 @@ impl QualityBucket {
 
 /// Closed live-guidance enum, serialised as a snake_case string over the wire.
 /// No variant name contains a forbidden token.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[zvariant(signature = "s", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum Guidance {
@@ -162,51 +196,125 @@ pub fn compute_diversity_percent(embedding_spread: u8) -> u32 {
     embedding_spread.min(100) as u32
 }
 
+/// Scale a `0.0..=1.0` ratio into a 0-100 `u8`, clamping hostile inputs.
+fn pct(ratio: f32) -> u8 {
+    clamp_percent(ratio * 100.0).min(100) as u8
+}
+
+/// Build a [`CaptureObservation`] from one frame's real measurements.
+///
+/// Every observation field is fed by a *different* [`FrameMetrics`] field.
+/// The previous implementation copied a single three-valued scalar into four
+/// slots, which — because the quality weights sum to 1.0 — made
+/// [`compute_quality_percent`] able to return only 20, 50 or 85 and left six
+/// of the nine [`Guidance`] variants unreachable.
+///
+/// Two deliberate mappings:
+///
+/// * **Pose is gated on geometry (review finding F8).** Coincident landmarks
+///   yield `yaw_deg == 0.0` and `roll_deg == 0.0`, which is exactly what a
+///   perfect frontal pose yields. [`FrameMetrics::landmark_spread`] is the
+///   only signal that separates them, so below [`MIN_LANDMARK_SPREAD`] the
+///   pose term is 0 rather than 100 and the frame is reported as
+///   [`Guidance::InsufficientPose`]. Without this gate a detection with no
+///   usable geometry reads as "LookingGood".
+///
+/// * **Saturation vetoes illumination (review finding F6).** Mean intensity
+///   alone rates a fully blown-out face box 0.23, which is too lenient for
+///   enrollment: clipped samples carry no identity information. The
+///   illumination term is therefore scaled by `1 - saturated_fraction`, so a
+///   2% specular glint is free while a uniformly white box collapses to 0.
+///
+/// A truncated frame buffer zeroes `blur` and `illumination` while leaving
+/// the geometry intact, so `illumination == 0.0` is ambiguous between "pitch
+/// black" and "unmeasurable". The ambiguity is collapsed deliberately: both
+/// readings mean *do not accept this frame*, and the two are already told
+/// apart upstream by distinct counters (`rejected_torn` versus the frame
+/// simply scoring badly), so nothing is lost by treating them alike here.
+pub fn observation_from(m: &FrameMetrics, diversity: u32) -> CaptureObservation {
+    let geometry_usable = m.landmark_spread.is_finite() && m.landmark_spread >= MIN_LANDMARK_SPREAD;
+    let pose_frontality = if geometry_usable {
+        let yaw_term = 1.0 - (m.yaw_deg.abs() / POSE_YAW_LIMIT_DEG).min(1.0);
+        let roll_term = 1.0 - (m.roll_deg.abs() / POSE_ROLL_LIMIT_DEG).min(1.0);
+        pct(yaw_term.min(roll_term))
+    } else {
+        0
+    };
+    let usable_light = m.illumination * (1.0 - m.saturated_fraction.clamp(0.0, 1.0));
+    CaptureObservation {
+        detection_suitability: pct(m.detection_confidence),
+        landmark_stability: pct(m.landmark_spread / LANDMARK_SPREAD_IDEAL),
+        blur_estimate: pct(m.blur),
+        pose_frontality,
+        illumination: pct(usable_light),
+        face_extent: pct(m.face_fraction),
+        embedding_spread: diversity.min(100) as u8,
+    }
+}
+
 /// Derive the live-guidance enum from a capture observation using deterministic
 /// precedence (first match wins). The order is fixed:
 ///
-/// 1. `detection_suitability < 20` → [`Guidance::Centering`]
-/// 2. `illumination < 30` → [`Guidance::BetterLighting`]
-/// 3. `detection_suitability < 50` → [`Guidance::MoveCloser`]
-/// 4. `landmark_stability < 25` → [`Guidance::MoveBack`]
-/// 5. `blur_estimate < 30` → [`Guidance::HoldStill`]
-/// 6. `20 <= pose_frontality < 50` → [`Guidance::FaceFront`]
+/// 1. `detection_suitability < 20` → [`Guidance::Centering`] — nothing to
+///    advise about yet.
+/// 2. `landmark_stability` degenerate → [`Guidance::InsufficientPose`] (F8);
+///    the geometry is unusable, so no pose/framing advice would be honest.
+/// 3. `face_extent < FACE_EXTENT_MIN` → [`Guidance::MoveCloser`]
+/// 4. `face_extent > FACE_EXTENT_MAX` → [`Guidance::MoveBack`]
+/// 5. `illumination < 30` → [`Guidance::BetterLighting`]
+/// 6. `blur_estimate < 30` → [`Guidance::HoldStill`]
 /// 7. `pose_frontality < 20` → [`Guidance::InsufficientPose`]
-/// 8. all key fields (detection, blur, pose, illumination) `>= 70` →
+/// 8. `pose_frontality < 50` → [`Guidance::FaceFront`]
+/// 9. all key fields (detection, blur, pose, illumination) `>= 70` →
 ///    [`Guidance::LookingGood`]
-/// 9. else → [`Guidance::Capturing`]
+/// 10. else → [`Guidance::Capturing`]
+///
+/// Framing (3, 4) is advised before exposure and sharpness because moving the
+/// subject changes both — telling someone to hold still while their face
+/// fills 60% of the sensor is advice they cannot act on.
 pub fn derive_guidance(obs: &CaptureObservation) -> Guidance {
     let d = obs.detection_suitability;
     let blur = obs.blur_estimate;
     let pose = obs.pose_frontality;
     let illum = obs.illumination;
     let landmark = obs.landmark_stability;
+    let extent = obs.face_extent;
 
     if d < 20 {
         return Guidance::Centering;
     }
-    if illum < 30 {
-        return Guidance::BetterLighting;
+    if landmark < degenerate_stability() {
+        return Guidance::InsufficientPose;
     }
-    if d < 50 {
+    if extent < FACE_EXTENT_MIN {
         return Guidance::MoveCloser;
     }
-    if landmark < 25 {
+    if extent > FACE_EXTENT_MAX {
         return Guidance::MoveBack;
+    }
+    if illum < 30 {
+        return Guidance::BetterLighting;
     }
     if blur < 30 {
         return Guidance::HoldStill;
     }
-    if (20..50).contains(&pose) {
-        return Guidance::FaceFront;
-    }
     if pose < 20 {
         return Guidance::InsufficientPose;
+    }
+    if pose < 50 {
+        return Guidance::FaceFront;
     }
     if d >= 70 && blur >= 70 && pose >= 70 && illum >= 70 {
         return Guidance::LookingGood;
     }
     Guidance::Capturing
+}
+
+/// `landmark_stability` below which the geometry is degenerate — the
+/// [`MIN_LANDMARK_SPREAD`] gate expressed in the observation's own 0-100
+/// units, so the two can never drift apart.
+fn degenerate_stability() -> u8 {
+    pct(MIN_LANDMARK_SPREAD / LANDMARK_SPREAD_IDEAL)
 }
 
 /// Project a capture observation plus frame counters into the wire-safe
@@ -240,6 +348,7 @@ pub fn project(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use namtor_recog::FrameMetrics;
 
     /// Subset of [`crate::manager::contract::FORBIDDEN_TOKENS`] that is NOT a
     /// substring of any approved `GuidanceProgress` field name. `frame` and
@@ -267,6 +376,7 @@ mod tests {
             blur_estimate: 100,
             pose_frontality: 100,
             illumination: 100,
+            face_extent: 20,
             embedding_spread: 100,
         };
         assert_eq!(compute_quality_percent(&perfect), 100);
@@ -278,6 +388,7 @@ mod tests {
             blur_estimate: 255,
             pose_frontality: 255,
             illumination: 255,
+            face_extent: 255,
             embedding_spread: 255,
         };
         assert_eq!(compute_quality_percent(&overflow), 100);
@@ -291,6 +402,7 @@ mod tests {
             blur_estimate: 70,
             pose_frontality: 60,
             illumination: 50,
+            face_extent: 20,
             embedding_spread: 40,
         };
         let a = compute_quality_percent(&obs);
@@ -335,10 +447,11 @@ mod tests {
             blur_estimate: 80,
             pose_frontality: 80,
             illumination: 80,
+            face_extent: 20,
             embedding_spread: 80,
         };
 
-        let cases: [(CaptureObservation, Guidance); 9] = [
+        let cases: [(CaptureObservation, Guidance); 10] = [
             // 1. Centering: detection < 20.
             (
                 CaptureObservation {
@@ -347,68 +460,68 @@ mod tests {
                 },
                 Guidance::Centering,
             ),
-            // 2. BetterLighting: detection >= 20, illumination < 30.
+            // 2. InsufficientPose (F8): the landmarks collapsed, so no pose
+            //    or framing advice would be honest.
             (
                 CaptureObservation {
-                    detection_suitability: 80,
+                    landmark_stability: 2,
+                    ..high_rest
+                },
+                Guidance::InsufficientPose,
+            ),
+            // 3. MoveCloser: the face covers too little of the frame.
+            (
+                CaptureObservation {
+                    face_extent: 2,
+                    ..high_rest
+                },
+                Guidance::MoveCloser,
+            ),
+            // 4. MoveBack: the face covers too much of the frame.
+            (
+                CaptureObservation {
+                    face_extent: 60,
+                    ..high_rest
+                },
+                Guidance::MoveBack,
+            ),
+            // 5. BetterLighting: framing is fine, exposure is not.
+            (
+                CaptureObservation {
                     illumination: 10,
                     ..high_rest
                 },
                 Guidance::BetterLighting,
             ),
-            // 3. MoveCloser: detection in [20,50), all earlier branches clear.
+            // 6. HoldStill: exposure fine, frame smeared.
             (
                 CaptureObservation {
-                    detection_suitability: 30,
-                    ..high_rest
-                },
-                Guidance::MoveCloser,
-            ),
-            // 4. MoveBack: detection >= 50, landmark < 25.
-            (
-                CaptureObservation {
-                    detection_suitability: 60,
-                    landmark_stability: 10,
-                    ..high_rest
-                },
-                Guidance::MoveBack,
-            ),
-            // 5. HoldStill: detection >= 50, landmark >= 25, blur < 30.
-            (
-                CaptureObservation {
-                    detection_suitability: 60,
-                    landmark_stability: 80,
                     blur_estimate: 10,
                     ..high_rest
                 },
                 Guidance::HoldStill,
             ),
-            // 6. FaceFront: earlier branches clear, pose in [20,50).
+            // 7. InsufficientPose (measured): the head is turned too far to
+            //    be recoverable by asking for a small correction.
             (
                 CaptureObservation {
-                    detection_suitability: 60,
-                    landmark_stability: 80,
-                    blur_estimate: 80,
-                    pose_frontality: 30,
-                    ..high_rest
-                },
-                Guidance::FaceFront,
-            ),
-            // 7. InsufficientPose: earlier branches clear, pose < 20.
-            (
-                CaptureObservation {
-                    detection_suitability: 60,
-                    landmark_stability: 80,
-                    blur_estimate: 80,
                     pose_frontality: 10,
                     ..high_rest
                 },
                 Guidance::InsufficientPose,
             ),
-            // 8. LookingGood: all key fields >= 70.
+            // 8. FaceFront: a recoverable turn.
+            (
+                CaptureObservation {
+                    pose_frontality: 30,
+                    ..high_rest
+                },
+                Guidance::FaceFront,
+            ),
+            // 9. LookingGood: all key fields >= 70.
             (high_rest, Guidance::LookingGood),
-            // 9. Capturing: falls through every branch; key fields not all >= 70
-            //    and pose >= 50 (not in [20,50), not < 20).
+            // 10. Capturing: falls through every branch; key fields not all
+            //     >= 70 and pose >= 50.
             (
                 CaptureObservation {
                     detection_suitability: 60,
@@ -416,6 +529,7 @@ mod tests {
                     blur_estimate: 60,
                     pose_frontality: 60,
                     illumination: 60,
+                    face_extent: 20,
                     embedding_spread: 60,
                 },
                 Guidance::Capturing,
@@ -429,6 +543,22 @@ mod tests {
                 "guidance mismatch for observation {obs:?}"
             );
         }
+    }
+
+    /// The F8 gate is expressed in the observation's own units and must track
+    /// [`MIN_LANDMARK_SPREAD`] exactly — a drift between the two would let a
+    /// degenerate detection through the ladder.
+    #[test]
+    fn degenerate_stability_tracks_the_spread_gate() {
+        let at_gate = observation_from(
+            &FrameMetrics {
+                landmark_spread: MIN_LANDMARK_SPREAD,
+                ..good_metrics()
+            },
+            0,
+        );
+        assert!(at_gate.landmark_stability >= degenerate_stability());
+        assert_ne!(derive_guidance(&at_gate), Guidance::InsufficientPose);
     }
 
     #[test]
@@ -457,6 +587,7 @@ mod tests {
             blur_estimate: 255,
             pose_frontality: 255,
             illumination: 255,
+            face_extent: 255,
             embedding_spread: 255,
         };
         assert_eq!(compute_quality_percent(&overflow), 100);
@@ -478,6 +609,7 @@ mod tests {
             blur_estimate: 70,
             pose_frontality: 72,
             illumination: 68,
+            face_extent: 22,
             embedding_spread: 55,
         };
         let prog = project(&obs, 120, 90, 30);
@@ -538,6 +670,7 @@ mod tests {
             blur_estimate: 90,
             pose_frontality: 90,
             illumination: 90,
+            face_extent: 20,
             embedding_spread: 70,
         };
         let prog = project(&obs, 100, 80, 20);
@@ -548,6 +681,256 @@ mod tests {
         assert_eq!(prog.diversity_percent, 70);
         assert_eq!(prog.quality_bucket, QualityBucket::HIGH);
         assert_eq!(prog.guidance, Guidance::LookingGood);
+    }
+
+    // -----------------------------------------------------------------
+    // Task 3.5: the observation is built from real, independent metrics
+    // -----------------------------------------------------------------
+
+    /// A frame that is good on every axis. Individual tests spoil one field.
+    fn good_metrics() -> FrameMetrics {
+        FrameMetrics {
+            detection_confidence: 0.95,
+            blur: 0.9,
+            illumination: 1.0,
+            yaw_deg: 2.0,
+            roll_deg: 2.0,
+            face_fraction: 0.20,
+            landmark_spread: 0.40,
+            saturated_fraction: 0.0,
+        }
+    }
+
+    /// One representative frame per guidance branch. The arbiter for
+    /// [`all_nine_guidance_variants_are_reachable`].
+    fn representative_metric_sweep() -> Vec<FrameMetrics> {
+        vec![
+            // Centering: the detector is barely holding on to anything.
+            FrameMetrics {
+                detection_confidence: 0.10,
+                ..good_metrics()
+            },
+            // InsufficientPose (degenerate geometry): landmarks collapsed.
+            FrameMetrics {
+                landmark_spread: 0.0,
+                ..good_metrics()
+            },
+            // MoveCloser: the face covers 2% of the frame.
+            FrameMetrics {
+                face_fraction: 0.02,
+                ..good_metrics()
+            },
+            // MoveBack: the face covers 60% of the frame.
+            FrameMetrics {
+                face_fraction: 0.60,
+                ..good_metrics()
+            },
+            // BetterLighting.
+            FrameMetrics {
+                illumination: 0.05,
+                ..good_metrics()
+            },
+            // HoldStill.
+            FrameMetrics {
+                blur: 0.10,
+                ..good_metrics()
+            },
+            // InsufficientPose (measured): yaw at the limit.
+            FrameMetrics {
+                yaw_deg: 44.0,
+                ..good_metrics()
+            },
+            // FaceFront: a recoverable turn.
+            FrameMetrics {
+                yaw_deg: 25.0,
+                ..good_metrics()
+            },
+            // LookingGood.
+            good_metrics(),
+            // Capturing: usable everywhere, excellent nowhere.
+            FrameMetrics {
+                detection_confidence: 0.60,
+                blur: 0.50,
+                illumination: 0.60,
+                yaw_deg: 10.0,
+                roll_deg: 5.0,
+                face_fraction: 0.20,
+                landmark_spread: 0.40,
+                saturated_fraction: 0.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn observation_fields_are_independent_not_one_scalar_copied() {
+        // A sharp but badly-lit frame must score high on blur and low on
+        // illumination — the fabricated version made them identical.
+        let m = FrameMetrics {
+            blur: 0.9,
+            illumination: 0.1,
+            ..good_metrics()
+        };
+        let obs = observation_from(&m, 50);
+        assert!(obs.blur_estimate > 80, "blur: {}", obs.blur_estimate);
+        assert!(obs.illumination < 20, "illumination: {}", obs.illumination);
+        assert_ne!(obs.blur_estimate, obs.illumination);
+    }
+
+    #[test]
+    fn observation_carries_the_measured_diversity() {
+        let obs = observation_from(&good_metrics(), 37);
+        assert_eq!(obs.embedding_spread, 37);
+        assert_eq!(
+            observation_from(&good_metrics(), 4000).embedding_spread,
+            100
+        );
+    }
+
+    #[test]
+    fn dark_frame_yields_better_lighting_guidance() {
+        let m = FrameMetrics {
+            illumination: 0.05,
+            ..good_metrics()
+        };
+        assert_eq!(
+            derive_guidance(&observation_from(&m, 50)),
+            Guidance::BetterLighting
+        );
+    }
+
+    #[test]
+    fn small_face_yields_move_closer_guidance() {
+        let m = FrameMetrics {
+            face_fraction: 0.02,
+            ..good_metrics()
+        };
+        assert_eq!(
+            derive_guidance(&observation_from(&m, 50)),
+            Guidance::MoveCloser
+        );
+    }
+
+    #[test]
+    fn large_face_yields_move_back_guidance() {
+        let m = FrameMetrics {
+            face_fraction: 0.60,
+            ..good_metrics()
+        };
+        assert_eq!(
+            derive_guidance(&observation_from(&m, 50)),
+            Guidance::MoveBack
+        );
+    }
+
+    #[test]
+    fn turned_head_yields_face_front_guidance() {
+        let m = FrameMetrics {
+            yaw_deg: 35.0,
+            ..good_metrics()
+        };
+        assert_eq!(
+            derive_guidance(&observation_from(&m, 50)),
+            Guidance::FaceFront
+        );
+    }
+
+    /// Review finding F8. Coincident landmarks make `yaw_deg`/`roll_deg`
+    /// read `0.0`, which is indistinguishable from a perfect frontal pose.
+    /// `landmark_spread == 0.0` is the ONLY signal that they are meaningless,
+    /// so the mapping must not trust them.
+    #[test]
+    fn degenerate_landmarks_are_never_scored_as_a_frontal_pose() {
+        let m = FrameMetrics {
+            landmark_spread: 0.0,
+            yaw_deg: 0.0,
+            roll_deg: 0.0,
+            ..good_metrics()
+        };
+        let obs = observation_from(&m, 50);
+        assert_eq!(
+            obs.pose_frontality, 0,
+            "yaw/roll trusted without geometry: {obs:?}"
+        );
+        assert_ne!(derive_guidance(&obs), Guidance::LookingGood);
+        assert_eq!(derive_guidance(&obs), Guidance::InsufficientPose);
+    }
+
+    /// The same gate, one notch above zero: a spread far below what a real
+    /// face produces is still degenerate.
+    #[test]
+    fn near_coincident_landmarks_are_also_gated() {
+        let m = FrameMetrics {
+            landmark_spread: 0.01,
+            ..good_metrics()
+        };
+        let obs = observation_from(&m, 50);
+        assert_eq!(obs.pose_frontality, 0);
+        assert_eq!(derive_guidance(&obs), Guidance::InsufficientPose);
+    }
+
+    /// F8, second half: a truncated buffer zeroes the pixel-derived metrics
+    /// while the geometry survives. Whether that means "pitch black" or
+    /// "unmeasurable" the frame is unusable, so it must never read as good.
+    #[test]
+    fn unmeasurable_pixels_never_read_as_looking_good() {
+        let m = FrameMetrics {
+            blur: 0.0,
+            illumination: 0.0,
+            ..good_metrics()
+        };
+        let obs = observation_from(&m, 50);
+        let g = derive_guidance(&obs);
+        assert_ne!(g, Guidance::LookingGood);
+        assert_eq!(g, Guidance::BetterLighting, "obs {obs:?}");
+    }
+
+    /// Review finding F6. A blown-out face box scores illumination 0.23 on
+    /// mean intensity alone; the saturated-sample fraction must veto it.
+    #[test]
+    fn blown_out_frame_is_penalised_by_the_saturation_term() {
+        let m = FrameMetrics {
+            illumination: 0.23,
+            saturated_fraction: 1.0,
+            ..good_metrics()
+        };
+        let obs = observation_from(&m, 50);
+        assert_eq!(obs.illumination, 0, "obs {obs:?}");
+        assert_eq!(derive_guidance(&obs), Guidance::BetterLighting);
+    }
+
+    /// A specular glint on an otherwise well-exposed frame must not be
+    /// treated as a blown-out frame.
+    #[test]
+    fn a_specular_highlight_does_not_veto_a_good_frame() {
+        let m = FrameMetrics {
+            saturated_fraction: 0.02,
+            ..good_metrics()
+        };
+        let obs = observation_from(&m, 50);
+        assert!(obs.illumination >= 95, "obs {obs:?}");
+        assert_eq!(derive_guidance(&obs), Guidance::LookingGood);
+    }
+
+    #[test]
+    fn all_nine_guidance_variants_are_reachable() {
+        let mut seen = std::collections::HashSet::new();
+        for m in representative_metric_sweep() {
+            seen.insert(derive_guidance(&observation_from(&m, 50)));
+        }
+        assert_eq!(seen.len(), 9, "unreachable variants; saw {seen:?}");
+    }
+
+    #[test]
+    fn quality_percent_is_not_limited_to_three_values() {
+        let mut values = std::collections::HashSet::new();
+        for m in representative_metric_sweep() {
+            values.insert(compute_quality_percent(&observation_from(&m, 50)));
+        }
+        assert!(
+            values.len() >= 6,
+            "quality collapsed to {} distinct values: {values:?}",
+            values.len()
+        );
     }
 
     #[test]

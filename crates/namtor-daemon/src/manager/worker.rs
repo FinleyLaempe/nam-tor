@@ -458,16 +458,22 @@ fn maybe_emit_progress(
     }
 }
 
+/// Project one pump's snapshot into the wire-safe progress struct.
+///
+/// The observation is built from the real per-frame measurements carried on
+/// the snapshot. It used to be built by copying `snapshot.quality` — a
+/// three-valued `QualityLabel` — into four of the six observation fields and
+/// hardcoding `landmark_stability: 100`. Because the quality weights sum to
+/// 1.0 that made `quality_percent` able to return only 20, 50 or 85, and left
+/// six of the nine guidance variants unreachable.
+///
+/// When no frame has been measured yet — before the first pump, or after a
+/// frame in which no face was detected — there is nothing to advise about, so
+/// the default observation is used and the guidance reads `Centering`.
 fn compute_progress(
     snapshot: &crate::manager::session::ProgressSnapshot,
     capture: &EnrollmentCapture,
 ) -> GuidanceProgress {
-    use crate::dbus::QualityLabel;
-    let quality_percent: u32 = match snapshot.quality {
-        QualityLabel::Low => 20,
-        QualityLabel::Medium => 50,
-        QualityLabel::High => 85,
-    };
     let frames_seen = snapshot.frames_captured;
     // Real monotonic counters. `reservoir_len()` is capped at `max_reservoir`,
     // so deriving accepted from it froze the count once the reservoir filled
@@ -480,13 +486,9 @@ fn compute_progress(
     // once the bounded reservoir is full no matter how alike the candidates
     // are; real diversity is mean pairwise cosine distance.
     let diversity_percent = capture.diversity_percent().min(100);
-    let obs = CaptureObservation {
-        detection_suitability: quality_percent.min(100) as u8,
-        landmark_stability: 100,
-        blur_estimate: quality_percent.min(100) as u8,
-        pose_frontality: quality_percent.min(100) as u8,
-        illumination: quality_percent.min(100) as u8,
-        embedding_spread: diversity_percent.min(100) as u8,
+    let obs = match snapshot.metrics {
+        Some(m) => observation::observation_from(&m, diversity_percent),
+        None => CaptureObservation::default(),
     };
     observation::project(&obs, frames_seen, frames_accepted, frames_rejected)
 }
@@ -498,6 +500,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manager::observation::Guidance;
     use crate::manager::session::MockEmbedSource;
     use namtor_capture::frame::{EmitterState, Frame, PixFmt};
     use namtor_capture::source::{CaptureError, CaptureSource, SourceCaps, Spectrum};
@@ -697,11 +700,11 @@ mod tests {
         fn embed(
             &mut self,
             _frame: &Frame,
-        ) -> Result<Option<(Vec<f32>, u8)>, crate::dbus::ApiError> {
+        ) -> Result<Option<(Vec<f32>, namtor_recog::FrameMetrics)>, crate::dbus::ApiError> {
             let mut v = vec![1.0_f32; 8];
             v[self.n % 8] += 0.6;
             self.n += 1;
-            Ok(Some((v, 80)))
+            Ok(Some((v, MockEmbedSource::nominal_metrics(0.8))))
         }
     }
 
@@ -737,6 +740,184 @@ mod tests {
             progress.diversity_percent, review.diversity_percent,
             "capture screen and review screen disagree under the same label"
         );
+    }
+
+    /// The end-to-end counterpart of `observation.rs`'s sweep: every guidance
+    /// variant must be reachable through a real capture session, not just
+    /// through a hand-built observation. Before task 3.5 only three were —
+    /// `compute_progress` copied one three-valued label into four observation
+    /// fields, so `quality_percent` could only be 20, 50 or 85.
+    #[test]
+    fn every_guidance_variant_is_reachable_through_a_real_session() {
+        use namtor_recog::FrameMetrics;
+
+        let good = FrameMetrics {
+            detection_confidence: 0.95,
+            blur: 0.9,
+            illumination: 1.0,
+            yaw_deg: 2.0,
+            roll_deg: 2.0,
+            face_fraction: 0.20,
+            landmark_spread: 0.40,
+            saturated_fraction: 0.0,
+        };
+        let cases: [(FrameMetrics, Guidance); 9] = [
+            (
+                FrameMetrics {
+                    detection_confidence: 0.10,
+                    ..good
+                },
+                Guidance::Centering,
+            ),
+            (
+                FrameMetrics {
+                    landmark_spread: 0.0,
+                    ..good
+                },
+                Guidance::InsufficientPose,
+            ),
+            (
+                FrameMetrics {
+                    face_fraction: 0.02,
+                    ..good
+                },
+                Guidance::MoveCloser,
+            ),
+            (
+                FrameMetrics {
+                    face_fraction: 0.60,
+                    ..good
+                },
+                Guidance::MoveBack,
+            ),
+            (
+                FrameMetrics {
+                    illumination: 0.05,
+                    ..good
+                },
+                Guidance::BetterLighting,
+            ),
+            (FrameMetrics { blur: 0.1, ..good }, Guidance::HoldStill),
+            (
+                FrameMetrics {
+                    yaw_deg: 25.0,
+                    ..good
+                },
+                Guidance::FaceFront,
+            ),
+            (good, Guidance::LookingGood),
+            (
+                FrameMetrics {
+                    detection_confidence: 0.60,
+                    blur: 0.50,
+                    illumination: 0.60,
+                    ..good
+                },
+                Guidance::Capturing,
+            ),
+        ];
+
+        let mut seen = std::collections::HashSet::new();
+        for (metrics, expected) in cases {
+            let frames: Vec<Frame> = (0..4).map(|i| grey_frame(120 + i)).collect();
+            let mut capture = EnrollmentCapture::new(
+                1000,
+                1000,
+                ":1.42".into(),
+                "alice".into(),
+                Some(Box::new(MockSource::finite(frames))),
+                Some(Box::new(MockEmbedSource::with_metrics(8, metrics))),
+                16,
+            );
+            capture.pump_until_exhausted().expect("pump");
+            let snap = capture.snapshot();
+            let progress = compute_progress(&snap, &capture);
+            assert_eq!(
+                progress.guidance, expected,
+                "metrics {metrics:?} produced {:?}",
+                progress.guidance
+            );
+            seen.insert(progress.guidance);
+        }
+        assert_eq!(seen.len(), 9, "unreachable variants; saw {seen:?}");
+    }
+
+    /// `quality_percent` used to be one of exactly three values because the
+    /// weights sum to 1.0 and every weighted field carried the same scalar.
+    #[test]
+    fn quality_percent_is_no_longer_three_valued() {
+        use namtor_recog::FrameMetrics;
+        let mut values = std::collections::HashSet::new();
+        for step in 0..8u32 {
+            let ratio = step as f32 / 8.0;
+            let metrics = FrameMetrics {
+                detection_confidence: 0.95,
+                blur: ratio,
+                illumination: 0.5 + ratio * 0.5,
+                yaw_deg: 0.0,
+                roll_deg: 0.0,
+                face_fraction: 0.20,
+                landmark_spread: 0.40,
+                saturated_fraction: 0.0,
+            };
+            let frames: Vec<Frame> = (0..3).map(|i| grey_frame(120 + i)).collect();
+            let mut capture = EnrollmentCapture::new(
+                1000,
+                1000,
+                ":1.42".into(),
+                "alice".into(),
+                Some(Box::new(MockSource::finite(frames))),
+                Some(Box::new(MockEmbedSource::with_metrics(8, metrics))),
+                16,
+            );
+            capture.pump_until_exhausted().expect("pump");
+            let snap = capture.snapshot();
+            values.insert(compute_progress(&snap, &capture).quality_percent);
+        }
+        assert!(
+            values.len() >= 6,
+            "quality collapsed to {} distinct values: {values:?}",
+            values.len()
+        );
+    }
+
+    /// Review finding F8, end to end: a detection whose landmarks collapsed
+    /// reports yaw 0.0 and roll 0.0, which is byte-for-byte a perfect frontal
+    /// pose. It must never be advertised to the user as a good frame.
+    #[test]
+    fn a_degenerate_detection_is_never_reported_as_looking_good() {
+        use namtor_recog::FrameMetrics;
+        let metrics = FrameMetrics {
+            detection_confidence: 0.99,
+            blur: 1.0,
+            illumination: 1.0,
+            yaw_deg: 0.0,
+            roll_deg: 0.0,
+            face_fraction: 0.20,
+            landmark_spread: 0.0,
+            saturated_fraction: 0.0,
+        };
+        let frames: Vec<Frame> = (0..4).map(|i| grey_frame(120 + i)).collect();
+        let mut capture = EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.42".into(),
+            "alice".into(),
+            Some(Box::new(MockSource::finite(frames))),
+            Some(Box::new(MockEmbedSource::with_metrics(8, metrics))),
+            16,
+        );
+        capture.pump_until_exhausted().expect("pump");
+        let snap = capture.snapshot();
+        let progress = compute_progress(&snap, &capture);
+        assert_ne!(progress.guidance, Guidance::LookingGood);
+        assert_eq!(progress.guidance, Guidance::InsufficientPose);
+
+        // The review screen, which aggregates the retained candidates, must
+        // agree — it builds its observation from the same mapping.
+        capture.stop().expect("stop");
+        let review = capture.review_snapshot().expect("review");
+        assert_eq!(review.guidance, "insufficient_pose");
     }
 
     #[test]

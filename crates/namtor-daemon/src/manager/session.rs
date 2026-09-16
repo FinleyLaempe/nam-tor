@@ -24,6 +24,7 @@
 
 use namtor_capture::frame::Frame;
 use namtor_capture::source::{CaptureError, CaptureSource};
+use namtor_recog::FrameMetrics;
 use namtor_store::template::Template;
 use zeroize::Zeroize;
 
@@ -49,21 +50,45 @@ const MIN_CANDIDATES: usize = 3;
 /// A single captured candidate held in the reservoir.
 struct Candidate {
     embedding: Vec<f32>,
-    /// Coarse 0-100 quality score (detection confidence / sharpness / pose).
+    /// The frame's real per-frame measurements, kept so the review screen can
+    /// aggregate the same signals the capture screen showed live.
+    metrics: FrameMetrics,
+    /// Coarse 0-100 capture quality, derived once from [`Self::metrics`] via
+    /// [`quality_percent_of`]. Cached because it drives reservoir eviction on
+    /// every offer.
     quality: u8,
     raw_frame: Vec<u8>,
 }
 
 impl Candidate {
+    fn new(embedding: Vec<f32>, metrics: FrameMetrics, raw_frame: Vec<u8>) -> Self {
+        Self {
+            embedding,
+            quality: quality_percent_of(&metrics),
+            metrics,
+            raw_frame,
+        }
+    }
+
     fn score(&self) -> u8 {
         self.quality
     }
 }
 
+/// Coarse 0-100 capture quality for one frame's measurements. `diversity` is
+/// deliberately 0: [`observation::compute_quality_percent`] does not read
+/// `embedding_spread`, and a per-frame quality must not depend on which other
+/// frames happen to be retained.
+pub(crate) fn quality_percent_of(m: &FrameMetrics) -> u8 {
+    observation::compute_quality_percent(&observation::observation_from(m, 0)).min(100) as u8
+}
+
 /// Coarse progress snapshot for the `EnrollmentProgress` signal. Carries no
 /// biometric material — only a counter, a quality bucket, and an integer
 /// coverage percent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Eq` is deliberately absent: [`Self::metrics`] carries `f32` measurements.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProgressSnapshot {
     /// Frames pulled from the capture source and structurally validated far
     /// enough to be judged. Monotonic.
@@ -89,6 +114,14 @@ pub struct ProgressSnapshot {
     pub rejected_torn: u32,
     /// Declined because the embedder itself failed on the frame.
     pub rejected_embed_error: u32,
+    /// The measurements of the most recently judged frame, or `None` before
+    /// the first frame has been embedded. This is what the live guidance is
+    /// derived from — the capture screen advises about the frame in front of
+    /// the camera right now, not about the retained average.
+    ///
+    /// Daemon-internal. It never crosses D-Bus: `GuidanceProgress` is the
+    /// only projection that does, and it carries bounded percentages only.
+    pub metrics: Option<FrameMetrics>,
 }
 
 /// Lifecycle phase of an [`EnrollmentCapture`].
@@ -139,25 +172,85 @@ pub struct FinishedCapture {
 /// ONNX model weights. Production wraps [`namtor_recog::pipeline::RecognitionPipeline`].
 pub trait EmbedSource: Send {
     /// Embed a captured frame. Returns `Ok(None)` when no face was detected
-    /// (the frame is skipped); `Ok(Some(embedding, quality))` on success.
-    fn embed(&mut self, frame: &Frame) -> Result<Option<(Vec<f32>, u8)>, ApiError>;
+    /// (a counted rejection, see [`ProgressSnapshot::rejected_no_face`]);
+    /// `Ok(Some((embedding, metrics)))` on success.
+    ///
+    /// The full [`FrameMetrics`] is returned rather than a single quality
+    /// byte because the guidance ladder needs the measurements to be
+    /// independent: collapsing them into one scalar is what made six of the
+    /// nine [`Guidance`] variants unreachable.
+    fn embed(&mut self, frame: &Frame) -> Result<Option<(Vec<f32>, FrameMetrics)>, ApiError>;
 }
 
 /// Deterministic mock embedder for tests. Produces a stable pseudo-embedding
-/// from the frame bytes (LCG, like `namtor_worker::MockBackend`) and a coarse
-/// quality from mean luminance. No model file is read.
+/// from the frame bytes (LCG, like `namtor_worker::MockBackend`) and a
+/// synthetic [`FrameMetrics`]. No model file is read.
+///
+/// This is a test double, not a simulator. The pixel-derived terms
+/// (`detection_confidence`, `blur`, `illumination`) all track mean luminance
+/// because a synthetic uniform fill carries no other signal to derive them
+/// from — inventing a fake gradient would be a different fabrication from the
+/// one task 3.5 removed, not an improvement. The geometric terms are fixed at
+/// the values a well-framed frontal face produces.
+///
+/// To drive a *specific* guidance branch, use [`Self::with_metrics`], which
+/// returns exactly the metrics it was given for every frame. The coverage
+/// test `mock_embed_source_can_drive_every_guidance_variant` uses it to walk
+/// all nine variants through a real capture session.
 pub struct MockEmbedSource {
     dim: usize,
+    fixed: Option<FrameMetrics>,
 }
 
 impl MockEmbedSource {
     pub fn new(dim: usize) -> Self {
-        Self { dim: dim.max(1) }
+        Self {
+            dim: dim.max(1),
+            fixed: None,
+        }
+    }
+
+    /// Return `metrics` verbatim for every embedded frame. The embedding is
+    /// still derived from the frame bytes, so diversity behaviour is
+    /// unchanged.
+    pub fn with_metrics(dim: usize, metrics: FrameMetrics) -> Self {
+        Self {
+            dim: dim.max(1),
+            fixed: Some(metrics),
+        }
+    }
+
+    /// The synthetic metrics this mock reports for a frame whose mean
+    /// luminance maps to `band` (`0.0..=1.0`): a well-framed, frontal,
+    /// unclipped face whose pixel-derived terms all sit at `band`. Exposed so
+    /// other test doubles can produce metrics consistent with this one.
+    pub fn nominal_metrics(band: f32) -> FrameMetrics {
+        let band = band.clamp(0.0, 1.0);
+        FrameMetrics {
+            detection_confidence: band,
+            blur: band,
+            illumination: band,
+            yaw_deg: 0.0,
+            roll_deg: 0.0,
+            face_fraction: 0.20,
+            landmark_spread: 0.40,
+            saturated_fraction: 0.0,
+        }
+    }
+
+    /// Mean-luminance band, peaked at 130 of 255 — the same curve the mock
+    /// has always used for its coarse quality.
+    fn luminance_band(data: &[u8]) -> f32 {
+        if data.is_empty() {
+            return 0.0;
+        }
+        let mean: f32 = data.iter().map(|&b| b as f32).sum::<f32>() / data.len() as f32;
+        (1.0 - ((mean - 130.0).abs() / 130.0)).clamp(0.0, 1.0)
     }
 }
 
 impl EmbedSource for MockEmbedSource {
-    fn embed(&mut self, frame: &Frame) -> Result<Option<(Vec<f32>, u8)>, ApiError> {
+    fn embed(&mut self, frame: &Frame) -> Result<Option<(Vec<f32>, FrameMetrics)>, ApiError> {
         if frame.data.is_empty() {
             return Ok(None);
         }
@@ -171,11 +264,11 @@ impl EmbedSource for MockEmbedSource {
             state = state.wrapping_mul(1664525).wrapping_add(1013904223);
             embedding.push((state as f32 / u32::MAX as f32) * 2.0 - 1.0);
         }
-        // Quality from mean luminance: ideal ~90-170 of 255.
-        let mean: f32 = frame.data.iter().map(|&b| b as f32).sum::<f32>() / frame.data.len() as f32;
-        let dist = (mean - 130.0).abs();
-        let quality = ((1.0 - (dist / 130.0)).clamp(0.0, 1.0) * 100.0).round() as u8;
-        Ok(Some((embedding, quality)))
+        if let Some(m) = self.fixed {
+            return Ok(Some((embedding, m)));
+        }
+        let metrics = Self::nominal_metrics(Self::luminance_band(&frame.data));
+        Ok(Some((embedding, metrics)))
     }
 }
 
@@ -206,6 +299,9 @@ pub struct EnrollmentCapture {
     rejected_torn: u32,
     /// Frames declined because the embedder errored on the frame.
     rejected_embed_error: u32,
+    /// Measurements of the most recently judged frame. `None` before the
+    /// first frame, and cleared again whenever a frame yields no detection.
+    last_metrics: Option<FrameMetrics>,
     phase: CapturePhase,
 }
 
@@ -241,6 +337,7 @@ impl EnrollmentCapture {
             rejected_below_floor: 0,
             rejected_torn: 0,
             rejected_embed_error: 0,
+            last_metrics: None,
             phase: CapturePhase::Capturing,
         }
     }
@@ -331,21 +428,20 @@ impl EnrollmentCapture {
                 return Err(e);
             }
         };
-        let (embedding, quality) = match embedded {
+        let (embedding, metrics) = match embedded {
             Some(v) => v,
             None => {
                 // `Ok(None)` means "no face detected" (see `EmbedSource`), a
                 // real user-actionable rejection, not a frame to drop silently.
+                // There are no measurements to guide with, so the last ones
+                // are cleared rather than left to go stale.
                 self.rejected_no_face += 1;
+                self.last_metrics = None;
                 return Ok(Some(self.snapshot()));
             }
         };
-        let candidate = Candidate {
-            embedding,
-            quality,
-            raw_frame: frame.data,
-        };
-        self.offer(candidate);
+        self.last_metrics = Some(metrics);
+        self.offer(Candidate::new(embedding, metrics, frame.data));
         Ok(Some(self.snapshot()))
     }
 
@@ -443,7 +539,13 @@ impl EnrollmentCapture {
             rejected_below_floor: self.rejected_below_floor,
             rejected_torn: self.rejected_torn,
             rejected_embed_error: self.rejected_embed_error,
+            metrics: self.last_metrics,
         }
+    }
+
+    /// Measurements of the most recently judged frame, if any.
+    pub fn last_metrics(&self) -> Option<FrameMetrics> {
+        self.last_metrics
     }
 
     /// Transition Capturing→Stopped. Retains the bounded reservoir (does NOT
@@ -489,7 +591,7 @@ impl EnrollmentCapture {
         let ready_to_save = self.reservoir.len() >= MIN_CANDIDATES;
         let quality_percent = self.avg_quality_percent();
         let diversity_percent = self.diversity_percent();
-        let guidance = self.review_guidance(quality_percent, diversity_percent);
+        let guidance = self.review_guidance(diversity_percent);
         Ok(ReviewSnapshot {
             ready_to_save,
             quality_percent,
@@ -506,6 +608,43 @@ impl EnrollmentCapture {
         let avg = self.reservoir.iter().map(|c| c.quality as f32).sum::<f32>()
             / self.reservoir.len() as f32;
         observation::clamp_percent(avg)
+    }
+
+    /// Mean of the retained candidates' measurements — the review screen's
+    /// input, the aggregate counterpart of [`Self::last_metrics`].
+    ///
+    /// `yaw_deg` and `roll_deg` are averaged as **magnitudes**. A diverse
+    /// reservoir deliberately holds faces turned both ways, so their signed
+    /// mean tends to zero and would report a set of profile shots as
+    /// perfectly frontal. The review question is "was the pose acceptable",
+    /// which is a question about magnitude.
+    fn mean_metrics(&self) -> Option<FrameMetrics> {
+        let n = self.reservoir.len();
+        if n == 0 {
+            return None;
+        }
+        let inv = 1.0 / n as f32;
+        let mut acc = FrameMetrics {
+            detection_confidence: 0.0,
+            blur: 0.0,
+            illumination: 0.0,
+            yaw_deg: 0.0,
+            roll_deg: 0.0,
+            face_fraction: 0.0,
+            landmark_spread: 0.0,
+            saturated_fraction: 0.0,
+        };
+        for c in &self.reservoir {
+            acc.detection_confidence += c.metrics.detection_confidence * inv;
+            acc.blur += c.metrics.blur * inv;
+            acc.illumination += c.metrics.illumination * inv;
+            acc.yaw_deg += c.metrics.yaw_deg.abs() * inv;
+            acc.roll_deg += c.metrics.roll_deg.abs() * inv;
+            acc.face_fraction += c.metrics.face_fraction * inv;
+            acc.landmark_spread += c.metrics.landmark_spread * inv;
+            acc.saturated_fraction += c.metrics.saturated_fraction * inv;
+        }
+        Some(acc)
     }
 
     /// Mean pairwise `1 - cosine_similarity` across the reservoir, as a 0-100
@@ -535,23 +674,23 @@ impl EnrollmentCapture {
     }
 
     /// Derive the review-screen guidance from the same
-    /// [`CaptureObservation`] shape the capture screen uses. `embedding_spread`
-    /// carries the measured [`Self::diversity_percent`], not a hardcoded 100:
-    /// the two screens must build the observation from the same measurements
-    /// so their guidance can never disagree. (Today
-    /// [`observation::derive_guidance`] does not read `embedding_spread`, so
-    /// this changes no output — it removes the fabricated input that would
-    /// silently diverge the moment the spread term enters the precedence
-    /// ladder.)
-    fn review_guidance(&self, quality_percent: u32, diversity_percent: u32) -> String {
-        let q = quality_percent.min(100) as u8;
-        let obs = CaptureObservation {
-            detection_suitability: q,
-            landmark_stability: 100,
-            blur_estimate: q,
-            pose_frontality: q,
-            illumination: q,
-            embedding_spread: diversity_percent.min(100) as u8,
+    /// [`CaptureObservation`] shape the capture screen uses, built from the
+    /// same measurements via [`observation::observation_from`] — the capture
+    /// screen from the latest frame, the review screen from the retained
+    /// mean. Neither screen fabricates an input any more, so their guidance
+    /// can differ only where the underlying frames differ.
+    ///
+    /// `embedding_spread` carries the measured [`Self::diversity_percent`].
+    /// [`observation::derive_guidance`] does not read it today; feeding it
+    /// the real value means the ladder can start reading it without silently
+    /// diverging the two screens.
+    fn review_guidance(&self, diversity_percent: u32) -> String {
+        let obs = match self.mean_metrics() {
+            Some(m) => observation::observation_from(&m, diversity_percent),
+            // Nothing was retained, so there is nothing to have an opinion
+            // about: the default observation reports Centering, which is what
+            // an empty session should say.
+            None => CaptureObservation::default(),
         };
         guidance_to_snake_case(observation::derive_guidance(&obs))
     }
@@ -939,12 +1078,12 @@ mod tests {
         n: usize,
     }
     impl EmbedSource for AlternatingNoFace {
-        fn embed(&mut self, _frame: &Frame) -> Result<Option<(Vec<f32>, u8)>, ApiError> {
+        fn embed(&mut self, _frame: &Frame) -> Result<Option<(Vec<f32>, FrameMetrics)>, ApiError> {
             self.n += 1;
             if self.n.is_multiple_of(2) {
                 Ok(None)
             } else {
-                Ok(Some((vec![1.0; 8], 80)))
+                Ok(Some((vec![1.0; 8], MockEmbedSource::nominal_metrics(0.8))))
             }
         }
     }

@@ -2256,7 +2256,10 @@ mod tests {
     /// Embed source that always errors.
     struct FailingEmbedSource;
     impl EmbedSource for FailingEmbedSource {
-        fn embed(&mut self, _frame: &Frame) -> Result<Option<(Vec<f32>, u8)>, ApiError> {
+        fn embed(
+            &mut self,
+            _frame: &Frame,
+        ) -> Result<Option<(Vec<f32>, namtor_recog::FrameMetrics)>, ApiError> {
             Err(ApiError::State("embed source fault".into()))
         }
     }
