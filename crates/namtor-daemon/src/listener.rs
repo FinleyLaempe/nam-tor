@@ -12,7 +12,6 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use namtor_proto::framing::{decode, encode};
@@ -46,7 +45,6 @@ pub struct Listener {
     nonce: NonceService,
     camera_lock: Mutex<()>,
     dispatcher: Arc<dyn LifecycleDispatch>,
-    shutdown: Arc<AtomicBool>,
 }
 
 impl Listener {
@@ -73,7 +71,6 @@ impl Listener {
             nonce: NonceService::new(),
             camera_lock: Mutex::new(()),
             dispatcher,
-            shutdown: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -100,7 +97,6 @@ impl Listener {
             nonce: NonceService::new(),
             camera_lock: Mutex::new(()),
             dispatcher,
-            shutdown: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -109,11 +105,6 @@ impl Listener {
     pub fn with_auth_gid(mut self, gid: u32) -> Self {
         self.auth_gid = gid;
         self
-    }
-
-    /// Signal the accept loop to stop after the next connection.
-    pub fn shutdown(&self) {
-        self.shutdown.store(true, Ordering::Relaxed);
     }
 
     /// Wait up to [`POLL_TIMEOUT_MS`] for one connection and serve it.
@@ -339,7 +330,7 @@ mod tests {
     use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::path::Path;
-    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
 
     /// Stub dispatcher: returns Unavailable for auth, closed status for status.
