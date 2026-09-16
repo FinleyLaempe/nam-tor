@@ -48,7 +48,7 @@
 # redistributable), and MiniFASNet (self-trained, Apache-2.0). Licence
 # records are pre-written so the daemon starts with zero manual steps.
 #
-# The model archive (namtor-models-$pkgver.tar.gz) is the deterministic,
+# The model archive (namtor-models-$_modelver.tar.gz) is the deterministic,
 # reproducible, signed source of truth produced by
 # packaging/build-model-archive.sh. It is MANDATORY: this recipe refuses to
 # build without it, and prepare() verifies its MANIFEST.json + sha256 sidecar
@@ -90,7 +90,15 @@ makedepends=(
     'python>=3.11'
 )
 
-source=("namtor-$pkgver.tar.gz" "namtor-models-$pkgver.tar.gz")
+# The model archive version is deliberately INDEPENDENT of pkgver. The ONNX
+# weights are their own artefact with their own release cadence: they are
+# published once as a standing asset (models-v0.1.0) and are unchanged by a
+# source-only release. Coupling them to $pkgver meant the first version bump
+# made makepkg look for namtor-models-0.2.0.tar.gz, which does not and should
+# not exist. packaging/build-model-archive.sh already defaults to 0.1.0 and
+# packaging/debian/rules already hardcoded it; this makes Arch agree.
+_modelver=0.1.0
+source=("namtor-$pkgver.tar.gz" "namtor-models-$_modelver.tar.gz")
 noextract=()
 # Real sha256 — no SKIP. The model archive hash is reproducible
 # (build-model-archive.sh yields a byte-identical tarball every build). The
@@ -102,7 +110,7 @@ sha256sums=(
 
 # ---------------------------------------------------------------------------
 # prepare: verify Cargo.lock + the mandatory model archive. The archive
-# (namtor-models-$pkgver.tar.gz) is verified by build-model-archive.sh
+# (namtor-models-$_modelver.tar.gz) is verified by build-model-archive.sh
 # --verify, which checks MANIFEST.json + sha256 sidecar + per-model hashes
 # against packaging/model-manifest.toml. Fails closed if absent or tampered
 # — no build proceeds without a verified model source.
@@ -113,9 +121,9 @@ prepare() {
         echo "error: Cargo.lock missing — release tarballs must ship a lockfile" >&2
         return 1
     fi
-    local archive="$srcdir/namtor-models-$pkgver.tar.gz"
+    local archive="$srcdir/namtor-models-$_modelver.tar.gz"
     if [[ ! -f "$archive" ]]; then
-        echo "error: model archive missing — namtor-models-$pkgver.tar.gz is mandatory" >&2
+        echo "error: model archive missing — namtor-models-$_modelver.tar.gz is mandatory" >&2
         return 1
     fi
     ./packaging/build-model-archive.sh --verify "$archive" "$srcdir/nam-tor-$pkgver"

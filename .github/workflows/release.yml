@@ -183,8 +183,21 @@ jobs:
             # a REST API download (no .git dir) when git isn't preinstalled
             # in the container, so git archive would fail even after
             # installing git in the toolchain step above.
-            tar --exclude=.git --transform 's,^\.,nam-tor-0.1.0,' \
-                -czf /tmp/namtor-0.1.0.tar.gz .
+            # Derive the version from the PKGBUILD, the single source of
+            # truth the recipes already use. Hardcoding it here meant the
+            # first version bump produced namtor-0.1.0.tar.gz while makepkg
+            # looked for namtor-$pkgver.tar.gz and failed with "was not
+            # found in the build directory".
+            PKGVER="$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD | head -1)"
+            MODELVER="$(sed -n 's/^_modelver=//p' packaging/arch/PKGBUILD | head -1)"
+            [ -n "$PKGVER" ] && [ -n "$MODELVER" ] || {
+              echo "::error::could not read pkgver/_modelver from PKGBUILD"; exit 1; }
+            echo "PKGVER=$PKGVER"   >> "$GITHUB_ENV"
+            echo "MODELVER=$MODELVER" >> "$GITHUB_ENV"
+            echo "source version $PKGVER, model archive version $MODELVER"
+
+            tar --exclude=.git --transform "s,^\.,nam-tor-$PKGVER," \
+                -czf "/tmp/namtor-$PKGVER.tar.gz" .
 
             # The raw .onnx model weights are gitignored (never committed —
             # see AGENTS.md), so build-model-archive.sh cannot run inside
@@ -194,23 +207,23 @@ jobs:
             # a 404 (GitHub hides asset existence from unauthenticated
             # requests). Use `gh release download`, which handles the
             # GH_TOKEN auth automatically.
-            gh release download models-v0.1.0 \
+            gh release download "models-v$MODELVER" \
                 --repo "${{ github.repository }}" \
-                --pattern 'namtor-models-0.1.0.tar.gz' \
+                --pattern "namtor-models-$MODELVER.tar.gz" \
                 --dir /tmp --clobber
-            echo "$NAMTOR_MODELS_SHA256  /tmp/namtor-models-0.1.0.tar.gz" | sha256sum -c -
+            echo "$NAMTOR_MODELS_SHA256  /tmp/namtor-models-$MODELVER.tar.gz" | sha256sum -c -
 
             cd /tmp
-            sha256sum namtor-0.1.0.tar.gz namtor-models-0.1.0.tar.gz
+            sha256sum "namtor-$PKGVER.tar.gz" "namtor-models-$MODELVER.tar.gz"
 
       # --- Build the package from source ---
       - name: Build Arch package (makepkg)
         if: matrix.distro == 'arch'
         run: |
-            cp /tmp/namtor-0.1.0.tar.gz /tmp/namtor-models-0.1.0.tar.gz packaging/arch/
+            cp "/tmp/namtor-$PKGVER.tar.gz" "/tmp/namtor-models-$MODELVER.tar.gz" packaging/arch/
             cd packaging/arch
-            src_sha=$(sha256sum namtor-0.1.0.tar.gz | awk '{print $1}')
-            model_sha=$(sha256sum namtor-models-0.1.0.tar.gz | awk '{print $1}')
+            src_sha=$(sha256sum "namtor-$PKGVER.tar.gz" | awk '{print $1}')
+            model_sha=$(sha256sum "namtor-models-$MODELVER.tar.gz" | awk '{print $1}')
             sed -i "s/^[[:space:]]*'[a-f0-9]*'$/    '$src_sha'/" PKGBUILD
             sed -i "s/^[[:space:]]*'[a-f0-9]*'$/    '$model_sha'/" PKGBUILD
 
@@ -230,8 +243,8 @@ jobs:
         if: startsWith(matrix.distro, 'fedora')
         run: |
             mkdir -p ~/rpmbuild/{SOURCES,SPECS,BUILD,RPMS,SRPMS}
-            cp /tmp/namtor-0.1.0.tar.gz ~/rpmbuild/SOURCES/
-            cp /tmp/namtor-models-0.1.0.tar.gz ~/rpmbuild/SOURCES/
+            cp "/tmp/namtor-$PKGVER.tar.gz" ~/rpmbuild/SOURCES/
+            cp "/tmp/namtor-models-$MODELVER.tar.gz" ~/rpmbuild/SOURCES/
             cp packaging/fedora/namtor.spec ~/rpmbuild/SPECS/
             rpmbuild -ba ~/rpmbuild/SPECS/namtor.spec
             find ~/rpmbuild/RPMS -name 'namtor-*.rpm' -exec cp {} /tmp/ \;

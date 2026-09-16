@@ -43,7 +43,7 @@
 #   - systemd            (socket activation, sysusers, tmpfiles)
 #
 # Models are BUNDLED from the deterministic, signed model archive
-# (namtor-models-%{version}.tar.gz, produced by
+# (namtor-models-%{modelver}.tar.gz, produced by
 # packaging/build-model-archive.sh). No network fetch occurs at build or
 # install time. The archive is MANDATORY: %prep verifies its MANIFEST.json
 # + sha256 sidecar + per-model hashes against model-manifest.toml before
@@ -71,7 +71,12 @@ Source0:        %{url}/archive/refs/tags/v%{version}/%{name}-%{version}.tar.gz
 # pinned (no SKIP); the release workflow regenerates it via
 # packaging/build-model-archive.sh and updates the hash below. Repeated
 # builds produce an identical tarball (fixed epoch, sorted entries, gzip -n).
-Source1:        %{url}/releases/download/v%{version}/namtor-models-%{version}.tar.gz
+# The model archive version is deliberately INDEPENDENT of %%{version}: the
+# ONNX weights are published once as a standing asset (models-v0.1.0) and are
+# unchanged by a source-only release. Coupling them to %%{version} made the
+# first version bump look for an archive that does not and should not exist.
+%global modelver 0.1.0
+Source1:        %{url}/releases/download/models-v%{modelver}/namtor-models-%{modelver}.tar.gz
 # Source0 is verified by the release workflow via the GPG-signed checksums
 # file; Source1 is verified in %prep against model-manifest.toml.
 
@@ -158,7 +163,7 @@ test -f Cargo.lock || { echo "Cargo.lock missing from tarball" >&2; exit 1; }
 # The model archive (Source1) is MANDATORY. build-model-archive.sh --verify
 # checks MANIFEST.json + sha256 sidecar + per-model hashes against
 # model-manifest.toml. Fails closed if absent or tampered.
-archive="%{_sourcedir}/namtor-models-%{version}.tar.gz"
+archive="%{_sourcedir}/namtor-models-%{modelver}.tar.gz"
 test -f "$archive" || { echo "error: model archive missing: $archive" >&2; exit 1; }
 ./packaging/build-model-archive.sh --verify "$archive" "%{_builddir}/nam-tor-%{version}"
 
@@ -191,7 +196,7 @@ cargo test --workspace -- --test-threads=1
 ./packaging/stage.sh "%{buildroot}" "%{_builddir}/nam-tor-%{version}"
 
 # Bundle models from the verified archive (Source1). No network fetch.
-archive="%{_sourcedir}/namtor-models-%{version}.tar.gz"
+archive="%{_sourcedir}/namtor-models-%{modelver}.tar.gz"
 mkdir -p "%{buildroot}/var/lib/namtor/models"
 tar -xzf "$archive" -C "%{buildroot}/var/lib/namtor/models" \
     --strip-components=1 models/yunet_2023mar.onnx \
