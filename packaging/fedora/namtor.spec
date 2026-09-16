@@ -248,6 +248,15 @@ echo '{"model_id":"sface_2021dec","licence_url":"https://www.apache.org/licenses
 /var/lib/namtor/models/minifasnet_pad.onnx
 /var/lib/namtor/models/yunet_2023mar
 /var/lib/namtor/models/sface_2021dec
+# Manual pages. Arch and Debian already shipped these; the Fedora %files
+# section listed none, so the RPM silently shipped no manual pages at all
+# while the other two distros did (and rpmbuild with
+# _unpackaged_files_terminate_build would have failed outright). rpmbuild
+# compresses man pages itself, so glob the extension rather than pinning
+# .8/.1 — unlike Arch, which sets !zipman to match install-manifest.toml.
+%{_mandir}/man8/namtor-daemon.8*
+%{_mandir}/man8/pam_namtor.8*
+%{_mandir}/man1/namtor-cli.1*
 
 # ===========================================================================
 # %files — namtor-ui
