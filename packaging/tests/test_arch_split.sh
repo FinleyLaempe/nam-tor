@@ -280,10 +280,19 @@ done
 
 # An obsoletion only fires on an upgrade to a NEWER version, so the rename
 # is inert unless pkgrel moved past the last namtor-gnome release (0.1.0-4).
-if grep -qE '^pkgrel=([5-9]|[1-9][0-9])' "$PKGBUILD"; then
-    ok "pkgrel bumped past the last namtor-gnome release (obsoletion can fire)"
+# Compare the FULL pkgver-pkgrel, not pkgrel alone: bumping pkgver resets
+# pkgrel to 1 by Arch convention, and 0.2.0-1 is newer than 0.1.0-4 even
+# though its pkgrel is smaller. A pkgrel-only check fails that legitimate
+# case and would push someone to fake a high pkgrel to satisfy it.
+_arch_last_gnome="0.1.0-4"   # last release that shipped namtor-gnome
+_arch_pkgver="$(sed -n 's/^pkgver=//p' "$PKGBUILD" | head -1)"
+_arch_pkgrel="$(sed -n 's/^pkgrel=//p' "$PKGBUILD" | head -1)"
+_arch_cur="${_arch_pkgver}-${_arch_pkgrel}"
+_arch_newest="$(printf '%s\n%s\n' "$_arch_cur" "$_arch_last_gnome" | sort -V | tail -1)"
+if [ "$_arch_cur" != "$_arch_last_gnome" ] && [ "$_arch_newest" = "$_arch_cur" ]; then
+    ok "version $_arch_cur is newer than $_arch_last_gnome (obsoletion can fire)"
 else
-    not_ok "pkgrel not bumped — replaces=('namtor-gnome') never fires without a newer version"
+    not_ok "version $_arch_cur is not newer than $_arch_last_gnome — replaces=('namtor-gnome') never fires"
 fi
 
 # The Plasma KCM package is gone. It is NOT enough to stop building it:

@@ -610,8 +610,8 @@ else
     not_ok "Fedora ui missing exact namtor Requires"
 fi
 ui_depends_deb=$(awk '/^Package: namtor-ui$/{f=1;next} f&&/^Depends:/{f=2;next} f==2&&/^[[:space:]]/{gsub(/[[:space:]]/,"");print;next} f==2&&!/^[[:space:]]/{exit}' "$DEBIAN_CONTROL" | tr -d '\n')
-if printf '%s' "$ui_depends_deb" | grep -q 'namtor(=0.1.0-3)'; then
-    ok "Debian ui Depends on namtor (= 0.1.0-3) (exact)"
+if printf '%s' "$ui_depends_deb" | grep -q 'namtor(=0.2.0-1)'; then
+    ok "Debian ui Depends on namtor (= 0.2.0-1) (exact)"
 else
     not_ok "Debian ui missing exact namtor Depends"
 fi

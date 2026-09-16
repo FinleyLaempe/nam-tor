@@ -104,12 +104,20 @@ if grep -qE "^Provides:[[:space:]]+namtor-gnome" "$SPEC"; then
 else
     not_ok "spec does not provide namtor-gnome"
 fi
-# An Obsoletes only fires on an upgrade to a NEWER version, so the rename is
-# inert unless Release moved past the last namtor-gnome release (0.1.0-3).
-if grep -qE "^Release:[[:space:]]+([4-9]|[1-9][0-9])" "$SPEC"; then
-    ok "Release bumped past the last namtor-gnome release (Obsoletes can fire)"
+# An Obsoletes only fires on an upgrade to a NEWER version. Compare the FULL
+# Version-Release, not Release alone: bumping Version resets Release to 1, so
+# 0.2.0-1 is newer than 0.1.0-3 despite the smaller Release. A Release-only
+# check rejects that legitimate case and would push someone to inflate
+# Release to satisfy it.
+_fed_last_gnome="0.1.0-3"   # last release that shipped namtor-gnome
+_fed_ver="$(sed -n 's/^Version:[[:space:]]*//p' "$SPEC" | head -1)"
+_fed_rel="$(sed -n 's/^Release:[[:space:]]*//p' "$SPEC" | head -1 | sed 's/%{?dist}//')"
+_fed_cur="${_fed_ver}-${_fed_rel}"
+_fed_newest="$(printf '%s\n%s\n' "$_fed_cur" "$_fed_last_gnome" | sort -V | tail -1)"
+if [ "$_fed_cur" != "$_fed_last_gnome" ] && [ "$_fed_newest" = "$_fed_cur" ]; then
+    ok "version $_fed_cur is newer than $_fed_last_gnome (Obsoletes can fire)"
 else
-    not_ok "Release not bumped — Obsoletes: namtor-gnome never fires without a newer version"
+    not_ok "version $_fed_cur is not newer than $_fed_last_gnome — Obsoletes: namtor-gnome never fires"
 fi
 
 # The KDE subpackage must be GONE — but obsoleted, not merely deleted.

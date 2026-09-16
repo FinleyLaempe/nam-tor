@@ -56,8 +56,8 @@
 %global debug_package %{nil}
 
 Name:           namtor
-Version:        0.1.0
-Release:        4%{?dist}
+Version:        0.2.0
+Release:        1%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
 # Combined SPDX expression: the Rust core is GPL-3.0-only; the bundled ONNX
@@ -338,6 +338,17 @@ fi
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.2.0-1
+- Release 0.2.0. The shipped package set changed, so this is a minor version
+  bump rather than another revision: namtor-kde is gone and namtor-gnome is
+  now namtor-ui. namtor-ui keeps Provides/Obsoletes for both former names so
+  dnf migrates an existing install instead of leaving it stranded.
+- Enrollment guidance is derived from real per-frame measurements (blur,
+  illumination, pose, face size, saturated-sample fraction) rather than one
+  fabricated scalar copied across four fields; all nine guidance messages
+  are reachable and quality is continuous instead of three fixed values.
+- The core subpackage now ships manual pages (namtor-daemon.8, namtor-cli.1,
+  pam_namtor.8); the %files section previously listed none at all.
 * Wed Sep 16 2026 Nam-tor Project <namtor@example.invalid> - 0.1.0-4
 - Rename the namtor-gnome subpackage to namtor-ui: it is the single,
   desktop-neutral GTK4/libadwaita UI and has no GNOME-only runtime

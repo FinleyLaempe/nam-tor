@@ -1,3 +1,16 @@
+namtor (0.2.0-1) unstable; urgency=medium
+
+  * Single desktop UI: namtor-gnome renamed to namtor-ui, and the Plasma 6
+    KCM (namtor-kde) removed. namtor-ui Provides/Replaces/Breaks both former
+    names so an existing install migrates instead of file-conflicting.
+  * Enrollment guidance is derived from real per-frame measurements
+    (blur, illumination, pose, face size, saturation) instead of one
+    fabricated scalar; all nine guidance messages are now reachable.
+  * namtor-ui Depends: namtor (= 0.2.0-1).
+  * Manual pages shipped on all three distros, including pam_namtor(8).
+
+ -- finley <finley.laempe@math.uni-freiburg.de>  Thu, 17 Sep 2026 00:13:03 +0200
+
 namtor (0.1.0-3) unstable; urgency=medium
 
   * Rename the namtor-gnome binary package to namtor-ui. It is the single,

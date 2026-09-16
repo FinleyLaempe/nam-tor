@@ -6,7 +6,7 @@
 #   (a) control has exactly 2 Package: stanzas: namtor, namtor-ui.
 #   (b) Core Depends: onnxruntime, libpam0g, systemd only — NO
 #       libgtk-4-1, libadwaita-1-0, libqt6, kirigami, kcoreaddons.
-#   (c) Desktop Depends: namtor (= 0.1.0-3), libgtk-4-1, libadwaita-1-0
+#   (c) Desktop Depends: namtor (= 0.2.0-1), libgtk-4-1, libadwaita-1-0
 #       and NO qt6/kirigami/kcoreaddons.
 #   (d) namtor-ui Provides/Replaces/Breaks its predecessors namtor-gnome
 #       (renamed) and namtor-kde (removed).
@@ -145,10 +145,14 @@ done
 # ---------------------------------------------------------------------------
 echo "--- (c) ui Depends ---"
 
-if printf '%s\n' "$UI_DEPS" | grep -qE 'namtor[[:space:]]*\(=[[:space:]]*0\.1\.0-3\)'; then
-    ok "ui Depends on namtor (= 0.1.0-3) (exact version)"
+# Derive the expected pin from debian/changelog rather than hardcoding it,
+# so a version bump cannot leave this assertion silently checking the old
+# value while its message claims the new one.
+_deb_ver="$(sed -n '1s/.*(\([^)]*\)).*/\1/p' "$DEBIAN_DIR/changelog")"
+if printf '%s\n' "$UI_DEPS" | grep -qE "namtor[[:space:]]*\(=[[:space:]]*${_deb_ver//./\\.}\)"; then
+    ok "ui Depends on namtor (= $_deb_ver) (exact version, from changelog)"
 else
-    not_ok "ui does not depend on namtor (= 0.1.0-3) (exact version)"
+    not_ok "ui does not depend on namtor (= $_deb_ver) (exact version, from changelog)"
 fi
 
 for dep in libgtk-4-1 libadwaita-1-0; do
