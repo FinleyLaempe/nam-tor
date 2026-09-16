@@ -1,29 +1,89 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Pure read/write logic for KDE's `kscreenlockerrc`.
+//! Desktop lock-screen authenticator provisioning.
 //!
-//! `kscreenlockerd` (the lock screen) reads `[Authenticators] Face=true` from
-//! `$HOME/.config/kscreenlockerrc` to decide whether to offer face unlock as
-//! an authentication method on the lock screen. This module owns that single
-//! line, preserving every other section/key in the file untouched. It never
-//! touches D-Bus or PAM — see [`crate::bridge::KcmBridge::set_face_unlock_enabled`]
-//! for the combined operation.
+//! A desktop's lock screen decides for itself which PAM-backed
+//! authenticators it offers. Enabling the `pam_namtor.so` stack for a
+//! service under `/etc/pam.d` (the [`crate::editor`] module's job) is
+//! therefore only half of "let me unlock this session with my face" — the
+//! lock screen also has to be told to *offer* face as an authenticator.
+//!
+//! This module owns that second half for KDE Plasma, whose
+//! `kscreenlockerd` reads `[Authenticators] Face=true` from
+//! `$HOME/.config/kscreenlockerrc`. It is a pure config-file writer: no
+//! D-Bus, no PAM, no GUI toolkit, so both `namtor-cli` and the GTK4 UI can
+//! call it. The module is named for the general operation rather than for
+//! Plasma so it can later grow a GDM/greetd arm alongside [`set_face`].
+//!
+//! ## Ordering guarantee (callers MUST preserve this)
+//!
+//! Face unlock on the lock screen is two coupled state changes: the PAM
+//! service (`kde-face` under `/etc/pam.d`, toggled through the daemon's
+//! `SetPamServiceEnabled` D-Bus method) and this file. **The PAM toggle
+//! runs first and the file is written only if it succeeded.** If the PAM
+//! call fails, `kscreenlockerrc` must be left untouched, so the file never
+//! advertises an authenticator that PAM cannot satisfy. Disabling reverses
+//! both, in the same order.
+//!
+//! ## Lockout safety
+//!
+//! [`would_cause_lockout`] reports the state where `Face=true` is the only
+//! enabled authenticator — no password fallback, so a camera failure locks
+//! the user out of their session. Any caller that is about to disable a
+//! non-face authenticator must check it first and refuse, or demand
+//! explicit confirmation.
+//!
+//! ## Status: no caller yet
+//!
+//! Nothing calls [`set_face`] or [`would_cause_lockout`] today. The Plasma
+//! KCM that was going to (`crates/namtor-kde`) never wired them into its
+//! QML or its C ABI before it was removed in favour of a single
+//! desktop-neutral GTK4 UI, so this is an unfinished feature rather than a
+//! regression. The logic and its tests are kept here, out of the deleted
+//! Qt crate, as the documented API for a future UI toggle.
 
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::Path;
+
+/// A lock-screen provisioning failure.
+///
+/// Deliberately small and free of backend internals so a UI can
+/// pattern-match on it without depending on this crate's editor types.
+#[derive(Debug)]
+pub enum LockscreenError {
+    /// A local filesystem operation failed (e.g. writing `kscreenlockerrc`).
+    Io(String),
+}
+
+impl fmt::Display for LockscreenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(msg) => write!(f, "local filesystem operation failed: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for LockscreenError {}
+
+impl From<io::Error> for LockscreenError {
+    fn from(err: io::Error) -> Self {
+        Self::Io(err.to_string())
+    }
+}
 
 /// Set or clear `Face=true` in the `[Authenticators]` section of
 /// `$HOME/.config/kscreenlockerrc`. Creates the file/section if absent when
 /// `enabled` is `true`; removes only the `Face=` line (leaving the section
 /// and file otherwise intact) when `enabled` is `false`.
-pub fn set_face(home: &Path, enabled: bool) -> io::Result<()> {
+pub fn set_face(home: &Path, enabled: bool) -> Result<(), LockscreenError> {
     let config_dir = home.join(".config");
     let path = config_dir.join("kscreenlockerrc");
 
     let existing = match fs::read_to_string(&path) {
         Ok(content) => content,
         Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(err) => return Err(err),
+        Err(err) => return Err(err.into()),
     };
 
     let updated = apply_face_setting(&existing, enabled);
@@ -32,7 +92,8 @@ pub fn set_face(home: &Path, enabled: bool) -> io::Result<()> {
     }
 
     fs::create_dir_all(&config_dir)?;
-    fs::write(&path, updated)
+    fs::write(&path, updated)?;
+    Ok(())
 }
 
 /// Returns `true` if `Face=true` is the only enabled authenticator in the
@@ -213,5 +274,114 @@ mod tests {
         set_face(&home, true).unwrap();
         let content = fs::read_to_string(home.join(".config/kscreenlockerrc")).unwrap();
         assert_eq!(content.matches("Face=true").count(), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // Lockout safety: Face must never be the sole enabled authenticator.
+    // Ported verbatim (bar the module path) from the deleted namtor-kde
+    // crate's `src/tests.rs`.
+    // -----------------------------------------------------------------
+
+    /// A `kscreenlockerrc` with only `Face=true` under `[Authenticators]`
+    /// (no password fallback) is a lockout-unsafe state. A caller must
+    /// check [`would_cause_lockout`] before allowing any
+    /// authenticator-disabling action and refuse (or confirm) if it would
+    /// produce this state.
+    #[test]
+    fn lockout_safety_face_only_is_unsafe() {
+        let home = temp_home("lockout-face-only");
+        let config_dir = home.join(".config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("kscreenlockerrc"),
+            "[Greeter]\nWallpaperPlugin=org.kde.image\n\n[Authenticators]\nFace=true\n",
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+        assert!(
+            would_cause_lockout(&content),
+            "Face=true with no other enabled authenticator must be lockout-unsafe"
+        );
+    }
+
+    /// `Face=true` alongside `Password=true` is safe — the password
+    /// authenticator is an explicit fallback.
+    #[test]
+    fn lockout_safety_face_plus_password_is_safe() {
+        let home = temp_home("lockout-face-plus-password");
+        let config_dir = home.join(".config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("kscreenlockerrc"),
+            "[Authenticators]\nFace=true\nPassword=true\n",
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+        assert!(
+            !would_cause_lockout(&content),
+            "Face=true + Password=true must be safe (password fallback exists)"
+        );
+    }
+
+    /// No `[Authenticators]` section at all is safe — password is the
+    /// implicit default authenticator in `kscreenlockerd`.
+    #[test]
+    fn lockout_safety_no_authenticators_section_is_safe() {
+        let home = temp_home("lockout-no-section");
+        let config_dir = home.join(".config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("kscreenlockerrc"),
+            "[Greeter]\nWallpaperPlugin=org.kde.image\n",
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+        assert!(
+            !would_cause_lockout(&content),
+            "No [Authenticators] section means password is the implicit default — safe"
+        );
+    }
+
+    /// `Face=true` alongside `Fingerprint=true` is safe — any non-face
+    /// authenticator enabled counts as a fallback.
+    #[test]
+    fn lockout_safety_face_plus_fingerprint_is_safe() {
+        let home = temp_home("lockout-face-plus-fingerprint");
+        let config_dir = home.join(".config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("kscreenlockerrc"),
+            "[Authenticators]\nFace=true\nFingerprint=true\n",
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+        assert!(
+            !would_cause_lockout(&content),
+            "Face=true + Fingerprint=true must be safe (non-face fallback exists)"
+        );
+    }
+
+    /// `Face=false` alone is not a lockout risk — Face is not enabled, so
+    /// the lockout condition (Face as sole authenticator) does not apply.
+    #[test]
+    fn lockout_safety_face_disabled_is_safe() {
+        let home = temp_home("lockout-face-disabled");
+        let config_dir = home.join(".config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("kscreenlockerrc"),
+            "[Authenticators]\nFace=false\n",
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(config_dir.join("kscreenlockerrc")).unwrap();
+        assert!(
+            !would_cause_lockout(&content),
+            "Face=false must be safe (face not enabled)"
+        );
     }
 }

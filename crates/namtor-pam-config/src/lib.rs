@@ -5,7 +5,9 @@
 //! auth-relevant services (GDM, SDDM, sudo, su, polkit, etc.) into a typed
 //! status with stable IDs and human-readable labels. The transactional
 //! editor (`editor` module) inserts/removes a marked `pam_namtor.so` block
-//! atomically with backup, checksum, and rollback.
+//! atomically with backup, checksum, and rollback. The
+//! [`desktop_lockscreen`] module provisions the desktop-side half of the
+//! same operation (KDE Plasma's `kscreenlockerrc` authenticator list).
 //!
 //! ## Classification states
 //!
@@ -28,6 +30,7 @@
 
 mod candidate;
 mod classify;
+pub mod desktop_lockscreen;
 mod editor;
 mod flock;
 mod lifecycle;
@@ -37,6 +40,7 @@ mod registry;
 mod scanner;
 
 pub use classify::{classify_service, known_service_label, ClassificationContext};
+pub use desktop_lockscreen::{set_face, would_cause_lockout, LockscreenError};
 pub use editor::{
     disable_service, enable_service, resolve_module_path, CrashPoint, EditError, EditOptions,
     EditOutcome, NamtorControl,
