@@ -790,7 +790,7 @@ impl<P: PolkitAuthority> Manager3Service<P> {
             frames_accepted: p.frames_accepted,
             frames_rejected: p.frames_rejected,
             quality_bucket: p.quality_bucket.0,
-            guidance: format!("{:?}", p.guidance).to_lowercase(),
+            guidance: crate::manager::session::guidance_to_snake_case(p.guidance),
         };
         lock(&self.signals).push(Manager3Signal::EnrollmentProgress(v3));
     }
@@ -862,6 +862,63 @@ mod tests {
             pamd.to_path_buf(),
             registry.to_path_buf(),
         )
+    }
+
+    // ---- Guidance wire serialization ----
+
+    /// Every [`Guidance`] variant the daemon can emit must survive the trip to
+    /// the client parser. Regression guard for the `format!("{:?}").to_lowercase()`
+    /// bug that emitted `movecloser`/`betterlighting`/... — unparseable by
+    /// `namtor_client::types::Guidance::from_wire`, so the UI displayed the raw
+    /// token to the user.
+    #[test]
+    fn every_guidance_variant_round_trips_over_the_wire() {
+        use crate::manager::observation::{Guidance, QualityBucket};
+        let all = [
+            Guidance::Centering,
+            Guidance::MoveCloser,
+            Guidance::MoveBack,
+            Guidance::BetterLighting,
+            Guidance::HoldStill,
+            Guidance::FaceFront,
+            Guidance::LookingGood,
+            Guidance::Capturing,
+            Guidance::InsufficientPose,
+        ];
+        let store: Arc<dyn ProfileStore> = Arc::new(NullProfileStore);
+        let svc = Manager3Service::new(StubPolkit, store);
+        for g in all {
+            svc.push_progress(
+                "session-1",
+                GuidanceProgress {
+                    frames_seen: 10,
+                    frames_accepted: 8,
+                    frames_rejected: 2,
+                    quality_percent: 50,
+                    diversity_percent: 50,
+                    quality_bucket: QualityBucket::MEDIUM,
+                    guidance: g,
+                },
+            );
+        }
+        let signals = svc.drain_signals();
+        assert_eq!(signals.len(), all.len(), "one signal per variant");
+        for (sig, g) in signals.iter().zip(all) {
+            let v3 = match sig {
+                Manager3Signal::EnrollmentProgress(v3) => v3,
+                other => panic!("expected EnrollmentProgress, got {other:?}"),
+            };
+            assert_eq!(
+                v3.guidance,
+                crate::manager::session::guidance_to_snake_case(g),
+                "wire form must be the canonical snake_case mapping"
+            );
+            assert!(
+                namtor_client::types::Guidance::from_wire(&v3.guidance).is_some(),
+                "client cannot parse wire form {:?} for {g:?}",
+                v3.guidance
+            );
+        }
     }
 
     // ---- ListPamServices ----

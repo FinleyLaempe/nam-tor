@@ -1608,6 +1608,7 @@ dependencies = [
  "libc",
  "namtor-camera",
  "namtor-capture",
+ "namtor-client",
  "namtor-eval",
  "namtor-hwdb",
  "namtor-layout",

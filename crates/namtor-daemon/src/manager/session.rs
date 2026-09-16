@@ -544,7 +544,12 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-fn guidance_to_snake_case(g: Guidance) -> String {
+/// Canonical snake_case wire form of a [`Guidance`] variant. This is the ONLY
+/// serialization permitted on the D-Bus surface: it must stay in lockstep with
+/// `namtor_client::types::Guidance::from_wire`. Never use `format!("{:?}")` —
+/// `Debug` prints `MoveCloser`, which lowercases to the unparseable
+/// `movecloser` and leaves the UI displaying a raw token.
+pub(crate) fn guidance_to_snake_case(g: Guidance) -> String {
     use Guidance::*;
     match g {
         Centering => "centering",

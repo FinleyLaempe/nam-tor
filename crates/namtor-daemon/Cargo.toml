@@ -36,6 +36,10 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Test-only: the guidance wire round-trip test parses the daemon's emitted
+# snake_case strings with the real client-side parser, so a drift between the
+# two tables fails the daemon's own test suite.
+namtor-client = { path = "../namtor-client" }
 namtor-eval = { path = "../namtor-eval" }
 namtor-worker = { path = "../namtor-worker", features = ["onnx"] }
 namtor-capture = { path = "../namtor-capture" }
