@@ -103,10 +103,29 @@ jobs:
         run: cargo test --release -p namtor-pam --test g5_structural -- --nocapture
 
       # Gate 7 — security advisories in the dependency lockfile.
+      #
+      # cargo-audit is installed as a prebuilt binary, NOT via `cargo install`.
+      # Building it from source was uncached and took ~20 minutes on every run
+      # (observed on run 35131384383), dominating a pipeline that otherwise
+      # finishes in ~14. install-action downloads a release binary in seconds
+      # and FAILS THE JOB when it cannot — the previous
+      # `cargo install ... 2>/dev/null || true` swallowed an install failure,
+      # so a broken build silently degraded the gate into running whatever
+      # `cargo audit` happened to be on PATH, or nothing at all.
+      - name: Install cargo-audit (prebuilt binary)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # `cargo audit` itself is invoked exactly as before, so the gate's
+      # pass/fail semantics are unchanged: a vulnerability advisory exits
+      # non-zero and fails the step (this is how RUSTSEC-2026-0285 against
+      # rustls 0.23.41 was caught), while informational warnings are reported
+      # without failing. `encoding` (unmaintained) and `chacha20` (yanked) are
+      # currently tolerated on that basis — do not add `--deny warnings`
+      # without first resolving both, or CI goes red on unrelated crates.
       - name: cargo audit (advisory database)
-        run: |
-            cargo install cargo-audit --locked 2>/dev/null || true
-            cargo audit --file Cargo.lock
+        run: cargo audit --file Cargo.lock
 
   python:
     runs-on: ubuntu-latest
