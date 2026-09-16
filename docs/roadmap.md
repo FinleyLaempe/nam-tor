@@ -49,7 +49,7 @@ the spec.
 **Language and toolchain**
 - Rust for all shipped runtime code. Edition 2021 or later. Workspace layout per spec §15.
 - Python + PyTorch for `ml/` only. Never shipped to users.
-- GTK4 + libadwaita (Rust) for GNOME UI. QML + thin C++ `KCModule` for KDE.
+- GTK4 + libadwaita (Rust) for the single, desktop-neutral UI. (A QML + C++ `KCModule` KDE KCM shipped through 0.1.0 and was removed in the production-readiness program; see M7.)
 - JavaScript for the optional GNOME Shell extension.
 
 **Licensing**
@@ -273,10 +273,11 @@ cleanly and the thresholds are more stable across devices.
 
 ### M7 — Desktop integration
 
-**Status: implemented (complete, redesigned).** `namtor_gnome` GTK4/libadwaita enrollment wizard + settings app shipped (redesigned to AdwPreferencesDialog idiom). KDE KCM shipped (tasks 21-25; Rust async D-Bus bridge, QML KCM, C++ KCModule shim). D-Bus `org.namtor.Manager` system-bus service shipped (tasks 8-13; methods, signals, polkit, peer identity, enrollment sessions, profile lifecycle). Manager3 continuous-enrollment contract shipped (enrollment redesign tasks 2/5/6). Runtime HIL WITHHELD (no root, no camera, no AT-SPI). See `docs/evidence/status-audit.md`.
+**Status: implemented (complete, redesigned).** `namtor_gnome` GTK4/libadwaita enrollment wizard + settings app shipped (redesigned to AdwPreferencesDialog idiom). A KDE KCM also shipped (tasks 21-25; Rust async D-Bus bridge, QML KCM, C++ KCModule shim) and was **removed** in the production-readiness program: the project consolidated on one desktop-neutral GTK4 UI, and the KCM's only unique logic (a `kscreenlockerrc` authenticator writer that was never wired into its QML) now lives in `namtor-pam-config::desktop_lockscreen`. D-Bus `org.namtor.Manager` system-bus service shipped (tasks 8-13; methods, signals, polkit, peer identity, enrollment sessions, profile lifecycle). Manager3 continuous-enrollment contract shipped (enrollment redesign tasks 2/5/6). Runtime HIL WITHHELD (no root, no camera, no AT-SPI). See `docs/evidence/status-audit.md`.
 
-**Scope:** D-Bus system service, polkit actions, GNOME settings app and
-enrollment wizard, KDE KCM, GNOME Shell extension.
+**Scope:** D-Bus system service, polkit actions, settings app and
+enrollment wizard, GNOME Shell extension. (The KDE KCM was in scope
+originally and has since been removed — see the status note above.)
 
 **Key deliverables**
 - `org.namtor.Manager` / `Device` / `Settings` per spec §9.1

@@ -27,19 +27,27 @@ provenance manifests.
 
 ## Split packages
 
-Nam-tor ships as three split packages on all three distros:
+Nam-tor ships as two split packages on all three distros:
 
 | Package | Arch | Fedora | Debian |
 |---|---|---|---|
 | Core | `namtor` | `namtor` | `namtor` |
-| GNOME | `namtor-gnome` | `namtor-gnome` | `namtor-gnome` |
-| KDE | `namtor-kde` | `namtor-kde` | `namtor-kde` |
+| Desktop UI | `namtor-gnome` | `namtor-gnome` | `namtor-gnome` |
 
 The core package owns the daemon, worker, CLI, PAM module, bundled models,
 systemd units, D-Bus service, polkit policy, lifecycle helper, SBOM, and
-licence texts. It is headless-safe (no GTK or Qt runtime deps). The GNOME
-and KDE packages own only their respective UI files and depend on `namtor`
-with an exact version pin. Shared directories are owned by core; desktop
+licence texts. It is headless-safe (no GTK runtime deps). The desktop
+package owns only the UI files and depends on `namtor` with an exact
+version pin.
+
+A third package, `namtor-kde` (a Plasma 6 KCM in Qt6/QML), shipped up to
+0.1.0 and has been removed — Nam-tor has one desktop-neutral GTK4 UI now.
+It is **obsoleted rather than merely dropped**: it declared an exact
+version dependency on the core package, so a leftover install would block
+core upgrades on every package manager. `namtor-gnome` therefore carries
+Arch `replaces`/`conflicts`, Fedora `Obsoletes:`, and Debian
+`Replaces:`/`Breaks:` entries naming `namtor-kde`. These stay until no
+supported upgrade path starts from a release that shipped it. Shared directories are owned by core; desktop
 packages own only their own files dropped into them (no dir-ownership
 conflicts). See [`docs/evidence/public-release/20-arch-matrix.json`](../docs/evidence/public-release/20-arch-matrix.json),
 [`21-fedora-matrix.json`](../docs/evidence/public-release/21-fedora-matrix.json),
@@ -122,7 +130,7 @@ needed to start the daemon:
 **PAM services are OFF by default.** No PAM config is edited at install
 time. To complete setup after install:
 
-1. **Open the Nam-tor Settings app** (GNOME or KDE).
+1. **Open the Nam-tor Settings app**.
 2. **Enroll your face** through the enrollment wizard.
 3. **Choose which PAM services to enable** (e.g. `gdm-password`) via the
    Settings toggle. The Settings app enables PAM services through the

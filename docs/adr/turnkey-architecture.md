@@ -1,7 +1,10 @@
 # ADR: Turnkey Release Architecture
 
 **Date:** 2026-08-08  
-**Status:** Accepted  
+**Status:** Accepted; **partially superseded 2026-09-16** by
+`docs/adr/single-desktop-ui.md`, which removes the `namtor-kde` package.
+Everything else here still holds. The three-package text below is left
+unedited as the record of what 0.1.0 shipped.  
 **Spec reference:** `docs/superpowers/specs/2026-08-04-nam-tor-design.md` §9  
 **Plan reference:** `model-licensing-strategy` Task 1  
 

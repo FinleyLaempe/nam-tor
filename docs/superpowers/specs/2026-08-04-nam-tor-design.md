@@ -1302,6 +1302,17 @@ polkit actions: `org.namtor.enroll-self`, `enroll-other`, `delete`, `configure`.
 
 ### 9.3 KDE
 
+> **AMENDMENT (2026-09-16, production-readiness Phase 2).** This section is
+> **no longer implemented and will not be.** The KCM described below was
+> built and shipped through 0.1.0 and has since been removed: the project
+> consolidated on the single desktop-neutral GTK4/libadwaita UI of §9.2,
+> which runs on Plasma like any other GTK application. The `namtor-kde`
+> package is obsoleted by the desktop package on all three distros (see
+> `docs/adr/single-desktop-ui.md`). The rest of §9 — the D-Bus API, the
+> enrollment flow, the privilege model — is unchanged and still
+> authoritative; only the second front-end is gone. The text below is kept
+> as the historical record of what was specified.
+
 - **KCM** in QML with a thin C++ `KCModule` shim, integrated into System Settings
   under Users / Security.
 - Same D-Bus API, so the two UIs share a common client crate (`namtor-client`) for wire types and D-Bus proxies, but neither UI process is privileged — all privileged operations go through the polkit-gated system bus.

@@ -14,7 +14,7 @@ carries a detached signature (`.minisig` for minisign, `.asc` for GPG):
 |---|---|---|
 | Source tarball | `namtor-<ver>.tar.gz` | `git archive` / release workflow |
 | Model archive | `namtor-models-<ver>.tar.gz` (+ `.sha256` sidecar) | `packaging/build-model-archive.sh` |
-| Arch split package | `namtor-<ver>-1-*.pkg.tar.zst` (×3: core, gnome, kde) | `makepkg` |
+| Arch split package | `namtor-<ver>-*-*.pkg.tar.zst` (×2: core, gnome) | `makepkg` |
 | Fedora split package | `namtor-<ver>-1.fcNN.*.rpm` (×3) | `rpmbuild` |
 | Debian split package | `namtor_<ver>-1_*.deb` (×3) | `dpkg-buildpackage` |
 | Checksums manifest | `SHA256SUMS` | `sign-packages.sh --checksums` |
@@ -150,10 +150,9 @@ Determinism guarantees:
 
 ## AppStream screenshots
 
-AppStream `metainfo.xml` files for the GNOME enrollment wizard
-(`packaging/gnome/org.namtor.Wizard.metainfo.xml`) and the KDE KCM
-(`packaging/kde/org.namtor.kcm.metainfo.xml`) ship **without** `<screenshots>`
-blocks.
+The AppStream `metainfo.xml` file for the enrollment wizard
+(`packaging/metainfo/org.namtor.Wizard.metainfo.xml`) ships **without** a
+`<screenshots>` block.
 
 **Rationale:** AppStream `<screenshot>` elements require stable public URLs.
 The project does not yet have a stable hosting location for screenshot

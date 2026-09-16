@@ -1,6 +1,6 @@
 # Nam-tor
 
-Infrared face authentication for Linux. A privilege-separated daemon, a PAM module, and native GNOME and KDE integration.
+Infrared face authentication for Linux. A privilege-separated daemon, a PAM module, and a desktop-neutral GTK4 settings and enrollment app.
 
 > **Experimental preview.** Do not enable on security-sensitive PAM services.
 > No G1-G5 production gate has passed with measured evidence yet. Biometric
@@ -16,22 +16,34 @@ Infrared face authentication for Linux. A privilege-separated daemon, a PAM modu
 
 ## Packages
 
-Nam-tor ships as three split packages on Arch, Fedora, and Debian:
+Nam-tor ships as two split packages on Arch, Fedora, and Debian:
 
 | Package | Contents | Depends on |
 |---|---|---|
 | `namtor` | Daemon, worker, PAM module, CLI, bundled models, systemd units, D-Bus service, polkit policy, lifecycle helper, SBOM | `onnxruntime`, `pam`, `systemd` |
-| `namtor-gnome` | GNOME enrollment wizard and settings app (GTK4/libadwaita) | `namtor` (exact version), `gtk4`, `libadwaita` |
-| `namtor-kde` | KDE Plasma 6 KCM (system settings module, Qt6/KF6) | `namtor` (exact version), `qt6-base`, `kirigami`, `kcoreaddons` |
+| `namtor-gnome` | Enrollment wizard and settings app (GTK4/libadwaita). Desktop-neutral despite the name — it is the only UI. | `namtor` (exact version), `gtk4`, `libadwaita` |
 
-The core package is headless-safe: it has no desktop-library dependencies, so a server can install `namtor` alone for daemon + PAM + CLI without pulling GTK or Qt.
+The core package is headless-safe: it has no desktop-library dependencies, so a server can install `namtor` alone for daemon + PAM + CLI without pulling GTK.
+
+### Upgrading from a release that had `namtor-kde`
+
+Releases up to 0.1.0 also shipped a `namtor-kde` package: a Plasma 6 KCM
+written in Qt6/QML. It is gone; Nam-tor now has one desktop-neutral GTK4
+UI, which runs on Plasma like any other GTK app.
+
+The old package is **obsoleted, not just dropped**, because it declared an
+exact-version dependency on `namtor`: left installed, it would block core
+upgrades. `namtor-gnome` declares `replaces`/`Obsoletes`/`Breaks` on it, so
+upgrading through your package manager removes it for you. If you pinned or
+held packages and end up with an unsatisfiable dependency, remove
+`namtor-kde` by hand and upgrade again.
 
 ## Setup
 
 Setup is Settings-only. No CLI or root shell is needed:
 
 1. Install the package(s) with your distro's package manager (`pacman -U`, `dnf install`, `apt install`).
-2. Open the Nam-tor Settings app (GNOME or KDE).
+2. Open the Nam-tor Settings app.
 3. Enroll your face through the enrollment wizard.
 4. Choose which PAM services to enable (e.g. `gdm-password`) via the Settings toggle.
 

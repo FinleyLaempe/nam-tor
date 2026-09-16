@@ -6,7 +6,7 @@ A navigational map into the [specification](superpowers/specs/2026-08-04-nam-tor
 
 ```
  ┌─ root ──────────────┐        ┌─ user session ────────────┐
- │ sudo / login / GDM  │        │ namtor-gtk  |  KDE KCM    │
+ │ sudo / login / GDM  │        │ namtor enrollment wizard  │
  │      │              │        │      │                    │
  │  pam_namtor.so      │        │      │ D-Bus, polkit-gated│
  └──────┼──────────────┘        └──────┼────────────────────┘
@@ -52,7 +52,7 @@ The **socket ACL is the security-critical seam** (§3.2). Anyone who can assert 
 | Why is accuracy about enrollment rather than model size? | §6.6 |
 | How are templates protected? | §7 — TPM sealing |
 | What happens when something fails? | §8.3 — every failure mode and its message |
-| How do GNOME and KDE integrate? | §9 |
+| How does the desktop UI integrate? | §9 |
 | How is any of this measured? | §10.6 — the eval harness |
 | What must be true to ship a claim? | §12 — acceptance gates |
 | What could still invalidate the design? | §13 — open risks |

@@ -196,6 +196,14 @@ marked `(defined)`.
 - `docs/evidence/ui/gnome/gnome-shell-qa.md` — GNOME Shell QA.
 - `docs/evidence/ui/gnome/package-qa.md` — GNOME package QA.
 - `docs/evidence/ui/gnome/review.json` — GNOME review scenarios.
+- **SUPERSEDED (2026-09-16):** the KDE KCM evidence below records what the
+  0.1.0 release shipped and is left byte-identical for that reason. The
+  Plasma KCM (`crates/namtor-kde`, package `namtor-kde`) has since been
+  removed; the project ships one desktop-neutral GTK4 UI. No claim about a
+  KDE-native System Settings module may be made from these files for any
+  release after 0.1.0. See `docs/adr/single-desktop-ui.md`. The same applies
+  to `docs/evidence/public-release/15-kde-flow.json` and
+  `15-kde-failures.json`.
 - `docs/evidence/kde-qa/report.md` — KDE KCM QA results.
 - `docs/evidence/ui/kde/build.md` — KDE KCM build evidence.
 - `docs/evidence/ui/kde/bridge.json` — KDE async D-Bus bridge and profile

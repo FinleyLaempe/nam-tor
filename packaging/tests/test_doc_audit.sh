@@ -8,7 +8,7 @@
 #       user, blanket GDM-group step, false production-readiness claim,
 #       fetched-at-first-run claim).
 #   (b) contains the "experimental preview" warning.
-#   (c) documents the split package names (namtor, namtor-gnome, namtor-kde).
+#   (c) documents the split package names (namtor, namtor-gnome).
 #   (d) has no broken internal markdown links (links to files that don't exist).
 #   (e) mutation: adding a stale string to any audited file fails the test.
 #
@@ -121,9 +121,12 @@ done
 # --- (c) package names documented -------------------------------------------
 
 echo "--- (c) split package names documented ---"
+# The shipped split packages. `namtor-kde` was removed when the project
+# consolidated on one desktop-neutral GTK4 UI; it must NOT be listed here
+# as a package users can install. It is still expected to be *mentioned*
+# in the docs, as an obsoleted package — that is checked separately below.
 PACKAGE_NAMES=(
     "namtor-gnome"
-    "namtor-kde"
 )
 PKG_FILES=(
     "$REPO_ROOT/README.md"
@@ -144,7 +147,20 @@ for f in "${PKG_FILES[@]}"; do
         all_present=0
     fi
     if [[ $all_present -eq 1 ]]; then
-        ok "$fname documents all three package names"
+        ok "$fname documents all shipped package names"
+    fi
+done
+
+# The removed namtor-kde package must still be DOCUMENTED, because leaving
+# it installed blocks core upgrades. A user upgrading from 0.1.0 needs to
+# be told it is gone and obsoleted; silently dropping it from the docs is
+# how people end up stuck on an unsatisfiable dependency.
+for f in "${PKG_FILES[@]}"; do
+    fname="${f#$REPO_ROOT/}"
+    if grep -qF "namtor-kde" "$f" 2>/dev/null; then
+        ok "$fname documents the obsoleted namtor-kde package"
+    else
+        not_ok "$fname does not mention the obsoleted namtor-kde package (upgrade trap)"
     fi
 done
 
