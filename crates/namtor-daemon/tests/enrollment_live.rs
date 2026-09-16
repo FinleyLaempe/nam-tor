@@ -32,7 +32,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use namtor_camera::watchdog::SystemClock;
 use namtor_hwdb::quirks::EmitterCfg;
@@ -43,7 +43,10 @@ use namtor_capture::source::{CaptureSource, SourceCaps, Spectrum};
 use namtor_daemon::manager::embed::PipelineEmbedSource;
 use namtor_daemon::manager::observation::{derive_guidance, observation_from};
 use namtor_daemon::manager::session::EnrollmentCapture;
+use namtor_daemon::verify::VerifyEngine;
 use namtor_layout::{InstallRoot, LayoutPaths};
+use namtor_proto::pam::Verdict;
+use namtor_store::{EnrollmentMeta, TemplateRecord, TemplateStore};
 
 mod hw_emitter;
 
@@ -1091,5 +1094,968 @@ fn emitter_goes_dark_within_the_teardown_budget() {
          does not arrive until {max:.1} ms. Resolving this needs an observer that does not \
          stall with the mode switch (a second camera, or a photodiode), not a looser test.",
         pretty(&timings),
+    );
+}
+
+// ===========================================================================
+// Gates G2.1 / G2.2 — authentication latency on the reference camera.
+// ===========================================================================
+
+/// Gate **G2.1**: median authentication latency budget, milliseconds.
+const AUTH_MEDIAN_BUDGET_MS: f64 = 500.0;
+
+/// Gate **G2.2**: p95 authentication latency budget, milliseconds.
+const AUTH_P95_BUDGET_MS: f64 = 1000.0;
+
+/// How many verify attempts the gates are measured over.
+///
+/// Twenty is the floor at which a p95 is something other than a restatement
+/// of the maximum: at nearest rank the p95 of 20 samples is the 19th, so one
+/// outlier still moves it. The test asserts it collected at least
+/// [`AUTH_SAMPLES_MIN`] and prints the count beside every number, because a
+/// percentile quoted without its N is not evidence.
+const AUTH_SAMPLES_TARGET: usize = 24;
+
+/// Fewer samples than this and the run reports what it got and refuses to
+/// call the gates either way.
+const AUTH_SAMPLES_MIN: usize = 20;
+
+/// The daemon's own per-attempt budget, mirroring the private `VERIFY_TIMEOUT`
+/// in `crates/namtor-daemon/src/dispatch.rs`. Every attempt here is given this
+/// deadline unless the emitter watchdog forces a shorter one, and each sample
+/// records which of the two it actually got.
+const VERIFY_TIMEOUT_MS: u64 = 5000;
+
+/// Headroom subtracted from the emitter's `max_on_ms` when deciding whether
+/// another attempt fits inside the current armed window.
+///
+/// [`VerifyEngine::verify`] only tests its deadline at the top of each frame
+/// iteration and then blocks in `VIDIOC_DQBUF` plus two ONNX graphs, so it can
+/// return later than the deadline it was handed — by up to one frame period
+/// plus one inference. This margin covers that overshoot so the LED is dark
+/// again before the watchdog budget is spent.
+const ARMED_WINDOW_MARGIN_MS: u64 = 400;
+
+/// The shortest deadline worth starting an attempt with. Below this the window
+/// is closed and the emitter re-armed instead, so no sample is truncated more
+/// severely than it has to be.
+const MIN_VERIFY_BUDGET_MS: u64 = 500;
+
+/// Upper bound on frames drained after arming while waiting for the firmware
+/// AE to stop clipping. The real bound is the watchdog; this only stops a
+/// silent camera from spinning.
+const AE_SETTLE_MAX_FRAMES: usize = 45;
+
+/// Fraction of samples at or above 250/255 below which the firmware AE is
+/// judged to have stopped clipping.
+///
+/// **This is the finding that made the measurement possible.** Arming the
+/// emitter does not hand you a usable image: the first illuminated frames come
+/// back at mean 254/255 with **98% of all samples clipped at 250+**, and YuNet
+/// finds nothing in a white rectangle. Measured on the reference camera, the
+/// AE then decays over ~13 frames to a mean in the 60–80 band, and detections
+/// appear the moment the clipped fraction drops under a couple of percent.
+/// `quirks/devices/3277-0018.toml` records the decay as `217.6 -> 45.3` and
+/// advises *"Do NOT wait for settling: the first pair has the best SNR
+/// (217.2)"*. On this device, at this working distance, the first pair is not
+/// 217 but **saturated**, and it carries no recoverable face at all.
+const AE_SATURATED_MAX: f32 = 0.02;
+
+/// Sample value at or above which a pixel counts as clipped.
+const AE_CLIP_LEVEL: u8 = 250;
+
+/// The uid the throwaway enrollment is filed under. Nothing is written outside
+/// a `tempfile::tempdir()`; `/var/lib/namtor` is never touched.
+const AUTH_UID: u32 = 1000;
+
+/// Templates the enrollment phase aims to collect. Eight is `SELECT_N` in
+/// `manager::session` and the cap `namtor-cli enroll` truncates to, i.e. the
+/// most a real enrollment ever keeps.
+const ENROLL_TARGET_TEMPLATES: usize = 8;
+
+/// Fewest templates worth authenticating against, matching the floor
+/// `namtor-cli enroll` enforces before it will write a record.
+const ENROLL_MIN_TEMPLATES: usize = 3;
+
+/// Blur floor, matching `namtor-cli enroll`'s `laplacian_stddev < 3.0` reject.
+const ENROLL_BLUR_FLOOR: f32 = 3.0;
+
+/// Detector score/NMS thresholds `namtor-cli enroll` configures before it
+/// enrolls, and the quality floor it then applies to the detections that come
+/// back. Enrollment deliberately runs a *more permissive* detector than
+/// verification — `RecognitionPipeline::new` defaults to `0.6`, which is what
+/// [`VerifyEngine`] uses — and filters on the score afterwards. Mirrored here
+/// exactly rather than approximated, because the difference decides which
+/// frames become templates.
+const ENROLL_DETECT_SCORE_THRESHOLD: f32 = 0.3;
+const ENROLL_DETECT_NMS_THRESHOLD: f32 = 0.4;
+const ENROLL_QUALITY_FLOOR: f32 = 0.5;
+
+/// Armed windows the enrollment phase may spend.
+const MAX_ENROLL_WINDOWS: usize = 10;
+
+/// Armed windows the verify phase may spend collecting
+/// [`AUTH_SAMPLES_TARGET`] samples.
+const MAX_VERIFY_WINDOWS: usize = 40;
+
+/// Fraction of samples at or above [`AE_CLIP_LEVEL`]. The firmware AE's own
+/// error signal, read straight off the pixels.
+fn saturated_fraction(data: &[u8]) -> f32 {
+    if data.is_empty() {
+        return 0.0;
+    }
+    data.iter().filter(|&&b| b >= AE_CLIP_LEVEL).count() as f32 / data.len() as f32
+}
+
+/// An armed emitter whose scene has been confirmed lit *and* out of AE
+/// clipping, with the cost of getting there recorded.
+struct ArmedWindow<'a> {
+    armed: hw_emitter::ArmedEmitter<'a>,
+    /// When the `payload_on` write returned, i.e. the start of the watchdog's
+    /// `max_on_ms` budget.
+    armed_at: Instant,
+    /// Brightest illuminated frame mean seen while settling.
+    lit_mean: f32,
+    /// Mean of the first frame judged usable.
+    settled_mean: f32,
+    /// Milliseconds from the `payload_on` write to that frame. This is the
+    /// mode-switch blackout plus the AE decay, and it is excluded from every
+    /// latency sample — see the test's doc comment.
+    settle_ms: f64,
+    /// Frames dequeued and thrown away getting there.
+    drained: usize,
+}
+
+/// Arms the emitter and drains frames until the scene is lit **and** the
+/// firmware AE has stopped clipping.
+///
+/// The drain is deliberately outside every timed region, for two measured
+/// reasons. The MSXU mode switch blinds the V4L2 stream for ~390 ms
+/// (`emitter_goes_dark_within_the_teardown_budget` measures it in both
+/// directions), and the AE then needs a further ~13 frames to come down off
+/// the clipping rail. Neither is authentication: the daemon warms the stream
+/// in `AuthPhase::Prepare` before `AuthPhase::Verify` runs. The cost is
+/// **measured and reported** rather than silently dropped, because on this
+/// device it is not small — see [`ArmedWindow::settle_ms`].
+///
+/// On every error path the emitter is forced off before the error returns, and
+/// the guard that would have done so anyway is dropped.
+fn arm_and_wait_for_usable_exposure<'a>(
+    node: &Path,
+    cfg: &'a EmitterCfg,
+    watchdog: &mut namtor_camera::watchdog::Watchdog<'_, SystemClock>,
+    source: &mut dyn CaptureSource,
+) -> Result<ArmedWindow<'a>, String> {
+    let mut armed = hw_emitter::ArmedEmitter::arm(node, cfg)?;
+    let armed_at = Instant::now();
+    watchdog.arm();
+
+    let mut lit_mean = 0.0f32;
+    let mut drained = 0usize;
+    let mut settled: Option<f32> = None;
+    while drained < AE_SETTLE_MAX_FRAMES {
+        if watchdog.check_expired() {
+            armed.force_off();
+            watchdog.disarm();
+            return Err(format!(
+                "the {} ms emitter watchdog fired after {drained} frames while waiting for the \
+                 exposure to come off the clipping rail; brightest illuminated frame mean \
+                 {lit_mean:.2}/255",
+                hw_emitter::max_on_ms(cfg),
+            ));
+        }
+        match source.next_frame() {
+            Ok(Some(frame)) => {
+                drained += 1;
+                let mean = frame_mean(&frame.data);
+                // Half of every armed window is the clean side of the 1:1
+                // firmware strobe and reads ~0.1/255. Only the illuminated
+                // side carries an exposure to judge.
+                if mean >= EMITTER_LIT_MEAN {
+                    lit_mean = lit_mean.max(mean);
+                    if saturated_fraction(&frame.data) < AE_SATURATED_MAX {
+                        settled = Some(mean);
+                        break;
+                    }
+                }
+            }
+            Ok(None) => {
+                armed.force_off();
+                watchdog.disarm();
+                return Err("the stream ended while waiting for the exposure to settle".into());
+            }
+            Err(e) => {
+                armed.force_off();
+                watchdog.disarm();
+                return Err(format!("next_frame while waiting for the exposure: {e}"));
+            }
+        }
+    }
+    let Some(settled_mean) = settled else {
+        armed.force_off();
+        watchdog.disarm();
+        return Err(if lit_mean < EMITTER_LIT_MEAN {
+            format!(
+                "the emitter control accepted payload_on but the scene stayed dark over \
+                 {drained} frames: brightest mean {lit_mean:.2}/255, below the \
+                 {EMITTER_LIT_MEAN:.1} lit floor"
+            )
+        } else {
+            format!(
+                "the scene lit (brightest mean {lit_mean:.2}/255) but the exposure never came \
+                 off the clipping rail within {drained} frames: still more than \
+                 {:.0}% of samples at {AE_CLIP_LEVEL}+",
+                AE_SATURATED_MAX * 100.0,
+            )
+        });
+    };
+
+    Ok(ArmedWindow {
+        armed,
+        armed_at,
+        lit_mean,
+        settled_mean,
+        settle_ms: armed_at.elapsed().as_secs_f64() * 1000.0,
+        drained,
+    })
+}
+
+/// One timed authentication attempt.
+struct LatencySample {
+    /// Wall-clock milliseconds from immediately before
+    /// [`VerifyEngine::verify`] is entered to immediately after it returns.
+    ms: f64,
+    verdict: Verdict,
+    score: f32,
+    reason: Option<String>,
+    /// The deadline this attempt was given, in milliseconds.
+    budget_ms: u64,
+    /// `true` when the emitter watchdog forced a deadline shorter than the
+    /// daemon's own [`VERIFY_TIMEOUT_MS`]. A sample that ran to a truncated
+    /// deadline is a **lower bound** on what the daemon would have spent.
+    truncated: bool,
+}
+
+impl LatencySample {
+    /// `true` when the attempt spent essentially its whole deadline, i.e. the
+    /// reported latency is the budget rather than the pipeline's own cost.
+    fn hit_deadline(&self) -> bool {
+        self.ms >= self.budget_ms as f64 * 0.95
+    }
+}
+
+/// Median of an already-sorted slice; the mean of the two middle values when
+/// the count is even, so the number does not depend on which side of the pair
+/// the implementation happens to pick.
+fn median_of(sorted: &[f64]) -> f64 {
+    let n = sorted.len();
+    if n % 2 == 1 {
+        sorted[n / 2]
+    } else {
+        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+    }
+}
+
+/// Nearest-rank percentile of an already-sorted slice: the smallest sample at
+/// or below which at least `pct`% of them fall. No interpolation — with
+/// 20-odd samples an interpolated percentile invents precision the data does
+/// not have.
+fn percentile_of(sorted: &[f64], pct: f64) -> f64 {
+    let n = sorted.len();
+    let rank = ((pct / 100.0) * n as f64).ceil().max(1.0) as usize;
+    sorted[rank.min(n) - 1]
+}
+
+fn pretty_ms(v: &[f64]) -> String {
+    v.iter()
+        .map(|t| format!("{t:.1}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// What the enrollment phase produced.
+struct LiveEnrollment {
+    templates: Vec<namtor_store::Template>,
+    quality_scalar: f32,
+    windows: usize,
+    /// Longest armed window, from the `payload_on` write to the `payload_off`
+    /// write. Must stay under the device's `max_on_ms`.
+    max_armed_ms: f64,
+    /// Brightest illuminated frame mean seen across every armed window: the
+    /// proof these templates came off a genuinely lit sensor.
+    lit_mean: f32,
+    best_confidence: f32,
+    frames_examined: usize,
+    no_face: usize,
+    below_quality: usize,
+    too_blurred: usize,
+}
+
+/// Enrolls against the live camera, mirroring what `namtor-cli enroll` does:
+/// run [`RecognitionPipeline`] over illuminated frames, keep the detections
+/// that clear the blur floor as [`Template`]s, then rank by detection score
+/// and keep the best [`ENROLL_TARGET_TEMPLATES`].
+///
+/// # Why not `EnrollmentCapture`
+///
+/// The daemon's own [`EnrollmentCapture`] — which
+/// `live_enrollment_session_accepts_frames_from_the_reference_camera` above
+/// drives — takes ownership of its capture source and exposes no handle to it.
+/// On this device that is fatal: every armed window starts with the AE on the
+/// clipping rail, `pump()` costs ~100 ms of ONNX per frame while the sensor
+/// produces one every 33 ms, so the consumer never catches up with the queue
+/// and every frame it ever sees is a saturated white rectangle. Measured: **0
+/// templates from 141 frames over 8 armed windows, best detection confidence
+/// 0.000**, with the emitter verified lit at 254/255 the whole time. Draining
+/// the queue cheaply first is the only thing that fixes it, and that needs the
+/// source. So this uses the CLI's enrollment path, which is equally shipped
+/// and equally real, and notes the difference rather than hiding it.
+///
+/// Every armed window is bounded by the device's own `max_on_ms` watchdog and
+/// closed explicitly; `payload_off` is restored on every path including panic.
+fn enroll_live(
+    yunet: &Path,
+    sface: &Path,
+    cfg: &EmitterCfg,
+    clock: &SystemClock,
+) -> Result<LiveEnrollment, String> {
+    let mut pipeline = namtor_recog::RecognitionPipeline::new(yunet, sface, (640, 640))
+        .map_err(|e| format!("load the enrollment recognition pipeline: {e}"))?;
+    pipeline.detector = pipeline
+        .detector
+        .with_thresholds(ENROLL_DETECT_SCORE_THRESHOLD, ENROLL_DETECT_NMS_THRESHOLD);
+    let mut source = open_reference_camera();
+
+    let budget_ms = u64::from(hw_emitter::max_on_ms(cfg));
+    let mut templates: Vec<namtor_store::Template> = Vec::new();
+    let mut windows = 0usize;
+    let mut max_armed_ms = 0.0f64;
+    let mut lit_mean = 0.0f32;
+    let mut best_confidence = 0.0f32;
+    let mut frames_examined = 0usize;
+    let mut no_face = 0usize;
+    let mut below_quality = 0usize;
+    let mut too_blurred = 0usize;
+    let mut last_err: Option<String> = None;
+
+    while templates.len() < ENROLL_TARGET_TEMPLATES && windows < MAX_ENROLL_WINDOWS {
+        windows += 1;
+        let mut watchdog = hw_emitter::watchdog_for(cfg, clock);
+        let mut window = match arm_and_wait_for_usable_exposure(
+            Path::new(IR_NODE),
+            cfg,
+            &mut watchdog,
+            source.as_mut(),
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                last_err = Some(format!("enroll window {windows}: {e}"));
+                break;
+            }
+        };
+        lit_mean = lit_mean.max(window.lit_mean);
+
+        let mut kept = 0usize;
+        loop {
+            if watchdog.check_expired()
+                || window.armed_at.elapsed().as_millis() as u64
+                    >= budget_ms.saturating_sub(ARMED_WINDOW_MARGIN_MS)
+                || templates.len() >= ENROLL_TARGET_TEMPLATES
+            {
+                break;
+            }
+            let frame = match source.next_frame() {
+                Ok(Some(f)) => f,
+                Ok(None) => break,
+                Err(_) => continue,
+            };
+            // Skip the clean half of the 1:1 strobe: it is black by design.
+            if frame_mean(&frame.data) < EMITTER_LIT_MEAN {
+                continue;
+            }
+            frames_examined += 1;
+            match pipeline.process_frame(&frame.data, frame.width, frame.height) {
+                Ok(Some(result)) => {
+                    let quality = result.detection.box_.score;
+                    best_confidence = best_confidence.max(quality);
+                    if quality < ENROLL_QUALITY_FLOOR {
+                        below_quality += 1;
+                        continue;
+                    }
+                    let blur = namtor_recog::quality::laplacian_stddev(
+                        &frame.data,
+                        frame.width,
+                        frame.height,
+                    );
+                    if blur < ENROLL_BLUR_FLOOR {
+                        too_blurred += 1;
+                        continue;
+                    }
+                    templates.push(namtor_store::Template {
+                        vector: result.embedding.vector,
+                        quality,
+                        is_anchor: false,
+                    });
+                    kept += 1;
+                }
+                Ok(None) => no_face += 1,
+                Err(e) => {
+                    last_err = Some(format!("enroll window {windows}: pipeline: {e}"));
+                    break;
+                }
+            }
+        }
+
+        window.armed.force_off();
+        watchdog.disarm();
+        let armed_ms = window.armed_at.elapsed().as_secs_f64() * 1000.0;
+        max_armed_ms = max_armed_ms.max(armed_ms);
+        drop(window.armed);
+        eprintln!(
+            "enroll window {windows}: exposure usable after {} drained frames / {:.0} ms \
+             (settled mean {:.1}/255, brightest {:.1}/255); examined {frames_examined} \
+             illuminated frames, kept {kept} this window, {} total of \
+             {ENROLL_TARGET_TEMPLATES}; armed {armed_ms:.0} ms of a {budget_ms} ms budget",
+            window.drained,
+            window.settle_ms,
+            window.settled_mean,
+            window.lit_mean,
+            templates.len(),
+        );
+        if last_err.is_some() {
+            break;
+        }
+    }
+    source.stop();
+    // Releases /dev/video2 (STREAMOFF + munmap) so the verify phase can
+    // reopen it.
+    drop(source);
+
+    if templates.len() < ENROLL_MIN_TEMPLATES {
+        return Err(format!(
+            "the live enrollment produced {} template(s), below the {ENROLL_MIN_TEMPLATES} \
+             `namtor-cli enroll` insists on{}. Examined {frames_examined} illuminated frames \
+             over {windows} armed window(s): {no_face} with no face even at the \
+             {ENROLL_DETECT_SCORE_THRESHOLD} detector threshold, {below_quality} detected but \
+             below the {ENROLL_QUALITY_FLOOR} quality floor, {too_blurred} below the \
+             {ENROLL_BLUR_FLOOR:.1} blur floor; best detection confidence {best_confidence:.3}; \
+             brightest illuminated frame mean {lit_mean:.2}/255. The emitter WAS lit, so this \
+             is not the emitter: is a face in front of {IR_NODE}? There is nothing to \
+             authenticate against and therefore no authentication latency to measure.",
+            templates.len(),
+            last_err
+                .as_deref()
+                .map(|e| format!(" ({e})"))
+                .unwrap_or_default(),
+        ));
+    }
+
+    // Rank by detection score and keep the best, exactly as `namtor-cli
+    // enroll` does before it writes the record.
+    templates.sort_by(|a, b| {
+        b.quality
+            .partial_cmp(&a.quality)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    templates.truncate(ENROLL_TARGET_TEMPLATES);
+    if let Some(first) = templates.first_mut() {
+        first.is_anchor = true;
+    }
+    let quality_scalar = templates.iter().map(|t| t.quality).sum::<f32>() / templates.len() as f32;
+
+    Ok(LiveEnrollment {
+        templates,
+        quality_scalar,
+        windows,
+        max_armed_ms,
+        lit_mean,
+        best_confidence,
+        frames_examined,
+        no_face,
+        below_quality,
+        too_blurred,
+    })
+}
+
+/// Explains a [`TemplateStore`] open failure in terms of what actually blocks
+/// it, rather than re-printing a bare `PermissionDenied`.
+///
+/// # The structural blocker
+///
+/// [`VerifyEngine::new`] calls `TemplateStore::open(store_dir, key_path)`,
+/// which uses `BackendSelector::default()`. The `tpm2` feature is off by
+/// default, so the selector falls through to the file backend, and the file
+/// backend's root secret path is the **hardcoded** `DEFAULT_ROOT_SECRET_PATH`
+/// — `/var/lib/namtor/root_secret` — in `namtor-store/src/crypto.rs`.
+/// `RootSecret::load_or_create` then calls `create_dir_all("/var/lib/namtor")`,
+/// which an unprivileged process cannot do.
+///
+/// The store *directory* and the sealing *key* are both parameters of
+/// `VerifyEngine::new`; the root secret underneath them is not, and no
+/// `LayoutPaths` setting or environment variable moves it. Every migration
+/// path forces it too: a `file-v2` blob unseals through `RootSecret`, and a
+/// legacy `file` blob is unconditionally re-sealed as `file-v2` on load.
+///
+/// The consequence is that **an unprivileged process cannot construct a
+/// `VerifyEngine` at all**, whatever directory it is pointed at. Every other
+/// consumer in the tree sidesteps this with
+/// `TemplateStore::open_with_selector(.., BackendSelector::file()
+/// .with_root_secret_path(..))` — see `manager/store.rs` and `dbus.rs` — but
+/// `VerifyEngine::new` exposes no selector, so a test cannot.
+fn store_open_blocker(e: &namtor_store::StoreError) -> String {
+    format!(
+        "G2.1/G2.2 NOT MEASURED — the verify engine cannot be constructed by an unprivileged \
+         process.\n\
+         TemplateStore::open failed: {e:?}\n\
+         ROOT CAUSE: VerifyEngine::new calls TemplateStore::open, which uses \
+         BackendSelector::default(). The tpm2 feature is off by default, so that resolves to \
+         the file backend, whose root secret path is the hardcoded \
+         /var/lib/namtor/root_secret (DEFAULT_ROOT_SECRET_PATH in namtor-store/src/crypto.rs). \
+         RootSecret::load_or_create then calls create_dir_all(\"/var/lib/namtor\"), which this \
+         process cannot do. The store directory and the sealing key are both parameters of \
+         VerifyEngine::new; the root secret is not, and no LayoutPaths setting or environment \
+         variable moves it.\n\
+         THIS IS NOT a camera, emitter, model or enrollment fault: all four worked. The \
+         enrollment logged above produced real templates off the live sensor moments before \
+         this failed.\n\
+         UNBLOCKING IT needs one of: (a) a selector-injecting constructor on VerifyEngine, \
+         mirroring TemplateStore::open_with_selector, which manager/store.rs and dbus.rs \
+         already use for exactly this reason; or (b) running this measurement as the uid that \
+         owns /var/lib/namtor. Neither is something a test under tests/ can do for itself."
+    )
+}
+
+/// Proves on the wire that the emitter control reads back `payload_off`.
+/// Opens the node purely to read; arms nothing.
+fn assert_emitter_restored(cfg: &EmitterCfg) {
+    let after = hw_emitter::read_control(Path::new(IR_NODE), cfg);
+    assert_eq!(
+        after.as_deref().ok(),
+        Some(cfg.payload_off.as_slice()),
+        "the emitter control must read back payload_off after teardown; got {after:02x?}"
+    );
+    eprintln!("emitter disarmed: GET_CUR read back {after:02x?}");
+}
+
+/// Gates **G2.1** (median ≤ 500 ms) and **G2.2** (p95 ≤ 1000 ms) — measured
+/// with a real clock against the reference camera, a real enrollment off that
+/// same camera, and the shipped [`VerifyEngine`].
+///
+/// # What is timed
+///
+/// Exactly one thing: the call to [`VerifyEngine::verify`], clocked from
+/// immediately before entry to immediately after return. That call is the
+/// daemon's entire authentication decision — `dispatch.rs` wraps it in nothing
+/// but a backoff lookup and an `AuthReply` construction. Inside the timed
+/// region, per spec §6.1:
+///
+/// * sealed-record load + decrypt from the template store (re-read on every
+///   attempt, exactly as the daemon does),
+/// * `VIDIOC_DQBUF` of frames until an On/Off pair is in hand,
+/// * the strobe differential `D = On − Off`,
+/// * analytic PAD over `D` (energy, gradient, specular, radial),
+/// * YuNet detection on the illuminated frame,
+/// * SFace alignment + 128-d embedding,
+/// * cosine match against every enrolled template, z-norm, threshold.
+///
+/// # What is NOT timed, and why
+///
+/// * **Model load.** [`VerifyEngine::new`] reads ~37 MiB of SFace plus YuNet
+///   and builds both graphs once, before the loop, because the running daemon
+///   loads them once at start-up and not per request. Charging a 37 MiB read
+///   to every sample would measure the wrong thing.
+/// * **Template-store open** and the sealing-key unseal — once at start-up in
+///   the daemon too. The per-attempt `store.load` IS timed.
+/// * **Camera open, `VIDIOC_STREAMON`, and stream warm-up.** The daemon warms
+///   the stream in `AuthPhase::Prepare`; `AuthPhase::Verify` finds it running.
+/// * **Emitter arming, the ~390 ms mode-switch blackout, and the firmware AE
+///   settling off the clipping rail.** Every armed window drains frames until
+///   the exposure is usable *before* the clock starts. This cost is not small
+///   and is not hidden: the test prints it per window and reports its median
+///   beside the latency numbers. See [`AE_SATURATED_MAX`] — it is the reason
+///   this measurement was reachable at all.
+/// * **Enrollment.** Done once, before any timing.
+///
+/// # The emitter watchdog truncates some deadlines — read this
+///
+/// The daemon gives each attempt 5 s (`VERIFY_TIMEOUT` in `dispatch.rs`). The
+/// reference device's `[emitter.lifecycle] max_on_ms` is 2000 ms, and safety
+/// comes first: no attempt is started unless its deadline fits in what is left
+/// of the armed window. Attempts that fit the full 5 s get it; the rest are
+/// handed the shorter deadline and are **flagged**. A flagged sample that ran
+/// to its deadline is a *lower bound* on what the daemon would have spent, so
+/// it can only make the measured latency look better than it is, never worse.
+/// The printout names every such sample.
+///
+/// # Scope — what this does and does not establish
+///
+/// This is the **library** [`VerifyEngine`] path driven from a test process.
+/// It is **not** the installed daemon serving a PAM request over its socket:
+/// no `SO_PEERCRED` ACL, no framing, no nonce, no backoff store, no lifecycle
+/// state machine, no worker supervisor, no D-Bus. Those add round trips this
+/// test cannot see. The numbers bound the recognition pipeline's own cost on
+/// real hardware; they are not an end-to-end login time.
+///
+/// # Safety
+///
+/// Identical to the two tests above. `force_off_before_anything` before any
+/// write (inside [`hw_emitter::ArmedEmitter::arm`]); every armed window
+/// bounded by the device's own `max_on_ms` watchdog and closed explicitly
+/// rather than by expiry; `payload_off` restored on every exit path including
+/// panic, by the guard's `Drop`. The emitter post-conditions — `GET_CUR` reads
+/// back `payload_off` AND the scene measures below the dark floor in photons —
+/// are asserted **before** any latency assertion, so a blown budget can never
+/// short-circuit the proof that the LED went out.
+#[test]
+#[ignore = "requires the reference camera; run with NAMTOR_HW_TEST=1"]
+fn authentication_latency_meets_the_median_and_p95_budgets() {
+    if !hw_enabled() {
+        return;
+    }
+    let _camera = lock_camera();
+    let Some((yunet, sface)) = model_paths() else {
+        return;
+    };
+
+    let quirks_dirs = quirks_dir_candidates();
+    let Some((quirks_dir, emitter_cfg)) =
+        hw_emitter::emitter_cfg(&quirks_dirs, hw_emitter::REFERENCE_VID_PID)
+    else {
+        eprintln!(
+            "skipping: no quirks entry for {} in any of {:?}. Without it there is no emitter \
+             control to write, {IR_NODE} stays dark, and nothing can be authenticated.",
+            hw_emitter::REFERENCE_VID_PID,
+            quirks_dirs,
+        );
+        return;
+    };
+    let budget_ms = u64::from(hw_emitter::max_on_ms(&emitter_cfg));
+    eprintln!(
+        "quirks: {} (via {}); payload_on {:02x?} payload_off {:02x?}; max_on_ms {budget_ms}",
+        hw_emitter::REFERENCE_VID_PID,
+        quirks_dir.display(),
+        emitter_cfg.payload_on,
+        emitter_cfg.payload_off,
+    );
+
+    let clock = SystemClock;
+
+    // ---- Phase 1: enroll, so there is something to authenticate against.
+    let enrolled = match enroll_live(&yunet, &sface, &emitter_cfg, &clock) {
+        Ok(e) => e,
+        Err(e) => {
+            // Every path out of `enroll_live` has already forced the emitter
+            // off. Prove it before saying anything else.
+            assert_emitter_restored(&emitter_cfg);
+            panic!("G2.1/G2.2 NOT MEASURED — live enrollment failed: {e}");
+        }
+    };
+    eprintln!(
+        "enrolled {} template(s) (mean detection score {:.3}, best {:.3}) over {} armed \
+         window(s), longest {:.0} ms of a {budget_ms} ms budget; brightest illuminated frame \
+         mean {:.2}/255. Examined {} illuminated frames: {} with no face, {} below the quality \
+         floor, {} too blurred.",
+        enrolled.templates.len(),
+        enrolled.quality_scalar,
+        enrolled.best_confidence,
+        enrolled.windows,
+        enrolled.max_armed_ms,
+        enrolled.lit_mean,
+        enrolled.frames_examined,
+        enrolled.no_face,
+        enrolled.below_quality,
+        enrolled.too_blurred,
+    );
+
+    // ---- Phase 2: commit the templates to a throwaway store. Never
+    // ---- /var/lib/namtor: this is a measurement, not an enrollment.
+    let store_dir = tempfile::tempdir().expect("tempdir for the throwaway template store");
+    let key_path = store_dir.path().join("key");
+    let now_us = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64;
+    let num_templates = enrolled.templates.len() as u32;
+    let record = TemplateRecord {
+        meta: EnrollmentMeta {
+            uid: AUTH_UID,
+            username: "hw-latency".into(),
+            model_id: "sface_2021dec".into(),
+            model_quant: namtor_proto::worker::Quant::Fp32,
+            created_at_us: now_us,
+            num_templates,
+            // No lawful impostor cohort here, so no z-norm parameters: the
+            // engine falls through to `DEFAULT_MATCH_THRESHOLD`, exactly as a
+            // first enrollment does in production.
+            znorm_mean: None,
+            znorm_std: None,
+            extrinsics: None,
+        },
+        templates: enrolled.templates,
+    };
+    {
+        let store = match TemplateStore::open(store_dir.path(), &key_path) {
+            Ok(s) => s,
+            Err(e) => {
+                assert_emitter_restored(&emitter_cfg);
+                panic!("{}", store_open_blocker(&e));
+            }
+        };
+        eprintln!(
+            "throwaway store at {:?}: {:?}",
+            store_dir.path(),
+            store.key_source()
+        );
+        store
+            .store(&record)
+            .expect("commit the live templates to the throwaway store");
+    }
+
+    // ---- Phase 3: build the engine. Both ONNX graphs and the store are
+    // ---- opened HERE, once, outside every timed region, because the running
+    // ---- daemon opens them once at start-up.
+    let engine_built_at = Instant::now();
+    let mut engine = match VerifyEngine::new(&yunet, &sface, store_dir.path(), &key_path) {
+        Ok(e) => e,
+        Err(namtor_daemon::verify::VerifyError::Store(e)) => {
+            assert_emitter_restored(&emitter_cfg);
+            panic!("{}", store_open_blocker(&e));
+        }
+        Err(e) => {
+            assert_emitter_restored(&emitter_cfg);
+            panic!("build the verify engine over the live enrollment: {e}");
+        }
+    };
+    eprintln!(
+        "verify engine built in {:.0} ms (YuNet + SFace graphs + store open + key unseal). None \
+         of this is inside any latency sample, because the daemon pays it once at start-up.",
+        engine_built_at.elapsed().as_secs_f64() * 1000.0,
+    );
+
+    // ---- Phase 4: the measurement.
+    let mut source = open_reference_camera();
+    let mut samples: Vec<LatencySample> = Vec::new();
+    let mut settle_costs: Vec<f64> = Vec::new();
+    let mut windows = 0usize;
+    let mut lit_mean = 0.0f32;
+    let mut max_armed_ms = 0.0f64;
+    let mut window_failure: Option<String> = None;
+
+    while samples.len() < AUTH_SAMPLES_TARGET && windows < MAX_VERIFY_WINDOWS {
+        windows += 1;
+        let mut watchdog = hw_emitter::watchdog_for(&emitter_cfg, &clock);
+        let mut window = match arm_and_wait_for_usable_exposure(
+            Path::new(IR_NODE),
+            &emitter_cfg,
+            &mut watchdog,
+            source.as_mut(),
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                window_failure = Some(format!(
+                    "verify window {windows}: {e} ({} sample(s) already collected)",
+                    samples.len()
+                ));
+                break;
+            }
+        };
+        lit_mean = lit_mean.max(window.lit_mean);
+        settle_costs.push(window.settle_ms);
+
+        let mut in_window = 0usize;
+        while samples.len() < AUTH_SAMPLES_TARGET {
+            if watchdog.check_expired() {
+                break;
+            }
+            let spent = window.armed_at.elapsed().as_millis() as u64;
+            let remaining = budget_ms
+                .saturating_sub(ARMED_WINDOW_MARGIN_MS)
+                .saturating_sub(spent);
+            if remaining < MIN_VERIFY_BUDGET_MS {
+                break;
+            }
+            let allowed = remaining.min(VERIFY_TIMEOUT_MS);
+            let truncated = allowed < VERIFY_TIMEOUT_MS;
+
+            // ------- The measured interval is exactly the next three lines.
+            let t0 = Instant::now();
+            let outcome = engine.verify(
+                source.as_mut(),
+                AUTH_UID,
+                t0 + Duration::from_millis(allowed),
+            );
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            // ------------------------------------------------------------
+
+            in_window += 1;
+            eprintln!(
+                "sample {:2}: {ms:8.1} ms  {:?} score={:.3}{} (deadline {allowed} ms{})",
+                samples.len() + 1,
+                outcome.verdict,
+                outcome.score,
+                outcome
+                    .reason
+                    .as_deref()
+                    .map(|r| format!(" reason=\"{r}\""))
+                    .unwrap_or_default(),
+                if truncated {
+                    ", TRUNCATED by the emitter watchdog"
+                } else {
+                    ", the daemon's own"
+                },
+            );
+            samples.push(LatencySample {
+                ms,
+                verdict: outcome.verdict,
+                score: outcome.score,
+                reason: outcome.reason,
+                budget_ms: allowed,
+                truncated,
+            });
+        }
+
+        window.armed.force_off();
+        watchdog.disarm();
+        let armed_ms = window.armed_at.elapsed().as_secs_f64() * 1000.0;
+        max_armed_ms = max_armed_ms.max(armed_ms);
+        drop(window.armed);
+        eprintln!(
+            "verify window {windows}: exposure usable after {} drained frames / {:.0} ms \
+             (settled mean {:.1}/255); {in_window} sample(s) in a {armed_ms:.0} ms armed window \
+             of a {budget_ms} ms budget",
+            window.drained, window.settle_ms, window.settled_mean,
+        );
+    }
+
+    // --- Emitter post-conditions FIRST. A latency assertion below must never
+    // --- be able to hide the proof that the LED went out.
+    assert_emitter_restored(&emitter_cfg);
+    let dark_after = brightest_mean(source.as_mut(), EMITTER_PROBE_FRAMES);
+    source.stop();
+    eprintln!(
+        "emitter restored: brightest frame mean {dark_after:.2}/255 over {EMITTER_PROBE_FRAMES} \
+         frames (was {lit_mean:.2} while armed). Longest armed window {max_armed_ms:.0} ms of a \
+         {budget_ms} ms budget over {windows} verify window(s), and {:.0} ms over {} enrollment \
+         window(s).",
+        enrolled.max_armed_ms, enrolled.windows,
+    );
+    assert!(
+        dark_after < EMITTER_DARK_MEAN,
+        "emitter still lighting the scene after teardown: brightest frame mean \
+         {dark_after:.2}/255 is at or above the {EMITTER_DARK_MEAN:.1} dark floor"
+    );
+    assert!(
+        max_armed_ms <= budget_ms as f64,
+        "a verify armed window ran {max_armed_ms:.0} ms, past the device's own {budget_ms} ms \
+         max_on_ms budget"
+    );
+    assert!(
+        enrolled.max_armed_ms <= budget_ms as f64,
+        "an enrollment armed window ran {:.0} ms, past the device's own {budget_ms} ms \
+         max_on_ms budget",
+        enrolled.max_armed_ms,
+    );
+
+    // --- Then: is there enough data to speak at all?
+    assert!(
+        samples.len() >= AUTH_SAMPLES_MIN,
+        "G2.1/G2.2 need at least {AUTH_SAMPLES_MIN} samples for a p95 to mean anything; got {} \
+         over {windows} armed window(s){}",
+        samples.len(),
+        window_failure
+            .as_deref()
+            .map(|e| format!(". Last fault: {e}"))
+            .unwrap_or_default(),
+    );
+
+    // --- Then: the distribution.
+    let mut timings: Vec<f64> = samples.iter().map(|s| s.ms).collect();
+    timings.sort_by(f64::total_cmp);
+    let median = median_of(&timings);
+    let p95 = percentile_of(&timings, 95.0);
+    let min = timings[0];
+    let max = timings[timings.len() - 1];
+
+    let mut settle_sorted = settle_costs.clone();
+    settle_sorted.sort_by(f64::total_cmp);
+    let settle_median = if settle_sorted.is_empty() {
+        f64::NAN
+    } else {
+        median_of(&settle_sorted)
+    };
+
+    let mut verdicts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for s in &samples {
+        let key = match (&s.verdict, s.reason.as_deref()) {
+            (Verdict::Match, _) => "Match".to_string(),
+            (v, Some(r)) => format!("{v:?} ({r})"),
+            (v, None) => format!("{v:?}"),
+        };
+        *verdicts.entry(key).or_default() += 1;
+    }
+    let matches = samples
+        .iter()
+        .filter(|s| s.verdict == Verdict::Match)
+        .count();
+    let truncated: Vec<usize> = samples
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.truncated && s.hit_deadline())
+        .map(|(i, _)| i + 1)
+        .collect();
+    let best_score = samples.iter().map(|s| s.score).fold(0.0f32, f32::max);
+
+    eprintln!(
+        "\nG2.1/G2.2 measured over N={} verify attempts on the reference camera:\n\
+         samples in collection order (ms): [{}]\n\
+         sorted (ms): [{}]\n\
+         min {min:.1}   MEDIAN {median:.1}   p95 {p95:.1}   max {max:.1}\n\
+         budgets: G2.1 median <= {AUTH_MEDIAN_BUDGET_MS:.0} ms, G2.2 p95 <= \
+         {AUTH_P95_BUDGET_MS:.0} ms\n\
+         verdicts: {verdicts:?}  ({matches}/{} Match; best score {best_score:.3} against the \
+         {:.2} default threshold)\n\
+         deadline-truncated samples that ran to their shortened deadline: {}\n\
+         EXCLUDED PREREQUISITE: each armed window needed a median {settle_median:.0} ms \
+         (samples [{}]) from the payload_on write to the first frame with the exposure off the \
+         clipping rail — the MSXU mode-switch blackout plus the firmware AE decay. No latency \
+         sample contains it. The daemon pays it in AuthPhase::Prepare, not per attempt, but it \
+         is real and it is larger than the G2.1 budget.\n\
+         TIMED: VerifyEngine::verify only — store load+decrypt, frame dequeue to an On/Off \
+         pair, strobe differential, analytic PAD, YuNet detect, SFace align+embed, cosine \
+         match, z-norm, threshold.\n\
+         NOT TIMED: ONNX model load (once, before the loop, as in the daemon), store open + \
+         key unseal, camera open/STREAMON, emitter arming and exposure settling, enrollment.\n\
+         SCOPE: the library VerifyEngine path driven from a test process. NOT the installed \
+         daemon serving a PAM request over its socket (no SO_PEERCRED, framing, nonce, \
+         backoff, lifecycle or D-Bus).",
+        samples.len(),
+        pretty_ms(&samples.iter().map(|s| s.ms).collect::<Vec<_>>()),
+        pretty_ms(&timings),
+        samples.len(),
+        namtor_daemon::verify::DEFAULT_MATCH_THRESHOLD,
+        if truncated.is_empty() {
+            "none".to_string()
+        } else {
+            format!("{truncated:?} — each is a LOWER BOUND on the daemon's 5 s-deadline cost")
+        },
+        pretty_ms(&settle_costs),
+    );
+
+    // --- Then: the gates.
+    assert!(
+        median <= AUTH_MEDIAN_BUDGET_MS,
+        "GATE G2.1 NOT MET AS MEASURED: median authentication latency {median:.1} ms over N={} \
+         attempts, against a {AUTH_MEDIAN_BUDGET_MS:.0} ms budget. Sorted samples (ms): [{}]. \
+         Verdicts: {verdicts:?}.",
+        samples.len(),
+        pretty_ms(&timings),
+    );
+    assert!(
+        p95 <= AUTH_P95_BUDGET_MS,
+        "GATE G2.2 NOT MET AS MEASURED: p95 authentication latency {p95:.1} ms (nearest rank) \
+         over N={} attempts, against a {AUTH_P95_BUDGET_MS:.0} ms budget. Sorted samples (ms): \
+         [{}]. Verdicts: {verdicts:?}.",
+        samples.len(),
+        pretty_ms(&timings),
     );
 }
