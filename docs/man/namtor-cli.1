@@ -1,0 +1,84 @@
+.TH NAMTOR-CLI 1 "2026-09-16" "namtor 0.1.0" "User Commands"
+.SH NAME
+namtor\-cli \- enrol and manage Nam-tor face authentication
+.SH SYNOPSIS
+.B namtor\-cli
+.I COMMAND
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B namtor\-cli
+is the terminal front-end to
+.BR namtor\-daemon (8).
+It enrols face templates, lists and removes enrolments, runs a one-shot
+verification and collects a privacy-safe support bundle.
+.PP
+Commands talk to the daemon over the system bus by default. The
+.B \-\-local
+flag on
+.B list
+and
+.B remove
+selects a direct-store recovery path that does not need a running daemon.
+.SH COMMANDS
+.TP
+.B status
+Report the selected device, stream state and protection level.
+.TP
+.B enroll
+Enrol a face template using the daemon-driven continuous enrollment
+lifecycle: start, watch live progress, press Enter to stop, then Save,
+Resume or Discard at the review step.
+.B SIGINT
+discards cleanly.
+.TP
+.B verify
+Verify a face against the enrolled templates via the daemon socket.
+.TP
+.B list
+List enrolled profiles.
+.TP
+.B remove \fIUID\fP [\fIPROFILE_ID\fP]
+Remove an enrolment.
+.I PROFILE_ID
+defaults to
+.IR default .
+.TP
+.B diagnostics
+Write a privacy-safe diagnostics support bundle.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print usage and exit.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.TP
+.BI \-\-user " NAME"
+Act on another user's enrolment
+.RB ( enroll ", " verify ).
+Requires root.
+.TP
+.B \-\-old
+Use the local capture-and-store enrollment flow instead of the daemon
+lifecycle. Kept for daemon-less environments.
+.TP
+.B \-\-local
+Use the direct-store recovery path instead of the daemon
+.RB ( list ", " remove ).
+.TP
+.BI \-\-out\-dir " DIR"
+Destination directory for
+.BR diagnostics .
+.SH FILES
+.TP
+.I /var/lib/namtor/templates
+Encrypted enrolled face templates.
+.SH EXIT STATUS
+.TP
+.B 0
+The command succeeded.
+.TP
+.B 1
+The command failed; a diagnostic is printed on standard error.
+.SH SEE ALSO
+.BR namtor\-daemon (8)

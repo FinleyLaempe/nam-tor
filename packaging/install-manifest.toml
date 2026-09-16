@@ -197,6 +197,30 @@ owner = "root"
 group = "root"
 package = "core"
 
+# Man page section directories. `Documentation=man:namtor-daemon(8)` in the
+# shipped systemd units only resolves if the page is actually installed —
+# `systemd-analyze verify` shells out to man(1) and fails the unit otherwise.
+[[dirs]]
+path = "/usr/share/man"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
+[[dirs]]
+path = "/usr/share/man/man1"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
+[[dirs]]
+path = "/usr/share/man/man8"
+mode = "0755"
+owner = "root"
+group = "root"
+package = "core"
+
 # Optional core-owned udev rules slot for a narrowly matched reference-camera
 # rule. Only populated if clean-system camera QA proves group ACLs
 # insufficient. Left as a directory slot for now — no rules file installed.
@@ -337,6 +361,32 @@ package = "core"
 [[files]]
 dest = "/usr/share/polkit-1/actions/org.namtor.policy"
 src = "packaging/polkit-1/actions/org.namtor.policy"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+package = "core"
+
+# ---------------------------------------------------------------------------
+# Man pages
+# ---------------------------------------------------------------------------
+# Installed uncompressed. Both the .service and the .socket declare
+# `Documentation=man:namtor-daemon(8)`; `systemd-analyze verify` resolves that
+# URI through man(1) and reports `Protocol error` (exit 1) when the page is
+# missing, which blocks the release smoke step. Gated by
+# packaging/tests/test_man_pages.sh.
+[[files]]
+dest = "/usr/share/man/man8/namtor-daemon.8"
+src = "docs/man/namtor-daemon.8"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+package = "core"
+
+[[files]]
+dest = "/usr/share/man/man1/namtor-cli.1"
+src = "docs/man/namtor-cli.1"
 mode = "0644"
 owner = "root"
 group = "root"

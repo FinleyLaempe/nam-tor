@@ -105,7 +105,7 @@ jobs:
             pacman -S --noconfirm --needed base-devel rust cargo python namcap \
                 onnxruntime openssl gtk4 libadwaita cmake qt6-base kirigami \
                 kcoreaddons extra-cmake-modules systemd xorg-server-xvfb \
-                github-cli
+                github-cli man-db
 
       - name: Install build toolchain (Fedora)
         if: startsWith(matrix.distro, 'fedora')
@@ -247,6 +247,11 @@ jobs:
       # `systemd-analyze verify` only parses the unit file statically —
       # no live bus needed — so it's safe without a timeout guard too,
       # but it's wrapped anyway for defense in depth.
+      # `--man=no` disables the Documentation=man: resolution pass, which
+      # shells out to man(1): without it the check reports `Protocol error`
+      # and exits 1 in any container that has no man-db, which is a property
+      # of the container, not of the unit. The man pages are shipped
+      # regardless (docs/man/, gated by packaging/tests/test_man_pages.sh).
       - name: Install + smoke test (Arch)
         if: matrix.distro == 'arch'
         run: |
@@ -261,7 +266,7 @@ jobs:
               timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
             timeout -k 10 10 namtor-cli status || true
             ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
-            timeout -k 10 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+            timeout -k 10 10 systemd-analyze verify --man=no /usr/lib/systemd/system/namtor-daemon.service
 
       - name: Install + smoke test (Fedora)
         if: startsWith(matrix.distro, 'fedora')
@@ -271,7 +276,7 @@ jobs:
               timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
             timeout -k 10 10 namtor-cli status || true
             ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
-            timeout -k 10 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+            timeout -k 10 10 systemd-analyze verify --man=no /usr/lib/systemd/system/namtor-daemon.service
 
       - name: Install + smoke test (Debian)
         if: startsWith(matrix.distro, 'debian')
@@ -282,7 +287,7 @@ jobs:
               timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
             timeout -k 10 10 namtor-cli status || true
             ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
-            timeout -k 10 10 systemd-analyze verify /usr/lib/systemd/system/namtor-daemon.service
+            timeout -k 10 10 systemd-analyze verify --man=no /usr/lib/systemd/system/namtor-daemon.service
 
       # --- Upgrade test: rebuild with a bumped pkgrel and reinstall ---
       - name: Upgrade test (rebuild with bumped release + reinstall)

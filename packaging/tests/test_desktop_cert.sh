@@ -752,6 +752,8 @@ for f in \
     packaging/lifecycle.sh \
     packaging/README.md \
     COPYING.md \
+    docs/man/namtor-daemon.8 \
+    docs/man/namtor-cli.1 \
     docs/evidence/packaging/namtor.spdx.json \
     docs/evidence/packaging/namtor.cyclonedx.json; do
     mkdir -p "$mutation_root/$(dirname "$f")"

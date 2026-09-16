@@ -1,0 +1,63 @@
+.TH NAMTOR-DAEMON 8 "2026-09-16" "namtor 0.1.0" "System Manager's Manual"
+.SH NAME
+namtor\-daemon \- Nam-tor infrared face authentication daemon
+.SH SYNOPSIS
+.B namtor\-daemon
+.SH DESCRIPTION
+.B namtor\-daemon
+owns the infrared camera and emitter, runs face detection, liveness
+detection and template matching, and serves authentication requests on
+.IR /run/namtor/auth.sock .
+It is started by systemd and takes no arguments. Inference runs in a
+separate sandboxed worker process.
+.PP
+The daemon runs as the unprivileged
+.I namtor
+user with an empty capability bounding set. Raw camera frames, embeddings
+and match scores never leave the daemon: the authentication socket carries
+only a pass/fail verdict, and the management interface on the system bus
+carries only coarse progress and guidance.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print usage and exit.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.SH FILES
+.TP
+.I /run/namtor/auth.sock
+PAM authentication socket, group
+.IR namtor\-auth .
+.TP
+.I /var/lib/namtor/templates
+Encrypted enrolled face templates.
+.TP
+.I /var/lib/namtor/models
+ONNX models used for detection, recognition and presentation-attack
+detection.
+.TP
+.I /usr/share/namtor/install-manifest.toml
+Install manifest consulted at startup to resolve installed paths.
+.SH ENVIRONMENT
+.TP
+.B NAMTOR_WORKER_BIN
+Path to the sandboxed inference worker. Set by the shipped systemd unit to
+.IR /usr/lib/namtor/namtor\-worker .
+.SH EXIT STATUS
+.TP
+.B 0
+Clean shutdown, or
+.B \-\-help
+/
+.B \-\-version
+printed.
+.TP
+.B 1
+Startup failed.
+.TP
+.B 2
+Unrecognised command-line argument.
+.SH SEE ALSO
+.BR namtor\-cli (1),
+.BR pam_namtor (8)

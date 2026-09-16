@@ -7,8 +7,8 @@
 #
 #   namtor       — core: daemon, worker, CLI, PAM module, systemd units,
 #                  sysusers, tmpfiles, D-Bus, polkit, manifests, models,
-#                  licences, lifecycle helper, SBOM. Headless-safe (no
-#                  desktop deps).
+#                  man pages, licences, lifecycle helper, SBOM. Headless-safe
+#                  (no desktop deps).
 #   namtor-gnome — GTK4/libadwaita enrollment wizard + settings. Desktop
 #                  entry, metainfo, icon. Depends on namtor exact version.
 #   namtor-kde   — Plasma 6 KCM QML module + desktop entry, metainfo,
@@ -59,7 +59,11 @@ optdepends=()
 backup=()
 validpgpkeys=()
 # Release profile already strips; debug symbols not shipped.
-options=('!strip' '!debug')
+# !zipman: man pages stay uncompressed so the installed paths match
+# packaging/install-manifest.toml byte for byte. The manifest is the single
+# source of truth for what lands on disk, and packaging/uninstall.sh removes
+# exactly the paths it declares — a makepkg-gzipped .8.gz would not match.
+options=('!strip' '!debug' '!zipman')
 changelog=
 
 # All makedeps are at the pkgbase level — every crate is built in one
@@ -176,9 +180,19 @@ package_namtor() {
 
     # Deterministic staging from packaging/install-manifest.toml — core
     # entries only (daemon, worker, CLI, PAM, systemd, sysusers, tmpfiles,
-    # D-Bus, polkit, manifests, PAM scripts, README, COPYING, SBOM,
-    # lifecycle helper).
+    # D-Bus, polkit, manifests, man pages, PAM scripts, README, COPYING,
+    # SBOM, lifecycle helper).
     ./packaging/stage.sh "$pkgdir" "$srcdir/nam-tor-$pkgver" --package core
+
+    # Man pages come from the manifest (docs/man/namtor-daemon.8 ->
+    # /usr/share/man/man8, docs/man/namtor-cli.1 -> /usr/share/man/man1).
+    # `Documentation=man:namtor-daemon(8)` in the shipped units only resolves
+    # if they are actually installed — `systemd-analyze verify` shells out to
+    # man(1) and exits 1 with `Protocol error` otherwise.
+    test -f "$pkgdir/usr/share/man/man8/namtor-daemon.8" || {
+        echo "error: man8/namtor-daemon.8 not staged" >&2; return 1; }
+    test -f "$pkgdir/usr/share/man/man1/namtor-cli.1" || {
+        echo "error: man1/namtor-cli.1 not staged" >&2; return 1; }
 
     # Bundle models (MIT: YuNet; Apache-2.0: SFace; self-trained: MiniFASNet)
     mkdir -p "$pkgdir/var/lib/namtor/models"
