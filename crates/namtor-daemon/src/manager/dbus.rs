@@ -641,12 +641,13 @@ impl<P: PolkitAuthority> Manager3Service<P> {
                         })
                     };
                 }
-                Some(WorkerEvent::Exhausted) => {
-                    return Ok(PollProgressReply {
-                        has_progress: false,
-                        progress: empty_progress(session),
-                    });
-                }
+                // The source ran out. Stop draining, but fall through to the
+                // `latest` handling below rather than returning an empty
+                // reply: Progress events drained earlier in this same pass
+                // are real and the UI needs them. Returning here discarded
+                // them, so a capture that finished faster than the poll
+                // interval reported nothing at all (F15).
+                Some(WorkerEvent::Exhausted) => break,
                 Some(WorkerEvent::Error(msg)) => {
                     self.remove_session(session, uid);
                     return Err(Manager3ApiError::State(msg));
@@ -1555,6 +1556,109 @@ mod tests {
                     as Box<dyn crate::manager::session::EmbedSource>)
             }),
         )
+    }
+
+    /// F15: a finite source that drains faster than the poll interval must
+    /// still report the progress it produced.
+    ///
+    /// `poll_progress` accumulates `Progress` events into `latest`, but on
+    /// draining `WorkerEvent::Exhausted` it used to `return` an empty reply
+    /// immediately, throwing `latest` away. `ReviewReady`/`Committed` break
+    /// out of the loop and keep it; `Exhausted` did not. A short enrollment
+    /// therefore reported "no progress" no matter how many frames it had
+    /// accepted, so the UI could show nothing at all for a fast capture.
+    #[test]
+    fn v3_poll_progress_keeps_progress_drained_alongside_exhausted() {
+        let store: Arc<dyn ProfileStore> = Arc::new(NullProfileStore);
+        // 3 frames, no pacing sleep: the worker finishes and pushes
+        // Exhausted into the same queue pass as the Progress events.
+        let svc = Manager3Service::new_with_capture(
+            StubPolkit,
+            store,
+            Box::new(|| Ok(Box::new(InstantSource3::new(3, 120)))),
+            Box::new(|| {
+                Ok(Box::new(crate::manager::session::MockEmbedSource::new(8))
+                    as Box<dyn crate::manager::session::EmbedSource>)
+            }),
+        );
+        let sid = svc.start_enrollment(&peer(0), 0, "alice").expect("start");
+
+        // Give the worker time to run the source to exhaustion so that a
+        // single poll drains Progress AND Exhausted together.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let reply = svc.poll_progress(&peer(0), &sid).expect("poll");
+
+        assert!(
+            reply.has_progress,
+            "progress drained alongside Exhausted was discarded: {reply:?}"
+        );
+        assert!(
+            reply.progress.frames_seen > 0,
+            "reported progress is empty: {:?}",
+            reply.progress
+        );
+        svc.cancel_enrollment(&peer(0), &sid).ok();
+    }
+
+    /// Like [`ReplaySource3`] but with no per-frame delay, so it exhausts
+    /// immediately. Exists to exercise the F15 path deliberately.
+    struct InstantSource3 {
+        left: usize,
+        fill: u8,
+        started: bool,
+    }
+
+    impl InstantSource3 {
+        fn new(frames: usize, fill: u8) -> Self {
+            Self {
+                left: frames,
+                fill,
+                started: false,
+            }
+        }
+    }
+
+    impl namtor_capture::source::CaptureSource for InstantSource3 {
+        fn caps(&self) -> namtor_capture::source::SourceCaps {
+            namtor_capture::source::SourceCaps {
+                spectrum: namtor_capture::source::Spectrum::Ir,
+                format: namtor_capture::frame::PixFmt::Grey8,
+                width: 8,
+                height: 8,
+                fps: 30,
+                has_metadata: false,
+            }
+        }
+        fn start(&mut self) -> Result<(), namtor_capture::source::CaptureError> {
+            self.started = true;
+            Ok(())
+        }
+        fn next_frame(
+            &mut self,
+        ) -> Result<Option<namtor_capture::frame::Frame>, namtor_capture::source::CaptureError>
+        {
+            if !self.started {
+                return Err(namtor_capture::source::CaptureError::NotStarted);
+            }
+            if self.left == 0 {
+                return Ok(None);
+            }
+            self.left -= 1;
+            let fill = self.fill.wrapping_add(self.left as u8);
+            Ok(Some(namtor_capture::frame::Frame {
+                data: vec![fill; 64],
+                format: namtor_capture::frame::PixFmt::Grey8,
+                width: 8,
+                height: 8,
+                ts_mono: std::time::Duration::from_millis(0),
+                sof: None,
+                emitter: namtor_capture::frame::EmitterState::On,
+                quality: None,
+            }))
+        }
+        fn stop(&mut self) {
+            self.started = false;
+        }
     }
 
     /// Before task 3.6 `start_enrollment` passed `None, None` for both
