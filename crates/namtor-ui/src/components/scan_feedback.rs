@@ -174,13 +174,36 @@ pub fn hero(guidance: &GuidanceView, quality_bucket: u8) -> gtk4::Widget {
     )
 }
 
+/// libadwaita fill class for a meter bar, given the class its percentage
+/// label carries — or `None` to leave the bar at the default accent fill.
+///
+/// Review finding F16: the bar used to render accent blue while the number
+/// beside it was tinted by quality, so a blue bar sat next to an amber "34%"
+/// and the row told two stories about one measurement. libadwaita defines
+/// `.success` / `.warning` / `.error` on `GtkProgressBar` itself, so the row
+/// can be made to change colour together with no custom CSS (`DESIGN.md` §8).
+///
+/// Only those three map across. `dim-label` — what the middle quality bucket
+/// uses — is a label treatment with no progress-bar fill meaning, and a bar
+/// with no tint at all is the honest rendering of a neutral reading: the
+/// default accent carries no warning weight, which is exactly right when the
+/// number beside it carries none either.
+fn bar_class(value_class: Option<&str>) -> Option<&str> {
+    match value_class {
+        Some(c @ ("success" | "warning" | "error")) => Some(c),
+        _ => None,
+    }
+}
+
 /// One measured signal: a titled row with a plain-language explanation, a
 /// percentage and an inline bar.
 ///
 /// `value_class` is a libadwaita style class applied to the number, or `None`
 /// for the default. Only signals the daemon itself judges (the quality
 /// bucket) are tinted — progress towards a goal is left neutral so the one
-/// tinted row on the page always means "this is what to fix".
+/// tinted row on the page always means "this is what to fix". The bar takes
+/// the same tint as the number via [`bar_class`], so the whole row reads as
+/// one signal.
 pub fn meter_row(
     title: &str,
     subtitle: &str,
@@ -207,6 +230,14 @@ pub fn meter_row(
         .valign(gtk4::Align::Center)
         .width_request(METER_BAR_PX)
         .build();
+    if let Some(fill) = bar_class(value_class) {
+        // `add_css_class`, never `set_css_classes`: GtkProgressBar carries an
+        // orientation class ("horizontal") of its own, and Adwaita hangs the
+        // trough's `min-height` off it. Replacing the list drops that class
+        // and the bar collapses to zero height — caught in the F16
+        // screenshots, where the tinted bar disappeared entirely.
+        bar.add_css_class(fill);
+    }
     bar.set_accessible_role(gtk4::AccessibleRole::ProgressBar);
     bar.update_property(&[gtk4::accessible::Property::Label(&tr(accessible_name))]);
 

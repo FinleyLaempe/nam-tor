@@ -321,3 +321,120 @@ fn no_forbidden_privacy_substring_reaches_the_ui() {
         assert!(hits.is_empty(), "leak in {s:?}: {hits:?}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// F16: the meter bar and its percentage tell one story
+// ---------------------------------------------------------------------------
+
+/// Every `GtkProgressBar` in the rendered capture page, as
+/// `(fraction_percent, css_classes)`.
+fn capture_bars(view: &EnrollmentViewV3) -> Vec<(u32, Vec<String>)> {
+    fn walk(w: &gtk4::Widget, out: &mut Vec<(u32, Vec<String>)>) {
+        if let Some(bar) = w.downcast_ref::<gtk4::ProgressBar>() {
+            out.push((
+                (bar.fraction() * 100.0).round() as u32,
+                bar.css_classes().iter().map(|c| c.to_string()).collect(),
+            ));
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            walk(&c, out);
+            child = c.next_sibling();
+        }
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let view = view.clone();
+    common::run_gtk_test(move || {
+        let mut comp = EnrollmentViewComponent::new();
+        let page = comp.render(Some(&view), |_| {}, || {}, || {});
+        let mut out = Vec::new();
+        walk(page.upcast_ref::<gtk4::Widget>(), &mut out);
+        let _ = tx.send(out);
+    });
+    rx.recv().expect("capture render produced bars")
+}
+
+fn view_with_quality(quality_percent: u32, quality_bucket: u8, guidance: &str) -> EnrollmentViewV3 {
+    EnrollmentViewV3 {
+        phase: "capturing".into(),
+        quality_percent,
+        diversity_percent: 18,
+        frames_seen: 50,
+        frames_accepted: 8,
+        frames_rejected: 42,
+        quality_bucket,
+        guidance: GuidanceView::from_wire(guidance),
+    }
+}
+
+/// Review finding F16: the image-quality bar used to render accent blue while
+/// the percentage beside it was tinted by the quality bucket, so a blue bar
+/// sat next to an amber "34%" — two signals about one measurement. The bar
+/// must now carry the same libadwaita class that tints the number.
+#[test]
+fn f16_image_quality_bar_is_tinted_like_its_percentage() {
+    let low = capture_bars(&view_with_quality(34, 0, "better_lighting"));
+    let (_, classes) = low
+        .iter()
+        .find(|(pct, _)| *pct == 34)
+        .expect("the 34% image-quality bar is rendered");
+    assert!(
+        classes.iter().any(|c| c == "warning"),
+        "low-quality bar must carry the same `warning` tint as its number: {classes:?}"
+    );
+
+    let good = capture_bars(&view_with_quality(87, 2, "looking_good"));
+    let (_, classes) = good
+        .iter()
+        .find(|(pct, _)| *pct == 87)
+        .expect("the 87% image-quality bar is rendered");
+    assert!(
+        classes.iter().any(|c| c == "success"),
+        "good-quality bar must carry the same `success` tint as its number: {classes:?}"
+    );
+}
+
+/// The tint is *added*, never assigned. `GtkProgressBar` carries an
+/// orientation style class of its own, and Adwaita hangs the trough's
+/// `min-height` off it — replacing the class list drops it and the bar
+/// collapses to zero height, which is what the first attempt at F16 did (the
+/// tinted bar vanished from the screenshot entirely). Pin it: a tinted bar
+/// keeps every class an untinted one has.
+#[test]
+fn f16_tinting_a_bar_does_not_strip_its_orientation_class() {
+    let low = capture_bars(&view_with_quality(34, 0, "better_lighting"));
+    let (_, tinted) = low
+        .iter()
+        .find(|(pct, _)| *pct == 34)
+        .expect("the tinted image-quality bar is rendered");
+    let (_, plain) = low
+        .iter()
+        .find(|(pct, _)| *pct == 18)
+        .expect("the untinted angle-variety bar is rendered");
+    assert!(!plain.is_empty(), "no baseline classes to compare against");
+    for class in plain {
+        assert!(
+            tinted.contains(class),
+            "tinting dropped {class:?} (tinted {tinted:?}, plain {plain:?})"
+        );
+    }
+}
+
+/// Progress towards a goal stays neutral: only the signals the daemon itself
+/// judges are tinted, so the one coloured row on the page always means "this
+/// is what to fix".
+#[test]
+fn f16_neutral_meters_keep_the_default_fill() {
+    let bars = capture_bars(&view_with_quality(34, 0, "better_lighting"));
+    let (_, classes) = bars
+        .iter()
+        .find(|(pct, _)| *pct == 18)
+        .expect("the 18% angle-variety bar is rendered");
+    for tint in ["success", "warning", "error"] {
+        assert!(
+            !classes.iter().any(|c| c == tint),
+            "neutral meter must not be tinted {tint}: {classes:?}"
+        );
+    }
+}
