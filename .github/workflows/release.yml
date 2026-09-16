@@ -553,15 +553,37 @@ jobs:
 
       - name: Generate SBOM (CycloneDX via cargo-cyclonedx)
         run: |
+            # `--all-packages` and `--output-pattern` are NOT cargo-cyclonedx
+            # flags; the real ones are `--all` and `--override-filename`. The
+            # invalid invocation exited 2 and killed the publish job on the
+            # first real tag build:
+            #   error: unexpected argument '--all-packages' found
+            #   tip: a similar argument exists: '--all'
+            # This had been flagged as unverified speculation and is now
+            # confirmed by a real run.
+            #
+            # Do not let a broken SBOM step block the release: generate what
+            # we can, then locate the output wherever cargo-cyclonedx put it
+            # (it writes per-package files next to each manifest, not to a
+            # single target/cyclonedx path). The syft/cargo-tree fallback
+            # below still runs if nothing lands.
+            SBOM="namtor-${{ github.ref_name }}-sbom.json"
             if command -v cargo-cyclonedx >/dev/null 2>&1; then
-              cargo cyclonedx --all-packages --format json --output-pattern package
-              mv target/cyclonedx/*.json namtor-${{ github.ref_name }}-sbom.json 2>/dev/null || \
-                find target/cyclonedx -name '*.json' | head -1 | \
-                xargs -I{} cp {} namtor-${{ github.ref_name }}-sbom.json
-            else
-              echo "::warning::cargo-cyclonedx unavailable; using cargo tree fallback"
+              cargo cyclonedx --all --format json || \
+                echo "::warning::cargo-cyclonedx failed; falling back"
+              found="$(find . -name '*.cdx.json' -o -name 'bom.json' \
+                       -o -path './target/cyclonedx/*.json' 2>/dev/null | head -1)"
+              if [ -n "$found" ]; then
+                cp "$found" "$SBOM"
+                echo "SBOM from $found"
+              else
+                echo "::warning::cargo-cyclonedx produced no JSON"
+              fi
+            fi
+            if [ ! -f "$SBOM" ]; then
+              echo "::warning::using cargo tree fallback for the SBOM"
               cargo tree --workspace --prefix none --no-dedupe \
-                > namtor-${{ github.ref_name }}-sbom.txt
+                > "namtor-${{ github.ref_name }}-sbom.txt"
             fi
 
       - name: SBOM fallback (syft) if cargo-cyclonedx produced nothing
