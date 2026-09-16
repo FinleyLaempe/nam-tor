@@ -84,9 +84,11 @@ fn init_tracing() {
         .init();
 }
 
-/// Install SIGTERM/SIGINT handlers that set [`SHUTDOWN`]. The blocking
-/// `accept()` in the listener returns `EINTR` when a signal arrives, so
-/// the accept loop wakes and checks the flag.
+/// Install SIGTERM/SIGINT handlers that set [`SHUTDOWN`]. `Listener::accept_one`
+/// polls with a short timeout and returns `Ok(None)` when it expires or a
+/// signal interrupts it, so the accept loop regains control and observes the
+/// flag. (`accept()` on a blocking listener retries `EINTR` internally and
+/// would never hand control back.)
 fn install_signal_handlers() {
     use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 
@@ -268,12 +270,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!("shutdown signal received, stopping");
             break;
         }
-        if let Err(e) = listener.accept_one() {
-            if SHUTDOWN.load(Ordering::Relaxed) {
-                tracing::info!("shutdown signal received during accept, stopping");
-                break;
+        match listener.accept_one() {
+            // Connection served.
+            Ok(Some(())) => {}
+            // Poll timed out or a signal interrupted it: re-check SHUTDOWN.
+            Ok(None) => continue,
+            Err(e) => {
+                if SHUTDOWN.load(Ordering::Relaxed) {
+                    tracing::info!("shutdown signal received during accept, stopping");
+                    break;
+                }
+                tracing::warn!(error = %e, "accept error");
             }
-            tracing::warn!(error = %e, "accept error");
         }
     }
 

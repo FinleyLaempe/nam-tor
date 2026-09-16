@@ -133,7 +133,7 @@ fn make_listener(dir: &tempfile::TempDir, dispatcher: Arc<MockVerifyDispatcher>)
 
 fn serve(listener: Listener) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let _ = listener.accept_one();
+        let _ = listener.accept_one_blocking();
     })
 }
 

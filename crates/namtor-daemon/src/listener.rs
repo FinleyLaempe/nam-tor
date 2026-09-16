@@ -8,8 +8,9 @@
 //! §3.2). Status requests bypass the lock (read-only).
 
 use std::io::Write;
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -32,6 +33,10 @@ pub trait LifecycleDispatch: Send + Sync {
     /// Read-only status snapshot; does not need `camera_lock`.
     fn snapshot(&self) -> StatusReply;
 }
+
+/// How long [`Listener::accept_one`] waits before returning `Ok(None)` so the
+/// caller can re-check its shutdown flag.
+const POLL_TIMEOUT_MS: i32 = 200;
 
 /// The socket listener.
 pub struct Listener {
@@ -57,6 +62,9 @@ impl Listener {
             std::fs::remove_file(path)?;
         }
         let listener = std::os::unix::net::UnixListener::bind(path)?;
+        // `accept_one` polls explicitly; a blocking listener would swallow
+        // EINTR inside `accept()` and never hand control back to the caller.
+        listener.set_nonblocking(true)?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
         Ok(Self {
             path: path.to_path_buf(),
@@ -83,6 +91,8 @@ impl Listener {
         // that we now own (systemd passes it with CLOEXEC cleared on the
         // LISTEN_FDS fds).
         let listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+        // See `bind`: `accept_one` polls, so the listener must not block.
+        listener.set_nonblocking(true)?;
         Ok(Self {
             path,
             listener,
@@ -106,13 +116,61 @@ impl Listener {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    /// Accept and serve one connection, looping over requests until the
-    /// client closes the connection or an error occurs. The PAM client
-    /// sends Prepare → Verify → Release on a single connection.
-    pub fn accept_one(&self) -> Result<(), DaemonError> {
-        self.listener.set_nonblocking(false).ok();
-        let (stream, _) = self.listener.accept()?;
+    /// Wait up to [`POLL_TIMEOUT_MS`] for one connection and serve it.
+    ///
+    /// Returns `Ok(Some(()))` when a connection was accepted and served to
+    /// completion, and `Ok(None)` when the poll timed out or was interrupted
+    /// by a signal — the caller must re-check its shutdown flag and call
+    /// again. `accept()` on a blocking listener retries `EINTR` internally
+    /// and would never return, which is why this polls explicitly; without it
+    /// `SIGTERM` can only stop the daemon via `SIGKILL`.
+    pub fn accept_one(&self) -> Result<Option<()>, DaemonError> {
+        let mut fds = [libc::pollfd {
+            fd: self.listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        }];
+        // SAFETY: FFI call into `poll(2)`. `fds` is a valid, correctly-sized
+        // array of `pollfd` that outlives the call, the length matches, and
+        // the fd is owned by `self.listener` for the whole call.
+        let rc = unsafe { libc::poll(fds.as_mut_ptr(), 1, POLL_TIMEOUT_MS) };
+        if rc < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                return Ok(None);
+            }
+            return Err(err.into());
+        }
+        if rc == 0 {
+            return Ok(None);
+        }
+        let stream = match self.listener.accept() {
+            Ok((stream, _)) => stream,
+            // Another thread won the race for this connection.
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        self.serve_connection(stream)?;
+        Ok(Some(()))
+    }
 
+    /// Block until one connection has been accepted and served.
+    ///
+    /// One-shot seam for callers with no shutdown flag to re-check (tests,
+    /// single-request harnesses). The daemon's main loop uses
+    /// [`Listener::accept_one`] instead so a signal can interrupt it.
+    pub fn accept_one_blocking(&self) -> Result<(), DaemonError> {
+        loop {
+            if self.accept_one()?.is_some() {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Serve one accepted connection, looping over requests until the client
+    /// closes the connection or an error occurs. The PAM client sends
+    /// Prepare → Verify → Release on a single connection.
+    fn serve_connection(&self, stream: UnixStream) -> Result<(), DaemonError> {
         let creds = get_peer_creds(&stream)?;
         tracing::debug!(peer_uid = creds.uid, peer_gid = creds.gid, "connection");
         if !authorise(&creds, self.auth_gid) {
@@ -332,11 +390,26 @@ mod tests {
         writer.flush().expect("flush");
     }
 
-    /// Spawn `accept_one` in a thread and return the handle.
+    /// Spawn `accept_one_blocking` in a thread and return the handle.
     fn serve(listener: Listener) -> std::thread::JoinHandle<()> {
         std::thread::spawn(move || {
-            let _ = listener.accept_one();
+            let _ = listener.accept_one_blocking();
         })
+    }
+
+    #[test]
+    fn accept_one_returns_none_on_poll_timeout() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let sock = tmp.path().join("auth.sock");
+        let dispatcher = Arc::new(StubDispatcher::new());
+        let listener =
+            Listener::bind(&sock, nix::unistd::getgid().as_raw() as u32, dispatcher).expect("bind");
+        let start = Instant::now();
+        // No client connects. The call must return within the poll timeout
+        // instead of blocking forever, so the caller can observe SHUTDOWN.
+        let got = listener.accept_one().expect("accept_one");
+        assert!(got.is_none(), "expected timeout, got a connection");
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
@@ -371,7 +444,7 @@ mod tests {
             .with_auth_gid(999);
 
         let handle = std::thread::spawn(move || {
-            listener.accept_one().expect("accept");
+            listener.accept_one_blocking().expect("accept");
         });
 
         let mut stream = connect_and_hello(&sock);
@@ -487,8 +560,8 @@ mod tests {
         let listener = Arc::new(listener);
         let l1 = Arc::clone(&listener);
         let l2 = Arc::clone(&listener);
-        let t1 = std::thread::spawn(move || l1.accept_one());
-        let t2 = std::thread::spawn(move || l2.accept_one());
+        let t1 = std::thread::spawn(move || l1.accept_one_blocking());
+        let t2 = std::thread::spawn(move || l2.accept_one_blocking());
 
         let s1 = connect_and_hello(&sock);
         let s2 = connect_and_hello(&sock);
@@ -570,7 +643,7 @@ mod tests {
 
         assert_eq!(listener.path(), path);
 
-        let t = std::thread::spawn(move || listener.accept_one().expect("accept"));
+        let t = std::thread::spawn(move || listener.accept_one_blocking().expect("accept"));
         let s = connect_and_hello(&path);
         let hello: HelloMsg = serde_json::from_value(recv_msg(&s)).expect("hello");
         assert_eq!(hello.server_version, 1);

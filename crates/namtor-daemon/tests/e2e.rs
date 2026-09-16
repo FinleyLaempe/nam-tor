@@ -186,7 +186,7 @@ fn e2e_full_auth_cycle() {
     let listener = Arc::new(make_listener(&dir, dispatcher.clone()));
     let path = listener.path().to_path_buf();
 
-    let t = std::thread::spawn(move || listener.accept_one().expect("accept"));
+    let t = std::thread::spawn(move || listener.accept_one_blocking().expect("accept"));
 
     let s = connect_and_hello(&path);
     let hello: HelloMsg = serde_json::from_value(recv_msg(&s)).expect("hello");
@@ -225,7 +225,7 @@ fn e2e_rhost_set_returns_refused() {
     let listener = Arc::new(make_listener(&dir, dispatcher.clone()));
     let path = listener.path().to_path_buf();
 
-    let t = std::thread::spawn(move || listener.accept_one().expect("accept"));
+    let t = std::thread::spawn(move || listener.accept_one_blocking().expect("accept"));
 
     let s = connect_and_hello(&path);
     let hello: HelloMsg = serde_json::from_value(recv_msg(&s)).expect("hello");
@@ -254,7 +254,7 @@ fn e2e_unauthorised_uid_connection_closed() {
     let bogus_gid = 999_999;
     let listener = Listener::bind(&path, bogus_gid, dispatcher).expect("bind");
 
-    let t = std::thread::spawn(move || listener.accept_one().expect("accept"));
+    let t = std::thread::spawn(move || listener.accept_one_blocking().expect("accept"));
 
     let s = connect_and_hello(&path);
     let mut buf = [0u8; 16];
@@ -277,7 +277,7 @@ fn e2e_replayed_nonce_closes_connection() {
 
     let listener2 = listener.clone();
     let t = std::thread::spawn(move || {
-        let _ = listener2.accept_one();
+        let _ = listener2.accept_one_blocking();
     });
 
     let s = connect_and_hello(&path);
@@ -311,7 +311,7 @@ fn e2e_status_does_not_block_on_camera_lock() {
     let listener = Arc::new(make_listener(&dir, dispatcher.clone()));
     let path = listener.path().to_path_buf();
 
-    let t = std::thread::spawn(move || listener.accept_one().expect("accept"));
+    let t = std::thread::spawn(move || listener.accept_one_blocking().expect("accept"));
 
     let s = connect_and_hello(&path);
     let _hello: HelloMsg = serde_json::from_value(recv_msg(&s)).expect("hello");
@@ -330,7 +330,7 @@ fn e2e_prepare_phase_stays_warming() {
     let listener = Arc::new(make_listener(&dir, dispatcher.clone()));
     let path = listener.path().to_path_buf();
 
-    let t = std::thread::spawn(move || listener.accept_one().expect("accept"));
+    let t = std::thread::spawn(move || listener.accept_one_blocking().expect("accept"));
 
     let s = connect_and_hello(&path);
     let hello: HelloMsg = serde_json::from_value(recv_msg(&s)).expect("hello");
@@ -376,7 +376,7 @@ fn e2e_no_biometric_data_in_logs() {
         drop(s);
     });
 
-    listener.accept_one().expect("accept");
+    listener.accept_one_blocking().expect("accept");
     client.join().expect("client");
 
     let messages = log.messages();
@@ -410,7 +410,7 @@ fn e2e_so_peercred_checked_on_connection() {
     let listener = Arc::new(make_listener(&dir, dispatcher));
     let path = listener.path().to_path_buf();
 
-    let t = std::thread::spawn(move || listener.accept_one().expect("accept"));
+    let t = std::thread::spawn(move || listener.accept_one_blocking().expect("accept"));
 
     let s = connect_and_hello(&path);
     let creds = get_peer_creds(&s).expect("peer creds");
