@@ -572,15 +572,16 @@ mod tests {
         // Polkit
         assert!(dests.has_file("/usr/share/polkit-1/actions/org.namtor.policy"));
 
-        // GNOME
+        // Desktop UI
         assert!(dests.has_file("/usr/share/applications/org.namtor.Wizard.desktop"));
         assert!(dests.has_file("/usr/share/metainfo/org.namtor.Wizard.metainfo.xml"));
         assert!(dests.has_file("/usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg"));
 
-        // KDE
-        assert!(dests.has_file("/usr/share/applications/org.namtor.kcm.desktop"));
-        assert!(dests.has_file("/usr/share/metainfo/org.namtor.kcm.metainfo.xml"));
-        assert!(dests.has_file("/usr/share/icons/hicolor/scalable/apps/org.namtor.kcm.svg"));
+        // The Plasma KCM's files were removed with its package and must not
+        // come back — nothing builds or stages them any more.
+        assert!(!dests.has_file("/usr/share/applications/org.namtor.kcm.desktop"));
+        assert!(!dests.has_file("/usr/share/metainfo/org.namtor.kcm.metainfo.xml"));
+        assert!(!dests.has_file("/usr/share/icons/hicolor/scalable/apps/org.namtor.kcm.svg"));
 
         // Manifests themselves
         assert!(dests.has_file("/usr/share/namtor/model-manifest.toml"));

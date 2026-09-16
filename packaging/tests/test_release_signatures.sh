@@ -300,10 +300,12 @@ if [[ -n "$keyid_a" ]]; then
     else
         fail=$((fail + 1)); failures+=("SHA256SUMS.asc missing"); echo "  FAIL: SHA256SUMS.asc missing"
     fi
-    # The checksums manifest must list every artifact.
+    # The checksums manifest must list every artifact. The staged set above
+    # is 9: source tarball, model archive, provenance, and core+gnome for
+    # each of Arch/Fedora/Debian. It was 12 while namtor-kde existed.
     sums_lines="$(wc -l < "$release_out/SHA256SUMS")"
-    if [[ "$sums_lines" -ge 12 ]]; then
-        pass=$((pass + 1)); echo "  PASS: SHA256SUMS covers $sums_lines artifacts (>=12)"
+    if [[ "$sums_lines" -ge 9 ]]; then
+        pass=$((pass + 1)); echo "  PASS: SHA256SUMS covers $sums_lines artifacts (>=9)"
     else
         fail=$((fail + 1)); failures+=("SHA256SUMS only $sums_lines entries"); echo "  FAIL: SHA256SUMS only $sums_lines entries"
     fi
