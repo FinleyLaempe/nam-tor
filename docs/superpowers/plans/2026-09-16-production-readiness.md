@@ -1604,3 +1604,150 @@ This matters more than a normal doc nit, because the failure mode it documents i
 Fix during the Phase 4 documentation pass (Task 4.2): move the substance into the tracked authoritative ledger, `docs/evidence/status-audit.md`, which already exists for exactly this purpose. Keep `todo.md` as a local scratchpad if the ignore rule is deliberate — but nothing load-bearing may live only there. Add a line to the ledger stating the rule: **a FIXED marker must cite a named test, or it does not count.**
 
 Related: the USA-0b fix also changed `ReviewSnapshot.frames_accepted` from the capped `reservoir.len()` to the monotonic counter, so capture and review now report the same accepted count. That is the same "two numbers, one label" class of bug and should be recorded in the ledger alongside it.
+
+### D6 verified fixed — and two new defects the published artifact exposes
+
+The evidence artifact from the green release run (35131438215) now contains exactly one cell, `arch/x86_64`, matching the only matrix cell that ran. The old behaviour would have published `fedora40` and `debian12` as `pass` on all six stages without either ever executing. Confirmed fixed against a real published artifact, not just the source.
+
+Two defects remain visible in that same artifact:
+
+### F11 — `generated_at` holds a run ID, not a timestamp
+
+```json
+"tag": "production-readiness",
+"generated_at": "35131438215",
+```
+
+`generated_at` is populated with `github.run_id`. A field named `generated_at`, in a `schema_version: 1` document intended as release evidence, must be a timestamp — anything consuming this for provenance or auditing will mis-parse it or silently treat a run ID as a date. Either emit a real ISO-8601 UTC timestamp and add a separate `run_id` field (preferred, since both are useful), or rename the field to `run_id`. Bump `schema_version` if the meaning of an existing field changes.
+
+### F12 — `tag` holds a branch name on `workflow_dispatch`
+
+The same artifact records `"tag": "production-readiness"`, which is a branch, because the workflow uses `github.ref_name` for both the evidence `tag` field and `softprops/action-gh-release`'s `tag_name` (`release.yml:482`). This was flagged as unverified in the original forensics; the artifact now confirms it live.
+
+Harmless in a dry run, but a `workflow_dispatch` with `dry_run: false` would reach the publish job and attempt to cut a GitHub Release **named after a branch**. Guard it: require a `refs/tags/` ref for the publish job, or take the tag from an explicit workflow input and fail fast when it is absent or does not look like `v*`. Until that is fixed, `workflow_dispatch` with `dry_run: false` is a foot-gun that should not be used.
+
+### F13 — `enrollment_live` looks for the models in the wrong place; they DO exist
+
+The HW-gated test `crates/namtor-daemon/tests/enrollment_live.rs` skipped with "no real ONNX weights on this machine", having found only 17-26 byte fixtures under `/tmp/tmp.*`. That conclusion is wrong. The real weights are present, at the repo-relative path `AGENTS.md` documents (`var/lib/namtor/models/`, gitignored):
+
+| file | size |
+|---|---|
+| `var/lib/namtor/models/yunet_2023mar.onnx` | 232,589 B |
+| `var/lib/namtor/models/sface_2021dec.onnx` | 38,696,353 B |
+| `var/lib/namtor/models/minifasnet_pad.onnx` | 191,665 B |
+
+plus `yunet_2023mar/fp32.onnx` and `sface_2021dec/fp32.onnx` symlinks. All comfortably over the test's 64 KiB threshold. `/var/lib/namtor/models/` (system path) does NOT exist — only the repo-relative one does.
+
+Fix: resolve the model directory the way the daemon does (`namtor-layout` `InstallRoot`/`LayoutPaths`, honouring the `NAMTOR_*` overrides) rather than probing a hardcoded or temp path, and make the skip message print the directory it actually searched. A skip whose stated reason is false is worse than a failure — it hides a runnable test.
+
+### F14 — end-to-end HIL enrollment is blocked by the IR emitter, not by the models (VERIFIED)
+
+Measured directly, 5 live frames at 640x360 GREY8 from `/dev/video2`:
+
+```
+frame 0: mean=0.1/255  min=0 max=4
+frame 4: mean=0.1/255  min=0 max=4
+```
+
+With the emitter unarmed the IR sensor returns an essentially black image. YuNet will never detect a face, so `frames_accepted` would be 0 no matter how good the pipeline is. `v4l2-ctl --list-ctrls` exposes no emitter control; activation lives behind the UVC XU + quirks table in `src/bin/namtor-daemon/live_capture.rs`.
+
+So the true blocker for a genuine end-to-end enrollment run is **owner-gated item O1** (root: install the systemd units, create the `namtor` user and `namtor-auth` group) so the daemon can arm the emitter — not missing models and not missing code. This is the single highest-value owner action for closing HIL gates: the reference camera, the TPM2 device and the models are all present on this machine.
+
+What IS verified against real hardware: `live_ir_frames_produce_plausible_pixel_metrics` genuinely ran, pulling 30 live frames through `quality::measure` with all metrics in range. The measurement path is exercised against real sensor data; only the detect/embed/accept path needs the emitter.
+
+### F15 — `Manager3Service::poll_progress` drops progress when it drains `Exhausted` (pre-existing)
+
+Found while wiring the production embedder. `poll_progress` returns `has_progress: false` as soon as it drains a `WorkerEvent::Exhausted` in the same pass, discarding progress accumulated earlier in that pass. A fast-draining finite source therefore reports "no progress" regardless of how many frames it actually captured.
+
+Not introduced by this work, and worked around in the new test with a paced replay source rather than papered over. It matters for the UI: a quick enrollment could show nothing at all. Fix before the scan screen ships, or the guidance work is undermined by the transport.
+
+### Task 3.7 verified independently by the coordinator
+
+Rendered the capture page myself in two guidance states via a throwaway harness (since deleted) and read the PNGs. Confirms the agent's description rather than taking it on trust:
+
+- **Low quality** (`better_lighting`, q=34, bucket=0): amber person silhouette in a rounded card; **"Find better lighting"** as the dominant headline; actionable one-liner "Turn towards a window or lamp, and avoid a bright light behind you."; Image quality 34% (amber), Angle variety 18%, Views kept 16%; **Needs attention -> Lighting** in amber, subtitled "What the scan is waiting on".
+- **Good** (`looking_good`, q=87, bucket=2): green silhouette; **"Looking good — keep going"**; "Keep turning your head slowly so the scan sees every angle."; 87% / 72% / 78%; **Needs attention -> Nothing** in green, and the row's subtitle changes to "Every signal is good enough right now".
+
+The silhouette tint, the headline colour, the percentage tint and the attention row agree in both states, so the screen reads as one coherent story rather than four unrelated widgets. Each meter carries a plain-language subtitle saying what it measures ("How well the camera sees you", "Head angles collected so far", "Usable share of what the camera sent"), which is what turns three numbers into something a user can act on.
+
+### F16 — meter bars stay accent-blue while their percentage is tinted
+
+In both captured states the `gtk4::ProgressBar` fill renders **accent blue** while the adjacent percentage label is tinted by quality (amber at 34%, green at 87%). A blue bar next to an amber "34%" reads as two different signals about the same measurement, and blue carries no warning weight at all — it is the one element on the screen that does not join the story the rest of the row is telling.
+
+Minor, purely cosmetic, and NOT a blocker. Fix by applying the same `success`/`warning`/`error` style class to the bar that already drives the label, so the whole row changes colour together. DESIGN.md §8 forbids custom CSS, and libadwaita provides these classes on `GtkProgressBar` directly, so no new CSS is needed.
+
+### F17 — `AGENTS.md` is gitignored, like `todo.md` (same class as F10)
+
+`.gitignore:50` ignores `AGENTS.md`. The rename task updated it in the working tree but could not commit it, exactly as happened with `todo.md` (F10). Two of the repo's three agent-facing orientation documents are therefore untracked, so a fresh clone gets neither, and any correction written into them evaporates.
+
+`AGENTS.md` is 15 KB and is the file that tells the next agent the project state, the shipped APIs, the hard rules and the hardware facts. Its "Current state" section still describes the KDE KCM as shipped and lists `namtor-gnome` among the crates — both now false.
+
+Decide during Task 4.2 whether these are deliberately local scratch files. If they are, the load-bearing content (project state, the corrected USA-0b entry, the "a FIXED marker must cite a named test" rule) must move into tracked docs — `docs/evidence/status-audit.md` and `docs/architecture.md` are the natural homes. If they are not deliberate, un-ignore them and commit. Either way, do not leave the authoritative orientation document both stale and untracked.
+
+### Task 2.2 verified by the coordinator
+
+`crates/namtor-ui` exists, `crates/namtor-gnome` is gone, `namtor_ui::APP_ID = "org.namtor.Wizard"` and the wizard builds from the constant rather than a literal. `Categories=Settings;Security;GTK;` — the `GNOME` category and `X-GNOME-UsesNotifications` are gone.
+
+All 79 residual `namtor-gnome` matches are deliberate and were spot-checked: `Provides:`/`Replaces:`/`Breaks:` in `debian/control`, `Provides:`/`Obsoletes:` in the RPM spec, the Arch `provides`/`conflicts`/`replaces`, the `#[serde(alias = "gnome")]` machinery, `legacy_gnome` stranded-install detection, the gate assertions that all of the above exist, and changelog/comment history.
+
+**Two errors in the coordinator's own brief, caught by the implementer:**
+1. The brief asserted the GTK application id was "already `org.namtor.Wizard`, a previous task fixed the mismatch". It was not — `src/bin/wizard.rs` still carried the literal `"org.namtor.Gnome"`. The mismatch had been *identified* early and written into Task 2.2, never fixed. Do not describe a planned fix as a completed one.
+2. The brief claimed `Categories=...GNOME;` and `X-GNOME-UsesNotifications` were "already handled or trivial". Neither was handled.
+
+Also worth recording: `legacy_gnome` could not be implemented as a file probe the way `legacy_kde` was. `namtor-kde` owned a unique file (`org.namtor.kcm.desktop`), but `namtor-gnome` owned *exactly* the same four files `namtor-ui` owns, so a file probe would flag every healthy install as stranded. It is instead implemented against dpkg's `info/<pkg>.list` and pacman's `local/<pkg>-<ver>/desc`. RPM's binary database exposes no equivalent path, so that case relies on dnf's `Obsoletes:` and is documented in the field.
+
+### F18 — five gate suites exist but no workflow runs them
+
+Verified by diffing the gates `ci.yml` invokes against `packaging/tests/*.sh`. CI runs 14. These 5 exist on disk and are invoked by nothing:
+
+- `test_core_cert.sh`
+- `test_desktop_cert.sh`
+- `test_lifecycle_cert.sh`
+- `test_pam_install.sh`
+- `test_release_ledger.sh`
+
+**Correction to earlier coordinator statements:** I repeatedly described these as "pre-existing CI failures". They are not failing CI, because they are not in CI. Whatever they assert is enforced nowhere, and they have been free to rot — which is exactly what happened (`test_desktop_cert.sh` carries 13 assertions naming tests and symbols that no longer exist).
+
+Decide per suite: wire it into `packaging-gates`, or delete it. A certification suite nobody runs is worse than no suite, because its presence implies coverage that does not exist. If wiring up, fix the stale assertions first — `test_core_cert.sh` also needs `namtor-models-0.1.0.tar.gz`, which is not in the tree.
+
+### F19 — the meta-gate emitted STALE evidence while printing "Evidence written:" (FIXED)
+
+The most serious finding of the review, because it is the failure mode this project's entire thesis is built against.
+
+`packaging/tests/test_ci_gates.sh` is the meta-gate: it runs every other gate, injects a known defect per category, and verifies the right gate catches it. It then emits `docs/evidence/public-release/28-ci-baseline.json` and `28-ci-mutations.json`.
+
+Mutation M07 targets `HANDOFF.md`, which **no longer exists** in the repo (it is gitignored and was untracked in `9d82035`). The target-missing branch writes the literal string `SKIP` into the results TSV instead of an exit code. The Python emitter then did `int(parts[2])`, raised `ValueError`, and died — but it is a heredoc, so the surrounding script carried on, printed `Evidence written:` naming both files, and **exited 0**.
+
+Consequence: those two JSON files had not been regenerated by any recent run. Measured before the fix — both dated **2026-08-09**, five weeks stale, while the gate reported success and named them as its evidence.
+
+Fixed in two places:
+1. The emitter tolerates a `SKIP` row (`exit_code: null`, `result: "SKIP"`) instead of crashing.
+2. The script now asserts both files were actually rewritten within the last 120 seconds before printing the banner, and fails with `::error::` otherwise. A dead emitter can never again leave stale JSON under a success message.
+
+The underlying M07 target still needs a decision: restore `HANDOFF.md`, repoint the mutation at a file that exists, or drop M07. The gate is now honest about skipping it either way.
+
+### F20 — the Fedora spec packages no man pages at all (pre-existing)
+
+`packaging/fedora/namtor.spec`'s `%files` lists neither `namtor-daemon.8` nor `namtor-cli.1` (nor the new `pam_namtor.8`). With `_unpackaged_files_terminate_build` enabled, rpmbuild would fail; without it, the Fedora package silently ships no manual pages while Arch and Debian do. `test_fedora_split.sh` passes, so nothing detects this. Low severity, but it is a real per-distro inconsistency in a project whose selling point is one behaviour across distros.
+
+### F21 — `Frame::emitter` reports parity, NOT whether the emitter is lit
+
+Surfaced while fixing F13 and worth recording on its own, because it is a trap of exactly the kind F13 was about.
+
+Every frame pulled from the reference camera is labelled `emitter=On` while the image is uniformly black (measured `mean=0.10/255`). `Frame::emitter` records **which side of the strobe alternation a frame came from**, not whether the emitter actually illuminated the scene. The two disagree whenever the emitter is unarmed.
+
+Anything that gates on that flag to decide "the emitter is working" gets a confident false signal. The F13 probe therefore measures pixels (brightest frame mean over 5 frames against a 4.0/255 floor) instead of trusting the metadata, and says so in its source.
+
+Audit any other consumer of `Frame::emitter` for the same assumption before the HIL gates run. The field is correct for its actual purpose — pairing On/Off frames for the differential — so this is a documentation and usage hazard, not a bug in the field itself.
+
+### F22 — latent V4L2 `EBUSY` race in the HW test binary (FIXED)
+
+`crates/namtor-daemon/tests/enrollment_live.rs` has two tests that both open `/dev/video2`, an exclusive V4L2 node, and cargo runs them on separate threads. The first real run after F13 failed with:
+
+```
+start the IR stream: Device("ioctl failed: VIDIOC_REQBUFS: EBUSY: Device or resource busy")
+```
+
+The race was **latent, and hidden by F13 itself** — the enrollment test always bailed out at the false model check before it ever reached the camera, so the two never overlapped. Fixing the false skip exposed it. Now serialised on a `static CAMERA: Mutex<()>` with the poison discarded, so a panicking sibling cannot fail the other for an unrelated reason.
+
+A good illustration of why a false skip is worse than a failure: it had been concealing a genuine concurrency bug in the same file.
