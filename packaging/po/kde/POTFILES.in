@@ -1,9 +1,0 @@
-# SPDX-License-Identifier: GPL-3.0-only
-# POTFILES.in — source files containing translatable strings for namtor-kde.
-# Used by xgettext with the Qt parser to produce namtor-kde.pot.
-#
-# One path per line, relative to the repo root. Only user-visible strings
-# (labels, button text, dialog messages, accessibility names) are extracted;
-# no biometric data, thresholds, or model identifiers appear in translatable
-# strings. KDE's i18n() calls in QML are the extraction target.
-crates/namtor-kde/qml/main.qml
