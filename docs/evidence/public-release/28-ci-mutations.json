@@ -3,7 +3,7 @@
   "title": "CI gate mutation matrix \u2014 each injected defect is caught",
   "gate": "ci-packaging-mutations",
   "status": "PASS",
-  "summary": "Mutation matrix: 13 mutations caught by the right gate, 0 skipped (hardware-gated), 0 not caught. For each gate category a known defect is injected into a controlled target, the catching test is run, the defect is reverted from a verified backup, and the restored file's sha256 is checked against the original. No file is left mutated.",
+  "summary": "Mutation matrix: 12 mutations caught by the right gate, 1 skipped (hardware-gated), 0 not caught. For each gate category a known defect is injected into a controlled target, the catching test is run, the defect is reverted from a verified backup, and the restored file's sha256 is checked against the original. No file is left mutated.",
   "mutations": [
     {
       "id": "M01",
@@ -50,9 +50,9 @@
     {
       "id": "M07",
       "gate": "no unexpected setuid",
-      "catching_test": "test_doc_audit.sh",
-      "exit_code": 1,
-      "result": "CAUGHT"
+      "catching_test": "target-missing",
+      "exit_code": null,
+      "result": "SKIP"
     },
     {
       "id": "M08",
@@ -98,8 +98,8 @@
     }
   ],
   "totals": {
-    "caught": 13,
-    "skip": 0,
+    "caught": 12,
+    "skip": 1,
     "not_caught": 0
   },
   "safety": {
