@@ -148,6 +148,21 @@ pub fn widget_tree_contains_type(widget: &gtk4::Widget, type_name: &str) -> bool
     check(widget, type_name)
 }
 
+/// Visit every `gtk4::Button` in a widget tree. Used by the accessibility
+/// tests to assert mnemonics and accessible names on real widgets rather
+/// than on a hand-maintained registry.
+pub fn for_each_button(widget: &gtk4::Widget, f: &mut dyn FnMut(&gtk4::Button)) {
+    use gtk4::prelude::*;
+    if let Some(btn) = widget.downcast_ref::<gtk4::Button>() {
+        f(btn);
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        for_each_button(&c, f);
+        child = c.next_sibling();
+    }
+}
+
 /// Run a presenter action and return the resulting model clone, so tests can
 /// snapshot state without borrowing the presenter.
 pub fn after<C: ManagerClient>(

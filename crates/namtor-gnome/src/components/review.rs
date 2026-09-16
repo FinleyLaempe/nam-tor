@@ -6,6 +6,7 @@
 //! exposed. Builds an [`adw::PreferencesPage`] (wrapped in a
 //! [`adw::NavigationPage`] by the caller for `push_subpage`).
 
+use crate::components::scan_feedback;
 use crate::tr;
 use crate::view_model::ReviewViewV3;
 use gtk4::prelude::*;
@@ -14,13 +15,18 @@ use libadwaita::prelude::{PreferencesGroupExt, PreferencesPageExt};
 
 pub struct ReviewViewComponent {
     page: adw::PreferencesPage,
-    group: Option<adw::PreferencesGroup>,
+    /// Groups currently on the page. A re-render removes the previous set
+    /// before adding the new one.
+    groups: Vec<adw::PreferencesGroup>,
 }
 
 impl ReviewViewComponent {
     pub fn new() -> Self {
         let page = adw::PreferencesPage::new();
-        Self { page, group: None }
+        Self {
+            page,
+            groups: Vec::new(),
+        }
     }
 
     /// Renders the review summary into the component's `PreferencesPage`.
@@ -34,50 +40,66 @@ impl ReviewViewComponent {
     ) -> &adw::PreferencesPage {
         self.clear();
 
-        let group = adw::PreferencesGroup::builder()
-            .title(tr("Review Enrollment"))
-            .build();
-        group.update_property(&[gtk4::accessible::Property::Label(&tr(
+        // Hero: the review screen answers "can I save this?", so the
+        // headline is the verdict and the daemon's guidance is the detail
+        // under it. The guidance used to be dropped here entirely.
+        let verdict_bucket = if view.ready_to_save { 2 } else { 1 };
+        let advice = match view.guidance.hint() {
+            Some(hint) => format!("{} — {}", view.guidance.label(), hint),
+            None => view.guidance.label(),
+        };
+        let headline = if view.ready_to_save {
+            tr("Ready to save")
+        } else {
+            tr("Not ready to save yet")
+        };
+
+        let hero_group = adw::PreferencesGroup::new();
+        hero_group.update_property(&[gtk4::accessible::Property::Label(&tr(
             "Enrollment review group",
         ))]);
+        hero_group.add(&scan_feedback::hero_with(
+            &headline,
+            view.ready_to_save,
+            Some(advice),
+            verdict_bucket,
+        ));
 
-        let quality_row = adw::ActionRow::builder()
-            .title(tr(&format!("Quality: {}%", view.quality_percent)))
+        let signals_group = adw::PreferencesGroup::builder()
+            .title(tr("What the scan collected"))
             .build();
-        quality_row.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Capture quality percentage",
+        signals_group.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Scan quality signals",
         ))]);
-        group.add(&quality_row);
+        signals_group.add(&scan_feedback::image_quality_row(
+            view.quality_percent,
+            verdict_bucket,
+        ));
+        signals_group.add(&scan_feedback::angle_variety_row(view.diversity_percent));
+        signals_group.add(&scan_feedback::attention_row(&view.guidance));
+        signals_group.add(&scan_feedback::count_row(
+            "Accepted",
+            "Kept for your face model",
+            view.frames_accepted,
+            "Accepted views",
+        ));
 
-        let diversity_row = adw::ActionRow::builder()
-            .title(tr(&format!("Diversity: {}%", view.diversity_percent)))
-            .build();
-        diversity_row.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Pose diversity percentage",
-        ))]);
-        group.add(&diversity_row);
-
-        let frames_row = adw::ActionRow::builder()
-            .title(tr(&format!("Frames accepted: {}", view.frames_accepted)))
-            .build();
-        frames_row.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Number of accepted frames",
-        ))]);
-        group.add(&frames_row);
-
-        let guidance_row = adw::ActionRow::builder().title(tr(&view.guidance)).build();
-        guidance_row.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Enrollment guidance",
-        ))]);
-        group.add(&guidance_row);
+        let group = adw::PreferencesGroup::new();
+        group.update_property(&[gtk4::accessible::Property::Label(&tr("Review actions"))]);
 
         let save_btn = gtk4::Button::builder()
             .label(tr("_Save Profile"))
-            .css_classes(["suggested-action"])
+            .css_classes(["pill"])
+            .halign(gtk4::Align::Center)
             .sensitive(!is_pending)
             .use_underline(true)
             .tooltip_text(tr("Save the enrolled profile"))
             .build();
+        // Only the action that is actually right gets the accent: saving a
+        // scan the daemon calls unfinished should not look like the default.
+        if view.ready_to_save {
+            save_btn.add_css_class("suggested-action");
+        }
         save_btn.update_property(&[
             gtk4::accessible::Property::Label(&tr("Save profile")),
             gtk4::accessible::Property::Description(&tr("Commit the captured profile to storage")),
@@ -86,10 +108,15 @@ impl ReviewViewComponent {
 
         let resume_btn = gtk4::Button::builder()
             .label(tr("_Resume Capture"))
+            .css_classes(["pill"])
+            .halign(gtk4::Align::Center)
             .sensitive(!is_pending)
             .use_underline(true)
             .tooltip_text(tr("Resume capture to improve quality"))
             .build();
+        if !view.ready_to_save {
+            resume_btn.add_css_class("suggested-action");
+        }
         resume_btn.update_property(&[
             gtk4::accessible::Property::Label(&tr("Resume capture")),
             gtk4::accessible::Property::Description(&tr("Return to capturing to add more frames")),
@@ -100,7 +127,8 @@ impl ReviewViewComponent {
             .label(tr("_Discard"))
             .sensitive(!is_pending)
             .use_underline(true)
-            .css_classes(["destructive-action"])
+            .halign(gtk4::Align::Center)
+            .css_classes(["destructive-action", "flat"])
             .tooltip_text(tr("Discard the captured profile"))
             .build();
         discard_btn.update_property(&[
@@ -111,19 +139,32 @@ impl ReviewViewComponent {
         ]);
         discard_btn.connect_clicked(move |_| on_discard());
 
-        group.add(&discard_btn);
-        group.add(&resume_btn);
-        group.add(&save_btn);
+        let buttons = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(6)
+            .halign(gtk4::Align::Center)
+            .build();
+        if view.ready_to_save {
+            buttons.append(&save_btn);
+            buttons.append(&resume_btn);
+        } else {
+            buttons.append(&resume_btn);
+            buttons.append(&save_btn);
+        }
+        buttons.append(&discard_btn);
+        group.add(&buttons);
 
+        self.page.add(&hero_group);
+        self.page.add(&signals_group);
         self.page.add(&group);
-        self.group = Some(group);
+        self.groups = vec![hero_group, signals_group, group];
 
         &self.page
     }
 
     fn clear(&mut self) {
-        if let Some(g) = self.group.take() {
-            self.page.remove(&g);
+        for group in self.groups.drain(..) {
+            self.page.remove(&group);
         }
     }
 

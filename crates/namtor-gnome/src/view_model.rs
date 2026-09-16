@@ -12,7 +12,7 @@
 //! views, which the GTK shell then renders.
 
 use crate::client::{
-    EnrollmentProgress, PamServiceCompatibility, PamServiceInfo, ProtectionKeyKind,
+    EnrollmentProgress, Guidance, PamServiceCompatibility, PamServiceInfo, ProtectionKeyKind,
     ProtectionStatus, QualityLabel, StatusReport,
 };
 
@@ -394,6 +394,142 @@ impl EnrollmentState {
     }
 }
 
+/// Typed capture guidance carried on the v3 view models.
+///
+/// The daemon sends a closed snake_case token (`looking_good`, `move_closer`,
+/// …). The view model keeps it **typed** so the UI never decides anything by
+/// matching text: a `contains("looking good")` check silently stops working
+/// the moment the label is translated. Translation happens once, at render
+/// time, in [`GuidanceView::label`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(untagged)]
+pub enum GuidanceView {
+    /// The daemon sent no guidance for this update.
+    #[default]
+    Silent,
+    /// A guidance value this client understands.
+    Known(Guidance),
+    /// A value this client does not recognise. Rendered verbatim so a newer
+    /// daemon is never silently ignored, but it drives no UI decision.
+    Raw(String),
+}
+
+/// The capture signal a piece of guidance points at. Derived from the typed
+/// guidance, so the user can see *which* part of the scan is holding it back
+/// rather than only an overall percentage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptureSignal {
+    /// Where the face sits in the camera's view.
+    Framing,
+    /// How much light reaches the face.
+    Lighting,
+    /// How much the face is moving between captures.
+    Steadiness,
+    /// How many distinct head angles have been captured.
+    HeadAngles,
+}
+
+impl CaptureSignal {
+    /// Short user-facing name. Wrap in [`crate::tr`] at render time.
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Self::Framing => "Framing",
+            Self::Lighting => "Lighting",
+            Self::Steadiness => "Steadiness",
+            Self::HeadAngles => "Head angles",
+        }
+    }
+}
+
+impl GuidanceView {
+    /// Parse a wire token. Unknown, non-empty values are kept verbatim.
+    pub fn from_wire(s: &str) -> Self {
+        match Guidance::from_wire(s) {
+            Some(g) => Self::Known(g),
+            None if s.trim().is_empty() => Self::Silent,
+            None => Self::Raw(s.to_string()),
+        }
+    }
+
+    /// The translated, user-facing guidance line. This is the only place the
+    /// guidance becomes human text.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Silent => crate::tr("Starting the scan…"),
+            Self::Known(g) => crate::tr(g.as_label()),
+            Self::Raw(s) => crate::tr(s),
+        }
+    }
+
+    /// A translated one-line "how" for the guidance — the concrete thing to
+    /// do, under the headline. `None` when there is nothing to add.
+    pub fn hint(&self) -> Option<String> {
+        let hint = match self {
+            Self::Known(Guidance::Centering) => "Line your face up with the middle of the screen.",
+            Self::Known(Guidance::MoveCloser) => {
+                "Come closer until your face fills most of the view."
+            }
+            Self::Known(Guidance::MoveBack) => "You are too close for the camera to focus.",
+            Self::Known(Guidance::BetterLighting) => {
+                "Turn towards a window or lamp, and avoid a bright light behind you."
+            }
+            Self::Known(Guidance::HoldStill) => "Slow, small movements give the scan usable views.",
+            Self::Known(Guidance::FaceFront) => "Look straight at the camera to begin.",
+            Self::Known(Guidance::InsufficientPose) => {
+                "Turn your head slowly left, right, up and down."
+            }
+            Self::Known(Guidance::LookingGood) => {
+                "Keep turning your head slowly so the scan sees every angle."
+            }
+            Self::Known(Guidance::Capturing) => "Stay in view while the scan gets going.",
+            Self::Silent | Self::Raw(_) => return None,
+        };
+        Some(crate::tr(hint))
+    }
+
+    /// The capture signal this guidance points at, or `None` when the scan is
+    /// going well and nothing needs attention.
+    pub fn signal(&self) -> Option<CaptureSignal> {
+        match self {
+            Self::Known(
+                Guidance::Centering
+                | Guidance::MoveCloser
+                | Guidance::MoveBack
+                | Guidance::FaceFront,
+            ) => Some(CaptureSignal::Framing),
+            Self::Known(Guidance::BetterLighting) => Some(CaptureSignal::Lighting),
+            Self::Known(Guidance::HoldStill) => Some(CaptureSignal::Steadiness),
+            Self::Known(Guidance::InsufficientPose) => Some(CaptureSignal::HeadAngles),
+            _ => None,
+        }
+    }
+
+    /// True when the daemon says the current view is usable. Typed, so it
+    /// keeps working in every locale.
+    pub fn is_encouraging(&self) -> bool {
+        matches!(self, Self::Known(Guidance::LookingGood))
+    }
+}
+
+impl From<&str> for GuidanceView {
+    fn from(s: &str) -> Self {
+        Self::from_wire(s)
+    }
+}
+
+impl From<String> for GuidanceView {
+    fn from(s: String) -> Self {
+        Self::from_wire(&s)
+    }
+}
+
+impl From<Guidance> for GuidanceView {
+    fn from(g: Guidance) -> Self {
+        Self::Known(g)
+    }
+}
+
 /// v3 capture-page view. Renders live progress during enrollment.
 /// No biometric data — only bounded percentages, counts, and a guidance label.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
@@ -405,14 +541,11 @@ pub struct EnrollmentViewV3 {
     pub frames_accepted: u32,
     pub frames_rejected: u32,
     pub quality_bucket: u8,
-    pub guidance: String,
+    pub guidance: GuidanceView,
 }
 
 impl EnrollmentViewV3 {
     pub fn from_progress(p: &crate::client::EnrollmentProgressV3) -> Self {
-        let guidance_label = crate::client::Guidance::from_wire(&p.guidance)
-            .map(|g| crate::tr(g.as_label()))
-            .unwrap_or_else(|| crate::tr(&p.guidance));
         Self {
             phase: p.phase.clone(),
             quality_percent: p.quality_percent,
@@ -421,8 +554,18 @@ impl EnrollmentViewV3 {
             frames_accepted: p.frames_accepted,
             frames_rejected: p.frames_rejected,
             quality_bucket: p.quality_bucket,
-            guidance: guidance_label,
+            guidance: GuidanceView::from_wire(&p.guidance),
         }
+    }
+
+    /// Share of observed captures the daemon kept, as a percentage. `None`
+    /// when nothing has been seen yet, so the view can say "waiting" instead
+    /// of showing a misleading 0%.
+    pub fn accept_rate_percent(&self) -> Option<u32> {
+        if self.frames_seen == 0 {
+            return None;
+        }
+        Some(((u64::from(self.frames_accepted) * 100) / u64::from(self.frames_seen)) as u32)
     }
 }
 
@@ -433,20 +576,17 @@ pub struct ReviewViewV3 {
     pub quality_percent: u32,
     pub diversity_percent: u32,
     pub frames_accepted: u32,
-    pub guidance: String,
+    pub guidance: GuidanceView,
 }
 
 impl ReviewViewV3 {
     pub fn from_review(r: &crate::client::EnrollmentReviewV3) -> Self {
-        let guidance_label = crate::client::Guidance::from_wire(&r.guidance)
-            .map(|g| crate::tr(g.as_label()))
-            .unwrap_or_else(|| crate::tr(&r.guidance));
         Self {
             ready_to_save: r.ready_to_save,
             quality_percent: r.quality_percent,
             diversity_percent: r.diversity_percent,
             frames_accepted: r.frames_accepted,
-            guidance: guidance_label,
+            guidance: GuidanceView::from_wire(&r.guidance),
         }
     }
 }

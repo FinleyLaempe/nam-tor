@@ -46,20 +46,36 @@ This document defines the visual and interaction language for the Nam-tor GNOME 
 - **No biometric data**: Never show raw scores, embeddings, or template metadata.
 
 #### Enrollment Capture Page
-- **Container**: Centered `AdwStatusPage` or `GtkBox` (Vertical).
-- **Content**: 
-  - Animated activity indicator (spinner or progress animation)
-  - Progress metrics: "Frames: {n} · Quality: {y}% · Diversity: {z}%"
-  - Guidance label (coarse, privacy-safe): "Looking good", "Move closer", "Center your face"
-  - **No camera preview** — privacy by design
-- **Primary Action**: Stop button (single, prominent)
+- **Container**: `AdwPreferencesPage` with four groups (hero, signals, counters, actions).
+- **Hero** (untitled group):
+  - Face silhouette in a `.card` frame — the stand-in for the camera view.
+    **No camera preview** — privacy by design. Its tint follows
+    `quality_bucket` (high `.success`, medium `.dim-label`, low `.warning`).
+  - Guidance headline in `.title-1` — the largest text on the page, because
+    it is the only actionable element. Styled from the *typed* guidance and
+    the quality bucket, never by matching the translated label.
+  - One dimmed line under it saying concretely how to act on the guidance.
+  - When the scan is complete the headline becomes "Enrollment complete"
+    rather than continuing to ask for more.
+- **Scan quality** group — the per-signal breakdown:
+  - "Image quality" (`quality_percent`, tinted by `quality_bucket`)
+  - "Angle variety" (`diversity_percent`)
+  - "Views kept" (`frames_accepted / frames_seen`, or "—" before the first view)
+  - "Needs attention" — the signal the guidance token implicates
+    (Framing / Lighting / Steadiness / Head angles / Nothing)
+- **Views this session** group: distinct Accepted / Seen / Rejected rows.
+- **Primary Action**: "Stop and review" (`.suggested-action .pill`), Cancel below it.
 
 #### Enrollment Review Page
-- **Container**: `AdwPreferencesPage` with summary groups.
-- **Content**:
-  - Summary: "Frames accepted: {n}", "Quality: {y}%", "Diversity: {z}%"
-  - Guidance: Final assessment ("Ready to save" or "Consider re-enrolling")
-- **Actions**: Save (primary), Resume (secondary), Discard (destructive)
+- **Container**: `AdwPreferencesPage` with hero, signals and actions groups.
+- **Hero**: the same silhouette treatment; headline is the verdict
+  ("Ready to save" / "Not ready to save yet") with the daemon's guidance and
+  its how-to rendered underneath. The review screen must never drop
+  `guidance`.
+- **What the scan collected**: Image quality, Angle variety, Needs attention,
+  Accepted.
+- **Actions**: the accent goes to the action that is actually right — Save
+  when `ready_to_save`, Resume otherwise. Discard is `.destructive-action .flat`.
 
 #### Enrollment Setup Page
 - **Container**: `AdwPreferencesGroup` with entry field.
@@ -258,16 +274,28 @@ Tab traversal follows visual order:
 - Manages `AdwBreakpoint` for adaptive switching
 - Provides `set_destination()` and `active_destination()` methods
 
-### 9.2 Navigation (`navigation.rs`)
-- Owns `AdwNavigationView` for enrollment drill-down
-- Creates `AdwNavigationPage` for Setup, Capture, Review
-- Manages back navigation (button, swipe)
-- Provides `push_page()` and `pop_page()` methods
+### 9.2 Navigation
+The shell owns the single `AdwNavigationView`; the enrollment and review
+sub-pages are pushed onto it via `Shell::push_subpage()` / `pop_subpage()`.
+Each sub-page carries its own `AdwToolbarView` + `AdwHeaderBar`, because
+`AdwNavigationView` does not supply one.
 
-### 9.3 Enrollment Components (`components/enrollment.rs`)
-- `SetupView`: Name entry, privacy notice, Start button
-- `CaptureView`: Progress indicators, guidance label, Stop button
-- `ReviewView`: Summary metrics, Save/Resume/Discard actions
+There is exactly **one** enrollment rendering path. An earlier
+`navigation.rs` built a second, divergent set of capture and review widgets
+that no production code ever reached; it was removed rather than kept in
+sync. `AppController` renders through the components below.
+
+### 9.3 Enrollment Components (`components/enrollment.rs`, `components/review.rs`)
+- `EnrollmentViewComponent::render(None, …)`: name entry, privacy notice, Start
+- `EnrollmentViewComponent::render(Some(view), …)`: the capture page above
+- `EnrollmentViewComponent::render_stopped(…)`: stopped summary + Review/Cancel
+- `ReviewViewComponent::render(…)`: the review page above
+
+### 9.3b Scan Feedback (`components/scan_feedback.rs`)
+Shared building blocks for both scan pages: `silhouette()`, `hero()` /
+`hero_with()`, `meter_row()`, `count_row()`, `attention_row()`. Keeping them
+in one module is what stops the capture and review screens from drifting
+apart again.
 
 ### 9.4 Profile List (`components/profile_list.rs`)
 - `ProfileListView`: Renders `PresenterModel.profiles` as rows

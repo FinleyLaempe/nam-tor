@@ -237,7 +237,7 @@ fn app_controller_uses_enrollment_and_review_components() {
         let page = enrollment.render(Some(&view), |_| {}, || {}, || {});
         let texts = common::collect_widget_text(page.upcast_ref::<gtk4::Widget>());
         assert!(
-            texts.iter().any(|t| t.contains("Capturing enrollment")),
+            texts.iter().any(|t| t.contains("Scan quality")),
             "EnrollmentViewComponent must render capture phase: {texts:?}"
         );
 
@@ -246,7 +246,7 @@ fn app_controller_uses_enrollment_and_review_components() {
         let page = review_comp.render(&review, || {}, || {}, || {}, false);
         let texts = common::collect_widget_text(page.upcast_ref::<gtk4::Widget>());
         assert!(
-            texts.iter().any(|t| t.contains("Review Enrollment")),
+            texts.iter().any(|t| t.contains("What the scan collected")),
             "ReviewViewComponent must render review summary: {texts:?}"
         );
     });

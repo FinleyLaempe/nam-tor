@@ -14,6 +14,8 @@
 //! - [`fake`] — in-memory test double.
 //! - [`dbus_client`] — live zbus-backed client (feature `dbus`).
 //! - [`presenter`] — headless state machine the GTK view renders.
+//! - [`components`] — the single enrollment rendering path (capture, review,
+//!   profile list, PAM services, system status).
 //! - [`privacy`] — runtime scan ensuring no biometric data leaks into UI
 //!   structs.
 //!
@@ -27,7 +29,6 @@ pub mod app;
 pub mod client;
 pub mod components;
 pub mod fake;
-pub mod navigation;
 pub mod polkit_auth;
 pub mod presenter;
 pub mod privacy;
@@ -49,7 +50,7 @@ pub fn tr(s: &str) -> String {
     s.to_string()
 }
 
-pub use navigation::EnrollmentNavigation;
+pub use a11y::{ProgressAnnouncer, PROGRESS_ANNOUNCE_INTERVAL};
 pub use shell::{Destination, Shell};
 
 #[cfg(feature = "dbus")]
@@ -67,8 +68,8 @@ pub use client::{
 pub use fake::{FakeManagerClient, Mode as FakeMode};
 pub use presenter::ProfilePresenter;
 pub use view_model::{
-    compatibility_label, sealing_label, EnrollmentState, EnrollmentView, EnrollmentViewV3,
-    ErrorView, PamServiceRowView, PendingMerge, PendingReplace, PresenterModel, ProfileRowView,
-    ProfileSetupView, ProtectionStatusView, ProtectionView, QualityView, ReadinessLevel,
-    ReadinessView, RecoveryHint, ReviewView, ReviewViewV3,
+    compatibility_label, sealing_label, CaptureSignal, EnrollmentState, EnrollmentView,
+    EnrollmentViewV3, ErrorView, GuidanceView, PamServiceRowView, PendingMerge, PendingReplace,
+    PresenterModel, ProfileRowView, ProfileSetupView, ProtectionStatusView, ProtectionView,
+    QualityView, ReadinessLevel, ReadinessView, RecoveryHint, ReviewView, ReviewViewV3,
 };

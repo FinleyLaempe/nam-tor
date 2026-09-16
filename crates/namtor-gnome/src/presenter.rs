@@ -449,7 +449,7 @@ impl<C: ManagerClient> ProfilePresenter<C> {
                     frames_accepted: 0,
                     frames_rejected: 0,
                     quality_bucket: 0,
-                    guidance: crate::client::Guidance::Capturing.as_label().into(),
+                    guidance: crate::client::Guidance::Capturing.into(),
                 });
             }
             Err(err) => {

@@ -253,8 +253,12 @@ fn poor_quality_shows_guidance() {
         p.on_progress_v3(&progress);
     });
     let view = model.enrollment_view_v3.as_ref().expect("view");
-    assert!(!view.guidance.is_empty());
-    assert!(view.guidance.to_lowercase().contains("better lighting"));
+    assert!(!view.guidance.label().is_empty());
+    assert!(view
+        .guidance
+        .label()
+        .to_lowercase()
+        .contains("better lighting"));
 }
 
 #[test]
@@ -713,7 +717,7 @@ fn progress_updates_view() {
     assert_eq!(view.frames_accepted, 15, "frames_accepted updated");
     assert_eq!(view.frames_rejected, 5, "frames_rejected updated");
     assert!(
-        view.guidance.contains("Looking good"),
+        view.guidance.label().contains("Looking good"),
         "guidance localized to human-readable label"
     );
 }
@@ -749,9 +753,9 @@ fn framing_guidance_updates() {
     });
     let view = model.enrollment_view_v3.as_ref().expect("enrollment view");
     assert!(
-        view.guidance.contains("Center"),
+        view.guidance.label().contains("Center"),
         "guidance shows centering message: {}",
-        view.guidance
+        view.guidance.label()
     );
 
     let progress_good = EnrollmentProgressV3 {
@@ -770,9 +774,9 @@ fn framing_guidance_updates() {
     });
     let view = model.enrollment_view_v3.as_ref().expect("enrollment view");
     assert!(
-        view.guidance.contains("Looking good"),
+        view.guidance.label().contains("Looking good"),
         "guidance updated to looking_good: {}",
-        view.guidance
+        view.guidance.label()
     );
 
     let progress_closer = EnrollmentProgressV3 {
@@ -791,9 +795,9 @@ fn framing_guidance_updates() {
     });
     let view = model.enrollment_view_v3.as_ref().expect("enrollment view");
     assert!(
-        view.guidance.contains("Move closer"),
+        view.guidance.label().contains("Move closer"),
         "guidance updated to move_closer: {}",
-        view.guidance
+        view.guidance.label()
     );
 }
 

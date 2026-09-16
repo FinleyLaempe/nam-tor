@@ -6,6 +6,7 @@
 //! component builds an [`adw::PreferencesPage`] (wrapped in an
 //! [`adw::NavigationPage`] by the caller for `push_subpage`) for each phase.
 
+use crate::components::scan_feedback;
 use crate::tr;
 use crate::view_model::EnrollmentViewV3;
 use gtk4::prelude::*;
@@ -14,13 +15,18 @@ use libadwaita::prelude::{EntryRowExt, PreferencesGroupExt, PreferencesPageExt};
 
 pub struct EnrollmentViewComponent {
     page: adw::PreferencesPage,
-    group: Option<adw::PreferencesGroup>,
+    /// Groups currently on the page. A re-render removes the previous set
+    /// before adding the new one.
+    groups: Vec<adw::PreferencesGroup>,
 }
 
 impl EnrollmentViewComponent {
     pub fn new() -> Self {
         let page = adw::PreferencesPage::new();
-        Self { page, group: None }
+        Self {
+            page,
+            groups: Vec::new(),
+        }
     }
 
     /// Renders the enrollment state into the component's `PreferencesPage`.
@@ -105,7 +111,7 @@ impl EnrollmentViewComponent {
         group.add(&cancel_btn);
 
         self.page.add(&group);
-        self.group = Some(group);
+        self.groups = vec![group];
     }
 
     fn render_capture_phase<F1, F2>(&mut self, view: &EnrollmentViewV3, on_stop: F1, on_cancel: F2)
@@ -113,111 +119,77 @@ impl EnrollmentViewComponent {
         F1: Fn() + 'static,
         F2: Fn() + 'static,
     {
-        let is_good_position = view.guidance.to_lowercase().contains("looking good");
-        let face_icon = gtk4::Image::from_icon_name("avatar-default-symbolic");
-        face_icon.set_pixel_size(128);
-        if is_good_position {
-            face_icon.set_css_classes(&["success"]);
-        } else {
-            face_icon.set_css_classes(&["dim-label"]);
-        }
-        face_icon.set_accessible_role(gtk4::AccessibleRole::Img);
-        face_icon.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Face position outline — center your face in the frame",
-        ))]);
+        // Hero: the silhouette stand-in for the camera view, with the
+        // guidance headline under it. `quality_bucket` and the typed
+        // `GuidanceView` drive the styling — never a translated string.
+        let hero_group = adw::PreferencesGroup::new();
+        hero_group.update_property(&[gtk4::accessible::Property::Label(&tr("Live scan guidance"))]);
 
-        let icon_clamp = adw::Clamp::builder()
-            .child(&face_icon)
-            .halign(gtk4::Align::Center)
-            .margin_top(24)
-            .margin_bottom(24)
-            .build();
-
-        let guidance_label = gtk4::Label::builder().label(tr(&view.guidance)).build();
-        if is_good_position {
-            guidance_label.set_css_classes(&["heading", "success"]);
-        } else {
-            guidance_label.set_css_classes(&["body"]);
-        }
-        guidance_label.set_accessible_role(gtk4::AccessibleRole::Status);
-        guidance_label.update_property(&[
-            gtk4::accessible::Property::Label(&tr("Live capture guidance")),
-            gtk4::accessible::Property::Description(&tr(
-                "Real-time positioning feedback during enrollment",
-            )),
-        ]);
-
-        let group = adw::PreferencesGroup::builder()
-            .title(tr("Capturing enrollment"))
-            .build();
-        group.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Capture progress group",
-        ))]);
-
-        group.add(&icon_clamp);
-        group.add(&guidance_label);
-
-        let quality_row = adw::ActionRow::builder()
-            .title(tr(&format!("Quality: {}%", view.quality_percent)))
-            .build();
-        quality_row.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Capture quality percentage",
-        ))]);
-        group.add(&quality_row);
-
-        let diversity_row = adw::ActionRow::builder()
-            .title(tr(&format!("Diversity: {}%", view.diversity_percent)))
-            .build();
-        diversity_row.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Pose diversity percentage",
-        ))]);
-        group.add(&diversity_row);
-
-        let counts_row = adw::ActionRow::builder()
-            .title(tr(&format!(
-                "Accepted: {} / Seen: {}",
-                view.frames_accepted, view.frames_seen
-            )))
-            .build();
-        counts_row.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Frames accepted and seen counts",
-        ))]);
-        group.add(&counts_row);
-
-        let bar = gtk4::ProgressBar::builder()
-            .fraction(view.diversity_percent as f64 / 100.0)
-            .build();
-        bar.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Enrollment diversity progress",
-        ))]);
-        group.add(&bar);
-
-        // USA-9: when diversity_percent >= 100 and quality_bucket is good
-        // (>= 2), show a completion cue and style the Stop button as
-        // suggested-action.
+        // USA-9: once the scan has everything it needs, the headline stops
+        // asking for more and says so — "keep going" would be wrong advice.
         let complete = view.diversity_percent >= 100 && view.quality_bucket >= 2;
-        let stop_label = if complete {
-            tr("Enrollment complete — press Stop to review")
-        } else {
-            tr("_Stop")
-        };
-
         if complete {
-            let cue_row = adw::ActionRow::builder()
-                .title(tr("Enrollment complete — press Stop to review"))
-                .css_classes(["success"])
-                .build();
-            cue_row.set_accessible_role(gtk4::AccessibleRole::Status);
-            cue_row.update_property(&[gtk4::accessible::Property::Label(&tr(
-                "Enrollment complete",
-            ))]);
-            group.add(&cue_row);
+            hero_group.add(&scan_feedback::hero_with(
+                &tr("Enrollment complete"),
+                true,
+                Some(tr("Press Stop and review to save this profile.")),
+                view.quality_bucket,
+            ));
+        } else {
+            hero_group.add(&scan_feedback::hero(&view.guidance, view.quality_bucket));
         }
+
+        // Breakdown: three separately measured signals plus the one the
+        // daemon says it is waiting on, so a low reading is explainable.
+        let signals_group = adw::PreferencesGroup::builder()
+            .title(tr("Scan quality"))
+            .description(tr("What the scan measures, and what it is waiting on."))
+            .build();
+        signals_group.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Scan quality signals",
+        ))]);
+        signals_group.add(&scan_feedback::image_quality_row(
+            view.quality_percent,
+            view.quality_bucket,
+        ));
+        signals_group.add(&scan_feedback::angle_variety_row(view.diversity_percent));
+        signals_group.add(&scan_feedback::kept_rate_row(view.accept_rate_percent()));
+        signals_group.add(&scan_feedback::attention_row(&view.guidance));
+
+        // Counters: the three numbers on the wire, each labelled for what it
+        // actually is. `frames_seen == accepted + rejected` holds, so the
+        // three rows add up in front of the user.
+        let counts_group = adw::PreferencesGroup::builder()
+            .title(tr("Views this session"))
+            .build();
+        counts_group.update_property(&[gtk4::accessible::Property::Label(&tr("Capture counters"))]);
+        counts_group.add(&scan_feedback::count_row(
+            "Accepted",
+            "Kept for your face model",
+            view.frames_accepted,
+            "Accepted views",
+        ));
+        counts_group.add(&scan_feedback::count_row(
+            "Seen",
+            "Views sent for checking",
+            view.frames_seen,
+            "Views seen",
+        ));
+        counts_group.add(&scan_feedback::count_row(
+            "Rejected",
+            "Not usable, so discarded",
+            view.frames_rejected,
+            "Rejected views",
+        ));
+
+        let actions_group = adw::PreferencesGroup::new();
+        actions_group.update_property(&[gtk4::accessible::Property::Label(&tr("Capture actions"))]);
 
         let stop_btn = gtk4::Button::builder()
-            .label(&stop_label)
-            .css_classes(["suggested-action"])
-            .use_underline(!complete)
+            .label(tr("_Stop and review"))
+            .css_classes(["suggested-action", "pill"])
+            .use_underline(true)
+            .halign(gtk4::Align::Center)
             .tooltip_text(tr("Stop capture and review the result"))
             .build();
         stop_btn.update_property(&[
@@ -230,6 +202,8 @@ impl EnrollmentViewComponent {
 
         let cancel_btn = gtk4::Button::builder()
             .label(tr("Cancel"))
+            .css_classes(["flat"])
+            .halign(gtk4::Align::Center)
             .tooltip_text(tr("Cancel enrollment and discard frames"))
             .build();
         cancel_btn.update_property(&[
@@ -240,11 +214,20 @@ impl EnrollmentViewComponent {
         ]);
         cancel_btn.connect_clicked(move |_| on_cancel());
 
-        group.add(&stop_btn);
-        group.add(&cancel_btn);
+        let buttons = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(6)
+            .halign(gtk4::Align::Center)
+            .build();
+        buttons.append(&stop_btn);
+        buttons.append(&cancel_btn);
+        actions_group.add(&buttons);
 
-        self.page.add(&group);
-        self.group = Some(group);
+        self.page.add(&hero_group);
+        self.page.add(&signals_group);
+        self.page.add(&counts_group);
+        self.page.add(&actions_group);
+        self.groups = vec![hero_group, signals_group, counts_group, actions_group];
     }
 
     /// Render the stopped state with a summary, optional error (USA-5),
@@ -276,29 +259,44 @@ impl EnrollmentViewComponent {
             group.add(&err_row);
         }
 
-        if let Some(v) = view {
-            let quality_row = adw::ActionRow::builder()
-                .title(tr(&format!("Quality: {}%", v.quality_percent)))
+        let summary_group = view.map(|v| {
+            let summary = adw::PreferencesGroup::builder()
+                .title(tr("What the scan collected"))
                 .build();
-            group.add(&quality_row);
-
-            let diversity_row = adw::ActionRow::builder()
-                .title(tr(&format!("Diversity: {}%", v.diversity_percent)))
-                .build();
-            group.add(&diversity_row);
-
-            let counts_row = adw::ActionRow::builder()
-                .title(tr(&format!(
-                    "Accepted: {} / Seen: {}",
-                    v.frames_accepted, v.frames_seen
-                )))
-                .build();
-            group.add(&counts_row);
-        }
+            summary.update_property(&[gtk4::accessible::Property::Label(&tr(
+                "Scan quality signals",
+            ))]);
+            summary.add(&scan_feedback::image_quality_row(
+                v.quality_percent,
+                v.quality_bucket,
+            ));
+            summary.add(&scan_feedback::angle_variety_row(v.diversity_percent));
+            summary.add(&scan_feedback::kept_rate_row(v.accept_rate_percent()));
+            summary.add(&scan_feedback::count_row(
+                "Accepted",
+                "Kept for your face model",
+                v.frames_accepted,
+                "Accepted views",
+            ));
+            summary.add(&scan_feedback::count_row(
+                "Seen",
+                "Views sent for checking",
+                v.frames_seen,
+                "Views seen",
+            ));
+            summary.add(&scan_feedback::count_row(
+                "Rejected",
+                "Not usable, so discarded",
+                v.frames_rejected,
+                "Rejected views",
+            ));
+            summary
+        });
 
         let review_btn = gtk4::Button::builder()
             .label(tr("_Review Enrollment"))
-            .css_classes(["suggested-action"])
+            .css_classes(["suggested-action", "pill"])
+            .halign(gtk4::Align::Center)
             .use_underline(true)
             .tooltip_text(tr("Review the captured enrollment"))
             .build();
@@ -312,23 +310,35 @@ impl EnrollmentViewComponent {
 
         let cancel_btn = gtk4::Button::builder()
             .label(tr("Cancel"))
+            .css_classes(["flat"])
+            .halign(gtk4::Align::Center)
             .tooltip_text(tr("Cancel enrollment and discard frames"))
             .build();
         cancel_btn.update_property(&[gtk4::accessible::Property::Label(&tr("Cancel enrollment"))]);
         cancel_btn.connect_clicked(move |_| on_cancel());
 
-        group.add(&review_btn);
-        group.add(&cancel_btn);
+        let buttons = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(6)
+            .halign(gtk4::Align::Center)
+            .build();
+        buttons.append(&review_btn);
+        buttons.append(&cancel_btn);
+        group.add(&buttons);
 
         self.page.add(&group);
-        self.group = Some(group);
+        self.groups = vec![group];
+        if let Some(summary) = summary_group {
+            self.page.add(&summary);
+            self.groups.push(summary);
+        }
 
         &self.page
     }
 
     fn clear(&mut self) {
-        if let Some(g) = self.group.take() {
-            self.page.remove(&g);
+        for group in self.groups.drain(..) {
+            self.page.remove(&group);
         }
     }
 
