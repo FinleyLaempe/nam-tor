@@ -64,7 +64,7 @@ production-level G5) are `WITHHELD` pending hardware or consented data.
 | **G1.2** auto-probe on unknown device | ≥80% success across contributed devices | `WITHHELD` | `namtor-probe` and tiered probing shipped. Contributor denominator does not exist (one device known). |
 | **G1.3** specific message per failure mode | fault-injection coverage of §8.3 table | `WITHHELD` | Distinct PAM/CLI reason codes shipped. Full §8.3 fault-injection matrix not published against production path. |
 | **G1.4** zero interaction on MSXU | no prompt on MSXU path | `WITHHELD` (requires HIL) | MSXU tier code is silent by construction. No HIL assertion run published. |
-| **G1.5** emitter off ≤200 ms after teardown | HIL luminance check after 4 teardown paths | `WITHHELD` (requires HIL) | Watchdog, RAII `EmitterGuard`, force-off helpers shipped. No HIL luminance measurement published. |
+| **G1.5** emitter off ≤200 ms after teardown | HIL luminance check after 4 teardown paths | `WITHHELD` (measured 2026-09-17, budget not met) | **Now measured, and it does not pass.** `emitter_goes_dark_within_the_teardown_budget` (`crates/namtor-daemon/tests/enrollment_live.rs`, `#[ignore]`d, `NAMTOR_HW_TEST=1`) arms the reference camera's IR emitter, confirms in photons that the scene is lit (228–247/255), takes a clock reading, issues `force_off`, and timestamps every frame until the scene is sustainably dark (frame mean < 4.0/255 for the rest of a 1200 ms window; a *run*, not one frame, because mode 2 is a 1:1 strobe in which half of all frames read ~0.13/255 while the emitter is fully on). Five samples: **430.8, 434.6, 434.7, 434.9, 435.0 ms** — median **434.7 ms**, max **435.0 ms**, against the 200 ms budget. Sampling granularity **33.5 ms/frame** (GREY8 640x360 at a nominal 30 fps), timestamped at dequeue rather than exposure, so each value is an upper bound carrying about ±1 frame period; no digit below that is meaningful. **This is not a slow LED.** The `payload_off` write returned by 42.7 ms, and the device then delivered *no frames at all* for a further ~394 ms. The same MSXU mode switch blinds the stream for 390–393 ms on the way *in* (arming), so the blackout is a property of the mode change, not of the emitter. The instant the LED actually went dark is therefore bracketed only to **[42.7, 435.0] ms**, and this method cannot resolve it further because its only witness is the camera that goes blind. Closing G1.5 needs an observer that does not stall with the mode switch — a second camera watching the LED, or a photodiode. **Scope:** the `namtor_camera` `emitter_ctrl` / `watchdog` **library** path driven from a test process on the reference camera. It does **not** exercise the installed daemon's teardown path (`crates/namtor-daemon/src/bin/namtor-daemon/live_capture.rs` is untouched and unexercised), and it covers **one** teardown path, not the four this gate asks for. Emitter restoration was verified on every run: `GET_CUR` read back `payload_off` (`01 03 01 …`) and the scene measured 0.10–0.13/255 afterwards. |
 | **G1.6** first auth after S3 succeeds 20/20 | scripted S3 cycle, 20 successes | `WITHHELD` | R10 (emitter survives suspend) untested, needs real S3 cycle. Resume reconciler code exists; 20x S3 HIL run not executed. |
 | **G2.1** median latency ≤500 ms | eval report latency distribution | `WITHHELD` | No production-path latency distribution published. |
 | **G2.2** p95 ≤1000 ms | eval report | `WITHHELD` | Same as G2.1. |
@@ -115,7 +115,7 @@ gates and is recorded as `WITHHELD: <reason>` rather than fake-success.
 
 | Input | Blocks | Status |
 |---|---|---|
-| Root: install systemd units, `namtor` user, `namtor-auth` group | Live daemon run, G1.1/G1.5 HIL, **and all end-to-end enrollment HIL** | `WITHHELD: needs root install` — **highest-value unlock, see note below** |
+| Root: install systemd units, `namtor` user, `namtor-auth` group | Live daemon run, G1.1 HIL, **and all end-to-end enrollment HIL** | `WITHHELD: needs root install` — **highest-value unlock, see note below** |
 | Python onnxruntime binding compatible with system Python | R4 INT8-vs-FP32, task 16 cohort tooling | `WITHHELD: python3 -c "import onnxruntime" fails (Python 3.14 incompat)` |
 | Model selection + upstream licence acceptance for restricted models | R4, production inference | `WITHHELD: no restricted model bundled; redistributable models admit without acceptance record` |
 | R5 cohort dataset (licence-verified) | G3, z-norm calibration, task 16 | `WITHHELD: no dataset selected` |
@@ -133,7 +133,18 @@ XU and the quirks table from the daemon and therefore needs the root install.
 Measured directly over 5 live frames with the emitter unarmed:
 `mean=0.1/255, min=0, max=4` — an essentially black image, in which face
 detection cannot succeed regardless of pipeline quality. So this single input
-gates the entire G1/G2 HIL family, not just the two gates listed above.
+gates the entire G1/G2 HIL family, not just the gates listed above.
+
+**Correction (2026-09-17).** The paragraph above is wrong about the emitter,
+and is kept only so the correction is legible. Arming the IR emitter does
+*not* need the root install: the quirks entry's measured
+`[access] requires_root = false` holds, and the logind seat ACL on
+`/dev/video2` gives the logged-in desktop user `rw`, so the XU write
+succeeds from an ordinary test process. `crates/namtor-daemon/tests/hw_emitter/`
+does exactly that, and both the live enrollment test and the G1.5 teardown
+measurement now arm and disarm the emitter without privilege. What root still
+gates is the *daemon* — its units, users and groups — and therefore the
+production-path HIL runs, not emitter access itself.
 
 ---
 
