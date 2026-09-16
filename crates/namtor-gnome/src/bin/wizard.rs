@@ -35,6 +35,15 @@ fn main() -> std::process::ExitCode {
     ) {
         return std::process::ExitCode::from(code);
     }
+    // KDE's GTK-config module writes the legacy prefer-dark-theme flag into
+    // ~/.config/gtk-4.0/settings.ini. libadwaita ignores that flag and warns
+    // about it the moment its style manager is constructed inside
+    // `adw_init()` — before any application callback runs. Initialising GTK
+    // here lets the flag be cleared first, so the app is driven purely by
+    // `AdwStyleManager:color-scheme` (set in `build_ui`) with no warning and
+    // no second, conflicting dark-theme mechanism.
+    clear_legacy_dark_theme_flag();
+
     let app = adw::Application::builder()
         .application_id("org.namtor.Gnome")
         .flags(ApplicationFlags::FLAGS_NONE)
@@ -45,7 +54,27 @@ fn main() -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
+/// Clear `GtkSettings:gtk-application-prefer-dark-theme` before libadwaita's
+/// style manager reads it. Best-effort: if GTK cannot be initialised (no
+/// display) there is nothing to clear and `app.run()` reports the real error.
+fn clear_legacy_dark_theme_flag() {
+    if gtk4::init().is_err() {
+        return;
+    }
+    let Some(display) = gtk4::gdk::Display::default() else {
+        return;
+    };
+    gtk4::Settings::for_display(&display).set_gtk_application_prefer_dark_theme(false);
+}
+
 fn build_ui(app: &adw::Application) {
+    // Follow the desktop's colour scheme via the freedesktop appearance
+    // portal (`org.freedesktop.appearance color-scheme`), which works on
+    // GNOME, Plasma, Sway and others. KDE instead writes the legacy
+    // GtkSettings prefer-dark-theme flag, which libadwaita ignores;
+    // ForceDark / ForceLight would pin the app to one scheme and ignore the
+    // desktop entirely.
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
     let controller = AppController::build(app);
     controller.borrow().present();
 }
