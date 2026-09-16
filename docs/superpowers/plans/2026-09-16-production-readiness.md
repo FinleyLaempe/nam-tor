@@ -1786,3 +1786,77 @@ Two per run sounds harmless, but `test_ci_gates.sh` runs every gate once per mut
 Fixed with `trap 'rm -rf "$tmp1" "$tmp2"' EXIT`, matching the house pattern. Verified: gate exits 0 and the `/tmp/tmp.*` count is unchanged across a run (leak = 0). The 914 stale stage roots were removed (only directories containing `usr/` or `var/` and older than 5 minutes, so nothing in flight was touched), taking `/tmp` from 13 GB to 3.8 GB and available memory from 0 to 12 GB.
 
 Worth noting for anyone running the gates in a loop locally: this is a developer-machine hazard, not a CI one — a fresh CI runner discards its `/tmp` per job, which is exactly why it was never noticed.
+
+---
+
+# Finding closures (coordinator, end of review phase)
+
+### F5 — CLOSED. The un-skipped deadlock test is stable
+
+`--skip concurrent_connections_serialise` was removed from CI, the PKGBUILD `check()`, the RPM `%check` and `override_dh_auto_test`. Evidence it is not flaky:
+
+- 3 consecutive green CI runs with no skip flag (736s, 869s, 554s), on three different commits
+- 25/25 consecutive local runs (implementing agent), 5/5 (coordinator)
+- full workspace suite green with no skip, repeatedly
+
+The fix is structural rather than timing luck: previously both threads blocked inside `accept()`; now the thread losing the accept race gets `EWOULDBLOCK` -> `Ok(None)` -> retries via `accept_one_blocking`, so both connections are served. Treat as settled.
+
+### F9 — CLOSED, with a measured result
+
+Replacing the from-source `cargo install cargo-audit` with a prebuilt install cut CI from **869s to 554s** — a 35% reduction against the ~14 minute historical baseline, and the `rust` job no longer dominates the run. The error-swallowing `2>/dev/null || true` is gone, so an install failure now fails the job instead of silently degrading the gate to whatever is on PATH.
+
+### F21 — CLOSED by audit. No production consumer misuses `Frame::emitter`
+
+Audited every non-test use of `EmitterState` in the workspace:
+
+- `crates/namtor-daemon/src/verify.rs` (the auth path) uses `frame.emitter` **only to pair On/Off frames**, which is the field's actual contract. It then calls `illuminated_first()`, which orders the pair by **measured mean luminance** (`mean_u8`), not by the tag. So the auth path is already defended against exactly this hazard.
+- `crates/namtor-recog/src/embed.rs`, `crates/namtor-daemon/src/supervisor.rs`, `crates/namtor-worker/src/bin/namtor-worker.rs` only **construct** a `FrameRef` with a fixed `On` label when handing a frame to the worker; none reads it to infer illumination.
+- `crates/namtor-uvc/src/strobe.rs` and `crates/namtor-capture/src/ir_uvc.rs` are the producers (parity tagging), not consumers.
+
+So F21 is a documentation and future-usage hazard, not a live defect. The F13 probe measures pixels rather than trusting the tag, and `illuminated_first` is the pattern any new consumer should follow. No code change required.
+
+### F2 — CLOSED as a deliberate decision
+
+Arch keeps `!zipman`, shipping uncompressed man pages, because `packaging/install-manifest.toml` declares the uncompressed paths and `packaging/uninstall.sh` removes exactly the manifest paths — compressing them would orphan the installed pages at uninstall. `namcap` passes in the green release run, so the non-idiomatic option costs nothing in practice.
+
+Fedora differs deliberately: rpmbuild compresses man pages itself, so its `%files` globs the extension (`.8*`, `.1*`) rather than pinning. Both are correct for their packaging system; the inconsistency is in the tooling, not the product. Revisit only if the manifest gains a notion of compressed destinations.
+
+### F23 update — the real root cause was a subshell, not a missing trap (FIXED)
+
+The `test_supply_chain.sh` trap was necessary but **not sufficient**: a meta-gate run still leaked ~70 directories. Measuring per gate found five more leaking — and all five already HAD cleanup traps:
+
+```
+test_arch_split           4
+test_uninstall_closure    4
+test_lifecycle           19
+test_install_default_off  6
+test_lifecycle_cert      11
+```
+
+The shared helper was:
+
+```bash
+mk_temp_dir() { local d; d="$(mktemp -d)"; TEMP_DIRS+=("$d"); printf '%s' "$d"; }
+root="$(mk_temp_dir)"      # command substitution == subshell
+```
+
+Every caller invokes it inside `$( )`. `TEMP_DIRS+=` therefore mutates the **subshell's** copy of the array and is discarded when the subshell exits; the parent's `TEMP_DIRS` stays empty and `cleanup` iterates nothing. Demonstrated in isolation:
+
+```
+captured: /tmp/demo-10298
+TEMP_DIRS in parent: 0 entries  -> <empty>
+```
+
+**8 gates shared the helper**, across 55 subshell call sites: `test_arch_split.sh`, `test_pam_install.sh`, `test_core_cert.sh`, `test_lifecycle.sh`, `test_lifecycle_cert.sh`, `test_install_default_off.sh`, `test_uninstall_closure.sh`, `test_desktop_cert.sh`.
+
+Fixed by removing the cross-subshell dependency entirely: one `TEMP_ROOT` is created in the parent, `mk_temp_dir` returns `mktemp -d "$TEMP_ROOT/t.XXXXXXXX"`, and the trap removes the root. Correct regardless of which subshell the caller runs in.
+
+Verified: leak=0 and rc=0 on all nine gates individually (previously 4/4/19/6/11), and on a full meta-gate sweep — `rc=0, leak=0`, baseline 11/11, mutations 13 caught / 0 skipped / 0 not caught.
+
+**Pattern note.** This is the third instance of one bash class in this programme, each of which silently produced a *passing* result that meant nothing:
+
+1. `ldd X | grep -v 'not found'` — `grep -v` succeeds whenever any line differs, so the check could never fail. Its proposed replacement `! ldd ... | grep ...` was also broken: `!` puts the pipeline in a tested context, suppressing `set -e`.
+2. `grep ... | while read; do rc=1; done` — the loop body runs in a subshell, so `rc` never reaches the caller and the gate could never fail.
+3. This one — array mutation inside `$( )` discarded, so cleanup had nothing to clean.
+
+When a shell gate reports success, confirm it can actually fail. A gate that cannot fail is indistinguishable from one that passes, and both of the first two shipped in CI for some time.

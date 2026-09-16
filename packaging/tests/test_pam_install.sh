@@ -26,19 +26,23 @@ FAIL=0
 FAILED_TESTS=()
 
 # Track temp dirs for cleanup.
-TEMP_DIRS=()
+# Temp dirs live under ONE root so cleanup cannot be defeated by a subshell.
+#
+# The previous helper appended to a TEMP_DIRS array, but every caller invokes
+# it as `root="$(mk_temp_dir)"` — command substitution, i.e. a subshell. The
+# append mutated the subshell's copy of the array and was discarded on exit,
+# so the parent's TEMP_DIRS stayed empty and cleanup removed nothing. Each
+# run leaked every directory it created; on a tmpfs /tmp that is leaked RAM.
+TEMP_ROOT="$(mktemp -d)"
 cleanup() {
-    for d in "${TEMP_DIRS[@]:-}"; do
-        rm -rf "$d"
-    done
+    rm -rf "$TEMP_ROOT"
 }
 trap cleanup EXIT
 
 mk_temp_dir() {
-    local d
-    d="$(mktemp -d)"
-    TEMP_DIRS+=("$d")
-    printf '%s' "$d"
+    # Children of TEMP_ROOT: the trap removes the root, so this works
+    # regardless of which subshell the caller runs us in.
+    mktemp -d "$TEMP_ROOT/t.XXXXXXXX"
 }
 
 # --- test helpers ----------------------------------------------------------

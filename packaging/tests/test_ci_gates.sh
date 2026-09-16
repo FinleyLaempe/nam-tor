@@ -173,7 +173,7 @@ M03|split ownership|packaging/stage.sh|test_arch_split.sh|break --package case a
 M04|production model validation call path|packaging/build-model-archive.sh|test_model_archive.sh|comment out licence copy -> archive missing licences (gate 4)
 M05|system-bus client parity|packaging/fedora/namtor.spec|test_fedora_split.sh|dbus-1/system-services -> dbus-1/session-services in core %files
 M06|PAM-default-off|packaging/arch/namtor.install|test_install_default_off.sh|inject pam-install.sh call into post_install
-M07|no unexpected setuid|HANDOFF.md|test_doc_audit.sh|inject stale 'setuid helper' string
+M07|no unexpected setuid|README.md|test_doc_audit.sh|inject stale 'setuid helper' string
 M08|package builds (structural)|packaging/arch/PKGBUILD|test_arch_split.sh|remove namtor-ui from pkgname array
 M09|uninstall closure|packaging/uninstall.sh|test_uninstall_closure.sh|rename tomllib -> tommutant (manifest parse gone)
 M10|docs claims|packaging/README.md|test_doc_audit.sh|inject stale 'models ensure' string
