@@ -204,8 +204,41 @@ impl VerifyEngine {
         store_dir: &Path,
         key_path: &Path,
     ) -> Result<Self, VerifyError> {
+        Self::new_with_selector(
+            yunet_path,
+            sface_path,
+            store_dir,
+            key_path,
+            &mut namtor_store::crypto::BackendSelector::default(),
+        )
+    }
+
+    /// Construct with an explicit [`BackendSelector`], mirroring
+    /// [`TemplateStore::open_with_selector`].
+    ///
+    /// [`Self::new`] uses `BackendSelector::default()`, whose file backend
+    /// resolves the root secret to the hardcoded `/var/lib/namtor/root_secret`
+    /// (`namtor-store::crypto::DEFAULT_ROOT_SECRET_PATH`) and calls
+    /// `create_dir_all` on a root-owned directory. That is right for the
+    /// daemon and impossible for anyone else: an unprivileged process gets
+    /// `Io(PermissionDenied)` and cannot construct a VerifyEngine at all.
+    ///
+    /// The store directory and the sealing key were already parameters; the
+    /// root secret underneath them was not, and no LayoutPaths setting or
+    /// environment variable moved it. Every other consumer in the tree
+    /// already sidesteps this (`manager/store.rs`, `dbus.rs`) via
+    /// `open_with_selector`; this engine was the one that could not, which is
+    /// why the G2 latency gates had never been measured — the measurement
+    /// could not build its subject.
+    pub fn new_with_selector(
+        yunet_path: &Path,
+        sface_path: &Path,
+        store_dir: &Path,
+        key_path: &Path,
+        selector: &mut namtor_store::crypto::BackendSelector,
+    ) -> Result<Self, VerifyError> {
         let pipeline = RecognitionPipeline::new(yunet_path, sface_path, (640, 640))?;
-        let store = TemplateStore::open(store_dir, key_path)?;
+        let store = TemplateStore::open_with_selector(store_dir, key_path, selector)?;
         Ok(Self {
             pipeline,
             store,

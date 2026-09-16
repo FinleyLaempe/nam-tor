@@ -1893,3 +1893,48 @@ My error: verifying a gate locally and inferring it would pass in CI. A gate's e
 Fixed by moving it to the **`build` job**, which does `cargo build --release` for every shippable crate and then asserts each binary exists — so the suite runs against genuinely compiled artifacts instead of skipping or failing. Placement verified by parsing the YAML and asserting the step resolves under `jobs.build`, not by reading the diff.
 
 Note the contrast with `test_core_cert.sh`, which belongs in `packaging-gates`: it exits 77 before touching any binary when the model archive is absent, so it never needs the build.
+
+---
+
+# G2 latency attempt — no number produced, two blockers, one product finding
+
+### F24 — `VerifyEngine` could not be constructed by anything but the daemon (FIXED)
+
+This supersedes F4, which I had filed as "testability, not a defect". It is a defect: it is the reason the G2 latency gates had never been measured — **the measurement could not build its subject.**
+
+`VerifyEngine::new` called `TemplateStore::open(store_dir, key_path)`, the non-selector variant. That uses `BackendSelector::default()`, whose file backend resolves the root secret to the hardcoded `/var/lib/namtor/root_secret` (`crates/namtor-store/src/crypto.rs:39`) and calls `create_dir_all` on a root-owned directory. An unprivileged process gets `Io(PermissionDenied)` — observed live, with 8 real templates already enrolled off the sensor:
+
+```
+enrolled 8 template(s) (mean detection score 0.652, best 0.769) over 10 armed windows
+panicked: open the throwaway template store: Io(Os { code: 13, kind: PermissionDenied })
+```
+
+The store directory and the sealing key were already parameters; the root secret underneath them was not, and no `LayoutPaths` setting or environment variable moved it. Pre-seeding a legacy `file` blob does not help either — it is unconditionally re-sealed as `file-v2` through `RootSecret` on load (`crypto.rs:152-156`).
+
+Every other consumer already sidesteps this via `open_with_selector` (`manager/store.rs:274`, `dbus.rs:1027`). `VerifyEngine` was the only one that could not.
+
+Fixed by adding `VerifyEngine::new_with_selector`, mirroring `TemplateStore::open_with_selector`. `new` now delegates to it with the default selector, so the daemon path is byte-identical and nothing else changes.
+
+### F25 — the quirks file's AE advice does not hold, and it threatens G2.1
+
+The most substantive finding of the attempt, and it is a product decision rather than a bug.
+
+`quirks/devices/3277-0018.toml` `[exposure]` states:
+
+> *"Do NOT wait for settling: the first pair has the best SNR (217.2), and waiting would add ~1 s to every authentication, putting gate G2.1 at risk. Normalise each differential per pair instead."*
+
+Measured on the same device: the first illuminated frames after the `payload_on` write come back at **mean 254/255 with ~98% of samples clipped at 250+**. YuNet finds nothing in a white rectangle. The firmware AE then decays over ~13 frames into the **60-90/255** band, and detections appear the moment the clipped fraction drops below a couple of percent.
+
+Cost from `payload_on` to the first *usable* frame, measured per armed window: **~555-1260 ms**.
+
+So the first pair is not the best-SNR frame at this working distance — it is saturated and carries no recoverable face. The ~1 s the quirks entry says to avoid is **not avoidable by policy**, and it is already **twice the entire 500 ms G2.1 budget**.
+
+This needs an owner decision, not a code change: the settle has to be paid somewhere, and `AuthPhase::Prepare` is the only sane place — the lifecycle already has a warm phase for exactly this kind of cost. Whoever attempts G2.1 next must state where it is paid and measure from there. Note the quirks `[exposure]` block is also cited as evidence elsewhere; re-measuring it at several working distances before trusting it again would be prudent.
+
+### G2.1 / G2.2 — still WITHHELD, reason replaced
+
+No latency samples were produced (N=0), so no median and no p95. The ledger's stale "no production-path measurement" is replaced by the two blockers above plus the scope note: the intended measurement is the **library `VerifyEngine` path driven from a test process**, not the installed daemon serving a PAM request over its socket (no `SO_PEERCRED`, framing, nonce, backoff, lifecycle or worker supervisor). It would bound the recognition pipeline's own cost, not an end-to-end login time.
+
+The test (`authentication_latency_meets_the_median_and_p95_budgets`) is committed and `#[ignore]`d, with its timed region documented, so the next attempt does not have to re-derive any of this. With F24 fixed, blocker 1 is gone; what remains is a person sitting square to the lens at a distance where YuNet clears 0.6 — run 3's 0.769 shows that position exists.
+
+Incidental, not a gate number: full-pipeline cost was roughly **100-140 ms per illuminated frame** (YuNet + SFace, release build, CPU EP). That excludes store load, frame-pair wait, differential, PAD, matching and z-norm, so it is not a `verify()` latency and must not be quoted as one.
