@@ -27,7 +27,8 @@ use namtor_daemon::dbus::{ManagerService, SystemPolkit};
 use namtor_daemon::dispatch::DaemonDispatcher;
 use namtor_daemon::lifecycle::SystemClock;
 use namtor_daemon::manager::bus::ManagerBusService;
-use namtor_daemon::manager::dbus::{Manager2Service, Manager3Service};
+use namtor_daemon::manager::dbus::{Manager2Service, Manager3EmbedFactory, Manager3Service};
+use namtor_daemon::manager::embed::PipelineEmbedSource;
 use namtor_daemon::manager::store::{ProfileStore, TemplateProfileStore};
 use namtor_daemon::models::{
     hex, resolve_required_specs, ManifestGate, ModelFetcher, ModelManifest, NoFetch,
@@ -242,7 +243,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         0
     });
 
-    let bus_service = start_manager_bus(&store_dir, &key_path);
+    // Enrollment gets its own camera factory: the auth path's factory was
+    // moved into `Daemon` above, and holding one source open across both
+    // would keep the emitter armed between enrollments.
+    let enroll_sources = if std::env::var("NAMTOR_NO_CAMERA").is_ok() {
+        None
+    } else {
+        let configured = std::env::var("NAMTOR_CAMERA_DEV").ok();
+        let yunet = yunet_path.clone();
+        let sface = sface_path.clone();
+        let embed_factory: Manager3EmbedFactory = Box::new(move || {
+            Ok(Box::new(PipelineEmbedSource::load(&yunet, &sface)?)
+                as Box<dyn namtor_daemon::manager::session::EmbedSource>)
+        });
+        Some((
+            live_capture::factory_with_configured(configured),
+            embed_factory,
+        ))
+    };
+
+    let bus_service = start_manager_bus(&store_dir, &key_path, enroll_sources);
 
     let _disconnect_monitor = bus_service.as_ref().and_then(|(bus, svc, svc3)| {
         match bus.monitor_disconnects(svc.clone(), svc3.clone()) {
@@ -303,6 +323,7 @@ type ManagerBusHandle = (
 fn start_manager_bus(
     store_dir: &std::path::Path,
     key_path: &std::path::Path,
+    enroll_sources: Option<(namtor_daemon::daemon::CaptureFactory, Manager3EmbedFactory)>,
 ) -> Option<ManagerBusHandle> {
     let store = match TemplateStore::open(store_dir, key_path) {
         Ok(s) => Arc::new(s),
@@ -324,10 +345,21 @@ fn start_manager_bus(
         pamd_root,
         registry_root,
     ));
-    let svc3 = Arc::new(Manager3Service::new(
-        SystemPolkit::default(),
-        profile_store.clone(),
-    ));
+    // Without these factories `StartEnrollment` creates a session whose
+    // first pump fails with "no capture source for session" — which is what
+    // the GUI enrollment path did before task 3.6.
+    let svc3 = Arc::new(match enroll_sources {
+        Some((capture_factory, embed_factory)) => Manager3Service::new_with_capture(
+            SystemPolkit::default(),
+            profile_store.clone(),
+            capture_factory,
+            embed_factory,
+        ),
+        None => {
+            tracing::warn!("no camera configured; GUI enrollment will capture no frames");
+            Manager3Service::new(SystemPolkit::default(), profile_store.clone())
+        }
+    });
     match ManagerBusService::start_system(svc.clone(), svc2, svc3.clone()) {
         Ok(bus) => Some((bus, svc, svc3)),
         Err(e) => {
