@@ -1774,3 +1774,15 @@ The remaining four still need an owner decision, and each fails for a different 
 - **`test_release_ledger.sh`** — has a write side effect on tracked evidence files, which is presumably why it was never wired up. It needs a read-only mode before it can be a gate.
 
 A certification suite nobody runs implies coverage that does not exist. Either wire each one up or delete it; leaving them is the worst of the three options.
+
+### F23 — `test_supply_chain.sh` leaked temp dirs into a tmpfs `/tmp` until memory ran out (FIXED)
+
+Found the hard way: this session's background processes started being killed for low memory. `/tmp` is a **16 GB tmpfs**, i.e. RAM, and it held **1,020 leftover `/tmp/tmp.*` stage-root directories totalling 8.3 GB**. Available memory was 0.
+
+Cause: `packaging/tests/test_supply_chain.sh:146-147` creates two temp dirs for its determinism check (regenerate the SBOM twice, diff) and had **no cleanup trap** — the only gate in `packaging/tests/` without one. Every other gate already uses either a `TEMP_DIRS` array with `trap cleanup EXIT` (`test_arch_split.sh`) or a direct `trap 'rm -rf ...' EXIT`.
+
+Two per run sounds harmless, but `test_ci_gates.sh` runs every gate once per mutation, so a single meta-gate run leaks ~26 directories, and each is stage-sized (~72 MB). Several meta-gate runs across this session's agents reached 8.3 GB and exhausted the machine.
+
+Fixed with `trap 'rm -rf "$tmp1" "$tmp2"' EXIT`, matching the house pattern. Verified: gate exits 0 and the `/tmp/tmp.*` count is unchanged across a run (leak = 0). The 914 stale stage roots were removed (only directories containing `usr/` or `var/` and older than 5 minutes, so nothing in flight was touched), taking `/tmp` from 13 GB to 3.8 GB and available memory from 0 to 12 GB.
+
+Worth noting for anyone running the gates in a loop locally: this is a developer-machine hazard, not a CI one — a fresh CI runner discards its `/tmp` per job, which is exactly why it was never noticed.

@@ -143,8 +143,15 @@ done
 # ---------------------------------------------------------------------------
 # Gate 7: Deterministic — regenerate twice, compare
 # ---------------------------------------------------------------------------
+# These two are the only temp dirs this gate creates, and until now nothing
+# removed them. The meta-gate (test_ci_gates.sh) invokes every gate once per
+# mutation, so each meta-gate run leaked ~26 stage-sized directories into
+# /tmp. On a tmpfs /tmp that is RAM: a few hundred runs exhausted it and
+# started killing unrelated processes. Clean up on EXIT, like every other
+# gate in this directory already does.
 tmp1=$(mktemp -d)
 tmp2=$(mktemp -d)
+trap 'rm -rf "$tmp1" "$tmp2"' EXIT
 python3 "${SRCDIR}/packaging/generate-sbom.py" --out "$tmp1" >/dev/null 2>&1
 python3 "${SRCDIR}/packaging/generate-sbom.py" --out "$tmp2" >/dev/null 2>&1
 assert "CycloneDX deterministic (two runs identical)" \
