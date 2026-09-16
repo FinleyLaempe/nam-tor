@@ -32,6 +32,7 @@
 //! entry (its `dest`), and all consumers follow automatically — no reference
 //! path is hard-coded in Rust.
 
+pub mod cli_preamble;
 mod install_layout;
 
 pub use install_layout::{
