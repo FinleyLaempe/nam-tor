@@ -469,8 +469,12 @@ fn compute_progress(
         QualityLabel::High => 85,
     };
     let frames_seen = snapshot.frames_captured;
-    let frames_accepted = capture.reservoir_len() as u32;
-    let frames_rejected = frames_seen.saturating_sub(frames_accepted);
+    // Real monotonic counters. `reservoir_len()` is capped at `max_reservoir`,
+    // so deriving accepted from it froze the count once the reservoir filled
+    // and reported every later frame — including frames that evicted a worse
+    // candidate — as rejected.
+    let frames_accepted = snapshot.frames_accepted;
+    let frames_rejected = snapshot.frames_rejected;
     // USA-0b: the capture screen must report the SAME quantity as the review
     // screen. `snapshot.coverage_percent` is reservoir fill, which hits 100%
     // once the bounded reservoir is full no matter how alike the candidates

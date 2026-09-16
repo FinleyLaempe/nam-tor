@@ -65,9 +65,30 @@ impl Candidate {
 /// coverage percent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgressSnapshot {
+    /// Frames pulled from the capture source and structurally validated far
+    /// enough to be judged. Monotonic.
     pub frames_captured: u32,
     pub quality: QualityLabel,
+    /// Reservoir FILL percent (retained candidates / reservoir capacity). This
+    /// is NOT diversity — see [`EnrollmentCapture::diversity_percent`].
     pub coverage_percent: u32,
+    /// Frames admitted to the reservoir, counting those that evicted a worse
+    /// candidate. Monotonic; NOT the reservoir length, which is capped at
+    /// `max_reservoir`.
+    pub frames_accepted: u32,
+    /// Total declined frames: the sum of the four per-reason counters below.
+    /// `frames_captured == frames_accepted + frames_rejected` always holds.
+    pub frames_rejected: u32,
+    /// Declined because no face was detected in the frame.
+    pub rejected_no_face: u32,
+    /// Declined because the reservoir was full and the candidate did not beat
+    /// the worst retained one.
+    pub rejected_below_floor: u32,
+    /// Declined because the frame failed structural validation (torn or
+    /// malformed buffer).
+    pub rejected_torn: u32,
+    /// Declined because the embedder itself failed on the frame.
+    pub rejected_embed_error: u32,
 }
 
 /// Lifecycle phase of an [`EnrollmentCapture`].
@@ -95,7 +116,10 @@ pub struct ReviewSnapshot {
     pub quality_percent: u32,
     /// 0-100 retained-embedding spread percent.
     pub diversity_percent: u32,
-    /// Number of candidates currently held in the reservoir.
+    /// Frames admitted to the reservoir over the whole session, counting
+    /// those that evicted a worse candidate. Monotonic, and the SAME quantity
+    /// the capture screen shows as `frames_accepted` — it is deliberately not
+    /// the reservoir length, which is capped at `max_reservoir`.
     pub frames_accepted: u32,
     /// Snake_case guidance enum value (mapped client-side from the
     /// [`Guidance`] enum, see [`guidance_to_snake_case`]).
@@ -167,6 +191,21 @@ pub struct EnrollmentCapture {
     reservoir: Vec<Candidate>,
     max_reservoir: usize,
     total_seen: u32,
+    /// Frames admitted to the reservoir, incremented on BOTH the admit and the
+    /// evict path in [`Self::offer`]. Monotonic: unlike `reservoir.len()` it
+    /// does not freeze when the reservoir reaches `max_reservoir`.
+    accepted: u32,
+    /// Frames declined because [`EmbedSource::embed`] returned `Ok(None)`,
+    /// i.e. no face was detected. A real, user-actionable reason — this used
+    /// to be a silent drop.
+    rejected_no_face: u32,
+    /// Frames declined because the reservoir was full and the candidate did
+    /// not beat the worst retained candidate.
+    rejected_below_floor: u32,
+    /// Frames declined because the frame failed structural validation.
+    rejected_torn: u32,
+    /// Frames declined because the embedder errored on the frame.
+    rejected_embed_error: u32,
     phase: CapturePhase,
 }
 
@@ -197,6 +236,11 @@ impl EnrollmentCapture {
             reservoir: Vec::with_capacity(max_reservoir),
             max_reservoir,
             total_seen: 0,
+            accepted: 0,
+            rejected_no_face: 0,
+            rejected_below_floor: 0,
+            rejected_torn: 0,
+            rejected_embed_error: 0,
             phase: CapturePhase::Capturing,
         }
     }
@@ -229,6 +273,22 @@ impl EnrollmentCapture {
         self.total_seen
     }
 
+    /// Frames admitted to the reservoir over the session, including those that
+    /// evicted a worse candidate. Monotonic; see [`Self::reservoir_len`] for
+    /// the capped count of candidates currently held.
+    pub fn frames_accepted(&self) -> u32 {
+        self.accepted
+    }
+
+    /// Frames declined, summed across every stated reason. Together with
+    /// [`Self::frames_accepted`] this always equals [`Self::total_seen`].
+    pub fn frames_rejected(&self) -> u32 {
+        self.rejected_no_face
+            .saturating_add(self.rejected_below_floor)
+            .saturating_add(self.rejected_torn)
+            .saturating_add(self.rejected_embed_error)
+    }
+
     /// Pull one frame from the capture source, embed it, offer it to the
     /// reservoir, and return the coarse progress snapshot. Returns
     /// `Ok(None)` when the capture source is exhausted (`Ok(None)` from
@@ -256,13 +316,29 @@ impl EnrollmentCapture {
             }
             Err(e) => return Err(ApiError::State(format!("capture: {e}"))),
         };
-        frame
-            .validate()
-            .map_err(|e| ApiError::State(format!("frame validate: {e}")))?;
+        if let Err(e) = frame.validate() {
+            // A torn/malformed frame was still pulled off the device: count it
+            // as seen AND rejected so `seen == accepted + rejected` holds.
+            self.total_seen += 1;
+            self.rejected_torn += 1;
+            return Err(ApiError::State(format!("frame validate: {e}")));
+        }
         self.total_seen += 1;
-        let (embedding, quality) = match embed.embed(&frame)? {
+        let embedded = match embed.embed(&frame) {
+            Ok(v) => v,
+            Err(e) => {
+                self.rejected_embed_error += 1;
+                return Err(e);
+            }
+        };
+        let (embedding, quality) = match embedded {
             Some(v) => v,
-            None => return Ok(Some(self.snapshot())),
+            None => {
+                // `Ok(None)` means "no face detected" (see `EmbedSource`), a
+                // real user-actionable rejection, not a frame to drop silently.
+                self.rejected_no_face += 1;
+                return Ok(Some(self.snapshot()));
+            }
         };
         let candidate = Candidate {
             embedding,
@@ -351,10 +427,22 @@ impl EnrollmentCapture {
         } else {
             ((self.reservoir.len() as u32 * 100) / self.max_reservoir as u32).min(100)
         };
+        let frames_rejected = self.frames_rejected();
+        debug_assert_eq!(
+            self.total_seen,
+            self.accepted + frames_rejected,
+            "every seen frame must be accepted or rejected for a stated reason"
+        );
         ProgressSnapshot {
             frames_captured: self.total_seen,
             quality: QualityLabel::from_scalar(avg_quality),
             coverage_percent: coverage,
+            frames_accepted: self.accepted,
+            frames_rejected,
+            rejected_no_face: self.rejected_no_face,
+            rejected_below_floor: self.rejected_below_floor,
+            rejected_torn: self.rejected_torn,
+            rejected_embed_error: self.rejected_embed_error,
         }
     }
 
@@ -396,7 +484,8 @@ impl EnrollmentCapture {
         if self.phase != CapturePhase::Stopped {
             return Err(ApiError::State("review requires stopped phase".into()));
         }
-        let frames_accepted = self.reservoir.len() as u32;
+        // Same quantity the capture screen reports under the same label.
+        let frames_accepted = self.accepted;
         let ready_to_save = self.reservoir.len() >= MIN_CANDIDATES;
         let quality_percent = self.avg_quality_percent();
         let diversity_percent = self.diversity_percent();
@@ -469,6 +558,7 @@ impl EnrollmentCapture {
 
     fn offer(&mut self, candidate: Candidate) {
         if self.reservoir.len() < self.max_reservoir {
+            self.accepted += 1;
             self.reservoir.push(candidate);
             return;
         }
@@ -480,10 +570,15 @@ impl EnrollmentCapture {
             .min_by_key(|&(_, s)| s)
             .unwrap_or((0, 0));
         if candidate.score() <= min_score {
+            self.rejected_below_floor += 1;
             let mut dropped = candidate;
             dropped.raw_frame.zeroize();
             dropped.embedding.zeroize();
         } else {
+            // Evicting a worse candidate IS an acceptance: the frame made it
+            // into the retained set. Counting it as a rejection is what made
+            // a 2000-frame session claim 1900 rejected.
+            self.accepted += 1;
             let evicted = std::mem::replace(&mut self.reservoir[min_idx], candidate);
             let mut dropped = evicted;
             dropped.raw_frame.zeroize();
@@ -835,6 +930,146 @@ mod tests {
             snap.quality,
             QualityLabel::Low | QualityLabel::Medium | QualityLabel::High
         ));
+    }
+
+    /// Embedder that reports "no face detected" (`Ok(None)`) for every second
+    /// frame. Exercises the branch that used to drop such frames silently.
+    #[derive(Default)]
+    struct AlternatingNoFace {
+        n: usize,
+    }
+    impl EmbedSource for AlternatingNoFace {
+        fn embed(&mut self, _frame: &Frame) -> Result<Option<(Vec<f32>, u8)>, ApiError> {
+            self.n += 1;
+            if self.n.is_multiple_of(2) {
+                Ok(None)
+            } else {
+                Ok(Some((vec![1.0; 8], 80)))
+            }
+        }
+    }
+
+    fn session_with(
+        frames: Vec<Frame>,
+        embed: Box<dyn EmbedSource>,
+        max_reservoir: usize,
+    ) -> EnrollmentCapture {
+        EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.42".into(),
+            "alice".into(),
+            Some(Box::new(ReplaySource::new(frames))),
+            Some(embed),
+            max_reservoir,
+        )
+    }
+
+    #[test]
+    fn accepted_count_keeps_rising_after_the_reservoir_fills() {
+        // Ascending luminance => strictly non-decreasing quality, so every
+        // frame past the 4th evicts a worse candidate and is genuinely
+        // accepted. Before the fix `frames_accepted` was `reservoir_len()`,
+        // which freezes at the cap and reports every later frame as rejected.
+        let mut s = session_with_frames(12, 4);
+        for _ in 0..12 {
+            s.pump().unwrap();
+        }
+        let snap = s.snapshot();
+        assert_eq!(snap.frames_captured, 12);
+        assert!(
+            snap.frames_accepted > 4,
+            "accepted froze at the reservoir cap: {}",
+            snap.frames_accepted
+        );
+        assert_eq!(
+            snap.frames_captured,
+            snap.frames_accepted + snap.frames_rejected,
+            "every seen frame is either accepted or rejected for a stated reason"
+        );
+    }
+
+    #[test]
+    fn no_face_frames_are_counted_not_silently_dropped() {
+        let frames: Vec<Frame> = (0..10).map(|_| grey_frame(130, 8, 8)).collect();
+        let mut s = session_with(frames, Box::new(AlternatingNoFace::default()), 100);
+        for _ in 0..10 {
+            s.pump().unwrap();
+        }
+        let snap = s.snapshot();
+        assert_eq!(snap.frames_captured, 10);
+        assert_eq!(snap.rejected_no_face, 5, "no-face frames must be counted");
+        assert_eq!(snap.frames_accepted, 5);
+        assert_eq!(snap.frames_rejected, 5);
+        assert_eq!(
+            snap.frames_captured,
+            snap.frames_accepted + snap.frames_rejected
+        );
+    }
+
+    #[test]
+    fn frames_below_the_retained_floor_are_counted_as_such() {
+        // Descending luminance away from the ideal => descending quality, so
+        // once the reservoir is full nothing beats the worst retained
+        // candidate and every later frame is genuinely rejected.
+        let frames: Vec<Frame> = (0..10)
+            .map(|i| grey_frame(130 - (i as u8 * 10), 8, 8))
+            .collect();
+        let mut s = session_with(frames, Box::new(MockEmbedSource::new(8)), 3);
+        for _ in 0..10 {
+            s.pump().unwrap();
+        }
+        let snap = s.snapshot();
+        assert_eq!(snap.frames_captured, 10);
+        assert_eq!(
+            snap.frames_accepted, 3,
+            "only the first three were admitted"
+        );
+        assert_eq!(snap.rejected_below_floor, 7);
+        assert_eq!(snap.rejected_no_face, 0);
+        assert_eq!(
+            snap.frames_captured,
+            snap.frames_accepted + snap.frames_rejected
+        );
+    }
+
+    #[test]
+    fn counters_survive_a_stop_resume_cycle() {
+        let mut s = session_with_frames(10, 100);
+        for _ in 0..4 {
+            s.pump().unwrap();
+        }
+        s.stop().unwrap();
+        let mid = s.snapshot();
+        s.resume().unwrap();
+        for _ in 0..4 {
+            s.pump().unwrap();
+        }
+        let end = s.snapshot();
+        assert_eq!(mid.frames_accepted, 4);
+        assert_eq!(
+            end.frames_accepted, 8,
+            "counters are monotonic across resume"
+        );
+        assert_eq!(
+            end.frames_captured,
+            end.frames_accepted + end.frames_rejected
+        );
+    }
+
+    #[test]
+    fn review_reports_the_same_accepted_count_as_progress() {
+        let mut s = session_with_frames(12, 4);
+        for _ in 0..12 {
+            s.pump().unwrap();
+        }
+        let snap = s.snapshot();
+        s.stop().unwrap();
+        let review = s.review_snapshot().unwrap();
+        assert_eq!(
+            review.frames_accepted, snap.frames_accepted,
+            "capture screen and review screen disagree under the same label"
+        );
     }
 
     #[test]
