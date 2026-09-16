@@ -3,25 +3,26 @@
 # Test matrix for Task 20: Arch split-package PKGBUILD structure.
 #
 # Acceptance criteria (from the task spec):
-#   (a) PKGBUILD uses pkgbase=namtor with three pkgname entries
-#       (namtor, namtor-gnome, namtor-kde).
-#   (b) makepkg builds three packages from one PKGBUILD.
+#   (a) PKGBUILD uses pkgbase=namtor with two pkgname entries
+#       (namtor, namtor-gnome).
+#   (b) makepkg builds two packages from one PKGBUILD.
 #   (c) Core package owns: daemon, worker, CLI, PAM module, systemd units,
 #       sysusers, tmpfiles, D-Bus, polkit, manifests, models, licences,
 #       lifecycle helper, SBOM. Depends on onnxruntime/pam/systemd/gcc-libs
 #       only — NO gtk4/libadwaita/qt6/kde runtime deps.
-#   (d) GNOME package owns: enroll-wizard binary, .desktop, .metainfo.xml,
+#   (d) Desktop package owns: enroll-wizard binary, .desktop, .metainfo.xml,
 #       .svg. Depends on namtor=$pkgver (exact) + gtk4 + libadwaita. NO
 #       Qt/KDE deps.
-#   (e) KDE package owns: KCM .desktop, .metainfo.xml, .svg + CMake QML
-#       module. Depends on namtor=$pkgver (exact) + qt6-base + kirigami +
-#       kcoreaddons. NO GTK/libadwaita deps.
+#   (e) The desktop package obsoletes the removed namtor-kde package via
+#       replaces/conflicts. Without that, a leftover namtor-kde keeps an
+#       unsatisfiable depends=("namtor=$pkgver") and pacman refuses to
+#       upgrade the core package at all.
 #   (f) All sha256sums pinned (no SKIP in release recipe).
 #   (g) Uses lifecycle helper for install/upgrade/remove hooks (core only).
 #   (h) Desktop packages have no install hooks.
 #   (i) No file conflicts between packages (disjoint dest sets).
-#   (j) Core headless: works without GNOME or KDE installed.
-#   (k) PKGBUILD syntax valid; makepkg --printsrcinfo produces 3 packages.
+#   (j) Core headless: works without the desktop package installed.
+#   (k) PKGBUILD syntax valid; makepkg --printsrcinfo produces 2 packages.
 #
 # Usage: bash packaging/tests/test_arch_split.sh
 # Exit code: 0 if all tests pass, 1 otherwise.
@@ -131,9 +132,9 @@ else
     not_ok "PKGBUILD fails bash -n syntax check"
 fi
 
-# --- (a) pkgbase + three pkgname entries ------------------------------------
+# --- (a) pkgbase + two pkgname entries --------------------------------------
 
-echo "--- (a) pkgbase=namtor + three pkgname entries ---"
+echo "--- (a) pkgbase=namtor + two pkgname entries ---"
 
 pb_output="$(source_pkgbuild)"
 pkgbase_val="$(printf '%s\n' "$pb_output" | awk -F= '/^pkgbase=/{print $2}')"
@@ -145,26 +146,26 @@ fi
 
 pkgname_entries="$(printf '%s\n' "$pb_output" | awk -F= '/^pkgname_entry=/{print $2}')"
 pkgname_count="$(printf '%s\n' "$pb_output" | awk -F= '/^pkgname_count=/{print $2}')"
-if [[ "$pkgname_count" == "3" ]]; then
-    ok "pkgname has exactly 3 entries"
+if [[ "$pkgname_count" == "2" ]]; then
+    ok "pkgname has exactly 2 entries"
 else
-    not_ok "pkgname has $pkgname_count entries (expected 3)"
+    not_ok "pkgname has $pkgname_count entries (expected 2)"
 fi
 
-expected_pkgnames="namtor namtor-gnome namtor-kde"
+expected_pkgnames="namtor namtor-gnome"
 actual_pkgnames="$(printf '%s\n' "$pkgname_entries" | sort | tr '\n' ' ' | sed 's/ $//')"
 expected_sorted="$(printf '%s\n' "$expected_pkgnames" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')"
 if [[ "$actual_pkgnames" == "$expected_sorted" ]]; then
-    ok "pkgname entries are: namtor, namtor-gnome, namtor-kde"
+    ok "pkgname entries are: namtor, namtor-gnome"
 else
     not_ok "pkgname entries are '$actual_pkgnames' (expected '$expected_sorted')"
 fi
 
-# --- (b) Three package functions exist --------------------------------------
+# --- (b) Two package functions exist ----------------------------------------
 
-echo "--- (b) three package functions exist ---"
+echo "--- (b) two package functions exist ---"
 
-for func in package_namtor package_namtor-gnome package_namtor-kde; do
+for func in package_namtor package_namtor-gnome; do
     if grep -q "^${func}()" "$PKGBUILD"; then
         ok "function $func exists"
     else
@@ -256,50 +257,41 @@ else
     not_ok "gnome does not stage --package gnome"
 fi
 
-# --- (e) KDE package: deps + content ----------------------------------------
+# --- (e) Obsoletion of the removed namtor-kde package -----------------------
 
-echo "--- (e) kde package deps + content ---"
+echo "--- (e) desktop package obsoletes namtor-kde ---"
 
-kde_body="$(extract_func 'package_namtor-kde' "$PKGBUILD")"
-
-# KDE depends on namtor=exact version.
-if printf '%s\n' "$kde_body" | grep -qF 'namtor=$pkgver'; then
-    ok "kde depends on namtor=\$pkgver (exact version)"
+# The Plasma KCM package is gone. It is NOT enough to stop building it:
+# namtor-kde declared depends=("namtor=$pkgver"), so a machine that still
+# has it installed has an unsatisfiable dependency and pacman aborts the
+# WHOLE transaction rather than upgrading the core package. The surviving
+# desktop package must therefore replace and conflict with it.
+if printf '%s\n' "$gnome_body" | grep -qE "replaces=\(.*namtor-kde"; then
+    ok "desktop package replaces=('namtor-kde') (unblocks core upgrades)"
 else
-    not_ok "kde does not depend on namtor=\$pkgver (exact version)"
+    not_ok "desktop package does not replace namtor-kde — a leftover namtor-kde will block core upgrades"
+fi
+if printf '%s\n' "$gnome_body" | grep -qE "conflicts=\(.*namtor-kde"; then
+    ok "desktop package conflicts=('namtor-kde')"
+else
+    not_ok "desktop package does not conflict with namtor-kde"
 fi
 
-# KDE depends on qt6-base + kirigami + kcoreaddons.
-for dep in qt6-base kirigami kcoreaddons; do
-    if printf '%s\n' "$kde_body" | grep -qE "['\"]${dep}['\"]| ${dep}['\" ]"; then
-        ok "kde depends on $dep"
+# The KCM package function must not come back by accident.
+if grep -q '^package_namtor-kde()' "$PKGBUILD"; then
+    not_ok "package_namtor-kde() is back (the Plasma KCM was removed)"
+else
+    ok "no package_namtor-kde() function (KCM removed)"
+fi
+
+# No Qt/KF6/CMake makedepends should remain at the pkgbase level.
+for nodep in cmake qt6-base kirigami kcoreaddons extra-cmake-modules; do
+    if grep -qE "^\s*'${nodep}'" "$PKGBUILD"; then
+        not_ok "makedepends still carries '$nodep' (no Qt/KF6/CMake build left)"
     else
-        not_ok "kde missing dependency: $dep"
+        ok "makedepends has no '$nodep'"
     fi
 done
-
-# KDE must NOT depend on GTK/libadwaita.
-for nodep in gtk4 libadwaita; do
-    if printf '%s\n' "$kde_body" | grep -qE "depends=.*['\"]${nodep}['\"]|depends=.* ${nodep}['\" ]"; then
-        not_ok "kde depends on $nodep (should not — GTK dep in kde)"
-    else
-        ok "kde does not depend on $nodep"
-    fi
-done
-
-# KDE stages --package kde.
-if printf '%s\n' "$kde_body" | grep -q -- '--package kde'; then
-    ok "kde stages --package kde"
-else
-    not_ok "kde does not stage --package kde"
-fi
-
-# KDE runs cmake --install for the QML module.
-if printf '%s\n' "$kde_body" | grep -q 'cmake.*--install'; then
-    ok "kde runs cmake --install for QML module"
-else
-    not_ok "kde does not run cmake --install"
-fi
 
 # --- (f) All sha256sums pinned (no SKIP) -------------------------------------
 
@@ -352,9 +344,8 @@ fi
 
 echo "--- (h) desktop packages have no install hooks ---"
 
-# Neither gnome nor kde package functions should set install= to a non-empty
-# value.
-for body_name in gnome_body kde_body; do
+# The desktop package function must not set install= to a non-empty value.
+for body_name in gnome_body; do
     body="${!body_name}"
     install_line="$(printf '%s\n' "$body" | grep -E '^\s*install=' || true)"
     if [[ -z "$install_line" ]]; then
@@ -367,7 +358,7 @@ for body_name in gnome_body kde_body; do
 done
 
 # No namtor-gnome.install or namtor-kde.install files should exist (desktop
-# packages have no hooks).
+# packages have no hooks; namtor-kde is gone entirely).
 for f in namtor-gnome.install namtor-kde.install; do
     if [[ -f "$ARCH_DIR/$f" ]]; then
         not_ok "$f exists (desktop packages should have no install hook)"
@@ -381,7 +372,7 @@ done
 echo "--- (i) no file conflicts between packages ---"
 
 # Stage each package into separate temp dirs and check for overlapping paths.
-# This uses stage.sh --package core|gnome|kde against fake empty destdirs,
+# This uses stage.sh --package core|gnome against fake empty destdirs,
 # then collects the file lists and checks for intersections.
 # We need the built binaries to exist for stage.sh to copy them; since we
 # may not have a release build, we create placeholder files for the sources
@@ -411,9 +402,7 @@ for f in \
     packaging/dbus-1/org.namtor.Manager.conf \
     packaging/polkit-1/actions/org.namtor.policy \
     packaging/applications/org.namtor.Wizard.desktop \
-    packaging/applications/org.namtor.kcm.desktop \
     packaging/metainfo/org.namtor.Wizard.metainfo.xml \
-    packaging/metainfo/org.namtor.kcm.metainfo.xml \
     packaging/model-manifest.toml \
     packaging/pam-install.sh \
     packaging/pam-uninstall.sh \
@@ -429,7 +418,7 @@ for f in \
     printf 'placeholder' > "$stage_root/$f"
 done
 # Icons
-for icon in org.namtor.Wizard.svg org.namtor.kcm.svg; do
+for icon in org.namtor.Wizard.svg; do
     mkdir -p "$stage_root/packaging/icons/hicolor/scalable/apps"
     printf 'placeholder' > "$stage_root/packaging/icons/hicolor/scalable/apps/$icon"
 done
@@ -438,11 +427,9 @@ done
 conflict_found=0
 paths_core=""
 paths_gnome=""
-paths_kde=""
 
 dest_core="$(mk_temp_dir)"
 dest_gnome="$(mk_temp_dir)"
-dest_kde="$(mk_temp_dir)"
 
 if bash "$STAGE_SH" "$dest_core" "$stage_root" --package core >/dev/null 2>&1; then
     paths_core="$(cd "$dest_core" && find . -type f -o -type l | sed 's|^\./||' | sort)"
@@ -456,10 +443,13 @@ else
     not_ok "stage.sh --package gnome failed"
 fi
 
-if bash "$STAGE_SH" "$dest_kde" "$stage_root" --package kde >/dev/null 2>&1; then
-    paths_kde="$(cd "$dest_kde" && find . -type f -o -type l | sed 's|^\./||' | sort)"
+# `--package kde` must now be REJECTED: the value is gone from the filter
+# allowlist, so a stale build recipe asking for it fails loudly instead of
+# silently staging nothing.
+if bash "$STAGE_SH" "$(mk_temp_dir)" "$stage_root" --package kde >/dev/null 2>&1; then
+    not_ok "stage.sh still accepts --package kde (should be rejected)"
 else
-    not_ok "stage.sh --package kde failed"
+    ok "stage.sh rejects --package kde (package removed)"
 fi
 
 # Check core vs gnome overlap.
@@ -473,29 +463,7 @@ if [[ -n "$paths_core" && -n "$paths_gnome" ]]; then
     fi
 fi
 
-# Check core vs kde overlap.
-if [[ -n "$paths_core" && -n "$paths_kde" ]]; then
-    overlap_ck="$(comm -12 <(printf '%s\n' "$paths_core") <(printf '%s\n' "$paths_kde"))"
-    if [[ -z "$overlap_ck" ]]; then
-        ok "no file conflicts between core and kde"
-    else
-        not_ok "file conflicts between core and kde: $(printf '%s' "$overlap_ck" | tr '\n' ' ')"
-        conflict_found=1
-    fi
-fi
-
-# Check gnome vs kde overlap.
-if [[ -n "$paths_gnome" && -n "$paths_kde" ]]; then
-    overlap_gk="$(comm -12 <(printf '%s\n' "$paths_gnome") <(printf '%s\n' "$paths_kde"))"
-    if [[ -z "$overlap_gk" ]]; then
-        ok "no file conflicts between gnome and kde"
-    else
-        not_ok "file conflicts between gnome and kde: $(printf '%s' "$overlap_gk" | tr '\n' ' ')"
-        conflict_found=1
-    fi
-fi
-
-# --- (j) Core headless: works without GNOME or KDE ---------------------------
+# --- (j) Core headless: works without the desktop package --------------------
 
 echo "--- (j) core headless (no desktop deps) ---"
 
@@ -542,10 +510,10 @@ else
     # pkgbase and pkgname are at column 0; other fields are tab-indented.
     srcinfo_pkgnames="$(printf '%s\n' "$srcinfo_output" | awk '/^pkgname = /{print $3}')"
     srcinfo_count="$(printf '%s\n' "$srcinfo_pkgnames" | grep -c . || true)"
-    if [[ "$srcinfo_count" == "3" ]]; then
-        ok "makepkg --printsrcinfo produces 3 pkgname entries"
+    if [[ "$srcinfo_count" == "2" ]]; then
+        ok "makepkg --printsrcinfo produces 2 pkgname entries"
     else
-        not_ok "makepkg --printsrcinfo produces $srcinfo_count pkgname entries (expected 3)"
+        not_ok "makepkg --printsrcinfo produces $srcinfo_count pkgname entries (expected 2)"
     fi
 
     # Verify pkgbase in srcinfo.
@@ -556,7 +524,7 @@ else
     fi
 
     # Verify each package has its own depends in the srcinfo.
-    for pkg in namtor namtor-gnome namtor-kde; do
+    for pkg in namtor namtor-gnome; do
         if printf '%s\n' "$srcinfo_output" | grep -q "^pkgname = ${pkg}$"; then
             ok "makepkg --printsrcinfo includes pkgname = $pkg"
         else

@@ -1,37 +1,38 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-only
-# Certification test for Task 30: GNOME and KDE Settings enrollment and
-# PAM opt-in.
+# Certification test for Task 30: desktop Settings enrollment and PAM
+# opt-in.
+#
+# Originally this covered two UIs. The Plasma KCM (`crates/namtor-kde`) was
+# removed when the project consolidated on one desktop-neutral GTK4 UI, so
+# every KDE-specific branch below is gone; what remains is a check that no
+# KDE payload has crept back into the packaging.
 #
 # Acceptance criteria (from the task spec):
-#   (a) GNOME settings app binary exists and is staged (namtor-enroll-wizard).
-#   (b) KDE KCM QML module files exist and are staged (libnamtorqml.so,
-#       main.qml, metadata.json).
-#   (c) Both UIs use the SYSTEM bus (not the session bus) — grep verified.
-#   (d) GNOME presenter flow: start enrollment -> progress -> review ->
+#   (a) Settings app binary exists and is staged (namtor-enroll-wizard).
+#   (b) No KDE/Qt payload remains anywhere in the packaging.
+#   (c) The UI uses the SYSTEM bus (not the session bus) — grep verified.
+#   (d) Presenter flow: start enrollment -> progress -> review ->
 #       commit -> profile list refresh (covered by namtor-gnome unit tests).
-#   (e) KDE bridge flow: start enrollment -> progress -> review -> commit ->
-#       profile list refresh (covered by namtor-kde unit tests).
+#   (e) (removed with the KCM)
 #   (f) PAM service toggle: list -> enable -> verify -> disable -> verify
-#       (covered by namtor-gnome + namtor-kde unit tests).
+#       (covered by namtor-gnome unit tests).
 #   (g) High-impact confirmation dialog for login/sudo/su/polkit services
-#       (HIGH_IMPACT_WARNING constant in GNOME, highImpactWarning() in KDE).
+#       (HIGH_IMPACT_WARNING constant).
 #   (h) Privacy scan passes on all UI-facing data (no thresholds, scores,
 #       embeddings, paths, gate names).
-#   (i) Accessibility: GNOME Switch has tooltip_text; KDE Switch has
-#       focusPolicy Qt.StrongFocus.
+#   (i) Accessibility: Switch has tooltip_text.
 #   (j) No-TPM sessions show persistent software-key warning.
 #   (k) Password fallback always available (PAM `sufficient` control).
 #   (l) Failure matrix: daemon down, camera missing, polkit denied,
 #       PAM rollback, stale signal.
 #
-# CI cannot run clean GNOME or Plasma sessions. The CI-testable surface is
+# CI cannot run a clean desktop session. The CI-testable surface is
 # therefore:
 #   - structural checks (binaries staged, system-bus usage, install-manifest
 #     entries, accessibility anchors, warning constants, PAM sufficient
 #     control);
-#   - existing unit tests in namtor-gnome (29 presenter + 12 privacy) and
-#     namtor-kde (18 + 3 abi-smoke).
+#   - existing unit tests in namtor-gnome (29 presenter + 12 privacy).
 # Real enrollment with a camera, real PAM toggle against /etc/pam.d, and
 # real authentication against a running PAM stack are human-gated on a
 # desktop VM and recorded as WITHHELD in the evidence files.
@@ -47,7 +48,6 @@ REPO_ROOT="$(cd "$PACKAGING_DIR/.." && pwd)"
 EVIDENCE_DIR="$REPO_ROOT/docs/evidence/public-release"
 
 GNOME_CRATE="$REPO_ROOT/crates/namtor-gnome"
-KDE_CRATE="$REPO_ROOT/crates/namtor-kde"
 MANIFEST="$PACKAGING_DIR/install-manifest.toml"
 STAGE_SH="$PACKAGING_DIR/stage.sh"
 PAM_INSTALL="$PACKAGING_DIR/pam-install.sh"
@@ -125,61 +125,59 @@ if [[ ! -f "$GNOME_BIN_PATH" ]] && [[ -f "$REPO_ROOT/target/debug/namtor-enroll-
 fi
 
 # ---------------------------------------------------------------------------
-# (b) KDE KCM QML module files staged
+# (b) No KDE/Qt payload anywhere
 # ---------------------------------------------------------------------------
 echo ""
-echo "[b] KDE KCM QML module files staged"
-check_file "KDE main.qml source" "$KDE_CRATE/qml/main.qml"
-check_file "KDE metadata.json source" "$KDE_CRATE/metadata.json"
-check_file "KDE CMakeLists.txt" "$KDE_CRATE/CMakeLists.txt"
-check_file "KDE C++ bridge source" "$KDE_CRATE/src/cpp/namtor_kcm.cpp"
-# CMake-built artifact: libnamtorqml.so under build-kde/
-KDE_SO="$KDE_CRATE/build-kde/libnamtorqml.so"
-check_file "libnamtorqml.so (CMake build artifact)" "$KDE_SO"
-# Rust cdylib that the QML module links against.
-check_file "libnamtor_kde.so (Rust cdylib, debug)" "$REPO_ROOT/target/debug/libnamtor_kde.so"
-# CMake install rules must declare libnamtorqml + main.qml + metadata.json.
-if grep -q 'install(TARGETS namtorqml' "$KDE_CRATE/CMakeLists.txt" \
-   && grep -q 'install(FILES qml/main.qml' "$KDE_CRATE/CMakeLists.txt" \
-   && grep -q 'install(FILES metadata.json' "$KDE_CRATE/CMakeLists.txt"; then
-    ok "CMakeLists.txt install rules cover libnamtorqml + main.qml + metadata.json"
+echo "[b] No KDE/Qt payload remains"
+if [[ -e "$REPO_ROOT/crates/namtor-kde" ]]; then
+    not_ok "crates/namtor-kde is back (the Plasma KCM was removed)"
 else
-    not_ok "CMakeLists.txt missing one of: install TARGETS namtorqml / main.qml / metadata.json"
+    ok "crates/namtor-kde removed"
 fi
-# install-manifest must declare the static KDE desktop-integration files
-# owned by package=kde (desktop, metainfo, icon).
-KDE_DESKTOP_COUNT=$(grep -c 'package = "kde"' "$MANIFEST" 2>/dev/null || echo 0)
-if [[ "$KDE_DESKTOP_COUNT" -ge 3 ]]; then
-    ok "install-manifest has >=3 kde-owned desktop-integration entries (found $KDE_DESKTOP_COUNT)"
+KDE_MANIFEST_COUNT=$(grep -cE '^package = "kde"' "$MANIFEST" 2>/dev/null || true)
+if [[ "${KDE_MANIFEST_COUNT:-0}" -eq 0 ]]; then
+    ok "install-manifest declares no kde-owned entries"
 else
-    not_ok "install-manifest has only $KDE_DESKTOP_COUNT kde entries (expected >=3)"
+    not_ok "install-manifest still has $KDE_MANIFEST_COUNT kde-owned entries"
 fi
+for f in \
+    "$PACKAGING_DIR/applications/org.namtor.kcm.desktop" \
+    "$PACKAGING_DIR/metainfo/org.namtor.kcm.metainfo.xml" \
+    "$PACKAGING_DIR/icons/hicolor/scalable/apps/org.namtor.kcm.svg" \
+    "$PACKAGING_DIR/po/kde"; do
+    if [[ -e "$f" ]]; then
+        not_ok "KDE packaging asset still present: ${f#$REPO_ROOT/}"
+    else
+        ok "KDE packaging asset removed: ${f#$REPO_ROOT/}"
+    fi
+done
 
 # ---------------------------------------------------------------------------
-# (c) Both UIs use the SYSTEM bus, not the session bus
+# (c) The UI uses the SYSTEM bus, not the session bus
 # ---------------------------------------------------------------------------
 echo ""
 echo "[c] System-bus usage (sessionBus must be 0)"
-SESSION_BUS_GNOME=$(count_matches 'Connection::session' \
-    "$GNOME_CRATE/src/dbus_client.rs")
-SESSION_BUS_KDE_BRIDGE=$(count_matches 'Connection::session' \
-    "$KDE_CRATE/src/bridge.rs")
-SESSION_BUS_KDE_CPP=$(count_matches 'sessionBus' \
-    "$KDE_CRATE/src/cpp/namtor_kcm.cpp")
-TOTAL_SESSION=$((SESSION_BUS_GNOME + SESSION_BUS_KDE_BRIDGE + SESSION_BUS_KDE_CPP))
-if [[ "$TOTAL_SESSION" -eq 0 ]]; then
-    ok "no Connection::session/sessionBus references in GNOME or KDE clients (total=$TOTAL_SESSION)"
+# The UI crate's dbus_client.rs is a thin re-export; the live connection is
+# opened in the shared namtor-client crate, so check both.
+UI_DBUS_SOURCES=(
+    "$GNOME_CRATE/src/dbus_client.rs"
+    "$REPO_ROOT/crates/namtor-client/src/dbus_client.rs"
+)
+SESSION_BUS_UI=0
+SYSTEM_BUS_UI=0
+for f in "${UI_DBUS_SOURCES[@]}"; do
+    SESSION_BUS_UI=$((SESSION_BUS_UI + $(count_matches 'Connection::session' "$f")))
+    SYSTEM_BUS_UI=$((SYSTEM_BUS_UI + $(count_matches 'Connection::system' "$f")))
+done
+if [[ "$SESSION_BUS_UI" -eq 0 ]]; then
+    ok "no Connection::session references in the UI D-Bus client"
 else
-    not_ok "session-bus references found: gnome=$SESSION_BUS_GNOME kde_bridge=$SESSION_BUS_KDE_BRIDGE kde_cpp=$SESSION_BUS_KDE_CPP"
+    not_ok "session-bus references found in the UI D-Bus client: $SESSION_BUS_UI"
 fi
-
-SYSTEM_BUS_GNOME=$(count_matches 'Connection::system' "$GNOME_CRATE/src/dbus_client.rs")
-SYSTEM_BUS_KDE_BRIDGE=$(count_matches 'Connection::system' "$KDE_CRATE/src/bridge.rs")
-SYSTEM_BUS_KDE_CPP=$(count_matches 'systemBus' "$KDE_CRATE/src/cpp/namtor_kcm.cpp")
-if [[ "$SYSTEM_BUS_GNOME" -ge 1 ]] && [[ "$SYSTEM_BUS_KDE_BRIDGE" -ge 1 ]] && [[ "$SYSTEM_BUS_KDE_CPP" -ge 1 ]]; then
-    ok "system-bus references present in GNOME ($SYSTEM_BUS_GNOME), KDE bridge ($SYSTEM_BUS_KDE_BRIDGE), KDE C++ ($SYSTEM_BUS_KDE_CPP)"
+if [[ "$SYSTEM_BUS_UI" -ge 1 ]]; then
+    ok "system-bus references present in the UI D-Bus client ($SYSTEM_BUS_UI)"
 else
-    not_ok "missing system-bus reference: gnome=$SYSTEM_BUS_GNOME kde_bridge=$SYSTEM_BUS_KDE_BRIDGE kde_cpp=$SYSTEM_BUS_KDE_CPP"
+    not_ok "missing system-bus reference in the UI D-Bus client"
 fi
 
 # ---------------------------------------------------------------------------
@@ -213,44 +211,7 @@ for t in "${FLOW_TESTS[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
-# (e) KDE bridge flow covered by unit tests
-# ---------------------------------------------------------------------------
-echo ""
-echo "[e] KDE bridge flow unit tests"
-# Capture full output first to avoid SIGPIPE when grep exits early (pipefail
-# would otherwise turn a SIGPIPE on the cargo side into a pipeline failure).
-KDE_OUT=$(cargo test -p namtor-kde --no-fail-fast 2>&1)
-if echo "$KDE_OUT" | grep -qE 'test result: ok\. ([0-9]+) passed; 0 failed'; then
-    KDE_PASSED=$(echo "$KDE_OUT" | grep -E 'test result:' | head -1 \
-                 | sed -E 's/.*ok\. ([0-9]+) passed.*/\1/')
-    ok "namtor-kde tests pass ($KDE_PASSED passed in lib.rs)"
-else
-    not_ok "namtor-kde tests failed"
-    KDE_PASSED=0
-fi
-KDE_FLOW_TESTS=(
-    "happy_path"
-    "enrollment_signals_round_trip"
-    "review_returns_coarse_quality"
-    "profile_and_status_changed_signals_round_trip"
-)
-for t in "${KDE_FLOW_TESTS[@]}"; do
-    if echo "$KDE_OUT" | grep -qE "^test tests::${t} \.\.\. ok"; then
-        ok "KDE flow test present: $t"
-    else
-        not_ok "KDE flow test missing/failed: $t"
-    fi
-done
-# ABI smoke (C ABI version + bus name + object path) must pass.
-KDE_ABI_OUT=$(cargo test -p namtor-kde --test abi_smoke --no-fail-fast 2>&1)
-if echo "$KDE_ABI_OUT" | grep -qE 'test result: ok\. 3 passed'; then
-    ok "KDE abi_smoke tests pass (3 passed)"
-else
-    not_ok "KDE abi_smoke tests failed"
-fi
-
-# ---------------------------------------------------------------------------
-# (f) PAM service toggle flow exists in both UIs
+# (f) PAM service toggle flow exists in the UI
 # ---------------------------------------------------------------------------
 echo ""
 echo "[f] PAM service toggle flow (list -> enable -> verify -> disable)"
@@ -266,19 +227,6 @@ if grep -q 'fn request_pam_toggle' "$GNOME_CRATE/src/presenter.rs" \
     ok "GNOME presenter has request_pam_toggle + confirm_pam_toggle"
 else
     not_ok "GNOME presenter missing PAM toggle methods"
-fi
-# KDE: Q_INVOKABLE listPamServices + setPamServiceEnabled in C++ bridge.
-if grep -q 'void NamtorKcm::listPamServices' "$KDE_CRATE/src/cpp/namtor_kcm.cpp" \
-   && grep -q 'void NamtorKcm::setPamServiceEnabled' "$KDE_CRATE/src/cpp/namtor_kcm.cpp"; then
-    ok "KDE C++ bridge has Q_INVOKABLE listPamServices + setPamServiceEnabled"
-else
-    not_ok "KDE C++ bridge missing PAM v2 methods"
-fi
-# QML must call setPamServiceEnabled.
-if grep -q 'setPamServiceEnabled' "$KDE_CRATE/qml/main.qml"; then
-    ok "KDE QML calls setPamServiceEnabled"
-else
-    not_ok "KDE QML does not call setPamServiceEnabled"
 fi
 # Unit tests covering toggle + revert + unsupported refusal.
 PAM_TESTS_GNOME=(
@@ -320,21 +268,6 @@ for t in "high_impact_pam_service_requires_confirmation" \
         not_ok "GNOME high-impact test missing/failed: $t"
     fi
 done
-# KDE: highImpactWarning() Q_INVOKABLE + QML confirm dialog.
-if grep -q 'QString NamtorKcm::highImpactWarning' "$KDE_CRATE/src/cpp/namtor_kcm.cpp" \
-   && grep -q 'FAR/FRR and real-attack PAD gates remain unmeasured' \
-        "$KDE_CRATE/src/cpp/namtor_kcm.cpp"; then
-    ok "KDE highImpactWarning() present and mentions FAR/FRR + PAD"
-else
-    not_ok "KDE highImpactWarning() missing or wrong text"
-fi
-if grep -q 'pamConfirmDialog' "$KDE_CRATE/qml/main.qml" \
-   && grep -q 'highImpactWarning' "$KDE_CRATE/qml/main.qml"; then
-    ok "KDE QML has pamConfirmDialog bound to highImpactWarning"
-else
-    not_ok "KDE QML missing pamConfirmDialog / highImpactWarning binding"
-fi
-
 # ---------------------------------------------------------------------------
 # (h) Privacy scan passes
 # ---------------------------------------------------------------------------
@@ -345,13 +278,6 @@ if cargo test -p namtor-gnome --test privacy_scan --no-fail-fast 2>&1 \
     ok "namtor-gnome privacy_scan tests pass (12 passed)"
 else
     not_ok "namtor-gnome privacy_scan tests failed"
-fi
-# KDE has its own privacy scan test in the lib suite.
-KDE_PRIV_OUT=$(cargo test -p namtor-kde privacy_scan_no_biometric_data --no-fail-fast 2>&1)
-if echo "$KDE_PRIV_OUT" | grep -qE '^test tests::privacy_scan_no_biometric_data \.\.\. ok'; then
-    ok "namtor-kde privacy_scan_no_biometric_data test passes"
-else
-    not_ok "namtor-kde privacy_scan_no_biometric_data test failed"
 fi
 # Forbidden substrings list is non-empty (the privacy scanner itself is gated).
 if grep -q 'forbidden_substrings_list_is_nonempty' "$GNOME_CRATE/tests/privacy_scan.rs"; then
@@ -388,20 +314,6 @@ if [[ "$GNOME_ACC_ROLES" -ge 10 ]]; then
 else
     not_ok "GNOME assigns AccessibleRole in only $GNOME_ACC_ROLES places (<10)"
 fi
-# KDE: PAM Switch has focusPolicy Qt.StrongFocus.
-if grep -q 'focusPolicy: Qt.StrongFocus' "$KDE_CRATE/qml/main.qml"; then
-    ok "KDE QML Switch has focusPolicy Qt.StrongFocus"
-else
-    not_ok "KDE QML Switch missing focusPolicy Qt.StrongFocus"
-fi
-# KDE: Accessible.name/description assigned across the QML.
-KDE_ACC=$(grep -cE 'Accessible\.(name|role|description)' "$KDE_CRATE/qml/main.qml" 2>/dev/null || echo 0)
-if [[ "$KDE_ACC" -ge 20 ]]; then
-    ok "KDE QML has $KDE_ACC Accessible.* annotations (>=20)"
-else
-    not_ok "KDE QML has only $KDE_ACC Accessible.* annotations (<20)"
-fi
-
 # ---------------------------------------------------------------------------
 # (j) No-TPM sessions show persistent software-key warning
 # ---------------------------------------------------------------------------
@@ -422,14 +334,6 @@ if cargo test -p namtor-gnome --test presenter_flow software_fallback_protection
 else
     not_ok "GNOME test software_fallback_protection_surfaced missing/failed"
 fi
-# KDE: protectionHasTpm drives "No TPM2 device — software fallback." label.
-if grep -q 'protectionHasTpm' "$KDE_CRATE/qml/main.qml" \
-   && grep -q 'No TPM2 device' "$KDE_CRATE/qml/main.qml"; then
-    ok "KDE QML protectionHasTpm drives 'No TPM2 device — software fallback.' label"
-else
-    not_ok "KDE QML software-fallback label missing"
-fi
-
 # ---------------------------------------------------------------------------
 # (k) Password fallback always available (PAM sufficient control)
 # ---------------------------------------------------------------------------
@@ -462,10 +366,8 @@ echo ""
 echo "[l] Failure matrix (unit-tested scenarios)"
 # Daemon down.
 GNOME_DAEMON_DOWN=$(cargo test -p namtor-gnome --test presenter_flow daemon_unavailable_shows_error_and_recovery --no-fail-fast 2>&1)
-KDE_DAEMON_DOWN=$(cargo test -p namtor-kde error_daemon_unavailable --no-fail-fast 2>&1)
-if echo "$GNOME_DAEMON_DOWN" | grep -qE '^test daemon_unavailable_shows_error_and_recovery \.\.\. ok' \
-   && echo "$KDE_DAEMON_DOWN" | grep -qE '^test tests::error_daemon_unavailable \.\.\. ok'; then
-    ok "daemon-down failure covered in GNOME + KDE"
+if echo "$GNOME_DAEMON_DOWN" | grep -qE '^test daemon_unavailable_shows_error_and_recovery \.\.\. ok'; then
+    ok "daemon-down failure covered in the UI"
 else
     not_ok "daemon-down failure not covered"
 fi
@@ -489,14 +391,6 @@ if echo "$PAMROLL_OUT" | grep -qE '^test failed_pam_toggle_reverts_to_previous_s
     ok "PAM rollback (failed toggle reverts) covered in GNOME"
 else
     not_ok "PAM rollback not covered"
-fi
-# Stale signal handling (KDE generation-guarded replies).
-KDE_STALE_OUT=$(cargo test -p namtor-kde --no-fail-fast 2>&1)
-if echo "$KDE_STALE_OUT" | grep -qE '^test tests::stale_progress_signal_ignored \.\.\. ok' \
-   && echo "$KDE_STALE_OUT" | grep -qE '^test tests::daemon_restart_old_bridge_errors_new_bridge_works \.\.\. ok'; then
-    ok "stale-signal failure covered in KDE (stale_progress_signal_ignored + daemon_restart)"
-else
-    not_ok "stale-signal failure not covered in KDE"
 fi
 # GNOME reconnect restores state after daemon restart.
 GNOME_RECONNECT=$(cargo test -p namtor-gnome --test presenter_flow reconnect_restores_state --no-fail-fast 2>&1)
@@ -712,8 +606,8 @@ else
     not_ok "Fedora gnome missing exact namtor Requires"
 fi
 gnome_depends_deb=$(awk '/^Package: namtor-gnome$/{f=1;next} f&&/^Depends:/{f=2;next} f==2&&/^[[:space:]]/{gsub(/[[:space:]]/,"");print;next} f==2&&!/^[[:space:]]/{exit}' "$DEBIAN_CONTROL" | tr -d '\n')
-if printf '%s' "$gnome_depends_deb" | grep -q 'namtor(=0.1.0-1)'; then
-    ok "Debian gnome Depends on namtor (= 0.1.0-1) (exact)"
+if printf '%s' "$gnome_depends_deb" | grep -q 'namtor(=0.1.0-2)'; then
+    ok "Debian gnome Depends on namtor (= 0.1.0-2) (exact)"
 else
     not_ok "Debian gnome missing exact namtor Depends"
 fi
@@ -742,9 +636,7 @@ for f in \
     packaging/dbus-1/org.namtor.Manager.conf \
     packaging/polkit-1/actions/org.namtor.policy \
     packaging/applications/org.namtor.Wizard.desktop \
-    packaging/applications/org.namtor.kcm.desktop \
     packaging/metainfo/org.namtor.Wizard.metainfo.xml \
-    packaging/metainfo/org.namtor.kcm.metainfo.xml \
     packaging/model-manifest.toml \
     packaging/pam-install.sh \
     packaging/pam-uninstall.sh \
@@ -759,7 +651,7 @@ for f in \
     mkdir -p "$mutation_root/$(dirname "$f")"
     printf 'placeholder' > "$mutation_root/$f"
 done
-for icon in org.namtor.Wizard.svg org.namtor.kcm.svg; do
+for icon in org.namtor.Wizard.svg; do
     mkdir -p "$mutation_root/packaging/icons/hicolor/scalable/apps"
     printf 'placeholder' > "$mutation_root/packaging/icons/hicolor/scalable/apps/$icon"
 done

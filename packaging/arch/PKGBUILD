@@ -3,7 +3,7 @@
 #
 # Arch Linux SPLIT package for Nam-tor — IR face authentication.
 #
-# pkgbase=namtor builds three packages from one PKGBUILD:
+# pkgbase=namtor builds two packages from one PKGBUILD:
 #
 #   namtor       — core: daemon, worker, CLI, PAM module, systemd units,
 #                  sysusers, tmpfiles, D-Bus, polkit, manifests, models,
@@ -11,13 +11,19 @@
 #                  (no desktop deps).
 #   namtor-gnome — GTK4/libadwaita enrollment wizard + settings. Desktop
 #                  entry, metainfo, icon. Depends on namtor exact version.
-#   namtor-kde   — Plasma 6 KCM QML module + desktop entry, metainfo,
-#                  icon. Depends on namtor exact version.
+#                  Desktop-neutral despite the name; it is the only UI.
+#
+# A third package, namtor-kde (the Plasma 6 KCM), was shipped up to and
+# including 0.1.0-3 and is now gone — the project consolidated on one
+# desktop-neutral GTK4 UI. It is NOT simply dropped: namtor-gnome declares
+# `replaces`/`conflicts` on it, because a leftover namtor-kde carries
+# `depends=("namtor=$pkgver")` and pacman would otherwise refuse to upgrade
+# the core package while that unsatisfiable dependency remained installed.
 #
 # The install manifest (schema v2) carries per-entry `package` ownership
-# (core|gnome|kde). stage.sh --package core|gnome|kde stages only the
-# entries owned by that package, producing a deterministic DESTDIR layout
-# with no file conflicts between packages.
+# (core|gnome). stage.sh --package core|gnome stages only the entries owned
+# by that package, producing a deterministic DESTDIR layout with no file
+# conflicts between packages.
 #
 # Supported architectures: x86_64, aarch64 (matches model-manifest.toml
 # `target_arch = "both"` for YuNet/SFace/MiniFASNet).
@@ -25,7 +31,6 @@
 # Runtime deps (per package):
 #   namtor       — onnxruntime (CPU EP), systemd, pam, gcc-libs
 #   namtor-gnome — namtor=$pkgver (exact), gtk4, libadwaita
-#   namtor-kde   — namtor=$pkgver (exact), qt6-base, kirigami, kcoreaddons
 #
 # Models are bundled: YuNet (MIT, redistributable), SFace (Apache-2.0,
 # redistributable), and MiniFASNet (self-trained, Apache-2.0). Licence
@@ -45,10 +50,9 @@ pkgbase=namtor
 pkgname=(
     namtor
     namtor-gnome
-    namtor-kde
 )
 pkgver=0.1.0
-pkgrel=3
+pkgrel=4
 epoch=0
 arch=('x86_64' 'aarch64')
 url="https://github.com/FinleyLaempe/nam-tor"
@@ -67,16 +71,11 @@ options=('!strip' '!debug' '!zipman')
 changelog=
 
 # All makedeps are at the pkgbase level — every crate is built in one
-# `cargo build` pass, and the KDE KCM needs CMake + Qt6 + KF6 frameworks.
+# `cargo build` pass.
 makedepends=(
     'cargo'
     'rust'
     'python>=3.11'
-    'cmake'
-    'qt6-base'
-    'kirigami'
-    'kcoreaddons'
-    'extra-cmake-modules'
 )
 
 source=("namtor-$pkgver.tar.gz" "namtor-models-$pkgver.tar.gz")
@@ -113,8 +112,7 @@ prepare() {
 
 # ---------------------------------------------------------------------------
 # build: cargo build --release for all install-manifest binaries + PAM
-# cdylib, then the KDE KCM QML module (CMake build). Shared across all
-# three split packages — makepkg runs build() once.
+# cdylib. Shared across both split packages — makepkg runs build() once.
 # ---------------------------------------------------------------------------
 build() {
     cd "$srcdir/nam-tor-$pkgver"
@@ -135,27 +133,17 @@ build() {
         -p namtor-cli \
         -p namtor-camera \
         -p namtor-pam \
-        -p namtor-gnome \
-        -p namtor-kde
-
-    # KDE KCM QML module (CMake build — installs libnamtorqml.so + main.qml +
-    # metadata.json into the Qt6 QML import dir). The Rust cdylib
-    # (libnamtor_kde.so) is built by cargo above and linked by CMake.
-    local _rust_so="$srcdir/nam-tor-$pkgver/target/release/libnamtor_kde.so"
-    cmake -S "$srcdir/nam-tor-$pkgver/crates/namtor-kde" \
-        -B build-kde \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr \
-        -DNAMTOR_KDE_RUST_SO="$_rust_so"
-    cmake --build build-kde --parallel
+        -p namtor-gnome
 }
 
 # ---------------------------------------------------------------------------
-# check: workspace tests (skipping the known-flaky serialise test)
+# check: workspace tests. `--test-threads=1` serialises tests that mutate
+# process-global env vars (the licence tests set/remove NAMTOR_ACCEPT_LICENCE);
+# without it those races produce spurious failures.
 # ---------------------------------------------------------------------------
 check() {
     cd "$srcdir/nam-tor-$pkgver"
-    cargo test --workspace -- --skip concurrent_connections_serialise --test-threads=1
+    cargo test --workspace -- --test-threads=1
 }
 
 # ---------------------------------------------------------------------------
@@ -215,13 +203,21 @@ package_namtor() {
 }
 
 # ---------------------------------------------------------------------------
-# package_namtor_gnome: GTK4/libadwaita enrollment wizard + settings.
-# Depends on the exact core version. No Qt/KDE deps. No install hook —
-# pacman's alpm hooks (desktop-database.hook, gtk-icon-cache.hook) handle
-# .desktop/icon cache updates automatically after the transaction.
+# package_namtor_gnome: GTK4/libadwaita enrollment wizard + settings — the
+# single, desktop-neutral UI. Depends on the exact core version. No install
+# hook — pacman's alpm hooks (desktop-database.hook, gtk-icon-cache.hook)
+# handle .desktop/icon cache updates automatically after the transaction.
+#
+# `replaces`/`conflicts` on namtor-kde are an UPGRADE BLOCKER FIX, not
+# tidiness. namtor-kde declared depends=("namtor=$pkgver"); once it stops
+# being built, a machine that still has it installed has an unsatisfiable
+# dependency and pacman aborts the whole transaction rather than upgrading
+# the core package. `replaces` makes pacman remove it as part of the
+# upgrade. Do not drop these until no supported upgrade path starts from a
+# release that shipped namtor-kde (<= 0.1.0-3).
 # ---------------------------------------------------------------------------
 package_namtor-gnome() {
-    pkgdesc="Nam-tor GNOME enrollment wizard and settings (GTK4/libadwaita)"
+    pkgdesc="Nam-tor enrollment wizard and settings (GTK4/libadwaita)"
     arch=('x86_64' 'aarch64')
     depends=(
         "namtor=$pkgver"
@@ -229,8 +225,8 @@ package_namtor-gnome() {
         'libadwaita'
     )
     provides=()
-    conflicts=()
-    replaces=()
+    conflicts=('namtor-kde')
+    replaces=('namtor-kde')
     # No install hook — desktop packages have no lifecycle hooks. The core
     # package's namtor.install delegates to the shared lifecycle helper.
 
@@ -239,38 +235,4 @@ package_namtor-gnome() {
     # Deterministic staging from packaging/install-manifest.toml — gnome
     # entries only (enroll-wizard binary, .desktop, .metainfo.xml, .svg).
     ./packaging/stage.sh "$pkgdir" "$srcdir/nam-tor-$pkgver" --package gnome
-}
-
-# ---------------------------------------------------------------------------
-# package_namtor_kde: Plasma 6 KCM QML module + desktop integration files.
-# Depends on the exact core version. No GTK/libadwaita deps. No install
-# hook — pacman's alpm hooks handle .desktop/icon cache updates.
-# ---------------------------------------------------------------------------
-package_namtor-kde() {
-    pkgdesc="Nam-tor KDE Plasma 6 KCM — system settings module (Qt6/KF6)"
-    arch=('x86_64' 'aarch64')
-    depends=(
-        "namtor=$pkgver"
-        'qt6-base'
-        'kirigami'
-        'kcoreaddons'
-    )
-    provides=()
-    conflicts=()
-    replaces=()
-    # No install hook — desktop packages have no lifecycle hooks.
-
-    cd "$srcdir/nam-tor-$pkgver"
-
-    # KDE KCM: install the CMake-built QML module + metadata.json into
-    # $pkgdir. This installs libnamtorqml.so + main.qml into the Qt6 QML
-    # import dir, and metadata.json into the kpackage/kcms dir. CMake also
-    # installs the desktop/metainfo/icon files; stage.sh --package kde
-    # below overwrites those with identical content from the manifest
-    # (same source files — deterministic staging is the source of truth).
-    DESTDIR="$pkgdir" cmake --install build-kde
-
-    # Deterministic staging from packaging/install-manifest.toml — kde
-    # entries only (kcm .desktop, .metainfo.xml, .svg).
-    ./packaging/stage.sh "$pkgdir" "$srcdir/nam-tor-$pkgver" --package kde
 }

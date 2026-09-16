@@ -28,7 +28,7 @@ const MANAGER_OBJECT_PATH: &str = "/org/namtor/Manager";
 const MANAGER_INTERFACE: &str = "org.namtor.Manager";
 
 /// One enrolled face profile as exposed over D-Bus (frozen wire `(ssbtt)`).
-/// Mirror of `namtor_daemon::dbus::ProfileInfo` / `namtor_kde::types::ProfileInfo`.
+/// Mirror of `namtor_daemon::dbus::ProfileInfo` / `namtor_client::types::ProfileInfo`.
 /// Carries no biometric payload — no embeddings, frames, scores, or thresholds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct ProfileInfo {

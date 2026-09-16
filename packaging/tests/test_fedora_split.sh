@@ -2,17 +2,21 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Task 21 — Fedora split-package structural test.
 #
-# Validates that packaging/fedora/namtor.spec produces THREE subpackages
+# Validates that packaging/fedora/namtor.spec produces TWO subpackages
 # from one spec:
 #   - namtor       (core: daemon, worker, CLI, PAM, systemd, sysusers,
 #                   tmpfiles, D-Bus, polkit, manifests, models, licences,
 #                   lifecycle helper, SBOM)
 #   - namtor-gnome (GTK4/libadwaita wizard + .desktop + .metainfo + .svg)
-#   - namtor-kde   (Plasma 6 KCM .desktop + .metainfo + .svg + QML module)
+#
+# A third subpackage, namtor-kde (the Plasma 6 KCM), is gone. It must be
+# OBSOLETED rather than merely dropped: it declared
+# `Requires: namtor = %{version}-%{release}`, so a leftover install keeps
+# an unsatisfiable dependency and dnf refuses to upgrade the core package.
 #
 # No network fetch at install. PAM off by default. Removal purges approved
-# state via the lifecycle helper. GNOME-only has no Qt/KDE deps; KDE-only
-# has no GTK/libadwaita deps. systemd/sysusers/tmpfiles macros present.
+# state via the lifecycle helper. The desktop subpackage has no Qt/KF6 deps
+# and the core has neither. systemd/sysusers/tmpfiles macros present.
 # Lifecycle helper drives the typed lifecycle phases.
 #
 # This is a structural test (no rpmbuild/mock available in CI) — it greps
@@ -80,17 +84,29 @@ else
     not_ok "namtor-gnome subpackage defined"
 fi
 
-# KDE subpackage: `%package kde` (yields namtor-kde) OR `-n namtor-kde`.
+# The KDE subpackage must be GONE — but obsoleted, not merely deleted.
 if grep -qE "^%package[[:space:]]+kde($|[[:space:]])" "$SPEC" \
         || grep -qE "^%package[[:space:]]+-n[[:space:]]+namtor-kde($|[[:space:]])" "$SPEC"; then
-    ok "namtor-kde subpackage defined"
+    not_ok "namtor-kde subpackage is back (the Plasma KCM was removed)"
 else
-    not_ok "namtor-kde subpackage defined"
+    ok "namtor-kde subpackage removed"
 fi
+if grep -qE "^Obsoletes:[[:space:]]+namtor-kde" "$SPEC"; then
+    ok "spec Obsoletes: namtor-kde (unblocks core upgrades)"
+else
+    not_ok "spec does not obsolete namtor-kde — a leftover install will block core upgrades"
+fi
+# No Qt6/KF6/CMake BuildRequires should remain.
+for br in cmake qt6-qtbase-devel kf6-kirigami-devel kf6-kcoreaddons-devel extra-cmake-modules; do
+    if grep -qE "^BuildRequires:[[:space:]]+${br}([[:space:]]|$)" "$SPEC"; then
+        not_ok "spec still BuildRequires $br (no Qt/KF6/CMake build left)"
+    else
+        ok "spec has no BuildRequires $br"
+    fi
+done
 
 # Each subpackage must have its own %description.
 check "namtor-gnome has %description" 'grep -qE "^%description[[:space:]]+gnome($|[[:space:]])" "$SPEC" || grep -qE "^%description[[:space:]]+-n[[:space:]]+namtor-gnome($|[[:space:]])" "$SPEC"' true
-check "namtor-kde has %description" 'grep -qE "^%description[[:space:]]+kde($|[[:space:]])" "$SPEC" || grep -qE "^%description[[:space:]]+-n[[:space:]]+namtor-kde($|[[:space:]])" "$SPEC"' true
 
 # ---------------------------------------------------------------------------
 # 2. %files sections exist per subpackage
@@ -104,11 +120,10 @@ else
     not_ok "core %files (bare) present"
 fi
 check "namtor-gnome %files present" 'grep -qE "^%files[[:space:]]+gnome($|[[:space:]])" "$SPEC" || grep -qE "^%files[[:space:]]+-n[[:space:]]+namtor-gnome($|[[:space:]])" "$SPEC"' true
-check "namtor-kde %files present" 'grep -qE "^%files[[:space:]]+kde($|[[:space:]])" "$SPEC" || grep -qE "^%files[[:space:]]+-n[[:space:]]+namtor-kde($|[[:space:]])" "$SPEC"' true
 
 # Helper: body of a %files section (handles `-n namtor-foo` and `foo` forms).
 files_body() {
-    local sub="$1"  # subpackage suffix: "" (core), gnome, kde
+    local sub="$1"  # subpackage suffix: "" (core), gnome
     if [[ -z "$sub" ]]; then
         awk -v t="$SPEC_TERM" '
             /^%files[[:space:]]*$/ {f=1; next}
@@ -127,7 +142,6 @@ files_body() {
 
 CORE_FILES="$(files_body "")"
 GNOME_FILES="$(files_body gnome)"
-KDE_FILES="$(files_body kde)"
 
 contains() { printf '%s\n' "$1" | grep -qE -- "$2"; }
 
@@ -170,9 +184,9 @@ if contains "$CORE_FILES" '%license'; then ok "core %files has %license directiv
 if contains "$CORE_FILES" 'licences/'; then ok "core %files bundles licence notices"; else not_ok "core %files bundles licence notices"; fi
 
 # ---------------------------------------------------------------------------
-# 4. Core %files must NOT contain GNOME/KDE-only files
+# 4. Core %files must NOT contain desktop-only files (or any KDE leftovers)
 # ---------------------------------------------------------------------------
-echo "--- (4) core %files excludes GNOME/KDE-only files ---"
+echo "--- (4) core %files excludes desktop-only files ---"
 
 core_exclude=(
     'namtor-enroll-wizard'
@@ -219,34 +233,25 @@ for e in "${gnome_exclude[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
-# 6. KDE %files — kcm .desktop + .metainfo + .svg + QML module + metadata
+# 6. No KDE payload anywhere in the spec
 # ---------------------------------------------------------------------------
-echo "--- (6) KDE %files payload ---"
+echo "--- (6) no KDE payload in any %files section ---"
 
-kde_expect=(
+kde_payload=(
     'org\.namtor\.kcm\.desktop'
     'org\.namtor\.kcm\.metainfo\.xml'
     'org\.namtor\.kcm\.svg'
     'qt6/qml/org/namtor'
-    'main\.qml'
     'kpackage/kcms/kcm_namtor'
-    'metadata\.json'
+    'libnamtorqml\.so'
+    'kcm_namtor\.so'
 )
-for e in "${kde_expect[@]}"; do
-    if contains "$KDE_FILES" "$e"; then ok "kde %files has $e"; else not_ok "kde %files has $e"; fi
-done
-
-# KDE must NOT contain GNOME files or core daemon files.
-kde_exclude=(
-    'namtor-daemon'
-    'namtor-worker'
-    'pam_namtor\.so'
-    'namtor-enroll-wizard'
-    'org\.namtor\.Wizard'
-    'namtor-daemon\.service'
-)
-for e in "${kde_exclude[@]}"; do
-    if contains "$KDE_FILES" "$e"; then not_ok "kde %files wrongly contains $e"; else ok "kde %files excludes $e"; fi
+for e in "${kde_payload[@]}"; do
+    if grep -qE -- "$e" "$SPEC"; then
+        not_ok "spec still ships KDE payload $e"
+    else
+        ok "spec has no KDE payload $e"
+    fi
 done
 
 # ---------------------------------------------------------------------------
@@ -258,12 +263,6 @@ echo "--- (7) Requires wiring ---"
 gnome_requires="$(awk '
     /^%package[[:space:]]+gnome($|[[:space:]])/ ||
     /^%package[[:space:]]+-n[[:space:]]+namtor-gnome($|[[:space:]])/ { f=1; next }
-    f && /^%[a-zA-Z]/ { exit }
-    f && /^Requires:/ { print }
-' "$SPEC")"
-kde_requires="$(awk '
-    /^%package[[:space:]]+kde($|[[:space:]])/ ||
-    /^%package[[:space:]]+-n[[:space:]]+namtor-kde($|[[:space:]])/ { f=1; next }
     f && /^%[a-zA-Z]/ { exit }
     f && /^Requires:/ { print }
 ' "$SPEC")"
@@ -283,27 +282,12 @@ fi
 # GNOME pulls GTK4 + libadwaita.
 if printf '%s\n' "$gnome_requires" | grep -qi 'gtk4'; then ok "gnome Requires gtk4"; else not_ok "gnome Requires gtk4"; fi
 if printf '%s\n' "$gnome_requires" | grep -qi 'libadwaita'; then ok "gnome Requires libadwaita"; else not_ok "gnome Requires libadwaita"; fi
-# GNOME must NOT pull Qt6/KF6.
+# The desktop subpackage must NOT pull Qt6/KF6 — nothing in the tree does
+# any more.
 if printf '%s\n' "$gnome_requires" | grep -qiE 'qt6|kf6|kirigami|kcoreaddons'; then
     not_ok "gnome Requires Qt6/KF6 (forbidden)"
 else
     ok "gnome has no Qt6/KF6 Requires"
-fi
-
-# KDE requires core.
-if printf '%s\n' "$kde_requires" | grep -qE 'Requires:[[:space:]]+%?\{?name\}?[[:space:]]*=[[:space:]]*%?\{?version\}?-%?\{?release\}?'; then
-    ok "kde Requires: namtor = %{version}-%{release}"
-else
-    not_ok "kde Requires: namtor = %{version}-%{release}"
-fi
-# KDE pulls Qt6 + KF6 runtime.
-if printf '%s\n' "$kde_requires" | grep -qi 'qt6'; then ok "kde Requires qt6"; else not_ok "kde Requires qt6"; fi
-if printf '%s\n' "$kde_requires" | grep -qiE 'kf6|kirigami|kcoreaddons'; then ok "kde Requires KF6"; else not_ok "kde Requires KF6"; fi
-# KDE must NOT pull GTK4/libadwaita.
-if printf '%s\n' "$kde_requires" | grep -qiE 'gtk4|libadwaita'; then
-    not_ok "kde Requires GTK4/libadwaita (forbidden)"
-else
-    ok "kde has no GTK4/libadwaita Requires"
 fi
 
 # Core must NOT pull GTK4/libadwaita or Qt6/KF6 runtime.

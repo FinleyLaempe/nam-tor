@@ -17,7 +17,7 @@ In addition to Cargo dependencies, the SBOM includes:
 
 - **Release binaries** — namtor-daemon, namtor-worker, namtor-cli,
   namtor-camera-emitter-off, pam_namtor.so (libnamtor_pam.so),
-  namtor-enroll-wizard, and the KDE QML module (libnamtorqml.so) when
+  and namtor-enroll-wizard when
   built. Each is a component with a sha256 hash.
 - **ONNX models** — yunet_2023mar, sface_2021dec, minifasnet_pad, read
   from ``packaging/model-manifest.toml``. Each carries its sha256,
@@ -110,16 +110,6 @@ def _binary_components(srcdir: str) -> list[dict]:
                 "licence": "GPL-3.0-only",
                 "kind": "binary",
             })
-    kde_so = os.path.join(srcdir, "crates", "namtor-kde",
-                          "build-kde", "libnamtorqml.so")
-    if os.path.isfile(kde_so):
-        out.append({
-            "name": "libnamtorqml.so",
-            "version": "0.1.0",
-            "sha256": _sha256_file(kde_so),
-            "licence": "GPL-3.0-only",
-            "kind": "binary",
-        })
     return out
 
 

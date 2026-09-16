@@ -5,17 +5,22 @@
 # packaging/stage.sh for a deterministic DESTDIR layout, and ships the
 # transactional PAM install/uninstall scripts under /usr/share/namtor.
 #
-# Split into three subpackages from one spec:
+# Split into two subpackages from one spec:
 #   namtor       (base/core) — daemon, worker, CLI, PAM module, systemd
 #                units, sysusers, tmpfiles, D-Bus, polkit, manifests,
 #                bundled models + licence notices, lifecycle helper, SBOM.
 #   namtor-gnome — GTK4/libadwaita enrollment wizard (.desktop, .metainfo,
-#                .svg). Requires namtor = ver-rel. No Qt/KF6 deps.
-#   namtor-kde   — Plasma 6 KCM (.desktop, .metainfo, .svg, QML module +
-#                metadata). Requires namtor = ver-rel. No GTK/libadwaita deps.
+#                .svg). Requires namtor = ver-rel. The single, desktop-
+#                neutral UI despite the name.
+#
+# A third subpackage, namtor-kde (the Plasma 6 KCM), shipped up to and
+# including 0.1.0-2 and is gone — the project consolidated on one
+# desktop-neutral GTK4 UI. namtor-gnome carries `Obsoletes: namtor-kde`
+# so dnf removes the stale subpackage during the upgrade instead of
+# leaving it behind with an unsatisfiable `Requires: namtor = ver-rel`.
 #
 # The install manifest (schema v2) carries per-entry `package` ownership
-# (core|gnome|kde); stage.sh stages all of them into one buildroot and the
+# (core|gnome); stage.sh stages all of them into one buildroot and the
 # %files sections partition the tree by subpackage.
 #
 # Supported architectures: x86_64, aarch64 (model-manifest target_arch=both).
@@ -41,7 +46,7 @@
 
 Name:           namtor
 Version:        0.1.0
-Release:        1%{?dist}
+Release:        3%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
 # Combined SPDX expression: the Rust core is GPL-3.0-only; the bundled ONNX
@@ -61,22 +66,14 @@ Source1:        %{url}/releases/download/v%{version}/namtor-models-%{version}.ta
 
 # Build requirements — Fedora ships rust-toolchain + cargo in the standard
 # repos. python3 >= 3.11 is needed for packaging/stage.sh (stdlib tomllib).
-# Qt6/KF6/ECM are build-time deps for the KDE KCM QML module (CMake build);
-# they do NOT become runtime deps of the core package.
 BuildRequires:  rust-toolchain
 BuildRequires:  cargo
 BuildRequires:  python3 >= 3.11
 BuildRequires:  systemd-rpm-macros
-BuildRequires:  cmake
-BuildRequires:  qt6-qtbase-devel
-BuildRequires:  kf6-kirigami-devel
-BuildRequires:  kf6-kcoreaddons-devel
-BuildRequires:  extra-cmake-modules
 
-# Core runtime requirements — daemon/worker/CLI/PAM only. GUI toolkit deps
-# (gtk4/libadwaita for GNOME, qt6/kf6 for KDE) live in the subpackages so a
-# headless or KDE-only host is not forced to pull GTK, and a GNOME-only host
-# is not forced to pull Qt.
+# Core runtime requirements — daemon/worker/CLI/PAM only. The GUI toolkit
+# deps (gtk4/libadwaita) live in the subpackage so a headless host is not
+# forced to pull GTK.
 Requires:       onnxruntime
 Requires:       pam
 Requires:       systemd
@@ -106,44 +103,31 @@ scripts, the bundled ONNX models with their licence notices, and the SBOM.
 Models are bundled from the signed deterministic archive (no network fetch
 at install time). PAM is OFF by default.
 
-Install namtor-gnome for the GTK4/libadwaita enrollment wizard, or
-namtor-kde for the Plasma 6 KCM.
+Install namtor-gnome for the GTK4/libadwaita enrollment wizard and
+settings app.
 
 # ===========================================================================
 # namtor-gnome — GTK4/libadwaita enrollment wizard + settings
 # ===========================================================================
 %package gnome
-Summary:        GNOME enrollment wizard for Nam-tor (GTK4 + libadwaita)
+Summary:        Enrollment wizard and settings for Nam-tor (GTK4 + libadwaita)
 License:        GPL-3.0-only
 Requires:       %{name} = %{version}-%{release}
 Requires:       gtk4%{?_isa}
 Requires:       libadwaita%{?_isa}
-# Explicitly do NOT pull Qt6/KF6 — GNOME-only integration.
+# UPGRADE BLOCKER FIX, not tidiness: namtor-kde declared
+# `Requires: namtor = %%{version}-%%{release}`. If it is merely dropped from
+# the spec, a machine that still has it installed keeps an unsatisfiable
+# dependency and dnf refuses to upgrade the core package. `Obsoletes` makes
+# dnf remove it as part of the transaction. Keep this until no supported
+# upgrade path starts from a release that shipped namtor-kde (<= 0.1.0-2).
+Obsoletes:      namtor-kde < %{version}-%{release}
 
 %description gnome
-The GNOME integration for Nam-tor: a GTK4 + libadwaita enrollment wizard
+The desktop integration for Nam-tor: a GTK4 + libadwaita enrollment wizard
 and settings app. Install this alongside the core namtor package to manage
 enrollment, review protection status, and toggle PAM services from the
-GNOME desktop. Requires the core namtor package at the same version.
-
-# ===========================================================================
-# namtor-kde — Plasma 6 KCM (KConfigModule) desktop integration
-# ===========================================================================
-%package kde
-Summary:        KDE Plasma 6 KCM for Nam-tor (Kirigami + Qt6 QML)
-License:        GPL-3.0-only
-Requires:       %{name} = %{version}-%{release}
-Requires:       qt6-qtbase%{?_isa}
-Requires:       kf6-kirigami%{?_isa}
-Requires:       kf6-kcoreaddons%{?_isa}
-# Explicitly do NOT pull GTK4/libadwaita — KDE-only integration.
-
-%description kde
-The KDE Plasma 6 integration for Nam-tor: a KConfigModule (KCM) built with
-Kirigami + Qt6 QML that exposes enrollment, profile management, protection
-status, and PAM service toggles from System Settings. Install this
-alongside the core namtor package to manage Nam-tor from the KDE desktop.
-Requires the core namtor package at the same version.
+desktop. Requires the core namtor package at the same version.
 
 %prep
 %autosetup -n nam-tor-%{version}
@@ -172,31 +156,17 @@ cargo build --release --frozen \
     -p namtor-cli \
     -p namtor-camera \
     -p namtor-pam \
-    -p namtor-gnome \
-    -p namtor-kde
-
-# KDE KCM QML module (CMake build — installs libnamtorqml.so + main.qml +
-# metadata.json into the Qt6 QML import dir). The Rust cdylib
-# (libnamtor_kde.so) is built by cargo above and linked by CMake.
-%global rust_so %{_builddir}/nam-tor-%{version}/target/release/libnamtor_kde.so
-cmake -S %{_builddir}/nam-tor-%{version}/crates/namtor-kde \
-    -B %{_builddir}/build-kde \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=%{_prefix} \
-    -DNAMTOR_KDE_RUST_SO=%{rust_so}
-cmake --build %{_builddir}/build-kde --parallel
+    -p namtor-gnome
 
 %check
-cargo test --workspace -- --skip concurrent_connections_serialise --test-threads=1
+# --test-threads=1 serialises tests that mutate process-global env vars
+# (the licence tests set/remove NAMTOR_ACCEPT_LICENCE); without it those
+# races produce spurious failures.
+cargo test --workspace -- --test-threads=1
 
 %install
-# KDE KCM: install the CMake-built QML module + metadata.json into
-# %{buildroot}. stage.sh will overwrite the overlapping desktop/metainfo/icon
-# files with identical content from the manifest (same source files).
-DESTDIR=%{buildroot} cmake --install %{_builddir}/build-kde
-
 # Deterministic staging from packaging/install-manifest.toml — installs
-# all static files for every split package (core, gnome, kde) into one
+# all static files for every split package (core, gnome) into one
 # buildroot; the %files sections partition the tree by subpackage.
 ./packaging/stage.sh "%{buildroot}" "%{_builddir}/nam-tor-%{version}"
 
@@ -270,21 +240,6 @@ echo '{"model_id":"sface_2021dec","licence_url":"https://www.apache.org/licenses
 %{_datadir}/icons/hicolor/scalable/apps/org.namtor.Wizard.svg
 
 # ===========================================================================
-# %files — namtor-kde
-# ===========================================================================
-%files kde
-%license COPYING.md
-%{_datadir}/applications/org.namtor.kcm.desktop
-%{_datadir}/metainfo/org.namtor.kcm.metainfo.xml
-%{_datadir}/icons/hicolor/scalable/apps/org.namtor.kcm.svg
-# KDE KCM plugin (CMake-installed to KDE_INSTALL_QTPLUGINDIR)
-%{_libdir}/qt6/plugins/plasma/kcms/systemsettings/kcm_namtor.so
-# KDE KCM QML module + KPlugin metadata (CMake-installed)
-%{_libdir}/qt6/qml/org/namtor/libnamtorqml.so
-%{_datadir}/qt6/qml/org/namtor/main.qml
-%{_datadir}/kpackage/kcms/kcm_namtor/metadata.json
-
-# ===========================================================================
 # Scriptlets — core (namtor). The daemon + PAM lifecycle is core's job;
 # the subpackages only refresh desktop/icon caches.
 # ===========================================================================
@@ -309,7 +264,7 @@ if [ $1 -eq 1 ]; then
     echo "     1. Open the Nam-tor Settings app."
     echo "     2. Enroll your face."
     echo "     3. Choose which PAM services to enable (e.g. gdm-password)."
-    echo "   Install namtor-gnome or namtor-kde for the desktop UI."
+    echo "   Install namtor-gnome for the desktop UI."
     echo "   No CLI or root shell needed for setup."
 fi
 
@@ -353,18 +308,15 @@ fi
 /usr/bin/update-desktop-database -q %{_datadir}/applications 2>/dev/null || :
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
-# ===========================================================================
-# Scriptlets — namtor-kde. Desktop + icon cache refresh only.
-# ===========================================================================
-%post kde
-/usr/bin/update-desktop-database -q %{_datadir}/applications 2>/dev/null || :
-/usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
-
-%postun kde
-/usr/bin/update-desktop-database -q %{_datadir}/applications 2>/dev/null || :
-/usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
-
 %changelog
+* Wed Sep 16 2026 Nam-tor Project <namtor@example.invalid> - 0.1.0-3
+- Drop the namtor-kde subpackage: the project consolidated on a single
+  desktop-neutral GTK4/libadwaita UI, so the Plasma 6 KCM is gone along
+  with the Qt6/KF6/CMake build requirements.
+- namtor-gnome now carries `Obsoletes: namtor-kde < ver-rel` so an
+  existing namtor-kde install is removed during the upgrade rather than
+  blocking it with an unsatisfiable `Requires: namtor = ver-rel`.
+
 * Sun Aug 09 2026 Nam-tor Project <namtor@example.invalid> - 0.1.0-2
 - Split into namtor (core), namtor-gnome, namtor-kde subpackages.
 - Core: daemon, worker, CLI, PAM, systemd, sysusers, tmpfiles, D-Bus,

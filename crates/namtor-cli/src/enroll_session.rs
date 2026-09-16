@@ -638,7 +638,7 @@ const POLL_PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 
 /// v3 enrollment progress mirror (frozen wire `(ssuuuuuys)`). Matches
 /// `namtor-daemon::manager::contract::EnrollmentProgressV3` and
-/// `namtor-kde::types::EnrollmentProgressV3` field-for-field. The daemon is
+/// `namtor-client::types::EnrollmentProgressV3` field-for-field. The daemon is
 /// the single source of truth for every field; the CLI does not recompute.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, zvariant::Type)]
 pub struct EnrollmentProgressV3 {

@@ -11,8 +11,9 @@
 #       updated, no stale files.
 #   (c) Add desktop: stage gnome over existing core → verify gnome files
 #       added, core intact.
-#   (d) Cross-desktop switch: stage kde over existing core+gnome → verify
-#       kde files added, gnome files coexist (split packages coexist).
+#   (d) Legacy desktop package rejected: `stage.sh --package kde` (the
+#       removed Plasma KCM) must fail loudly rather than silently stage
+#       nothing, and must leave the existing core+gnome tree untouched.
 #   (e) Rollback: remove desktop package files → verify core still
 #       functional.
 #   (f) Full removal: run uninstall.sh → verify total purge (no namtor
@@ -33,7 +34,7 @@
 #
 # Since clean distros cannot be run in CI, real distro upgrade/rollback on
 # a live VM (pacman -U, dnf upgrade, apt upgrade) is WITHHELD. This script
-# uses DESTDIR fake-root staging via stage.sh --package core|gnome|kde and
+# uses DESTDIR fake-root staging via stage.sh --package core|gnome and
 # uninstall.sh to certify the lifecycle structurally.
 #
 # Usage: bash packaging/tests/test_lifecycle_cert.sh
@@ -403,56 +404,53 @@ for rel in \
 done
 
 # ===========================================================================
-# (d) Cross-desktop switch: stage kde over core+gnome
+# (d) Legacy `--package kde` is rejected and changes nothing
 # ===========================================================================
 
 echo ""
-echo "[d] Cross-desktop: stage kde over core+gnome"
+echo "[d] Legacy --package kde is rejected"
 
+# The Plasma KCM package was removed, so `kde` is no longer in stage.sh's
+# filter allowlist. A stale build recipe asking for it must fail loudly —
+# the dangerous outcome would be an accepted-but-empty stage that produces
+# an apparently-successful package with no payload.
+files_before_kde="$(find "$ROOT_A" -type f -o -type l | sort | sha256sum)"
 if bash "$STAGE" "$ROOT_A" "$REPO_ROOT" --package kde >/tmp/lc_stage_kde_d.log 2>&1; then
-    ok "cross-desktop: stage.sh --package kde succeeds over core+gnome"
+    not_ok "legacy: stage.sh --package kde succeeded (should be rejected)"
 else
-    not_ok "cross-desktop: stage.sh --package kde fails (see /tmp/lc_stage_kde_d.log)"
-    cat /tmp/lc_stage_kde_d.log >&2
+    ok "legacy: stage.sh --package kde rejected"
+fi
+files_after_kde="$(find "$ROOT_A" -type f -o -type l | sort | sha256sum)"
+if [[ "$files_before_kde" == "$files_after_kde" ]]; then
+    ok "legacy: rejected staging left the tree byte-identical"
+else
+    not_ok "legacy: rejected staging modified the tree"
 fi
 
-missing_kde_files="$(count_missing_files "$ROOT_A" kde)"
-if [[ "$missing_kde_files" -eq 0 ]]; then
-    ok "cross-desktop: all kde manifest files present"
-else
-    not_ok "cross-desktop: $missing_kde_files kde manifest file(s) missing"
-fi
-
-missing_gnome_after_kde="$(count_missing_files "$ROOT_A" gnome)"
-if [[ "$missing_gnome_after_kde" -eq 0 ]]; then
-    ok "cross-desktop: gnome files still present after kde added (coexist)"
-else
-    not_ok "cross-desktop: $missing_gnome_after_kde gnome file(s) missing after kde added"
-fi
-
-missing_core_after_kde="$(count_missing_files "$ROOT_A" core)"
-if [[ "$missing_core_after_kde" -eq 0 ]]; then
-    ok "cross-desktop: core files still present after kde added"
-else
-    not_ok "cross-desktop: $missing_core_after_kde core file(s) missing after kde added"
-fi
-
+# No KCM payload may appear in a fully staged tree.
 for rel in \
     usr/share/applications/org.namtor.kcm.desktop \
     usr/share/metainfo/org.namtor.kcm.metainfo.xml \
     usr/share/icons/hicolor/scalable/apps/org.namtor.kcm.svg; do
     if path_exists "$ROOT_A/$rel"; then
-        ok "cross-desktop: $rel present"
+        not_ok "legacy: KCM payload $rel is present (should be gone)"
     else
-        not_ok "cross-desktop: $rel missing"
+        ok "legacy: KCM payload $rel absent"
     fi
 done
 
-if path_exists "$ROOT_A/usr/bin/namtor-enroll-wizard" \
-   && path_exists "$ROOT_A/usr/share/applications/org.namtor.Wizard.desktop"; then
-    ok "cross-desktop: gnome enroll-wizard + .desktop coexist with kde files"
+missing_gnome_after_kde="$(count_missing_files "$ROOT_A" gnome)"
+if [[ "$missing_gnome_after_kde" -eq 0 ]]; then
+    ok "legacy: gnome files intact"
 else
-    not_ok "cross-desktop: gnome files displaced by kde staging"
+    not_ok "legacy: $missing_gnome_after_kde gnome file(s) missing"
+fi
+
+missing_core_after_kde="$(count_missing_files "$ROOT_A" core)"
+if [[ "$missing_core_after_kde" -eq 0 ]]; then
+    ok "legacy: core files intact"
+else
+    not_ok "legacy: $missing_core_after_kde core file(s) missing"
 fi
 
 # ===========================================================================
@@ -460,7 +458,7 @@ fi
 # ===========================================================================
 
 echo ""
-echo "[e] Rollback: remove desktop package files (gnome + kde)"
+echo "[e] Rollback: remove desktop package files"
 
 removed_count=0
 while IFS= read -r dest; do
@@ -471,14 +469,6 @@ while IFS= read -r dest; do
         removed_count=$((removed_count + 1))
     fi
 done < <(manifest_files_for_pkg gnome)
-while IFS= read -r dest; do
-    [[ -z "$dest" ]] && continue
-    full="$ROOT_A$dest"
-    if path_exists "$full"; then
-        rm -f "$full"
-        removed_count=$((removed_count + 1))
-    fi
-done < <(manifest_files_for_pkg kde)
 
 if [[ "$removed_count" -gt 0 ]]; then
     ok "rollback: removed $removed_count desktop package file(s)"
@@ -487,18 +477,11 @@ else
 fi
 
 missing_gnome_after_rollback="$(count_missing_files "$ROOT_A" gnome)"
-missing_kde_after_rollback="$(count_missing_files "$ROOT_A" kde)"
 total_gnome="$(manifest_files_for_pkg gnome | grep -c . || echo 0)"
-total_kde="$(manifest_files_for_pkg kde | grep -c . || echo 0)"
 if [[ "$missing_gnome_after_rollback" -eq "$total_gnome" ]]; then
     ok "rollback: all gnome files removed"
 else
     not_ok "rollback: $missing_gnome_after_rollback/$total_gnome gnome files missing (expected all removed)"
-fi
-if [[ "$missing_kde_after_rollback" -eq "$total_kde" ]]; then
-    ok "rollback: all kde files removed"
-else
-    not_ok "rollback: $missing_kde_after_rollback/$total_kde kde files missing (expected all removed)"
 fi
 
 missing_core_after_rollback="$(count_missing_files "$ROOT_A" core)"
@@ -623,14 +606,6 @@ if [[ "$refs_g3" -eq 0 ]]; then
     ok "password-preservation: 0 pam_namtor refs after gnome added"
 else
     not_ok "password-preservation: $refs_g3 pam_namtor ref(s) after gnome added"
-fi
-
-bash "$STAGE" "$ROOT_G1" "$REPO_ROOT" --package kde >/dev/null 2>&1
-refs_g4="$(count_pam_namtor_refs "$ROOT_G1")"
-if [[ "$refs_g4" -eq 0 ]]; then
-    ok "password-preservation: 0 pam_namtor refs after kde added"
-else
-    not_ok "password-preservation: $refs_g4 pam_namtor ref(s) after kde added"
 fi
 
 DESTDIR="$ROOT_G1" bash "$UNINSTALL" "$PACKAGING_DIR" >/dev/null 2>&1

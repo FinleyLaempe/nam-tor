@@ -2,8 +2,8 @@
 //! D-Bus wire types for `org.namtor.Manager` (v1), `org.namtor.Manager2` (v2),
 //! and `org.namtor.Manager3` (v3) on the **system bus** (spec §9.1).
 //!
-//! These types are the single source of truth shared by both GUI crates
-//! (namtor-gnome, namtor-kde) so the two front-ends cannot drift. Wire
+//! These types are the single source of truth shared by the UI crate
+//! (namtor-gnome) and namtor-cli, so the front-ends cannot drift. Wire
 //! signatures are frozen in `docs/evidence/dbus-contract-v3.xml` and mirrored
 //! here byte-for-byte. The `zvariant::Type` derive ensures the Rust structs
 //! serialize to the correct D-Bus signatures.

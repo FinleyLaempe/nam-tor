@@ -3,23 +3,24 @@
 # Test matrix for Task 22: Debian split-package control/rules structure.
 #
 # Acceptance criteria (from the task spec):
-#   (a) control has exactly 3 Package: stanzas: namtor, namtor-gnome,
-#       namtor-kde.
+#   (a) control has exactly 2 Package: stanzas: namtor, namtor-gnome.
 #   (b) Core Depends: onnxruntime, libpam0g, systemd only — NO
 #       libgtk-4-1, libadwaita-1-0, libqt6, kirigami, kcoreaddons.
-#   (c) GNOME Depends: namtor (= 0.1.0-1), libgtk-4-1, libadwaita-1-0
+#   (c) Desktop Depends: namtor (= 0.1.0-2), libgtk-4-1, libadwaita-1-0
 #       and NO qt6/kirigami/kcoreaddons.
-#   (d) KDE Depends: namtor (= 0.1.0-1), libqt6-base6, kirigami,
-#       kcoreaddons and NO gtk4/libadwaita.
-#   (e) rules calls stage.sh with --package core, --package gnome,
-#       --package kde.
+#   (d) namtor-gnome Replaces/Breaks the removed namtor-kde package.
+#       Merely dropping it is not enough: it declared
+#       `Depends: namtor (= <version>)`, so a leftover install holds apt
+#       back from upgrading the core package.
+#   (e) rules calls stage.sh with --package core and --package gnome
+#       (and no longer with --package kde).
 #   (f) rules relocates PAM module to multiarch path (DEB_HOST_MULTIARCH
 #       + security).
 #   (g) rules comment does NOT contain "monolithic".
-#   (h) namtor-gnome.install and namtor-kde.install exist and list the
-#       correct files.
-#   (i) namtor-gnome.postinst, namtor-gnome.postrm, namtor-kde.postinst,
-#       namtor-kde.postrm exist with desktop cache refresh only.
+#   (h) namtor-gnome.install exists and lists the correct files; the
+#       namtor-kde.* packaging files are gone.
+#   (i) namtor-gnome.postinst and namtor-gnome.postrm exist with desktop
+#       cache refresh only.
 #   (j) changelog mentions the split.
 #   (k) namtor.postinst delegates to lifecycle.sh (not desktop cache).
 #   (l) namtor.postrm distinguishes remove vs purge.
@@ -64,24 +65,30 @@ if [[ ! -f "$RULES" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# (a) control has exactly 3 Package: stanzas
+# (a) control has exactly 2 Package: stanzas
 # ---------------------------------------------------------------------------
-echo "--- (a) three Package: stanzas ---"
+echo "--- (a) two Package: stanzas ---"
 
 package_stanzas="$(grep -cE '^Package:' "$CONTROL")"
-if [[ "$package_stanzas" == "3" ]]; then
-    ok "control has exactly 3 Package: stanzas"
+if [[ "$package_stanzas" == "2" ]]; then
+    ok "control has exactly 2 Package: stanzas"
 else
-    not_ok "control has $package_stanzas Package: stanzas (expected 3)"
+    not_ok "control has $package_stanzas Package: stanzas (expected 2)"
 fi
 
-for pkg in namtor namtor-gnome namtor-kde; do
+for pkg in namtor namtor-gnome; do
     if grep -qE "^Package:[[:space:]]+${pkg}$" "$CONTROL"; then
         ok "control has Package: $pkg"
     else
         not_ok "control missing Package: $pkg"
     fi
 done
+
+if grep -qE "^Package:[[:space:]]+namtor-kde$" "$CONTROL"; then
+    not_ok "control has Package: namtor-kde (the Plasma KCM was removed)"
+else
+    ok "control has no Package: namtor-kde (KCM removed)"
+fi
 
 # ---------------------------------------------------------------------------
 # Helper: extract a Package stanza body from control
@@ -97,7 +104,6 @@ stanza_body() {
 
 CORE_BODY="$(stanza_body namtor)"
 GNOME_BODY="$(stanza_body namtor-gnome)"
-KDE_BODY="$(stanza_body namtor-kde)"
 
 # Extract the Depends block (continuation lines start with space/tab).
 depends_block() {
@@ -111,7 +117,6 @@ depends_block() {
 
 CORE_DEPS="$(depends_block "$CORE_BODY")"
 GNOME_DEPS="$(depends_block "$GNOME_BODY")"
-KDE_DEPS="$(depends_block "$KDE_BODY")"
 
 # ---------------------------------------------------------------------------
 # (b) Core Depends — no desktop deps
@@ -135,14 +140,14 @@ for nodep in libgtk-4-1 libadwaita-1-0 libqt6 kirigami kcoreaddons; do
 done
 
 # ---------------------------------------------------------------------------
-# (c) GNOME Depends — gtk4 + libadwaita, exact core version, no Qt/KDE
+# (c) Desktop Depends — gtk4 + libadwaita, exact core version, no Qt/KDE
 # ---------------------------------------------------------------------------
 echo "--- (c) gnome Depends ---"
 
-if printf '%s\n' "$GNOME_DEPS" | grep -qE 'namtor[[:space:]]*\(=[[:space:]]*0\.1\.0-1\)'; then
-    ok "gnome Depends on namtor (= 0.1.0-1) (exact version)"
+if printf '%s\n' "$GNOME_DEPS" | grep -qE 'namtor[[:space:]]*\(=[[:space:]]*0\.1\.0-2\)'; then
+    ok "gnome Depends on namtor (= 0.1.0-2) (exact version)"
 else
-    not_ok "gnome does not depend on namtor (= 0.1.0-1) (exact version)"
+    not_ok "gnome does not depend on namtor (= 0.1.0-2) (exact version)"
 fi
 
 for dep in libgtk-4-1 libadwaita-1-0; do
@@ -162,44 +167,56 @@ for nodep in libqt6 kirigami kcoreaddons; do
 done
 
 # ---------------------------------------------------------------------------
-# (d) KDE Depends — qt6 + kirigami + kcoreaddons, exact core version, no GTK
+# (d) namtor-gnome obsoletes the removed namtor-kde
 # ---------------------------------------------------------------------------
-echo "--- (d) kde Depends ---"
+echo "--- (d) obsoletion of namtor-kde ---"
 
-if printf '%s\n' "$KDE_DEPS" | grep -qE 'namtor[[:space:]]*\(=[[:space:]]*0\.1\.0-1\)'; then
-    ok "kde Depends on namtor (= 0.1.0-1) (exact version)"
+# Dropping the stanza is not enough. namtor-kde declared
+# `Depends: namtor (= <version>)`, so a machine that still has it installed
+# keeps an unsatisfiable dependency and apt holds back the core upgrade.
+# Replaces + Breaks tells apt to remove it as part of the transaction.
+if printf '%s\n' "$GNOME_BODY" | grep -qE '^Replaces:.*namtor-kde'; then
+    ok "namtor-gnome Replaces: namtor-kde (unblocks core upgrades)"
 else
-    not_ok "kde does not depend on namtor (= 0.1.0-1) (exact version)"
+    not_ok "namtor-gnome does not Replace namtor-kde — a leftover install will block core upgrades"
+fi
+if printf '%s\n' "$GNOME_BODY" | grep -qE '^Breaks:.*namtor-kde'; then
+    ok "namtor-gnome Breaks: namtor-kde"
+else
+    not_ok "namtor-gnome does not Break namtor-kde"
 fi
 
-for dep in libqt6-base6 kirigami kcoreaddons; do
-    if printf '%s\n' "$KDE_DEPS" | grep -qiE "$dep"; then
-        ok "kde Depends on $dep"
+# No Qt/KF6/CMake Build-Depends should remain.
+for bd in cmake qt6-base-dev libkf6kirigami-dev libkf6coreaddons-dev extra-cmake-modules; do
+    if grep -qE "^[[:space:]]+${bd}," "$CONTROL"; then
+        not_ok "control still Build-Depends on $bd (no Qt/KF6/CMake build left)"
     else
-        not_ok "kde missing dependency: $dep"
-    fi
-done
-
-for nodep in libgtk-4-1 libadwaita-1-0; do
-    if printf '%s\n' "$KDE_DEPS" | grep -qiE "$nodep"; then
-        not_ok "kde Depends on $nodep (should not — GTK dep in kde)"
-    else
-        ok "kde does not depend on $nodep"
+        ok "control has no Build-Depends on $bd"
     fi
 done
 
 # ---------------------------------------------------------------------------
-# (e) rules calls stage.sh with --package core, gnome, kde
+# (e) rules calls stage.sh with --package core, gnome (never kde)
 # ---------------------------------------------------------------------------
 echo "--- (e) stage.sh --package calls in rules ---"
 
-for pkg in core gnome kde; do
+for pkg in core gnome; do
     if grep -qE "stage\.sh.*--package[[:space:]]+${pkg}" "$RULES"; then
         ok "rules calls stage.sh --package $pkg"
     else
         not_ok "rules does not call stage.sh --package $pkg"
     fi
 done
+if grep -qE "stage\.sh.*--package[[:space:]]+kde" "$RULES"; then
+    not_ok "rules still calls stage.sh --package kde (stage.sh now rejects it)"
+else
+    ok "rules does not call stage.sh --package kde"
+fi
+if grep -qE '(^|[^-])cmake' "$RULES"; then
+    not_ok "rules still runs cmake (the KCM was the only CMake build)"
+else
+    ok "rules runs no cmake"
+fi
 
 # ---------------------------------------------------------------------------
 # (f) rules relocates PAM module to multiarch path
@@ -255,17 +272,11 @@ fi
 echo "--- (h) .install files ---"
 
 GNOME_INSTALL="$DEBIAN_DIR/namtor-gnome.install"
-KDE_INSTALL="$DEBIAN_DIR/namtor-kde.install"
 
 if [[ -f "$GNOME_INSTALL" ]]; then
     ok "namtor-gnome.install exists"
 else
     not_ok "namtor-gnome.install does not exist"
-fi
-if [[ -f "$KDE_INSTALL" ]]; then
-    ok "namtor-kde.install exists"
-else
-    not_ok "namtor-kde.install does not exist"
 fi
 
 if [[ -f "$GNOME_INSTALL" ]]; then
@@ -282,28 +293,21 @@ if [[ -f "$GNOME_INSTALL" ]]; then
     done
 fi
 
-if [[ -f "$KDE_INSTALL" ]]; then
-    for f in \
-        'org\.namtor\.kcm\.desktop' \
-        'org\.namtor\.kcm\.metainfo\.xml' \
-        'org\.namtor\.kcm\.svg' \
-        'libnamtorqml\.so' \
-        'main\.qml' \
-        'metadata\.json'; do
-        if grep -qE "$f" "$KDE_INSTALL"; then
-            ok "namtor-kde.install lists $f"
-        else
-            not_ok "namtor-kde.install missing $f"
-        fi
-    done
-fi
+# Every namtor-kde packaging file must be gone, not just unreferenced.
+for f in namtor-kde.install namtor-kde.postinst namtor-kde.postrm; do
+    if [[ -e "$DEBIAN_DIR/$f" ]]; then
+        not_ok "$f still exists (the Plasma KCM package was removed)"
+    else
+        ok "$f removed"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # (i) desktop maintainer scripts exist with cache refresh only
 # ---------------------------------------------------------------------------
 echo "--- (i) desktop maintainer scripts ---"
 
-for script in namtor-gnome.postinst namtor-gnome.postrm namtor-kde.postinst namtor-kde.postrm; do
+for script in namtor-gnome.postinst namtor-gnome.postrm; do
     if [[ -f "$DEBIAN_DIR/$script" ]]; then
         ok "$script exists"
     else
@@ -311,7 +315,7 @@ for script in namtor-gnome.postinst namtor-gnome.postrm namtor-kde.postinst namt
     fi
 done
 
-for postinst in namtor-gnome.postinst namtor-kde.postinst; do
+for postinst in namtor-gnome.postinst; do
     if [[ -f "$DEBIAN_DIR/$postinst" ]] && grep -qE 'update-desktop-database' "$DEBIAN_DIR/$postinst"; then
         ok "$postinst refreshes desktop cache"
     else
@@ -325,7 +329,7 @@ for postinst in namtor-gnome.postinst namtor-kde.postinst; do
     fi
 done
 
-for postrm in namtor-gnome.postrm namtor-kde.postrm; do
+for postrm in namtor-gnome.postrm; do
     if [[ -f "$DEBIAN_DIR/$postrm" ]] && grep -qE 'update-desktop-database|gtk-update-icon-cache' "$DEBIAN_DIR/$postrm"; then
         ok "$postrm refreshes desktop/icon cache"
     else
@@ -355,10 +359,13 @@ else
     not_ok "changelog does not mention namtor-gnome"
 fi
 
-if grep -qiE 'namtor-kde' "$CHANGELOG"; then
-    ok "changelog mentions namtor-kde"
+# The newest changelog entry must record the namtor-kde removal — the
+# obsoletion is a user-visible upgrade behaviour, not an internal detail.
+newest_entry="$(awk 'NR>1 && /^[a-z].*\(.*\).*urgency=/{exit} {print}' "$CHANGELOG")"
+if printf '%s\n' "$newest_entry" | grep -qiE 'namtor-kde'; then
+    ok "newest changelog entry documents the namtor-kde removal"
 else
-    not_ok "changelog does not mention namtor-kde"
+    not_ok "newest changelog entry does not document the namtor-kde removal"
 fi
 
 # ---------------------------------------------------------------------------
@@ -432,8 +439,7 @@ echo "--- (m) SPDX headers on maintainer scripts ---"
 
 for script in \
     namtor.postinst namtor.prerm namtor.postrm \
-    namtor-gnome.postinst namtor-gnome.postrm \
-    namtor-kde.postinst namtor-kde.postrm; do
+    namtor-gnome.postinst namtor-gnome.postrm; do
     if [[ -f "$DEBIAN_DIR/$script" ]]; then
         if grep -qE 'SPDX-License-Identifier' "$DEBIAN_DIR/$script"; then
             ok "$script has SPDX header"
@@ -468,7 +474,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "--- (o) Architecture fields ---"
 
-for pkg in namtor namtor-gnome namtor-kde; do
+for pkg in namtor namtor-gnome; do
     body="$(stanza_body "$pkg")"
     if printf '%s\n' "$body" | grep -qE '^Architecture:[[:space:]]+(amd64[[:space:]]+arm64|arm64[[:space:]]+amd64)'; then
         ok "$pkg has Architecture: amd64 arm64"

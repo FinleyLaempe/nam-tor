@@ -7,12 +7,18 @@
 #
 # Matrix: Arch Linux only (x86_64) for now.
 #
-# Fedora and Debian cells are temporarily disabled — not a CI config
-# issue, a real packaging gap: Debian 12 bookworm has no KDE Frameworks
-# 6 packages in its repos at all (libkf6kirigami-dev etc. don't exist
-# until trixie/13), and the Fedora .spec needs further debugging. Re-add
-# their `include:` matrix entries once those are resolved; the lint/
-# build/install/smoke/upgrade/uninstall steps for both are already
+# Fedora and Debian cells are still disabled, but for one reason now
+# rather than two. The Debian blocker is GONE: it was that Debian 12
+# bookworm ships no KDE Frameworks 6 at all (libkf6kirigami-dev et al.
+# only appear in trixie/13), which made the Plasma KCM unbuildable there.
+# The KCM has been removed and nothing in the tree needs KF6 or Qt6, so
+# the Debian cell is now technically possible — it is left disabled only
+# because it has never been exercised end to end, not because of a
+# missing dependency. The Fedora blocker is separate and unchanged: the
+# .spec needs further debugging.
+#
+# Re-add their `include:` matrix entries once those are resolved; the
+# lint/build/install/smoke/upgrade/uninstall steps for both are already
 # written below and gated by `if: startsWith(matrix.distro, ...)`.
 #
 # The raw ONNX model weights (var/lib/namtor/models/*.onnx) are
@@ -103,8 +109,7 @@ jobs:
         run: |
             pacman -Syu --noconfirm
             pacman -S --noconfirm --needed base-devel rust cargo python namcap \
-                onnxruntime openssl gtk4 libadwaita cmake qt6-base kirigami \
-                kcoreaddons extra-cmake-modules systemd xorg-server-xvfb \
+                onnxruntime openssl gtk4 libadwaita systemd xorg-server-xvfb \
                 github-cli man-db
 
       - name: Install build toolchain (Fedora)
@@ -113,8 +118,7 @@ jobs:
             dnf -y update
             dnf -y install @development-tools rust cargo python3 \
                 systemd-rpm-macros rpmlint rpm-build onnxruntime openssl-devel pam-devel \
-                gtk4-devel libadwaita-devel cmake qt6-qtbase-devel \
-                kf6-kirigami-devel kf6-kcoreaddons-devel extra-cmake-modules
+                gtk4-devel libadwaita-devel
 
       - name: Install build toolchain (Debian)
         if: startsWith(matrix.distro, 'debian')
@@ -122,8 +126,7 @@ jobs:
             apt-get update
             apt-get install -y --no-install-recommends build-essential cargo rustc \
                 python3 debhelper-compat dh-cargo libpam0g-dev openssl devscripts \
-                cmake qt6-base-dev libkf6kirigami-dev libkf6coreaddons-dev \
-                extra-cmake-modules libgtk-4-dev libadwaita-1-dev
+                libgtk-4-dev libadwaita-1-dev
             # onnxruntime is not in Debian 12 repos — it's a runtime dep
             # declared in the .deb control, not a build dep. Skip it here.
 
@@ -331,11 +334,11 @@ jobs:
         run: |
             case "${{ matrix.distro }}" in
               arch)
-                # All three split packages are installed above, and the
-                # desktop ones declare depends=("namtor=$pkgver").
-                # Removing only `namtor` leaves those dependencies broken
-                # and pacman aborts the whole transaction.
-                timeout -k 10 120 pacman -Rns --noconfirm namtor-gnome namtor-kde namtor || \
+                # Both split packages are installed above, and the desktop
+                # one declares depends=("namtor=$pkgver"). Removing only
+                # `namtor` leaves that dependency broken and pacman aborts
+                # the whole transaction.
+                timeout -k 10 120 pacman -Rns --noconfirm namtor-gnome namtor || \
                   { echo "::error::uninstall failed"; exit 1; }
                 ;;
               fedora*)

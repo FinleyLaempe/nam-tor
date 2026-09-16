@@ -10,11 +10,6 @@ Build-Depends:
     python3 (>= 3.11),
     dh-cargo,
     libpam0g-dev,
-    cmake,
-    qt6-base-dev,
-    libkf6kirigami-dev,
-    libkf6coreaddons-dev,
-    extra-cmake-modules,
 Standards-Version: 4.7.0
 Homepage: https://github.com/namtor/nam-tor
 Rules-Requires-Root: binary-targets
@@ -47,8 +42,8 @@ Description: IR face authentication for Linux — daemon, PAM module, CLI
  bundled from the deterministic signed archive (no network fetch at
  install time). PAM is OFF by default.
  .
- Install namtor-gnome for the GTK4/libadwaita enrollment wizard,
- or namtor-kde for the Plasma 6 KCM.
+ Install namtor-gnome for the GTK4/libadwaita enrollment wizard and
+ settings app.
 
 Package: namtor-gnome
 Architecture: amd64 arm64
@@ -56,30 +51,20 @@ License: GPL-3.0-only
 Depends:
     ${misc:Depends},
     ${shlibs:Depends},
-    namtor (= 0.1.0-1),
+    namtor (= 0.1.0-2),
     libgtk-4-1,
     libadwaita-1-0,
-Description: GNOME enrollment wizard for Nam-tor (GTK4 + libadwaita)
- The GNOME integration for Nam-tor: a GTK4 + libadwaita enrollment
+Replaces: namtor-kde
+Breaks: namtor-kde
+Description: Enrollment wizard and settings for Nam-tor (GTK4 + libadwaita)
+ The desktop integration for Nam-tor: a GTK4 + libadwaita enrollment
  wizard and settings app. Install this alongside the core namtor
  package to manage enrollment, review protection status, and toggle
- PAM services from the GNOME desktop. Requires the core namtor
- package at the same version.
-
-Package: namtor-kde
-Architecture: amd64 arm64
-License: GPL-3.0-only
-Depends:
-    ${misc:Depends},
-    ${shlibs:Depends},
-    namtor (= 0.1.0-1),
-    libqt6-base6,
-    kirigami,
-    kcoreaddons,
-Description: KDE Plasma 6 KCM for Nam-tor (Kirigami + Qt6 QML)
- The KDE Plasma 6 integration for Nam-tor: a KConfigModule (KCM)
- built with Kirigami + Qt6 QML that exposes enrollment, profile
- management, protection status, and PAM service toggles from
- System Settings. Install this alongside the core namtor package
- to manage Nam-tor from the KDE desktop. Requires the core namtor
- package at the same version.
+ PAM services from the desktop. Requires the core namtor package at
+ the same version.
+ .
+ Replaces/Breaks namtor-kde is an upgrade-blocker fix, not tidiness:
+ the removed Plasma 6 KCM package declared Depends: namtor (= ...),
+ so a leftover install of it would hold apt back from upgrading the
+ core package. Keep these until no supported upgrade path starts
+ from a release that shipped namtor-kde.

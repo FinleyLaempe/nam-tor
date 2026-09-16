@@ -1,3 +1,16 @@
+namtor (0.1.0-2) unstable; urgency=medium
+
+  * Drop the namtor-kde binary package: the project consolidated on a
+    single desktop-neutral GTK4/libadwaita UI, so the Plasma 6 KCM and
+    its cmake/qt6-base-dev/libkf6*-dev build dependencies are gone.
+  * namtor-gnome now declares Replaces/Breaks: namtor-kde. This is an
+    upgrade-blocker fix, not tidiness: namtor-kde declared
+    Depends: namtor (= <version>), so a leftover install of it would
+    hold apt back from upgrading the core package.
+  * namtor-gnome Depends: namtor (= 0.1.0-2).
+
+ -- Nam-tor Project <namtor@example.invalid>  Wed, 16 Sep 2026 00:00:00 +0000
+
 namtor (0.1.0-1) unstable; urgency=medium
 
   * Split into namtor (core), namtor-gnome, namtor-kde binary packages.

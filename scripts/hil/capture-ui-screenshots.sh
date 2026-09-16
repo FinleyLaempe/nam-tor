@@ -3,9 +3,15 @@
 # Nam-tor UI screenshot capture harness — tasks 28/29.
 #
 # Captures screenshots of every named UI state (the 15-state matrix from
-# docs/evidence/enrollment-redesign/16-visual-review.md) for both the GNOME
-# enrollment wizard and the KDE KCM, against a real namtor-daemon on the
-# system bus.  The output directory is docs/evidence/ui/real-run/<desktop>/.
+# docs/evidence/enrollment-redesign/16-visual-review.md) for the enrollment
+# wizard, against a real namtor-daemon on the system bus.  The output
+# directory is docs/evidence/ui/real-run/<desktop>/.
+#
+# This used to make a second pass over the Plasma KCM via kcmshell6. The
+# KCM was removed when the project consolidated on one desktop-neutral
+# GTK4 UI, so there is one pass now. The existing KDE screenshots under
+# docs/evidence/ui/kde/ are frozen release artifacts and are left in
+# place.
 #
 # Without NAMTOR_HW_TEST=1 the script prints a SKIP message and exits 0 —
 # it never fabricates a screenshot.  The manifest
@@ -19,9 +25,7 @@
 # Environment overrides (all have safe defaults):
 #   NAMTOR_HW_TEST       — must be "1" to run the live path
 #   NAMTOR_DAEMON_BIN    — daemon binary (default /usr/lib/namtor/namtor-daemon)
-#   NAMTOR_GNOME_BIN     — GNOME wizard binary (default /usr/bin/namtor-enroll-wizard)
-#   NAMTOR_KCM_BIN       — kcmshell6 binary (default /usr/bin/kcmshell6)
-#   NAMTOR_KCM_MODULE    — KCM module name (default kcm_namtor)
+#   NAMTOR_GNOME_BIN     — wizard binary (default /usr/bin/namtor-enroll-wizard)
 #   NAMTOR_SOCKET        — daemon socket (default /run/namtor/auth.sock)
 #   NAMTOR_EVIDENCE_DIR  — screenshot root (default docs/evidence/ui/real-run)
 #                          (relative to repo root)
@@ -44,13 +48,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 NAMTOR_DAEMON_BIN="${NAMTOR_DAEMON_BIN:-/usr/lib/namtor/namtor-daemon}"
 NAMTOR_GNOME_BIN="${NAMTOR_GNOME_BIN:-/usr/bin/namtor-enroll-wizard}"
-NAMTOR_KCM_BIN="${NAMTOR_KCM_BIN:-/usr/bin/kcmshell6}"
-NAMTOR_KCM_MODULE="${NAMTOR_KCM_MODULE:-kcm_namtor}"
 NAMTOR_SOCKET="${NAMTOR_SOCKET:-/run/namtor/auth.sock}"
 NAMTOR_EVIDENCE_DIR="${NAMTOR_EVIDENCE_DIR:-$REPO_ROOT/docs/evidence/ui/real-run}"
 
 GNOME_DIR="$NAMTOR_EVIDENCE_DIR/gnome"
-KDE_DIR="$NAMTOR_EVIDENCE_DIR/kde"
 MANIFEST="$NAMTOR_EVIDENCE_DIR/manifest.json"
 
 # D-Bus constants (match reference-auth-hil.sh).
@@ -63,7 +64,6 @@ IFACE_V3="org.namtor.Manager3"
 # State tracked for cleanup and manifest.
 DAEMON_STARTED_BY_US=0
 GNOME_PID=""
-KCM_PID=""
 MANIFEST_ENTRIES=()
 
 # ---------------------------------------------------------------------------
@@ -74,10 +74,6 @@ cleanup() {
     if [[ -n "$GNOME_PID" ]] && kill -0 "$GNOME_PID" 2>/dev/null; then
         kill "$GNOME_PID" 2>/dev/null || true
         wait "$GNOME_PID" 2>/dev/null || true
-    fi
-    if [[ -n "$KCM_PID" ]] && kill -0 "$KCM_PID" 2>/dev/null; then
-        kill "$KCM_PID" 2>/dev/null || true
-        wait "$KCM_PID" 2>/dev/null || true
     fi
     if [[ "$DAEMON_STARTED_BY_US" -eq 1 ]]; then
         systemctl stop namtor-daemon.service 2>/dev/null || true
@@ -226,12 +222,12 @@ start_daemon() {
 }
 
 # ---------------------------------------------------------------------------
-# State matrix — the 15 states from 16-visual-review.md, plus KDE equivalents.
+# State matrix — the 15 states from 16-visual-review.md.
 # Each state is: <state_name> <desktop> <env_vars> <drive_action>
 # drive_action describes how to reach the state (gdbus calls, env vars, etc.)
 # ---------------------------------------------------------------------------
 
-# GNOME states (15 from the visual-review matrix).
+# UI states (15 from the visual-review matrix).
 GNOME_STATES=(
     "profiles-empty"
     "profiles-populated"
@@ -250,24 +246,6 @@ GNOME_STATES=(
     "200pct-text"
 )
 
-# KDE states — the KCM exposes a subset of the same states.
-KDE_STATES=(
-    "profiles-empty"
-    "profiles-populated"
-    "setup"
-    "capture-low"
-    "capture-medium"
-    "capture-high"
-    "stopped-review"
-    "auth-collapsed"
-    "auth-expanded"
-    "system-healthy"
-    "system-degraded"
-    "offline"
-    "rtl"
-    "high-contrast"
-    "200pct-text"
-)
 
 # ---------------------------------------------------------------------------
 # Drive GNOME to a named state.  Best-effort: uses gdbus calls and
@@ -402,55 +380,6 @@ post_gnome_state() {
 }
 
 # ---------------------------------------------------------------------------
-# Drive KDE KCM to a named state.  Best-effort: the KCM is launched via
-# kcmshell6 and driven via xdotool/ydotool or D-Bus.
-# ---------------------------------------------------------------------------
-drive_kde_state() {
-    local state="$1"
-    local kcm_env=()
-
-    case "$state" in
-        rtl)
-            kcm_env+=("LANG=ar" "LC_ALL=ar")
-            ;;
-        high-contrast)
-            # KDE uses a different theme mechanism; best-effort.
-            kcm_env+=("QT_HIGHDPI_SCALE_FACTOR=1")
-            ;;
-        200pct-text)
-            kcm_env+=("QT_SCALE_FACTOR=2")
-            ;;
-        offline|system-degraded)
-            systemctl stop namtor-daemon.service 2>/dev/null || true
-            sleep 1
-            ;;
-        *)
-            ;;
-    esac
-
-    # Relaunch KCM with env vars if needed.
-    if [[ ${#kcm_env[@]} -gt 0 ]] || [[ -z "$KCM_PID" ]] || ! kill -0 "$KCM_PID" 2>/dev/null; then
-        if [[ -n "$KCM_PID" ]] && kill -0 "$KCM_PID" 2>/dev/null; then
-            kill "$KCM_PID" 2>/dev/null || true
-            wait "$KCM_PID" 2>/dev/null || true
-        fi
-        env "${kcm_env[@]}" "$NAMTOR_KCM_BIN" "$NAMTOR_KCM_MODULE" &
-        KCM_PID=$!
-        sleep 3
-    fi
-}
-
-post_kde_state() {
-    local state="$1"
-    case "$state" in
-        offline|system-degraded)
-            systemctl start namtor-daemon.service 2>/dev/null || true
-            sleep 1
-            ;;
-    esac
-}
-
-# ---------------------------------------------------------------------------
 # Capture one screenshot for a given desktop and state.
 # Records the result in the manifest.
 # ---------------------------------------------------------------------------
@@ -459,11 +388,7 @@ capture_state() {
     local state="$2"
     local outpath
 
-    if [[ "$desktop" == "gnome" ]]; then
-        outpath="$GNOME_DIR/${state}.png"
-    else
-        outpath="$KDE_DIR/${state}.png"
-    fi
+    outpath="$GNOME_DIR/${state}.png"
 
     echo "capture-ui-screenshots: capturing $desktop/$state → $outpath"
 
@@ -481,16 +406,13 @@ capture_state() {
 echo "capture-ui-screenshots: NAMTOR_HW_TEST=1, starting capture run"
 
 # Ensure output directories exist.
-mkdir -p "$GNOME_DIR" "$KDE_DIR"
+mkdir -p "$GNOME_DIR"
 
 # Start the daemon.
 if ! start_daemon; then
     echo "capture-ui-screenshots: cannot start daemon — recording all states as skip" >&2
     for state in "${GNOME_STATES[@]}"; do
         add_entry "$state" "gnome" "$GNOME_DIR/${state}.png" "skip" "daemon not started"
-    done
-    for state in "${KDE_STATES[@]}"; do
-        add_entry "$state" "kde" "$KDE_DIR/${state}.png" "skip" "daemon not started"
     done
     write_manifest
     exit 0
@@ -515,37 +437,10 @@ for state in "${GNOME_STATES[@]}"; do
     sleep 0.5
 done
 
-# Kill GNOME before KDE pass.
-if [[ -n "$GNOME_PID" ]] && kill -0 "$GNOME_PID" 2>/dev/null; then
-    kill "$GNOME_PID" 2>/dev/null || true
-    wait "$GNOME_PID" 2>/dev/null || true
-    GNOME_PID=""
-fi
-
-# --- KDE capture pass ---
-
-# Launch the KDE KCM.
-if [[ -x "$NAMTOR_KCM_BIN" ]]; then
-    "$NAMTOR_KCM_BIN" "$NAMTOR_KCM_MODULE" &
-    KCM_PID=$!
-    sleep 3
-else
-    echo "capture-ui-screenshots: KDE kcmshell6 not found at $NAMTOR_KCM_BIN" >&2
-fi
-
-for state in "${KDE_STATES[@]}"; do
-    drive_kde_state "$state"
-    sleep 1
-    capture_state "kde" "$state"
-    post_kde_state "$state"
-    sleep 0.5
-done
-
 # Write the manifest.
 write_manifest
 
 echo "capture-ui-screenshots: capture run complete"
-echo "  GNOME screenshots: $GNOME_DIR"
-echo "  KDE screenshots:   $KDE_DIR"
+echo "  Screenshots: $GNOME_DIR"
 echo "  Manifest:          $MANIFEST"
 exit 0

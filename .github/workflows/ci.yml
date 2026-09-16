@@ -2,29 +2,28 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  # Full compile-pipeline gate: builds every shippable binary + the KDE KCM
-  # CMake module on a real distro that has all the KF6/Qt6/GTK4 dev deps.
-  # Uses archlinux:latest because Ubuntu 24.04 does not ship the full KF6
-  # -dev set and this matches the Arch cell of the release matrix. Verifies
-  # the whole workspace compiles end-to-end on every PR, not just
-  # pam_namtor.so (which the rust job below builds for the structural gate).
+  # Full compile-pipeline gate: builds every shippable binary in release
+  # mode, so the whole workspace is proven to compile end-to-end on every
+  # PR — not just pam_namtor.so (which the rust job below builds for the
+  # structural gate).
+  #
+  # This used to run in an archlinux:latest container, whose entire
+  # justification was that Ubuntu did not ship the full KF6 -dev set needed
+  # by the Plasma KCM. The KCM is gone and the only desktop dependency left
+  # is GTK4/libadwaita, which Ubuntu packages, so this runs on the plain
+  # runner like every other job.
   build:
     name: full compile pipeline
     runs-on: ubuntu-latest
-    container: archlinux:latest
     steps:
       - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install build toolchain
         run: |
-            for i in 1 2 3; do
-              pacman -Syu --noconfirm && break || {
-                echo "::warning::pacman -Syu failed (attempt $i), retrying in 10s"
-                sleep 10
-              }
-            done
-            pacman -S --noconfirm --needed base-devel rust cargo cmake ninja \
-                qt6-base kirigami kcoreaddons extra-cmake-modules \
-                gtk4 libadwaita pam openssl onnxruntime
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+                libgtk-4-dev libadwaita-1-dev libpam0g-dev libssl-dev \
+                libudev-dev libseccomp-dev pkg-config
       - name: cargo build --release (all shippable crates)
         run: |
             cargo build --release --locked \
@@ -33,8 +32,7 @@ jobs:
                 -p namtor-cli \
                 -p namtor-camera \
                 -p namtor-pam \
-                -p namtor-gnome \
-                -p namtor-kde
+                -p namtor-gnome
       - name: Verify shippable binaries exist
         run: |
             for bin in namtor-daemon namtor-worker namtor-cli \
@@ -44,18 +42,6 @@ jobs:
             done
             test -f target/release/libnamtor_pam.so || {
               echo "::error::missing libnamtor_pam.so"; exit 1; }
-            test -f target/release/libnamtor_kde.so || {
-              echo "::error::missing libnamtor_kde.so"; exit 1; }
-      - name: CMake build — KDE KCM QML module
-        run: |
-            cmake -S crates/namtor-kde -B build-kde \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_INSTALL_PREFIX=/usr \
-                -DNAMTOR_KDE_RUST_SO="$PWD/target/release/libnamtor_kde.so"
-            cmake --build build-kde --parallel
-      - name: KDE ABI smoke test
-        run: |
-            ctest --test-dir build-kde --output-on-failure
 
   rust:
     runs-on: ubuntu-latest
@@ -80,22 +66,19 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
-      # Gate 6c — clippy with -D warnings. Excludes namtor-kde (needs KF6/Qt6
-      # dev packages unavailable on Ubuntu; covered by the `build` job on
-      # archlinux:latest).
+      # Gate 6c — clippy with -D warnings.
       - name: cargo clippy
-        run: cargo clippy --all-targets --workspace --exclude namtor-kde -- -D warnings
+        run: cargo clippy --all-targets --workspace -- -D warnings
 
       # Gate 6d — test suite.
-      # `--skip concurrent_connections_serialise` avoids a pre-existing deadlock
-      # in listener.rs::concurrent_connections_serialise_on_camera_lock (flagged
-      # for a later wave; see docs/evidence/ci-baseline.md).
       # `--test-threads=1` serialises tests that mutate process-global env vars
       # (licence tests set/remove NAMTOR_ACCEPT_LICENCE); without it those races
       # produce spurious failures under the parallel executor.
-      # Excludes namtor-kde (KF6 unavailable on Ubuntu; covered by `build` job).
+      # No `--skip` and no `--exclude`: the listener deadlock that forced
+      # `--skip concurrent_connections_serialise` is fixed, and namtor-kde
+      # (the only crate that needed KF6/Qt6) no longer exists.
       - name: cargo test --all
-        run: xvfb-run -a cargo test --workspace --exclude namtor-kde -- --skip concurrent_connections_serialise --test-threads=1
+        run: xvfb-run -a cargo test --workspace -- --test-threads=1
 
       # Gate 1a — namtor-proto carries no ML deps (existing G5.1 check).
       - name: G5.1 — namtor-proto carries no ML deps

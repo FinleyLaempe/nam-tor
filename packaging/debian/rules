@@ -14,12 +14,16 @@
 # per-model hashes against model-manifest.toml before any compilation. No
 # network fetch occurs at build or install time.
 #
-# Split into namtor (core), namtor-gnome, namtor-kde binary packages.
+# Split into namtor (core) and namtor-gnome binary packages.
 # The install manifest (schema v2) carries per-entry `package` ownership
-# (core|gnome|kde); override_dh_auto_install calls
-# `stage.sh debian/<pkg> . --package core|gnome|kde` to stage only the
+# (core|gnome); override_dh_auto_install calls
+# `stage.sh debian/<pkg> . --package core|gnome` to stage only the
 # entries owned by each binary package, producing a deterministic DESTDIR
 # layout with no file conflicts between packages.
+#
+# A third binary package, namtor-kde (the Plasma 6 KCM), is gone; see the
+# Replaces/Breaks note in debian/control for why it is obsoleted rather
+# than simply dropped.
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 # Cargo needs the C compiler and linker from the environment; dh-cargo
@@ -61,37 +65,20 @@ override_dh_auto_build:
 	    -p namtor-cli \
 	    -p namtor-camera \
 	    -p namtor-pam \
-	    -p namtor-gnome \
-	    -p namtor-kde
-
-	# KDE KCM QML module (CMake build — installs libnamtorqml.so + main.qml
-	# + metadata.json into the Qt6 QML import dir). The Rust cdylib
-	# (libnamtor_kde.so) is built by cargo above and linked by CMake.
-	cmake -S crates/namtor-kde \
-	    -B build-kde \
-	    -DCMAKE_BUILD_TYPE=Release \
-	    -DCMAKE_INSTALL_PREFIX=/usr \
-	    -DNAMTOR_KDE_RUST_SO=$$(pwd)/target/release/libnamtor_kde.so
-	cmake --build build-kde --parallel
+	    -p namtor-gnome
 
 # ---------------------------------------------------------------------------
-# override_dh_auto_test: workspace tests, skipping the known-flaky
-# serialise test and serialising env-var-mutating tests.
+# override_dh_auto_test: workspace tests, serialising env-var-mutating
+# tests (--test-threads=1).
 # ---------------------------------------------------------------------------
 override_dh_auto_test:
-	cargo test --workspace -- --skip concurrent_connections_serialise --test-threads=1 || true
+	cargo test --workspace -- --test-threads=1 || true
 
 # ---------------------------------------------------------------------------
 # override_dh_auto_install: deterministic split staging from
 # packaging/install-manifest.toml into per-package DESTDIRs.
 # ---------------------------------------------------------------------------
 override_dh_auto_install:
-	# KDE KCM: install the CMake-built QML module + metadata.json into
-	# debian/namtor-kde. stage.sh --package kde will overwrite the
-	# overlapping desktop/metainfo/icon files with identical content
-	# from the manifest.
-	DESTDIR=debian/namtor-kde cmake --install build-kde
-
 	# Deterministic staging from packaging/install-manifest.toml — core
 	# entries only (daemon, worker, CLI, PAM, systemd, sysusers, tmpfiles,
 	# D-Bus, polkit, manifests, PAM scripts, README, COPYING, SBOM,
@@ -109,9 +96,6 @@ override_dh_auto_install:
 	# GNOME entries only (enroll-wizard binary, .desktop, .metainfo.xml,
 	# .svg).
 	./packaging/stage.sh debian/namtor-gnome . --package gnome
-
-	# KDE entries only (kcm .desktop, .metainfo.xml, .svg).
-	./packaging/stage.sh debian/namtor-kde . --package kde
 
 	# Bundle models from the verified archive (no network fetch).
 	mkdir -p debian/namtor/var/lib/namtor/models

@@ -16,7 +16,17 @@ use std::path::Path;
 pub struct InstalledPackages {
     pub core: bool,
     pub gnome: bool,
-    pub kde: bool,
+    /// True if the obsolete `namtor-kde` package (the Plasma 6 KCM, dropped
+    /// when the project consolidated on one desktop-neutral GTK4 UI) is
+    /// still installed.
+    ///
+    /// This is reported rather than ignored because it is actionable: the
+    /// old package declared an exact-version dependency on the core
+    /// package, so a leftover install BLOCKS core upgrades on pacman and
+    /// dnf until it is removed. The current packages declare
+    /// `replaces`/`Obsoletes`/`Breaks` on it so a normal upgrade clears it,
+    /// but a machine that never takes that upgrade path stays stuck.
+    pub legacy_kde: bool,
     /// True if binaries exist but the install manifest is missing — indicates
     /// a manual/monolithic install rather than a split-package install.
     pub manual: bool,
@@ -31,8 +41,8 @@ impl std::fmt::Display for InstalledPackages {
         if self.gnome {
             parts.push("namtor-gnome");
         }
-        if self.kde {
-            parts.push("namtor-kde");
+        if self.legacy_kde {
+            parts.push("namtor-kde (obsolete)");
         }
         if self.manual {
             parts.push("manual");
@@ -53,17 +63,20 @@ pub fn detect_installed_packages(root: &Path) -> InstalledPackages {
     let manifest = root.join("usr/share/namtor/install-manifest.toml");
     let wizard = root.join("usr/bin/namtor-enroll-wizard");
     let gnome_desktop = root.join("usr/share/applications/org.namtor.Wizard.desktop");
-    let kde_desktop = root.join("usr/share/applications/org.namtor.kcm.desktop");
+    // The KCM desktop entry was the only file namtor-kde owned that had a
+    // stable, unambiguous path, so it stays the probe for a leftover
+    // install of that obsolete package.
+    let legacy_kcm_desktop = root.join("usr/share/applications/org.namtor.kcm.desktop");
 
     let core = daemon.exists() && manifest.exists();
     let gnome = wizard.exists() && gnome_desktop.exists();
-    let kde = kde_desktop.exists();
+    let legacy_kde = legacy_kcm_desktop.exists();
     let manual = daemon.exists() && !manifest.exists();
 
     InstalledPackages {
         core,
         gnome,
-        kde,
+        legacy_kde,
         manual,
     }
 }
@@ -342,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn detect_all_three_split_packages() {
+    fn detect_both_split_packages_plus_obsolete_kde() {
         let tmp = TempDir::new().unwrap();
         touch(tmp.path(), "usr/lib/namtor/namtor-daemon");
         touch(tmp.path(), "usr/share/namtor/install-manifest.toml");
@@ -355,9 +368,15 @@ mod tests {
         let pkgs = detect_installed_packages(tmp.path());
         assert!(pkgs.core);
         assert!(pkgs.gnome);
-        assert!(pkgs.kde);
+        assert!(
+            pkgs.legacy_kde,
+            "a leftover namtor-kde install must be reported — it blocks core upgrades"
+        );
         assert!(!pkgs.manual);
-        assert_eq!(format!("{pkgs}"), "namtor, namtor-gnome, namtor-kde");
+        assert_eq!(
+            format!("{pkgs}"),
+            "namtor, namtor-gnome, namtor-kde (obsolete)"
+        );
     }
 
     #[test]
@@ -368,7 +387,7 @@ mod tests {
         let pkgs = detect_installed_packages(tmp.path());
         assert!(pkgs.core);
         assert!(!pkgs.gnome);
-        assert!(!pkgs.kde);
+        assert!(!pkgs.legacy_kde);
         assert!(!pkgs.manual);
         assert_eq!(format!("{pkgs}"), "namtor");
     }
@@ -389,7 +408,7 @@ mod tests {
         let pkgs = detect_installed_packages(tmp.path());
         assert!(!pkgs.core);
         assert!(!pkgs.gnome);
-        assert!(!pkgs.kde);
+        assert!(!pkgs.legacy_kde);
         assert!(!pkgs.manual);
         assert_eq!(format!("{pkgs}"), "none");
     }
@@ -619,7 +638,7 @@ mod tests {
         let pkgs = InstalledPackages {
             core: true,
             gnome: true,
-            kde: false,
+            legacy_kde: false,
             manual: false,
         };
         let text = format!("{pkgs}");

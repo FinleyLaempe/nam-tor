@@ -62,6 +62,18 @@ impl ManifestDests {
 // ---------------------------------------------------------------------------
 
 /// Which split package owns an install manifest entry.
+///
+/// # On-disk compatibility
+///
+/// This enum is deserialized from `/usr/share/namtor/install-manifest.toml`,
+/// which is **installed on the user's system** and read at runtime by
+/// `packaging/uninstall.sh` and `namtor-cli` diagnostics. A newly built
+/// `namtor-cli` routinely reads an *older* manifest than the one in this
+/// source tree. `#[serde(other)]` on [`Package::Unknown`] is therefore
+/// load-bearing: without it, a manifest written by a release that still had
+/// a `namtor-kde` package (`package = "kde"`) would fail to deserialize at
+/// all, taking down uninstall and diagnostics rather than degrading to "an
+/// entry this build does not own".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Package {
@@ -69,8 +81,13 @@ pub enum Package {
     Core,
     /// `namtor-gnome` — GTK4/libadwaita wizard + settings.
     Gnome,
-    /// `namtor-kde` — Plasma 6 KCM, QML, C++ bridge.
-    Kde,
+    /// A package name this build does not know — most likely `kde`, from a
+    /// manifest installed before the Plasma KCM was dropped in favour of a
+    /// single desktop-neutral UI. Entries owned by an unknown package are
+    /// never staged by this build and never match a `--package` filter, but
+    /// they must still parse.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Lifecycle policy for generated runtime state on upgrade or purge.
@@ -826,12 +843,61 @@ package = \"kde\"
             .expect("wizard entry exists");
         assert_eq!(wizard.package, Some(Package::Gnome));
 
+        // The fixture deliberately carries a `package = "kde"` entry, which
+        // no longer names a package this build ships. It must degrade to
+        // `Package::Unknown` rather than failing the whole parse.
         let kcm = split
             .files
             .iter()
             .find(|f| f.dest == "/usr/share/applications/org.namtor.kcm.desktop")
             .expect("kcm entry exists");
-        assert_eq!(kcm.package, Some(Package::Kde));
+        assert_eq!(kcm.package, Some(Package::Unknown));
+    }
+
+    /// Regression guard for the installed-manifest compatibility contract:
+    /// `/usr/share/namtor/install-manifest.toml` is written by whichever
+    /// release is installed, and `uninstall.sh` + `namtor-cli` read it with
+    /// whichever `namtor-layout` is installed. A manifest from a release
+    /// that still shipped `namtor-kde` says `package = "kde"`; a build
+    /// without that variant must still load it, or uninstall and
+    /// diagnostics break on every machine upgrading from such a release.
+    #[test]
+    fn old_manifest_with_removed_kde_package_still_deserialises() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = tmp.path().join("old-install-manifest.toml");
+        fs::write(
+            &manifest,
+            "\
+schema_version = 2
+
+[[files]]
+dest = \"/usr/share/applications/org.namtor.kcm.desktop\"
+src = \"packaging/applications/org.namtor.kcm.desktop\"
+mode = \"0644\"
+owner = \"root\"
+group = \"root\"
+package = \"kde\"
+",
+        )
+        .unwrap();
+
+        let split = LayoutPaths::parse_split_manifest(&manifest)
+            .expect("an old manifest naming a removed package must still parse");
+        assert_eq!(split.files.len(), 1);
+        assert_eq!(split.files[0].package, Some(Package::Unknown));
+
+        // An unknown package is owned by nothing this build stages, so it
+        // never leaks into a core or gnome DESTDIR.
+        assert!(split.package_dests(Package::Core).files.is_empty());
+        assert!(split.package_dests(Package::Gnome).files.is_empty());
+
+        // And it is not a validation error — degrading, not failing, is the
+        // whole point.
+        assert!(
+            split.validate().is_empty(),
+            "an unknown package must not be a validation error: {:?}",
+            split.validate()
+        );
     }
 
     #[test]
@@ -1003,13 +1069,15 @@ on_purge = \"remove\"
             .files
             .contains(&"/usr/lib/namtor/namtor-daemon".to_string()));
 
-        let kde_dests = split.package_dests(Package::Kde);
-        assert!(kde_dests
+        // The fixture's `package = "kde"` entry parses as `Unknown` and so
+        // belongs to neither shipped package — it is filtered out of both.
+        assert!(!gnome_dests
             .files
             .contains(&"/usr/share/applications/org.namtor.kcm.desktop".to_string()));
-        assert!(!kde_dests
+        let unknown_dests = split.package_dests(Package::Unknown);
+        assert!(unknown_dests
             .files
-            .contains(&"/usr/bin/namtor-enroll-wizard".to_string()));
+            .contains(&"/usr/share/applications/org.namtor.kcm.desktop".to_string()));
     }
 
     #[test]
@@ -1066,19 +1134,29 @@ on_purge = \"remove\"
         }
     }
 
+    /// The repo manifest declares only packages this build ships. An
+    /// `Unknown` entry here would mean a typo or a stale package name, not
+    /// an old on-disk manifest — that fallback exists for installed files,
+    /// not for the source of truth.
     #[test]
-    fn repo_manifest_kde_package_has_no_gnome_payload() {
+    fn repo_manifest_declares_no_unknown_package() {
         let manifest = repo_manifest_path();
         let split = LayoutPaths::parse_split_manifest(&manifest).expect("repo manifest must parse");
 
-        let kde_dests = split.package_dests(Package::Kde);
-        for dest in &kde_dests.files {
-            assert!(
-                !dest.contains("wizard")
-                    && !dest.contains("gnome")
-                    && !dest.contains("gtk")
-                    && !dest.contains("adwaita"),
-                "KDE package contains GNOME/GTK payload: {dest}"
+        for f in &split.files {
+            assert_ne!(
+                f.package,
+                Some(Package::Unknown),
+                "file dest {} names a package this build does not ship",
+                f.dest
+            );
+        }
+        for d in &split.dirs {
+            assert_ne!(
+                d.package,
+                Some(Package::Unknown),
+                "dir path {} names a package this build does not ship",
+                d.path
             );
         }
     }

@@ -4,9 +4,9 @@
 //! Shared D-Bus contract suite — transport-agnostic behavioral tests.
 //!
 //! This module is the single source of behavioral truth for the
-//! `org.namtor.Manager` surface as seen by a desktop UI. Both the GNOME
-//! and KDE front-ends run these scenarios against [`crate::fake::FakeManagerClient`]
-//! so the two UIs cannot drift in happy-path, error, cancel, or auth-loss
+//! `org.namtor.Manager` surface as seen by a desktop UI. The front-end runs
+//! these scenarios against [`crate::fake::FakeManagerClient`] so that it and
+//! the daemon cannot drift in happy-path, error, cancel, or auth-loss
 //! handling.
 
 use crate::client::ManagerClient;

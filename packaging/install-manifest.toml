@@ -13,7 +13,7 @@
 #                           this version governs packaging migrations only.
 #
 #   [retention]
-#     purge_owner        string   — which package (core|gnome|kde) owns the
+#     purge_owner        string   — which package (core|gnome) owns the
 #                                   purge of biometric state (templates,
 #                                   models cache, backoff).
 #
@@ -21,7 +21,7 @@
 #     path               string   — a runtime-generated state path (not an
 #                                   installed file). Created by the daemon at
 #                                   runtime; lifecycle declared here.
-#     package            string   — core|gnome|kde
+#     package            string   — core|gnome
 #     on_upgrade         string   — "preserve" | "remove"
 #     on_purge           string   — "preserve" | "remove"
 #
@@ -39,10 +39,15 @@
 # Split packages:
 #   core  — namtor (daemon, worker, PAM, CLI, models, services, SBOM, notice)
 #   gnome — namtor-gnome (GTK4/libadwaita wizard + settings)
-#   kde   — namtor-kde (Plasma 6 KCM desktop integration files)
 #
-# Shared directories (e.g. /usr/share/applications) are owned by core; GNOME
-# and KDE each own only their own files dropped into them.
+# A third `kde` package (the Plasma 6 KCM) existed up to and including the
+# 0.1.0 release and appears as `package = "kde"` in manifests installed by
+# it. Nothing writes that value any more, but `namtor-layout`'s `Package`
+# enum still accepts it (degrading to `Unknown`) because uninstall.sh and
+# namtor-cli read the INSTALLED manifest, which may predate this build.
+#
+# Shared directories (e.g. /usr/share/applications) are owned by core; the
+# desktop package owns only its own files dropped into them.
 #
 # Modes are octal strings ("0755", "0644"). Owners/groups are
 # resolved by name at install time (root must run staging to chown; non-root
@@ -422,41 +427,6 @@ owner = "root"
 group = "root"
 symlink = false
 package = "gnome"
-
-# ---------------------------------------------------------------------------
-# KDE Plasma 6 desktop integration (KCM desktop entry, metainfo, icon)
-# ---------------------------------------------------------------------------
-# The KCM QML module (libnamtorqml.so) and metadata.json are installed by
-# the CMake build's install() rules, not by this manifest — CMake handles
-# the Qt6 QML import dir and the kpackage/kcms directory. These entries
-# cover the static desktop-integration files that CMake does not install.
-
-[[files]]
-dest = "/usr/share/applications/org.namtor.kcm.desktop"
-src = "packaging/applications/org.namtor.kcm.desktop"
-mode = "0644"
-owner = "root"
-group = "root"
-symlink = false
-package = "kde"
-
-[[files]]
-dest = "/usr/share/metainfo/org.namtor.kcm.metainfo.xml"
-src = "packaging/metainfo/org.namtor.kcm.metainfo.xml"
-mode = "0644"
-owner = "root"
-group = "root"
-symlink = false
-package = "kde"
-
-[[files]]
-dest = "/usr/share/icons/hicolor/scalable/apps/org.namtor.kcm.svg"
-src = "packaging/icons/hicolor/scalable/apps/org.namtor.kcm.svg"
-mode = "0644"
-owner = "root"
-group = "root"
-symlink = false
-package = "kde"
 
 # ---------------------------------------------------------------------------
 # Quirks database — per-device quirks TOML files read by the daemon and
