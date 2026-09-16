@@ -390,6 +390,7 @@ jobs:
             mkdir -p artifacts
             python3 - <<'PY'
             import json, os
+            from datetime import datetime, timezone
             # MUST mirror the build matrix above. Listing a cell that is
             # not in the matrix publishes a "pass" for a platform nobody
             # tested — a release-integrity defect, not a cosmetic one.
@@ -408,11 +409,32 @@ jobs:
                     "model_runtime": "pass",
                     "notes": "Captured from release.yml build job success."
                 })
-            tag = os.environ.get("GITHUB_REF_NAME", "dry-run")
+            # F12: `tag` must hold a TAG. On workflow_dispatch the ref is a
+            # branch, and passing a branch name off as a release tag is how
+            # run 35131438215 published `"tag": "production-readiness"`. Only
+            # a refs/tags/ ref yields a tag here; anything else is marked as
+            # the dry run it is. The publish job independently refuses to run
+            # from a non-tag ref, so a real release always takes the first
+            # branch below.
+            ref = os.environ.get("GITHUB_REF", "")
+            ref_name = os.environ.get("GITHUB_REF_NAME", "")
+            if ref.startswith("refs/tags/"):
+                tag = ref_name
+            else:
+                tag = f"dry-run-{ref_name}" if ref_name else "dry-run"
+            # F11: `generated_at` was fed GITHUB_RUN_ID, so a field named for a
+            # timestamp held a run ID and any consumer parsing it as a date
+            # mis-read it. It is now a real ISO-8601 UTC instant, and the run
+            # ID keeps its own field — both are wanted for provenance.
+            # schema_version goes to 2 because `generated_at` and `tag` both
+            # changed meaning.
             out = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "tag": tag,
-                "generated_at": os.environ.get("GITHUB_RUN_ID", ""),
+                "ref": ref,
+                "generated_at": datetime.now(timezone.utc)
+                                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "run_id": os.environ.get("GITHUB_RUN_ID", ""),
                 "cells": results,
                 "summary": {
                     "total": len(results),
@@ -440,6 +462,32 @@ jobs:
     # Skip publish on dry-run (workflow_dispatch default).
     if: github.event_name == 'push' || github.event.inputs.dry_run != 'true'
     steps:
+      # F12 — refuse to publish from anything that is not a real `v*` tag.
+      # Every artifact name below, and action-gh-release's `tag_name`, is
+      # built from `github.ref_name`, which on workflow_dispatch is a BRANCH
+      # name: a dispatch with dry_run=false would otherwise cut a GitHub
+      # Release named after a branch. This runs before checkout so the refusal
+      # is the first thing in the log, and nothing is built, signed or
+      # uploaded before it. dry_run is untouched — a dry run never reaches
+      # this job at all.
+      - name: Refuse to publish from a non-tag ref
+        env:
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+            if [ "${REF#refs/tags/}" = "$REF" ]; then
+                echo "::error::refusing to publish: '$REF' is not a tag. Cut a release by pushing a v* tag; workflow_dispatch is for dry runs only (dry_run: true)."
+                exit 1
+            fi
+            case "$REF_NAME" in
+                v*) ;;
+                *)
+                    echo "::error::refusing to publish: tag '$REF_NAME' is not a release tag (expected v*)."
+                    exit 1
+                    ;;
+            esac
+            echo "publish guard: ref '$REF' is release tag '$REF_NAME'"
+
       - uses: actions/checkout@v5
 
       - name: Download all package artifacts
