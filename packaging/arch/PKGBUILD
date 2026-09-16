@@ -9,19 +9,31 @@
 #                  sysusers, tmpfiles, D-Bus, polkit, manifests, models,
 #                  man pages, licences, lifecycle helper, SBOM. Headless-safe
 #                  (no desktop deps).
-#   namtor-gnome — GTK4/libadwaita enrollment wizard + settings. Desktop
+#   namtor-ui    — GTK4/libadwaita enrollment wizard + settings. Desktop
 #                  entry, metainfo, icon. Depends on namtor exact version.
-#                  Desktop-neutral despite the name; it is the only UI.
+#                  Desktop-neutral: it is the only UI.
 #
-# A third package, namtor-kde (the Plasma 6 KCM), was shipped up to and
-# including 0.1.0-3 and is now gone — the project consolidated on one
-# desktop-neutral GTK4 UI. It is NOT simply dropped: namtor-gnome declares
-# `replaces`/`conflicts` on it, because a leftover namtor-kde carries
-# `depends=("namtor=$pkgver")` and pacman would otherwise refuse to upgrade
-# the core package while that unsatisfiable dependency remained installed.
+# Two predecessors are obsoleted here rather than simply dropped:
+#
+#   namtor-gnome — the same package under its old, desktop-specific name,
+#                  shipped up to and including 0.1.0-4. pacman does not
+#                  migrate a rename on its own, so without the
+#                  `provides`/`conflicts`/`replaces` below the old package
+#                  lingers and FILE-CONFLICTS with this one: both own
+#                  /usr/bin/namtor-enroll-wizard, the .desktop, the
+#                  metainfo and the icon.
+#   namtor-kde   — the Plasma 6 KCM, shipped up to and including 0.1.0-3,
+#                  removed when the project consolidated on one
+#                  desktop-neutral GTK4 UI. A leftover namtor-kde carries
+#                  `depends=("namtor=$pkgver")` and pacman would otherwise
+#                  refuse to upgrade the core package while that
+#                  unsatisfiable dependency remained installed.
+#
+# An obsoletion only fires on an upgrade to a NEWER version, which is why
+# pkgrel is bumped alongside the rename.
 #
 # The install manifest (schema v2) carries per-entry `package` ownership
-# (core|gnome). stage.sh --package core|gnome stages only the entries owned
+# (core|ui). stage.sh --package core|ui stages only the entries owned
 # by that package, producing a deterministic DESTDIR layout with no file
 # conflicts between packages.
 #
@@ -30,7 +42,7 @@
 #
 # Runtime deps (per package):
 #   namtor       — onnxruntime (CPU EP), systemd, pam, gcc-libs
-#   namtor-gnome — namtor=$pkgver (exact), gtk4, libadwaita
+#   namtor-ui    — namtor=$pkgver (exact), gtk4, libadwaita
 #
 # Models are bundled: YuNet (MIT, redistributable), SFace (Apache-2.0,
 # redistributable), and MiniFASNet (self-trained, Apache-2.0). Licence
@@ -49,10 +61,10 @@
 pkgbase=namtor
 pkgname=(
     namtor
-    namtor-gnome
+    namtor-ui
 )
 pkgver=0.1.0
-pkgrel=4
+pkgrel=5
 epoch=0
 arch=('x86_64' 'aarch64')
 url="https://github.com/FinleyLaempe/nam-tor"
@@ -133,7 +145,7 @@ build() {
         -p namtor-cli \
         -p namtor-camera \
         -p namtor-pam \
-        -p namtor-gnome
+        -p namtor-ui
 }
 
 # ---------------------------------------------------------------------------
@@ -203,20 +215,29 @@ package_namtor() {
 }
 
 # ---------------------------------------------------------------------------
-# package_namtor_gnome: GTK4/libadwaita enrollment wizard + settings — the
+# package_namtor-ui: GTK4/libadwaita enrollment wizard + settings — the
 # single, desktop-neutral UI. Depends on the exact core version. No install
 # hook — pacman's alpm hooks (desktop-database.hook, gtk-icon-cache.hook)
 # handle .desktop/icon cache updates automatically after the transaction.
 #
-# `replaces`/`conflicts` on namtor-kde are an UPGRADE BLOCKER FIX, not
-# tidiness. namtor-kde declared depends=("namtor=$pkgver"); once it stops
-# being built, a machine that still has it installed has an unsatisfiable
-# dependency and pacman aborts the whole transaction rather than upgrading
-# the core package. `replaces` makes pacman remove it as part of the
-# upgrade. Do not drop these until no supported upgrade path starts from a
-# release that shipped namtor-kde (<= 0.1.0-3).
+# `provides`/`conflicts`/`replaces` are an UPGRADE BLOCKER FIX, not
+# tidiness:
+#
+# - namtor-gnome is this package's former name. pacman migrates nothing on
+#   a rename: without `replaces` the old package stays installed and
+#   file-conflicts with this one on all four of its files, and the install
+#   fails. `provides` keeps anything that depended on the old name
+#   satisfiable during the transaction; `conflicts` makes the overlap
+#   explicit rather than letting pacman discover it file by file.
+# - namtor-kde declared depends=("namtor=$pkgver"); once it stops being
+#   built, a machine that still has it installed has an unsatisfiable
+#   dependency and pacman aborts the whole transaction rather than
+#   upgrading the core package.
+#
+# Do not drop either until no supported upgrade path starts from a release
+# that shipped them (namtor-kde <= 0.1.0-3, namtor-gnome <= 0.1.0-4).
 # ---------------------------------------------------------------------------
-package_namtor-gnome() {
+package_namtor-ui() {
     pkgdesc="Nam-tor enrollment wizard and settings (GTK4/libadwaita)"
     arch=('x86_64' 'aarch64')
     depends=(
@@ -224,15 +245,15 @@ package_namtor-gnome() {
         'gtk4'
         'libadwaita'
     )
-    provides=()
-    conflicts=('namtor-kde')
-    replaces=('namtor-kde')
+    provides=('namtor-gnome')
+    conflicts=('namtor-gnome' 'namtor-kde')
+    replaces=('namtor-gnome' 'namtor-kde')
     # No install hook — desktop packages have no lifecycle hooks. The core
     # package's namtor.install delegates to the shared lifecycle helper.
 
     cd "$srcdir/nam-tor-$pkgver"
 
-    # Deterministic staging from packaging/install-manifest.toml — gnome
+    # Deterministic staging from packaging/install-manifest.toml — UI
     # entries only (enroll-wizard binary, .desktop, .metainfo.xml, .svg).
-    ./packaging/stage.sh "$pkgdir" "$srcdir/nam-tor-$pkgver" --package gnome
+    ./packaging/stage.sh "$pkgdir" "$srcdir/nam-tor-$pkgver" --package ui
 }

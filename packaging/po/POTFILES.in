@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
-# POTFILES.in — source files containing translatable strings for namtor-gnome.
-# Used by xgettext / msginit to produce namtor-gnome.pot.
+# POTFILES.in — source files containing translatable strings for namtor-ui.
+# Used by xgettext / msginit to produce namtor-ui.pot.
 #
 # One path per line, relative to the repo root. Only user-visible strings
 # (labels, error messages, recovery guidance) are extracted; no biometric
 # data, thresholds, or model identifiers appear in translatable strings.
-crates/namtor-gnome/src/bin/wizard.rs
-crates/namtor-gnome/src/components/enrollment.rs
-crates/namtor-gnome/src/components/profile_list.rs
-crates/namtor-gnome/src/components/recovery.rs
-crates/namtor-gnome/src/components/review.rs
-crates/namtor-gnome/src/shell.rs
+crates/namtor-ui/src/bin/wizard.rs
+crates/namtor-ui/src/components/enrollment.rs
+crates/namtor-ui/src/components/profile_list.rs
+crates/namtor-ui/src/components/recovery.rs
+crates/namtor-ui/src/components/review.rs
+crates/namtor-ui/src/shell.rs

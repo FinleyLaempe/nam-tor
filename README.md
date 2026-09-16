@@ -21,22 +21,37 @@ Nam-tor ships as two split packages on Arch, Fedora, and Debian:
 | Package | Contents | Depends on |
 |---|---|---|
 | `namtor` | Daemon, worker, PAM module, CLI, bundled models, systemd units, D-Bus service, polkit policy, lifecycle helper, SBOM | `onnxruntime`, `pam`, `systemd` |
-| `namtor-gnome` | Enrollment wizard and settings app (GTK4/libadwaita). Desktop-neutral despite the name — it is the only UI. | `namtor` (exact version), `gtk4`, `libadwaita` |
+| `namtor-ui` | Enrollment wizard and settings app (GTK4/libadwaita). Desktop-neutral — it is the only UI. | `namtor` (exact version), `gtk4`, `libadwaita` |
 
 The core package is headless-safe: it has no desktop-library dependencies, so a server can install `namtor` alone for daemon + PAM + CLI without pulling GTK.
 
-### Upgrading from a release that had `namtor-kde`
+### Upgrading from a release that had `namtor-gnome` or `namtor-kde`
 
-Releases up to 0.1.0 also shipped a `namtor-kde` package: a Plasma 6 KCM
+The desktop package used to be called **`namtor-gnome`**. It is the same
+package — GTK4/libadwaita, no GNOME-only runtime dependency — renamed to
+`namtor-ui` because it is now the single, desktop-neutral UI.
+
+A rename is not free: no package manager migrates one on its own, and the
+two packages own exactly the same four files (`/usr/bin/namtor-enroll-wizard`,
+the `.desktop` entry, the AppStream metainfo and the icon). Left installed,
+the old one **file-conflicts** with the new one. `namtor-ui` therefore
+declares `provides`/`conflicts`/`replaces` (Arch), `Provides:`/`Obsoletes:`
+(Fedora) and `Provides:`/`Replaces:`/`Breaks:` (Debian) on `namtor-gnome`,
+so a normal upgrade swaps it for you.
+
+Releases up to 0.1.0 also shipped a **`namtor-kde`** package: a Plasma 6 KCM
 written in Qt6/QML. It is gone; Nam-tor now has one desktop-neutral GTK4
-UI, which runs on Plasma like any other GTK app.
+UI, which runs on Plasma like any other GTK app. It too is **obsoleted, not
+just dropped**, because it declared an exact-version dependency on `namtor`:
+left installed, it would block core upgrades.
 
-The old package is **obsoleted, not just dropped**, because it declared an
-exact-version dependency on `namtor`: left installed, it would block core
-upgrades. `namtor-gnome` declares `replaces`/`Obsoletes`/`Breaks` on it, so
-upgrading through your package manager removes it for you. If you pinned or
-held packages and end up with an unsatisfiable dependency, remove
-`namtor-kde` by hand and upgrade again.
+The installed binary, the desktop entry id (`org.namtor.Wizard`) and the
+polkit and D-Bus names are unchanged by the rename — only the package name
+moved.
+
+If you pinned or held packages and end up with a file conflict or an
+unsatisfiable dependency, remove `namtor-gnome` / `namtor-kde` by hand and
+upgrade again.
 
 ## Setup
 

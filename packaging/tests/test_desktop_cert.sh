@@ -13,10 +13,10 @@
 #   (b) No KDE/Qt payload remains anywhere in the packaging.
 #   (c) The UI uses the SYSTEM bus (not the session bus) — grep verified.
 #   (d) Presenter flow: start enrollment -> progress -> review ->
-#       commit -> profile list refresh (covered by namtor-gnome unit tests).
+#       commit -> profile list refresh (covered by namtor-ui unit tests).
 #   (e) (removed with the KCM)
 #   (f) PAM service toggle: list -> enable -> verify -> disable -> verify
-#       (covered by namtor-gnome unit tests).
+#       (covered by namtor-ui unit tests).
 #   (g) High-impact confirmation dialog for login/sudo/su/polkit services
 #       (HIGH_IMPACT_WARNING constant).
 #   (h) Privacy scan passes on all UI-facing data (no thresholds, scores,
@@ -32,7 +32,7 @@
 #   - structural checks (binaries staged, system-bus usage, install-manifest
 #     entries, accessibility anchors, warning constants, PAM sufficient
 #     control);
-#   - existing unit tests in namtor-gnome (29 presenter + 12 privacy).
+#   - existing unit tests in namtor-ui (29 presenter + 12 privacy).
 # Real enrollment with a camera, real PAM toggle against /etc/pam.d, and
 # real authentication against a running PAM stack are human-gated on a
 # desktop VM and recorded as WITHHELD in the evidence files.
@@ -47,7 +47,7 @@ PACKAGING_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PACKAGING_DIR/.." && pwd)"
 EVIDENCE_DIR="$REPO_ROOT/docs/evidence/public-release"
 
-GNOME_CRATE="$REPO_ROOT/crates/namtor-gnome"
+UI_CRATE="$REPO_ROOT/crates/namtor-ui"
 MANIFEST="$PACKAGING_DIR/install-manifest.toml"
 STAGE_SH="$PACKAGING_DIR/stage.sh"
 PAM_INSTALL="$PACKAGING_DIR/pam-install.sh"
@@ -105,22 +105,22 @@ echo "Task 30 — Desktop settings enrollment + PAM opt-in certification"
 echo "=================================================================="
 
 # ---------------------------------------------------------------------------
-# (a) GNOME settings app binary staged
+# (a) settings app binary staged
 # ---------------------------------------------------------------------------
 echo ""
-echo "[a] GNOME settings app binary staged"
-GNOME_BIN_REL=$(grep -A4 'dest = "/usr/bin/namtor-enroll-wizard"' "$MANIFEST" \
+echo "[a] settings app binary staged"
+UI_BIN_REL=$(grep -A4 'dest = "/usr/bin/namtor-enroll-wizard"' "$MANIFEST" \
                 | grep -E '^src' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-GNOME_BIN_PATH="$REPO_ROOT/$GNOME_BIN_REL"
-if [[ -n "$GNOME_BIN_REL" ]] \
-   && grep -q 'package = "gnome"' <(grep -A6 'dest = "/usr/bin/namtor-enroll-wizard"' "$MANIFEST"); then
-    ok "install-manifest declares namtor-enroll-wizard under package=gnome"
+UI_BIN_PATH="$REPO_ROOT/$UI_BIN_REL"
+if [[ -n "$UI_BIN_REL" ]] \
+   && grep -q 'package = "ui"' <(grep -A6 'dest = "/usr/bin/namtor-enroll-wizard"' "$MANIFEST"); then
+    ok "install-manifest declares namtor-enroll-wizard under package=ui"
 else
-    not_ok "install-manifest missing namtor-enroll-wizard gnome entry"
+    not_ok "install-manifest missing namtor-enroll-wizard ui entry"
 fi
-check_file "namtor-enroll-wizard binary" "$GNOME_BIN_PATH"
+check_file "namtor-enroll-wizard binary" "$UI_BIN_PATH"
 # Also accept the debug build as a fallback (CI may build debug only).
-if [[ ! -f "$GNOME_BIN_PATH" ]] && [[ -f "$REPO_ROOT/target/debug/namtor-enroll-wizard" ]]; then
+if [[ ! -f "$UI_BIN_PATH" ]] && [[ -f "$REPO_ROOT/target/debug/namtor-enroll-wizard" ]]; then
     ok "namtor-enroll-wizard debug build present at target/debug/"
 fi
 
@@ -160,7 +160,7 @@ echo "[c] System-bus usage (sessionBus must be 0)"
 # The UI crate's dbus_client.rs is a thin re-export; the live connection is
 # opened in the shared namtor-client crate, so check both.
 UI_DBUS_SOURCES=(
-    "$GNOME_CRATE/src/dbus_client.rs"
+    "$UI_CRATE/src/dbus_client.rs"
     "$REPO_ROOT/crates/namtor-client/src/dbus_client.rs"
 )
 SESSION_BUS_UI=0
@@ -181,18 +181,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# (d) GNOME presenter flow covered by unit tests
+# (d) UI presenter flow covered by unit tests
 # ---------------------------------------------------------------------------
 echo ""
-echo "[d] GNOME presenter flow unit tests"
-if cargo test -p namtor-gnome --test presenter_flow --no-fail-fast 2>&1 | grep -qE 'test result: ok\. ([0-9]+) passed; 0 failed'; then
-    GNOME_PASSED=$(cargo test -p namtor-gnome --test presenter_flow --no-fail-fast 2>&1 \
+echo "[d] UI presenter flow unit tests"
+if cargo test -p namtor-ui --test presenter_flow --no-fail-fast 2>&1 | grep -qE 'test result: ok\. ([0-9]+) passed; 0 failed'; then
+    UI_PASSED=$(cargo test -p namtor-ui --test presenter_flow --no-fail-fast 2>&1 \
                    | grep -E 'test result:' | head -1 \
                    | sed -E 's/.*ok\. ([0-9]+) passed.*/\1/')
-    ok "namtor-gnome presenter_flow tests pass ($GNOME_PASSED passed)"
+    ok "namtor-ui presenter_flow tests pass ($UI_PASSED passed)"
 else
-    not_ok "namtor-gnome presenter_flow tests failed"
-    GNOME_PASSED=0
+    not_ok "namtor-ui presenter_flow tests failed"
+    UI_PASSED=0
 fi
 # Flow coverage: each phase has a dedicated test.
 FLOW_TESTS=(
@@ -202,11 +202,11 @@ FLOW_TESTS=(
     "reconnect_restores_state"
 )
 for t in "${FLOW_TESTS[@]}"; do
-    if cargo test -p namtor-gnome --test presenter_flow "$t" --no-fail-fast 2>&1 \
+    if cargo test -p namtor-ui --test presenter_flow "$t" --no-fail-fast 2>&1 \
        | grep -qE "^test ${t} \.\.\. ok"; then
-        ok "GNOME flow test present: $t"
+        ok "UI flow test present: $t"
     else
-        not_ok "GNOME flow test missing/failed: $t"
+        not_ok "UI flow test missing/failed: $t"
     fi
 done
 
@@ -215,32 +215,32 @@ done
 # ---------------------------------------------------------------------------
 echo ""
 echo "[f] PAM service toggle flow (list -> enable -> verify -> disable)"
-# GNOME: SetPamServiceEnabled + ListPamServices in client trait + presenter.
-if grep -q 'fn set_pam_service_enabled' "$GNOME_CRATE/src/client.rs" \
-   && grep -q 'fn list_pam_services' "$GNOME_CRATE/src/client.rs"; then
-    ok "GNOME client trait declares list_pam_services + set_pam_service_enabled"
+# UI: SetPamServiceEnabled + ListPamServices in client trait + presenter.
+if grep -q 'fn set_pam_service_enabled' "$UI_CRATE/src/client.rs" \
+   && grep -q 'fn list_pam_services' "$UI_CRATE/src/client.rs"; then
+    ok "UI client trait declares list_pam_services + set_pam_service_enabled"
 else
-    not_ok "GNOME client trait missing PAM v2 methods"
+    not_ok "UI client trait missing PAM v2 methods"
 fi
-if grep -q 'fn request_pam_toggle' "$GNOME_CRATE/src/presenter.rs" \
-   && grep -q 'fn confirm_pam_toggle' "$GNOME_CRATE/src/presenter.rs"; then
-    ok "GNOME presenter has request_pam_toggle + confirm_pam_toggle"
+if grep -q 'fn request_pam_toggle' "$UI_CRATE/src/presenter.rs" \
+   && grep -q 'fn confirm_pam_toggle' "$UI_CRATE/src/presenter.rs"; then
+    ok "UI presenter has request_pam_toggle + confirm_pam_toggle"
 else
-    not_ok "GNOME presenter missing PAM toggle methods"
+    not_ok "UI presenter missing PAM toggle methods"
 fi
 # Unit tests covering toggle + revert + unsupported refusal.
-PAM_TESTS_GNOME=(
+PAM_TESTS_UI=(
     "pam_service_toggle_works"
     "failed_pam_toggle_reverts_to_previous_state"
     "unsupported_pam_service_cannot_be_toggled"
     "set_pam_service_enabled_refuses_unsupported"
 )
-for t in "${PAM_TESTS_GNOME[@]}"; do
-    if cargo test -p namtor-gnome --test presenter_flow "$t" --no-fail-fast 2>&1 \
+for t in "${PAM_TESTS_UI[@]}"; do
+    if cargo test -p namtor-ui --test presenter_flow "$t" --no-fail-fast 2>&1 \
        | grep -qE "^test ${t} \.\.\. ok"; then
-        ok "GNOME PAM test present: $t"
+        ok "UI PAM test present: $t"
     else
-        not_ok "GNOME PAM test missing/failed: $t"
+        not_ok "UI PAM test missing/failed: $t"
     fi
 done
 
@@ -249,23 +249,23 @@ done
 # ---------------------------------------------------------------------------
 echo ""
 echo "[g] High-impact confirmation dialog"
-# GNOME constant.
-if grep -q 'pub const HIGH_IMPACT_WARNING' "$GNOME_CRATE/src/components/pam_services.rs" \
+# UI constant.
+if grep -q 'pub const HIGH_IMPACT_WARNING' "$UI_CRATE/src/components/pam_services.rs" \
    && grep -q 'FAR/FRR and real-attack PAD gates remain unmeasured' \
-        "$GNOME_CRATE/src/components/pam_services.rs"; then
-    ok "GNOME HIGH_IMPACT_WARNING constant present and mentions FAR/FRR + PAD"
+        "$UI_CRATE/src/components/pam_services.rs"; then
+    ok "UI HIGH_IMPACT_WARNING constant present and mentions FAR/FRR + PAD"
 else
-    not_ok "GNOME HIGH_IMPACT_WARNING constant missing or wrong text"
+    not_ok "UI HIGH_IMPACT_WARNING constant missing or wrong text"
 fi
-# GNOME tests for high-impact dialog.
+# UI tests for high-impact dialog.
 for t in "high_impact_pam_service_requires_confirmation" \
          "high_impact_warning_contains_required_phrases" \
          "disabling_risky_service_needs_no_confirmation"; do
-    if cargo test -p namtor-gnome --test presenter_flow "$t" --no-fail-fast 2>&1 \
+    if cargo test -p namtor-ui --test presenter_flow "$t" --no-fail-fast 2>&1 \
        | grep -qE "^test ${t} \.\.\. ok"; then
-        ok "GNOME high-impact test present: $t"
+        ok "UI high-impact test present: $t"
     else
-        not_ok "GNOME high-impact test missing/failed: $t"
+        not_ok "UI high-impact test missing/failed: $t"
     fi
 done
 # ---------------------------------------------------------------------------
@@ -273,20 +273,20 @@ done
 # ---------------------------------------------------------------------------
 echo ""
 echo "[h] Privacy scan (no thresholds/scores/embeddings/paths/gate names)"
-if cargo test -p namtor-gnome --test privacy_scan --no-fail-fast 2>&1 \
+if cargo test -p namtor-ui --test privacy_scan --no-fail-fast 2>&1 \
    | grep -qE 'test result: ok\. 12 passed; 0 failed'; then
-    ok "namtor-gnome privacy_scan tests pass (12 passed)"
+    ok "namtor-ui privacy_scan tests pass (12 passed)"
 else
-    not_ok "namtor-gnome privacy_scan tests failed"
+    not_ok "namtor-ui privacy_scan tests failed"
 fi
 # Forbidden substrings list is non-empty (the privacy scanner itself is gated).
-if grep -q 'forbidden_substrings_list_is_nonempty' "$GNOME_CRATE/tests/privacy_scan.rs"; then
+if grep -q 'forbidden_substrings_list_is_nonempty' "$UI_CRATE/tests/privacy_scan.rs"; then
     ok "privacy_scan has forbidden_substrings_list_is_nonempty guard"
 else
     not_ok "privacy_scan missing forbidden_substrings_list_is_nonempty guard"
 fi
 # Spot-check a few forbidden tokens are listed in the privacy module.
-PRIV="$GNOME_CRATE/src/privacy.rs"
+PRIV="$UI_CRATE/src/privacy.rs"
 for token in threshold score embedding vector landmark template biometric; do
     if grep -qi "\"$token\"" "$PRIV"; then
         ok "forbidden token '$token' listed in privacy.rs"
@@ -300,39 +300,39 @@ done
 # ---------------------------------------------------------------------------
 echo ""
 echo "[i] Accessibility (keyboard controls + screen-reader labels)"
-# GNOME: PAM service Switch has tooltip_text.
-if grep -q 'tooltip_text' "$GNOME_CRATE/src/components/pam_services.rs" \
-   && grep -q 'set_tooltip_text' "$GNOME_CRATE/src/components/pam_services.rs"; then
-    ok "GNOME PAM Switch has tooltip_text + set_tooltip_text"
+# UI: PAM service Switch has tooltip_text.
+if grep -q 'tooltip_text' "$UI_CRATE/src/components/pam_services.rs" \
+   && grep -q 'set_tooltip_text' "$UI_CRATE/src/components/pam_services.rs"; then
+    ok "UI PAM Switch has tooltip_text + set_tooltip_text"
 else
-    not_ok "GNOME PAM Switch missing tooltip_text"
+    not_ok "UI PAM Switch missing tooltip_text"
 fi
-# GNOME: accessible roles assigned in components.
-GNOME_ACC_ROLES=$(grep -rE 'AccessibleRole::' "$GNOME_CRATE/src/" 2>/dev/null | wc -l)
-if [[ "$GNOME_ACC_ROLES" -ge 10 ]]; then
-    ok "GNOME assigns AccessibleRole in $GNOME_ACC_ROLES places (>=10)"
+# UI: accessible roles assigned in components.
+UI_ACC_ROLES=$(grep -rE 'AccessibleRole::' "$UI_CRATE/src/" 2>/dev/null | wc -l)
+if [[ "$UI_ACC_ROLES" -ge 10 ]]; then
+    ok "UI assigns AccessibleRole in $UI_ACC_ROLES places (>=10)"
 else
-    not_ok "GNOME assigns AccessibleRole in only $GNOME_ACC_ROLES places (<10)"
+    not_ok "UI assigns AccessibleRole in only $UI_ACC_ROLES places (<10)"
 fi
 # ---------------------------------------------------------------------------
 # (j) No-TPM sessions show persistent software-key warning
 # ---------------------------------------------------------------------------
 echo ""
 echo "[j] No-TPM software-fallback warning"
-# GNOME: ProtectionView.is_software_fallback drives a warning banner.
-if grep -q 'pub is_software_fallback: bool' "$GNOME_CRATE/src/view_model.rs" \
-   && grep -q 'is_software_fallback' "$GNOME_CRATE/src/bin/wizard.rs" \
-   && grep -q 'Software fallback in use' "$GNOME_CRATE/src/bin/wizard.rs"; then
-    ok "GNOME ProtectionView.is_software_fallback surfaces 'Software fallback in use' banner"
+# UI: ProtectionView.is_software_fallback drives a warning banner.
+if grep -q 'pub is_software_fallback: bool' "$UI_CRATE/src/view_model.rs" \
+   && grep -q 'is_software_fallback' "$UI_CRATE/src/bin/wizard.rs" \
+   && grep -q 'Software fallback in use' "$UI_CRATE/src/bin/wizard.rs"; then
+    ok "UI ProtectionView.is_software_fallback surfaces 'Software fallback in use' banner"
 else
-    not_ok "GNOME software-fallback warning incomplete"
+    not_ok "UI software-fallback warning incomplete"
 fi
-# GNOME test for software fallback.
-if cargo test -p namtor-gnome --test presenter_flow software_fallback_protection_surfaced --no-fail-fast 2>&1 \
+# UI test for software fallback.
+if cargo test -p namtor-ui --test presenter_flow software_fallback_protection_surfaced --no-fail-fast 2>&1 \
    | grep -qE '^test software_fallback_protection_surfaced \.\.\. ok'; then
-    ok "GNOME test software_fallback_protection_surfaced passes"
+    ok "UI test software_fallback_protection_surfaced passes"
 else
-    not_ok "GNOME test software_fallback_protection_surfaced missing/failed"
+    not_ok "UI test software_fallback_protection_surfaced missing/failed"
 fi
 # ---------------------------------------------------------------------------
 # (k) Password fallback always available (PAM sufficient control)
@@ -365,63 +365,63 @@ fi
 echo ""
 echo "[l] Failure matrix (unit-tested scenarios)"
 # Daemon down.
-GNOME_DAEMON_DOWN=$(cargo test -p namtor-gnome --test presenter_flow daemon_unavailable_shows_error_and_recovery --no-fail-fast 2>&1)
-if echo "$GNOME_DAEMON_DOWN" | grep -qE '^test daemon_unavailable_shows_error_and_recovery \.\.\. ok'; then
+UI_DAEMON_DOWN=$(cargo test -p namtor-ui --test presenter_flow daemon_unavailable_shows_error_and_recovery --no-fail-fast 2>&1)
+if echo "$UI_DAEMON_DOWN" | grep -qE '^test daemon_unavailable_shows_error_and_recovery \.\.\. ok'; then
     ok "daemon-down failure covered in the UI"
 else
     not_ok "daemon-down failure not covered"
 fi
 # Polkit denied.
-POLKIT_OUT=$(cargo test -p namtor-gnome --test presenter_flow polkit_denied_shows_auth_error --no-fail-fast 2>&1)
+POLKIT_OUT=$(cargo test -p namtor-ui --test presenter_flow polkit_denied_shows_auth_error --no-fail-fast 2>&1)
 if echo "$POLKIT_OUT" | grep -qE '^test polkit_denied_shows_auth_error \.\.\. ok'; then
-    ok "polkit-denied failure covered in GNOME"
+    ok "polkit-denied failure covered in the UI"
 else
-    not_ok "polkit-denied failure not covered in GNOME"
+    not_ok "polkit-denied failure not covered in the UI"
 fi
 # Camera missing / low diversity.
-LOWDIV_OUT=$(cargo test -p namtor-gnome --test presenter_flow low_diversity_shows_guidance --no-fail-fast 2>&1)
+LOWDIV_OUT=$(cargo test -p namtor-ui --test presenter_flow low_diversity_shows_guidance --no-fail-fast 2>&1)
 if echo "$LOWDIV_OUT" | grep -qE '^test low_diversity_shows_guidance \.\.\. ok'; then
-    ok "camera-capture failure (low_diversity) covered in GNOME"
+    ok "camera-capture failure (low_diversity) covered in the UI"
 else
     not_ok "low_diversity guidance not covered"
 fi
 # PAM rollback (failed toggle reverts).
-PAMROLL_OUT=$(cargo test -p namtor-gnome --test presenter_flow failed_pam_toggle_reverts_to_previous_state --no-fail-fast 2>&1)
+PAMROLL_OUT=$(cargo test -p namtor-ui --test presenter_flow failed_pam_toggle_reverts_to_previous_state --no-fail-fast 2>&1)
 if echo "$PAMROLL_OUT" | grep -qE '^test failed_pam_toggle_reverts_to_previous_state \.\.\. ok'; then
-    ok "PAM rollback (failed toggle reverts) covered in GNOME"
+    ok "PAM rollback (failed toggle reverts) covered in the UI"
 else
     not_ok "PAM rollback not covered"
 fi
-# GNOME reconnect restores state after daemon restart.
-GNOME_RECONNECT=$(cargo test -p namtor-gnome --test presenter_flow reconnect_restores_state --no-fail-fast 2>&1)
-if echo "$GNOME_RECONNECT" | grep -qE '^test reconnect_restores_state \.\.\. ok'; then
-    ok "GNOME reconnect_restores_state covers daemon-restart recovery"
+# UI reconnect restores state after daemon restart.
+UI_RECONNECT=$(cargo test -p namtor-ui --test presenter_flow reconnect_restores_state --no-fail-fast 2>&1)
+if echo "$UI_RECONNECT" | grep -qE '^test reconnect_restores_state \.\.\. ok'; then
+    ok "UI reconnect_restores_state covers daemon-restart recovery"
 else
-    not_ok "GNOME reconnect_restores_state missing/failed"
+    not_ok "UI reconnect_restores_state missing/failed"
 fi
 
 # ---------------------------------------------------------------------------
-# (m) GNOME redesigned source resources present (tasks 9-13)
+# (m) UI redesigned source resources present (tasks 9-13)
 # ---------------------------------------------------------------------------
 echo ""
-echo "[m] GNOME redesigned source resources present"
-check_file "GNOME DESIGN.md" "$GNOME_CRATE/DESIGN.md"
-check_file "GNOME shell.rs" "$GNOME_CRATE/src/shell.rs"
-check_file "GNOME navigation.rs" "$GNOME_CRATE/src/navigation.rs"
-check_file "GNOME a11y.rs" "$GNOME_CRATE/src/a11y.rs"
-check_file "GNOME system_status.rs component" "$GNOME_CRATE/src/components/system_status.rs"
+echo "[m] UI redesigned source resources present"
+check_file "UI DESIGN.md" "$UI_CRATE/DESIGN.md"
+check_file "UI shell.rs" "$UI_CRATE/src/shell.rs"
+check_file "UI navigation.rs" "$UI_CRATE/src/navigation.rs"
+check_file "UI a11y.rs" "$UI_CRATE/src/a11y.rs"
+check_file "UI system_status.rs component" "$UI_CRATE/src/components/system_status.rs"
 for c in enrollment.rs pam_services.rs profile_list.rs recovery.rs review.rs; do
-    check_file "GNOME component $c" "$GNOME_CRATE/src/components/$c"
+    check_file "UI component $c" "$UI_CRATE/src/components/$c"
 done
-check_file "GNOME shell_navigation tests" "$GNOME_CRATE/tests/shell_navigation.rs"
-if grep -q 'Profiles' "$GNOME_CRATE/DESIGN.md" \
-   && grep -q 'Authentication' "$GNOME_CRATE/DESIGN.md" \
-   && grep -q 'System' "$GNOME_CRATE/DESIGN.md"; then
+check_file "UI shell_navigation tests" "$UI_CRATE/tests/shell_navigation.rs"
+if grep -q 'Profiles' "$UI_CRATE/DESIGN.md" \
+   && grep -q 'Authentication' "$UI_CRATE/DESIGN.md" \
+   && grep -q 'System' "$UI_CRATE/DESIGN.md"; then
     ok "DESIGN.md defines three destinations (Profiles, Authentication, System)"
 else
     not_ok "DESIGN.md missing one of: Profiles, Authentication, System"
 fi
-if grep -q 'ProgressAnnouncer\|should_announce\|throttle' "$GNOME_CRATE/src/a11y.rs"; then
+if grep -q 'ProgressAnnouncer\|should_announce\|throttle' "$UI_CRATE/src/a11y.rs"; then
     ok "a11y.rs defines announcement throttle"
 else
     not_ok "a11y.rs missing announcement throttle"
@@ -459,17 +459,17 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "[o] Translation seam (i18n infrastructure)"
-if grep -q 'pub fn tr(' "$GNOME_CRATE/src/lib.rs"; then
-    ok "GNOME lib.rs exports tr() translation seam"
+if grep -q 'pub fn tr(' "$UI_CRATE/src/lib.rs"; then
+    ok "UI lib.rs exports tr() translation seam"
 else
-    not_ok "GNOME lib.rs missing tr() translation seam"
+    not_ok "UI lib.rs missing tr() translation seam"
 fi
 check_file "POTFILES.in" "$PACKAGING_DIR/po/POTFILES.in"
-check_file "namtor-gnome.pot template" "$PACKAGING_DIR/po/namtor-gnome.pot"
-if grep -q 'crates/namtor-gnome/src/' "$PACKAGING_DIR/po/POTFILES.in"; then
-    ok "POTFILES.in references GNOME source files"
+check_file "namtor-ui.pot template" "$PACKAGING_DIR/po/namtor-ui.pot"
+if grep -q 'crates/namtor-ui/src/' "$PACKAGING_DIR/po/POTFILES.in"; then
+    ok "POTFILES.in references UI source files"
 else
-    not_ok "POTFILES.in does not reference any GNOME source file"
+    not_ok "POTFILES.in does not reference any UI source file"
 fi
 MO_COUNT=$(find "$REPO_ROOT" -name '*.mo' -not -path '*/target/*' \
            -not -path '*/packaging/arch/src/*' 2>/dev/null | wc -l)
@@ -480,17 +480,17 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# (p) Executable linkage — namtor-gnome binary present and buildable
+# (p) Executable linkage — namtor-ui binary present and buildable
 # ---------------------------------------------------------------------------
 echo ""
-echo "[p] Executable linkage (namtor-gnome binary)"
-if grep -q 'name = "namtor-enroll-wizard"' "$GNOME_CRATE/Cargo.toml" \
-   || grep -q 'path = "src/bin/wizard.rs"' "$GNOME_CRATE/Cargo.toml"; then
-    ok "namtor-gnome Cargo.toml declares namtor-enroll-wizard binary"
+echo "[p] Executable linkage (namtor-ui binary)"
+if grep -q 'name = "namtor-enroll-wizard"' "$UI_CRATE/Cargo.toml" \
+   || grep -q 'path = "src/bin/wizard.rs"' "$UI_CRATE/Cargo.toml"; then
+    ok "namtor-ui Cargo.toml declares namtor-enroll-wizard binary"
 else
-    not_ok "namtor-gnome Cargo.toml missing binary declaration"
+    not_ok "namtor-ui Cargo.toml missing binary declaration"
 fi
-check_file "wizard.rs binary source" "$GNOME_CRATE/src/bin/wizard.rs"
+check_file "wizard.rs binary source" "$UI_CRATE/src/bin/wizard.rs"
 if grep -A6 'dest = "/usr/bin/namtor-enroll-wizard"' "$MANIFEST" \
    | grep -q 'src = "target/release/namtor-enroll-wizard"'; then
     ok "install-manifest maps namtor-enroll-wizard to target/release binary"
@@ -530,13 +530,13 @@ if git -C "$REPO_ROOT" check-ignore packaging/arch/pkg >/dev/null 2>&1; then
 else
     not_ok "packaging/arch/pkg/ is not gitignored"
 fi
-SCREENSHOT_COUNT=$(git -C "$REPO_ROOT" ls-files 'crates/namtor-gnome/**/*.png' \
-                    'crates/namtor-gnome/**/*.jpg' 'crates/namtor-gnome/**/*.jpeg' 2>/dev/null \
+SCREENSHOT_COUNT=$(git -C "$REPO_ROOT" ls-files 'crates/namtor-ui/**/*.png' \
+                    'crates/namtor-ui/**/*.jpg' 'crates/namtor-ui/**/*.jpeg' 2>/dev/null \
                     | wc -l)
 if [[ "$SCREENSHOT_COUNT" -eq 0 ]]; then
-    ok "no tracked screenshots in crates/namtor-gnome/"
+    ok "no tracked screenshots in crates/namtor-ui/"
 else
-    not_ok "found $SCREENSHOT_COUNT tracked screenshots in crates/namtor-gnome/"
+    not_ok "found $SCREENSHOT_COUNT tracked screenshots in crates/namtor-ui/"
 fi
 # Biometric evidence = face images, template dumps, captured frames — NOT
 # synthetic test fixtures (fixtures/onnx/*.onnx are backend test models).
@@ -589,27 +589,27 @@ for nodep in libgtk-4-1 libadwaita-1-0; do
 done
 
 # ---------------------------------------------------------------------------
-# (s) namtor-gnome depends on namtor (exact version)
+# (s) namtor-ui depends on namtor (exact version)
 # ---------------------------------------------------------------------------
 echo ""
-echo "[s] namtor-gnome depends on namtor (exact version)"
-gnome_body_arch="$(awk '/^package_namtor-gnome\(\)/{f=1} f{print} f&&/^}/{exit}' "$ARCH_PKGBUILD")"
-if printf '%s\n' "$gnome_body_arch" | grep -qF 'namtor=$pkgver'; then
-    ok "Arch gnome depends on namtor=\$pkgver (exact)"
+echo "[s] namtor-ui depends on namtor (exact version)"
+ui_body_arch="$(awk '/^package_namtor-ui\(\)/{f=1} f{print} f&&/^}/{exit}' "$ARCH_PKGBUILD")"
+if printf '%s\n' "$ui_body_arch" | grep -qF 'namtor=$pkgver'; then
+    ok "Arch ui depends on namtor=\$pkgver (exact)"
 else
-    not_ok "Arch gnome missing namtor=\$pkgver exact dep"
+    not_ok "Arch ui missing namtor=\$pkgver exact dep"
 fi
-gnome_requires_fed=$(awk '/^%package gnome/{f=1;next} f&&/^Requires:/{print} f&&/^%/{exit}' "$SPEC")
-if printf '%s\n' "$gnome_requires_fed" | grep -q '%{name} = %{version}-%{release}'; then
-    ok "Fedora gnome Requires namtor = ver-rel (exact)"
+ui_requires_fed=$(awk '/^%package ui/{f=1;next} f&&/^Requires:/{print} f&&/^%/{exit}' "$SPEC")
+if printf '%s\n' "$ui_requires_fed" | grep -q '%{name} = %{version}-%{release}'; then
+    ok "Fedora ui Requires namtor = ver-rel (exact)"
 else
-    not_ok "Fedora gnome missing exact namtor Requires"
+    not_ok "Fedora ui missing exact namtor Requires"
 fi
-gnome_depends_deb=$(awk '/^Package: namtor-gnome$/{f=1;next} f&&/^Depends:/{f=2;next} f==2&&/^[[:space:]]/{gsub(/[[:space:]]/,"");print;next} f==2&&!/^[[:space:]]/{exit}' "$DEBIAN_CONTROL" | tr -d '\n')
-if printf '%s' "$gnome_depends_deb" | grep -q 'namtor(=0.1.0-2)'; then
-    ok "Debian gnome Depends on namtor (= 0.1.0-2) (exact)"
+ui_depends_deb=$(awk '/^Package: namtor-ui$/{f=1;next} f&&/^Depends:/{f=2;next} f==2&&/^[[:space:]]/{gsub(/[[:space:]]/,"");print;next} f==2&&!/^[[:space:]]/{exit}' "$DEBIAN_CONTROL" | tr -d '\n')
+if printf '%s' "$ui_depends_deb" | grep -q 'namtor(=0.1.0-3)'; then
+    ok "Debian ui Depends on namtor (= 0.1.0-3) (exact)"
 else
-    not_ok "Debian gnome missing exact namtor Depends"
+    not_ok "Debian ui missing exact namtor Depends"
 fi
 
 # ---------------------------------------------------------------------------
@@ -656,42 +656,42 @@ for icon in org.namtor.Wizard.svg; do
     printf 'placeholder' > "$mutation_root/packaging/icons/hicolor/scalable/apps/$icon"
 done
 
-dest_gnome_mut="$(mk_temp_dir)"
-if bash "$STAGE_SH" "$dest_gnome_mut" "$mutation_root" --package gnome >/dev/null 2>&1; then
-    ok "mutation: stage.sh --package gnome succeeded"
+dest_ui_mut="$(mk_temp_dir)"
+if bash "$STAGE_SH" "$dest_ui_mut" "$mutation_root" --package ui >/dev/null 2>&1; then
+    ok "mutation: stage.sh --package ui succeeded"
 else
-    not_ok "mutation: stage.sh --package gnome failed"
+    not_ok "mutation: stage.sh --package ui failed"
 fi
 
-GNOME_EXPECTED=(
+UI_EXPECTED=(
     "usr/bin/namtor-enroll-wizard"
     "usr/share/applications/org.namtor.Wizard.desktop"
     "usr/share/metainfo/org.namtor.Wizard.metainfo.xml"
     "usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg"
 )
 mut_present=0
-for r in "${GNOME_EXPECTED[@]}"; do
-    if [[ -f "$dest_gnome_mut/$r" ]]; then
+for r in "${UI_EXPECTED[@]}"; do
+    if [[ -f "$dest_ui_mut/$r" ]]; then
         mut_present=$((mut_present + 1))
     fi
 done
-if [[ "$mut_present" -eq "${#GNOME_EXPECTED[@]}" ]]; then
-    ok "mutation: staged gnome payload has all ${#GNOME_EXPECTED[@]} expected resources"
+if [[ "$mut_present" -eq "${#UI_EXPECTED[@]}" ]]; then
+    ok "mutation: staged ui payload has all ${#UI_EXPECTED[@]} expected resources"
 else
-    not_ok "mutation: staged gnome payload has only $mut_present/${#GNOME_EXPECTED[@]} resources"
+    not_ok "mutation: staged ui payload has only $mut_present/${#UI_EXPECTED[@]} resources"
 fi
 
 REMOVED="usr/share/metainfo/org.namtor.Wizard.metainfo.xml"
-rm -f "$dest_gnome_mut/$REMOVED"
-if [[ ! -f "$dest_gnome_mut/$REMOVED" ]]; then
+rm -f "$dest_ui_mut/$REMOVED"
+if [[ ! -f "$dest_ui_mut/$REMOVED" ]]; then
     ok "mutation: removed $REMOVED from staged payload"
 else
     not_ok "mutation: failed to remove $REMOVED"
 fi
 
 mut_fail=0
-for r in "${GNOME_EXPECTED[@]}"; do
-    if [[ ! -f "$dest_gnome_mut/$r" ]]; then
+for r in "${UI_EXPECTED[@]}"; do
+    if [[ ! -f "$dest_ui_mut/$r" ]]; then
         mut_fail=1
         echo "  (mutation detected missing: $r)"
     fi
@@ -702,11 +702,11 @@ else
     not_ok "mutation: certification passed despite removed resource (test is vacuous)"
 fi
 
-mkdir -p "$(dirname "$dest_gnome_mut/$REMOVED")"
-printf 'placeholder' > "$dest_gnome_mut/$REMOVED"
+mkdir -p "$(dirname "$dest_ui_mut/$REMOVED")"
+printf 'placeholder' > "$dest_ui_mut/$REMOVED"
 mut_pass=1
-for r in "${GNOME_EXPECTED[@]}"; do
-    if [[ ! -f "$dest_gnome_mut/$r" ]]; then
+for r in "${UI_EXPECTED[@]}"; do
+    if [[ ! -f "$dest_ui_mut/$r" ]]; then
         mut_pass=0
     fi
 done

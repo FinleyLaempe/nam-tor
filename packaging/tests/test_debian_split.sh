@@ -3,23 +3,24 @@
 # Test matrix for Task 22: Debian split-package control/rules structure.
 #
 # Acceptance criteria (from the task spec):
-#   (a) control has exactly 2 Package: stanzas: namtor, namtor-gnome.
+#   (a) control has exactly 2 Package: stanzas: namtor, namtor-ui.
 #   (b) Core Depends: onnxruntime, libpam0g, systemd only — NO
 #       libgtk-4-1, libadwaita-1-0, libqt6, kirigami, kcoreaddons.
-#   (c) Desktop Depends: namtor (= 0.1.0-2), libgtk-4-1, libadwaita-1-0
+#   (c) Desktop Depends: namtor (= 0.1.0-3), libgtk-4-1, libadwaita-1-0
 #       and NO qt6/kirigami/kcoreaddons.
-#   (d) namtor-gnome Replaces/Breaks the removed namtor-kde package.
+#   (d) namtor-ui Provides/Replaces/Breaks its predecessors namtor-gnome
+#       (renamed) and namtor-kde (removed).
 #       Merely dropping it is not enough: it declared
 #       `Depends: namtor (= <version>)`, so a leftover install holds apt
 #       back from upgrading the core package.
-#   (e) rules calls stage.sh with --package core and --package gnome
+#   (e) rules calls stage.sh with --package core and --package ui
 #       (and no longer with --package kde).
 #   (f) rules relocates PAM module to multiarch path (DEB_HOST_MULTIARCH
 #       + security).
 #   (g) rules comment does NOT contain "monolithic".
-#   (h) namtor-gnome.install exists and lists the correct files; the
+#   (h) namtor-ui.install exists and lists the correct files; the
 #       namtor-kde.* packaging files are gone.
-#   (i) namtor-gnome.postinst and namtor-gnome.postrm exist with desktop
+#   (i) namtor-ui.postinst and namtor-ui.postrm exist with desktop
 #       cache refresh only.
 #   (j) changelog mentions the split.
 #   (k) namtor.postinst delegates to lifecycle.sh (not desktop cache).
@@ -76,7 +77,7 @@ else
     not_ok "control has $package_stanzas Package: stanzas (expected 2)"
 fi
 
-for pkg in namtor namtor-gnome; do
+for pkg in namtor namtor-ui; do
     if grep -qE "^Package:[[:space:]]+${pkg}$" "$CONTROL"; then
         ok "control has Package: $pkg"
     else
@@ -103,7 +104,7 @@ stanza_body() {
 }
 
 CORE_BODY="$(stanza_body namtor)"
-GNOME_BODY="$(stanza_body namtor-gnome)"
+UI_BODY="$(stanza_body namtor-ui)"
 
 # Extract the Depends block (continuation lines start with space/tab).
 depends_block() {
@@ -116,7 +117,7 @@ depends_block() {
 }
 
 CORE_DEPS="$(depends_block "$CORE_BODY")"
-GNOME_DEPS="$(depends_block "$GNOME_BODY")"
+UI_DEPS="$(depends_block "$UI_BODY")"
 
 # ---------------------------------------------------------------------------
 # (b) Core Depends — no desktop deps
@@ -142,48 +143,61 @@ done
 # ---------------------------------------------------------------------------
 # (c) Desktop Depends — gtk4 + libadwaita, exact core version, no Qt/KDE
 # ---------------------------------------------------------------------------
-echo "--- (c) gnome Depends ---"
+echo "--- (c) ui Depends ---"
 
-if printf '%s\n' "$GNOME_DEPS" | grep -qE 'namtor[[:space:]]*\(=[[:space:]]*0\.1\.0-2\)'; then
-    ok "gnome Depends on namtor (= 0.1.0-2) (exact version)"
+if printf '%s\n' "$UI_DEPS" | grep -qE 'namtor[[:space:]]*\(=[[:space:]]*0\.1\.0-3\)'; then
+    ok "ui Depends on namtor (= 0.1.0-3) (exact version)"
 else
-    not_ok "gnome does not depend on namtor (= 0.1.0-2) (exact version)"
+    not_ok "ui does not depend on namtor (= 0.1.0-3) (exact version)"
 fi
 
 for dep in libgtk-4-1 libadwaita-1-0; do
-    if printf '%s\n' "$GNOME_DEPS" | grep -qiE "$dep"; then
-        ok "gnome Depends on $dep"
+    if printf '%s\n' "$UI_DEPS" | grep -qiE "$dep"; then
+        ok "ui Depends on $dep"
     else
-        not_ok "gnome missing dependency: $dep"
+        not_ok "ui missing dependency: $dep"
     fi
 done
 
 for nodep in libqt6 kirigami kcoreaddons; do
-    if printf '%s\n' "$GNOME_DEPS" | grep -qiE "$nodep"; then
-        not_ok "gnome Depends on $nodep (should not — Qt/KDE dep in gnome)"
+    if printf '%s\n' "$UI_DEPS" | grep -qiE "$nodep"; then
+        not_ok "ui Depends on $nodep (should not — Qt/KDE dep in the GTK UI)"
     else
-        ok "gnome does not depend on $nodep"
+        ok "ui does not depend on $nodep"
     fi
 done
 
 # ---------------------------------------------------------------------------
-# (d) namtor-gnome obsoletes the removed namtor-kde
+# (d) namtor-ui obsoletes both predecessors
 # ---------------------------------------------------------------------------
-echo "--- (d) obsoletion of namtor-kde ---"
+echo "--- (d) obsoletion of namtor-gnome and namtor-kde ---"
+
+# namtor-gnome is this same package under its old name. apt migrates nothing
+# on a rename, and both own /usr/bin/namtor-enroll-wizard, the .desktop, the
+# metainfo and the icon, so without Replaces/Breaks the unpack fails on a
+# file conflict. Provides keeps anything that depended on the old name
+# satisfiable through the transaction.
+for field in Provides Replaces Breaks; do
+    if printf '%s\n' "$UI_BODY" | grep -qE "^${field}:.*namtor-gnome"; then
+        ok "namtor-ui ${field}: namtor-gnome (rename migration)"
+    else
+        not_ok "namtor-ui does not ${field} namtor-gnome — the pre-rename package will file-conflict"
+    fi
+done
 
 # Dropping the stanza is not enough. namtor-kde declared
 # `Depends: namtor (= <version>)`, so a machine that still has it installed
 # keeps an unsatisfiable dependency and apt holds back the core upgrade.
 # Replaces + Breaks tells apt to remove it as part of the transaction.
-if printf '%s\n' "$GNOME_BODY" | grep -qE '^Replaces:.*namtor-kde'; then
-    ok "namtor-gnome Replaces: namtor-kde (unblocks core upgrades)"
+if printf '%s\n' "$UI_BODY" | grep -qE '^Replaces:.*namtor-kde'; then
+    ok "namtor-ui Replaces: namtor-kde (unblocks core upgrades)"
 else
-    not_ok "namtor-gnome does not Replace namtor-kde — a leftover install will block core upgrades"
+    not_ok "namtor-ui does not Replace namtor-kde — a leftover install will block core upgrades"
 fi
-if printf '%s\n' "$GNOME_BODY" | grep -qE '^Breaks:.*namtor-kde'; then
-    ok "namtor-gnome Breaks: namtor-kde"
+if printf '%s\n' "$UI_BODY" | grep -qE '^Breaks:.*namtor-kde'; then
+    ok "namtor-ui Breaks: namtor-kde"
 else
-    not_ok "namtor-gnome does not Break namtor-kde"
+    not_ok "namtor-ui does not Break namtor-kde"
 fi
 
 # No Qt/KF6/CMake Build-Depends should remain.
@@ -196,11 +210,11 @@ for bd in cmake qt6-base-dev libkf6kirigami-dev libkf6coreaddons-dev extra-cmake
 done
 
 # ---------------------------------------------------------------------------
-# (e) rules calls stage.sh with --package core, gnome (never kde)
+# (e) rules calls stage.sh with --package core, ui (never kde)
 # ---------------------------------------------------------------------------
 echo "--- (e) stage.sh --package calls in rules ---"
 
-for pkg in core gnome; do
+for pkg in core ui; do
     if grep -qE "stage\.sh.*--package[[:space:]]+${pkg}" "$RULES"; then
         ok "rules calls stage.sh --package $pkg"
     else
@@ -260,7 +274,7 @@ else
 fi
 
 # rules should mention the split
-if grep -qiE 'namtor-gnome|namtor-kde|split' "$RULES"; then
+if grep -qiE 'namtor-ui|namtor-kde|split' "$RULES"; then
     ok "rules mentions split packages"
 else
     not_ok "rules does not mention split packages"
@@ -271,24 +285,24 @@ fi
 # ---------------------------------------------------------------------------
 echo "--- (h) .install files ---"
 
-GNOME_INSTALL="$DEBIAN_DIR/namtor-gnome.install"
+UI_INSTALL="$DEBIAN_DIR/namtor-ui.install"
 
-if [[ -f "$GNOME_INSTALL" ]]; then
-    ok "namtor-gnome.install exists"
+if [[ -f "$UI_INSTALL" ]]; then
+    ok "namtor-ui.install exists"
 else
-    not_ok "namtor-gnome.install does not exist"
+    not_ok "namtor-ui.install does not exist"
 fi
 
-if [[ -f "$GNOME_INSTALL" ]]; then
+if [[ -f "$UI_INSTALL" ]]; then
     for f in \
         'usr/bin/namtor-enroll-wizard' \
         'org\.namtor\.Wizard\.desktop' \
         'org\.namtor\.Wizard\.metainfo\.xml' \
         'org\.namtor\.Wizard\.svg'; do
-        if grep -qE "$f" "$GNOME_INSTALL"; then
-            ok "namtor-gnome.install lists $f"
+        if grep -qE "$f" "$UI_INSTALL"; then
+            ok "namtor-ui.install lists $f"
         else
-            not_ok "namtor-gnome.install missing $f"
+            not_ok "namtor-ui.install missing $f"
         fi
     done
 fi
@@ -307,7 +321,7 @@ done
 # ---------------------------------------------------------------------------
 echo "--- (i) desktop maintainer scripts ---"
 
-for script in namtor-gnome.postinst namtor-gnome.postrm; do
+for script in namtor-ui.postinst namtor-ui.postrm; do
     if [[ -f "$DEBIAN_DIR/$script" ]]; then
         ok "$script exists"
     else
@@ -315,7 +329,7 @@ for script in namtor-gnome.postinst namtor-gnome.postrm; do
     fi
 done
 
-for postinst in namtor-gnome.postinst; do
+for postinst in namtor-ui.postinst; do
     if [[ -f "$DEBIAN_DIR/$postinst" ]] && grep -qE 'update-desktop-database' "$DEBIAN_DIR/$postinst"; then
         ok "$postinst refreshes desktop cache"
     else
@@ -329,7 +343,7 @@ for postinst in namtor-gnome.postinst; do
     fi
 done
 
-for postrm in namtor-gnome.postrm; do
+for postrm in namtor-ui.postrm; do
     if [[ -f "$DEBIAN_DIR/$postrm" ]] && grep -qE 'update-desktop-database|gtk-update-icon-cache' "$DEBIAN_DIR/$postrm"; then
         ok "$postrm refreshes desktop/icon cache"
     else
@@ -353,19 +367,35 @@ else
     not_ok "changelog does not mention 'split'"
 fi
 
-if grep -qiE 'namtor-gnome' "$CHANGELOG"; then
-    ok "changelog mentions namtor-gnome"
+if grep -qiE 'namtor-ui' "$CHANGELOG"; then
+    ok "changelog mentions namtor-ui"
 else
-    not_ok "changelog does not mention namtor-gnome"
+    not_ok "changelog does not mention namtor-ui"
 fi
 
-# The newest changelog entry must record the namtor-kde removal — the
+# ... and must keep documenting namtor-gnome as the obsoleted predecessor.
+# Dropping it from the changelog is how a user on the old package ends up
+# stranded with no record of what happened.
+if grep -qiE 'namtor-gnome' "$CHANGELOG"; then
+    ok "changelog still documents namtor-gnome (obsoleted predecessor)"
+else
+    not_ok "changelog no longer documents namtor-gnome"
+fi
+
+# The newest changelog entry must record the namtor-gnome rename — the
 # obsoletion is a user-visible upgrade behaviour, not an internal detail.
 newest_entry="$(awk 'NR>1 && /^[a-z].*\(.*\).*urgency=/{exit} {print}' "$CHANGELOG")"
-if printf '%s\n' "$newest_entry" | grep -qiE 'namtor-kde'; then
-    ok "newest changelog entry documents the namtor-kde removal"
+if printf '%s\n' "$newest_entry" | grep -qiE 'namtor-gnome'; then
+    ok "newest changelog entry documents the namtor-gnome rename"
 else
-    not_ok "newest changelog entry does not document the namtor-kde removal"
+    not_ok "newest changelog entry does not document the namtor-gnome rename"
+fi
+
+# The namtor-kde removal must stay documented somewhere in the changelog.
+if grep -qiE 'namtor-kde' "$CHANGELOG"; then
+    ok "changelog documents the namtor-kde removal"
+else
+    not_ok "changelog does not document the namtor-kde removal"
 fi
 
 # ---------------------------------------------------------------------------
@@ -439,7 +469,7 @@ echo "--- (m) SPDX headers on maintainer scripts ---"
 
 for script in \
     namtor.postinst namtor.prerm namtor.postrm \
-    namtor-gnome.postinst namtor-gnome.postrm; do
+    namtor-ui.postinst namtor-ui.postrm; do
     if [[ -f "$DEBIAN_DIR/$script" ]]; then
         if grep -qE 'SPDX-License-Identifier' "$DEBIAN_DIR/$script"; then
             ok "$script has SPDX header"
@@ -474,7 +504,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "--- (o) Architecture fields ---"
 
-for pkg in namtor namtor-gnome; do
+for pkg in namtor namtor-ui; do
     body="$(stanza_body "$pkg")"
     if printf '%s\n' "$body" | grep -qE '^Architecture:[[:space:]]+(amd64[[:space:]]+arm64|arm64[[:space:]]+amd64)'; then
         ok "$pkg has Architecture: amd64 arm64"

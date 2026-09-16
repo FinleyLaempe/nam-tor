@@ -7,7 +7,7 @@
 #   - namtor       (core: daemon, worker, CLI, PAM, systemd, sysusers,
 #                   tmpfiles, D-Bus, polkit, manifests, models, licences,
 #                   lifecycle helper, SBOM)
-#   - namtor-gnome (GTK4/libadwaita wizard + .desktop + .metainfo + .svg)
+#   - namtor-ui (GTK4/libadwaita wizard + .desktop + .metainfo + .svg)
 #
 # A third subpackage, namtor-kde (the Plasma 6 KCM), is gone. It must be
 # OBSOLETED rather than merely dropped: it declared
@@ -76,12 +76,40 @@ echo "--- (1) subpackage definitions ---"
 # Base package is `namtor` (core) — the Name: line.
 check "Name: namtor present" 'grep -qE "^Name:[[:space:]]+namtor$" "$SPEC"' true
 
-# GNOME subpackage: `%package gnome` (yields namtor-gnome) OR `-n namtor-gnome`.
+# UI subpackage: `%package ui` (yields namtor-ui) OR `-n namtor-ui`.
+if grep -qE "^%package[[:space:]]+ui($|[[:space:]])" "$SPEC" \
+        || grep -qE "^%package[[:space:]]+-n[[:space:]]+namtor-ui($|[[:space:]])" "$SPEC"; then
+    ok "namtor-ui subpackage defined"
+else
+    not_ok "namtor-ui subpackage defined"
+fi
+
+# The pre-rename namtor-gnome subpackage must be GONE — but obsoleted and
+# provided, not merely renamed. dnf migrates nothing on a rename, and both
+# subpackages own exactly the same four files, so a leftover namtor-gnome
+# file-conflicts with namtor-ui.
 if grep -qE "^%package[[:space:]]+gnome($|[[:space:]])" "$SPEC" \
         || grep -qE "^%package[[:space:]]+-n[[:space:]]+namtor-gnome($|[[:space:]])" "$SPEC"; then
-    ok "namtor-gnome subpackage defined"
+    not_ok "namtor-gnome subpackage is back (it was renamed to namtor-ui)"
 else
-    not_ok "namtor-gnome subpackage defined"
+    ok "namtor-gnome subpackage renamed away"
+fi
+if grep -qE "^Obsoletes:[[:space:]]+namtor-gnome" "$SPEC"; then
+    ok "spec Obsoletes: namtor-gnome (rename migration)"
+else
+    not_ok "spec does not obsolete namtor-gnome — the pre-rename subpackage will file-conflict"
+fi
+if grep -qE "^Provides:[[:space:]]+namtor-gnome" "$SPEC"; then
+    ok "spec Provides: namtor-gnome (keeps old requirers satisfiable)"
+else
+    not_ok "spec does not provide namtor-gnome"
+fi
+# An Obsoletes only fires on an upgrade to a NEWER version, so the rename is
+# inert unless Release moved past the last namtor-gnome release (0.1.0-3).
+if grep -qE "^Release:[[:space:]]+([4-9]|[1-9][0-9])" "$SPEC"; then
+    ok "Release bumped past the last namtor-gnome release (Obsoletes can fire)"
+else
+    not_ok "Release not bumped — Obsoletes: namtor-gnome never fires without a newer version"
 fi
 
 # The KDE subpackage must be GONE — but obsoleted, not merely deleted.
@@ -106,7 +134,7 @@ for br in cmake qt6-qtbase-devel kf6-kirigami-devel kf6-kcoreaddons-devel extra-
 done
 
 # Each subpackage must have its own %description.
-check "namtor-gnome has %description" 'grep -qE "^%description[[:space:]]+gnome($|[[:space:]])" "$SPEC" || grep -qE "^%description[[:space:]]+-n[[:space:]]+namtor-gnome($|[[:space:]])" "$SPEC"' true
+check "namtor-ui has %description" 'grep -qE "^%description[[:space:]]+ui($|[[:space:]])" "$SPEC" || grep -qE "^%description[[:space:]]+-n[[:space:]]+namtor-ui($|[[:space:]])" "$SPEC"' true
 
 # ---------------------------------------------------------------------------
 # 2. %files sections exist per subpackage
@@ -119,11 +147,11 @@ if grep -qE "^%files[[:space:]]*$" "$SPEC"; then
 else
     not_ok "core %files (bare) present"
 fi
-check "namtor-gnome %files present" 'grep -qE "^%files[[:space:]]+gnome($|[[:space:]])" "$SPEC" || grep -qE "^%files[[:space:]]+-n[[:space:]]+namtor-gnome($|[[:space:]])" "$SPEC"' true
+check "namtor-ui %files present" 'grep -qE "^%files[[:space:]]+ui($|[[:space:]])" "$SPEC" || grep -qE "^%files[[:space:]]+-n[[:space:]]+namtor-ui($|[[:space:]])" "$SPEC"' true
 
 # Helper: body of a %files section (handles `-n namtor-foo` and `foo` forms).
 files_body() {
-    local sub="$1"  # subpackage suffix: "" (core), gnome
+    local sub="$1"  # subpackage suffix: "" (core), ui
     if [[ -z "$sub" ]]; then
         awk -v t="$SPEC_TERM" '
             /^%files[[:space:]]*$/ {f=1; next}
@@ -141,7 +169,7 @@ files_body() {
 }
 
 CORE_FILES="$(files_body "")"
-GNOME_FILES="$(files_body gnome)"
+UI_FILES="$(files_body ui)"
 
 contains() { printf '%s\n' "$1" | grep -qE -- "$2"; }
 
@@ -204,22 +232,22 @@ for e in "${core_exclude[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
-# 5. GNOME %files — wizard binary + .desktop + .metainfo + .svg
+# 5. UI %files — wizard binary + .desktop + .metainfo + .svg
 # ---------------------------------------------------------------------------
-echo "--- (5) GNOME %files payload ---"
+echo "--- (5) UI %files payload ---"
 
-gnome_expect=(
+ui_expect=(
     'namtor-enroll-wizard'
     'org\.namtor\.Wizard\.desktop'
     'org\.namtor\.Wizard\.metainfo\.xml'
     'org\.namtor\.Wizard\.svg'
 )
-for e in "${gnome_expect[@]}"; do
-    if contains "$GNOME_FILES" "$e"; then ok "gnome %files has $e"; else not_ok "gnome %files has $e"; fi
+for e in "${ui_expect[@]}"; do
+    if contains "$UI_FILES" "$e"; then ok "ui %files has $e"; else not_ok "ui %files has $e"; fi
 done
 
-# GNOME must NOT contain KDE files or core daemon files.
-gnome_exclude=(
+# The UI subpackage must NOT contain KDE files or core daemon files.
+ui_exclude=(
     'namtor-daemon'
     'namtor-worker'
     'pam_namtor\.so'
@@ -228,8 +256,8 @@ gnome_exclude=(
     'kpackage/kcms'
     'namtor-daemon\.service'
 )
-for e in "${gnome_exclude[@]}"; do
-    if contains "$GNOME_FILES" "$e"; then not_ok "gnome %files wrongly contains $e"; else ok "gnome %files excludes $e"; fi
+for e in "${ui_exclude[@]}"; do
+    if contains "$UI_FILES" "$e"; then not_ok "ui %files wrongly contains $e"; else ok "ui %files excludes $e"; fi
 done
 
 # ---------------------------------------------------------------------------
@@ -259,10 +287,10 @@ done
 # ---------------------------------------------------------------------------
 echo "--- (7) Requires wiring ---"
 
-# GNOME subpackage Requires block (lines after `%package gnome` up to next %).
-gnome_requires="$(awk '
-    /^%package[[:space:]]+gnome($|[[:space:]])/ ||
-    /^%package[[:space:]]+-n[[:space:]]+namtor-gnome($|[[:space:]])/ { f=1; next }
+# UI subpackage Requires block (lines after `%package ui` up to next %).
+ui_requires="$(awk '
+    /^%package[[:space:]]+ui($|[[:space:]])/ ||
+    /^%package[[:space:]]+-n[[:space:]]+namtor-ui($|[[:space:]])/ { f=1; next }
     f && /^%[a-zA-Z]/ { exit }
     f && /^Requires:/ { print }
 ' "$SPEC")"
@@ -273,21 +301,21 @@ core_requires="$(awk '
     /^Requires:/ { print }
 ' "$SPEC")"
 
-# GNOME requires core exactly once with version-release pin.
-if printf '%s\n' "$gnome_requires" | grep -qE 'Requires:[[:space:]]+%?\{?name\}?[[:space:]]*=[[:space:]]*%?\{?version\}?-%?\{?release\}?'; then
-    ok "gnome Requires: namtor = %{version}-%{release}"
+# The UI subpackage requires core exactly once with version-release pin.
+if printf '%s\n' "$ui_requires" | grep -qE 'Requires:[[:space:]]+%?\{?name\}?[[:space:]]*=[[:space:]]*%?\{?version\}?-%?\{?release\}?'; then
+    ok "ui Requires: namtor = %{version}-%{release}"
 else
-    not_ok "gnome Requires: namtor = %{version}-%{release}"
+    not_ok "ui Requires: namtor = %{version}-%{release}"
 fi
-# GNOME pulls GTK4 + libadwaita.
-if printf '%s\n' "$gnome_requires" | grep -qi 'gtk4'; then ok "gnome Requires gtk4"; else not_ok "gnome Requires gtk4"; fi
-if printf '%s\n' "$gnome_requires" | grep -qi 'libadwaita'; then ok "gnome Requires libadwaita"; else not_ok "gnome Requires libadwaita"; fi
+# The UI subpackage pulls GTK4 + libadwaita.
+if printf '%s\n' "$ui_requires" | grep -qi 'gtk4'; then ok "ui Requires gtk4"; else not_ok "ui Requires gtk4"; fi
+if printf '%s\n' "$ui_requires" | grep -qi 'libadwaita'; then ok "ui Requires libadwaita"; else not_ok "ui Requires libadwaita"; fi
 # The desktop subpackage must NOT pull Qt6/KF6 — nothing in the tree does
 # any more.
-if printf '%s\n' "$gnome_requires" | grep -qiE 'qt6|kf6|kirigami|kcoreaddons'; then
-    not_ok "gnome Requires Qt6/KF6 (forbidden)"
+if printf '%s\n' "$ui_requires" | grep -qiE 'qt6|kf6|kirigami|kcoreaddons'; then
+    not_ok "ui Requires Qt6/KF6 (forbidden)"
 else
-    ok "gnome has no Qt6/KF6 Requires"
+    ok "ui has no Qt6/KF6 Requires"
 fi
 
 # Core must NOT pull GTK4/libadwaita or Qt6/KF6 runtime.

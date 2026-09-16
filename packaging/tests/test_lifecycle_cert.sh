@@ -9,11 +9,11 @@
 #   (b) Upgrade: re-stage core over existing (simulating version bump) →
 #       verify profiles/templates preserved (sha256 receipts), manifest
 #       updated, no stale files.
-#   (c) Add desktop: stage gnome over existing core → verify gnome files
+#   (c) Add desktop: stage ui over existing core → verify ui files
 #       added, core intact.
 #   (d) Legacy desktop package rejected: `stage.sh --package kde` (the
 #       removed Plasma KCM) must fail loudly rather than silently stage
-#       nothing, and must leave the existing core+gnome tree untouched.
+#       nothing, and must leave the existing core+ui tree untouched.
 #   (e) Rollback: remove desktop package files → verify core still
 #       functional.
 #   (f) Full removal: run uninstall.sh → verify total purge (no namtor
@@ -34,7 +34,7 @@
 #
 # Since clean distros cannot be run in CI, real distro upgrade/rollback on
 # a live VM (pacman -U, dnf upgrade, apt upgrade) is WITHHELD. This script
-# uses DESTDIR fake-root staging via stage.sh --package core|gnome and
+# uses DESTDIR fake-root staging via stage.sh --package core|ui and
 # uninstall.sh to certify the lifecycle structurally.
 #
 # Usage: bash packaging/tests/test_lifecycle_cert.sh
@@ -199,8 +199,8 @@ WORKER_BIN="$REPO_ROOT/target/release/namtor-worker"
 EMITTER_OFF_BIN="$REPO_ROOT/target/release/namtor-camera-emitter-off"
 CLI_BIN="$REPO_ROOT/target/release/namtor-cli"
 PAM_SO="$REPO_ROOT/target/release/libnamtor_pam.so"
-GNOME_BIN="$REPO_ROOT/target/release/namtor-enroll-wizard"
-for f in "$DAEMON_BIN" "$WORKER_BIN" "$EMITTER_OFF_BIN" "$CLI_BIN" "$PAM_SO" "$GNOME_BIN"; do
+UI_BIN="$REPO_ROOT/target/release/namtor-enroll-wizard"
+for f in "$DAEMON_BIN" "$WORKER_BIN" "$EMITTER_OFF_BIN" "$CLI_BIN" "$PAM_SO" "$UI_BIN"; do
     if [[ -f "$f" ]]; then
         ok "built artifact present: $(basename "$f")"
     else
@@ -357,38 +357,38 @@ else
 fi
 
 # ===========================================================================
-# (c) Add desktop: stage gnome over existing core
+# (c) Add desktop: stage ui over existing core
 # ===========================================================================
 
 echo ""
-echo "[c] Add desktop: stage gnome over existing core"
+echo "[c] Add desktop: stage ui over existing core"
 
-if bash "$STAGE" "$ROOT_A" "$REPO_ROOT" --package gnome >/tmp/lc_stage_gnome_c.log 2>&1; then
-    ok "add-desktop: stage.sh --package gnome succeeds over core"
+if bash "$STAGE" "$ROOT_A" "$REPO_ROOT" --package ui >/tmp/lc_stage_ui_c.log 2>&1; then
+    ok "add-desktop: stage.sh --package ui succeeds over core"
 else
-    not_ok "add-desktop: stage.sh --package gnome fails (see /tmp/lc_stage_gnome_c.log)"
-    cat /tmp/lc_stage_gnome_c.log >&2
+    not_ok "add-desktop: stage.sh --package ui fails (see /tmp/lc_stage_ui_c.log)"
+    cat /tmp/lc_stage_ui_c.log >&2
 fi
 
-missing_gnome_files="$(count_missing_files "$ROOT_A" gnome)"
-if [[ "$missing_gnome_files" -eq 0 ]]; then
-    ok "add-desktop: all gnome manifest files present"
+missing_ui_files="$(count_missing_files "$ROOT_A" ui)"
+if [[ "$missing_ui_files" -eq 0 ]]; then
+    ok "add-desktop: all ui manifest files present"
 else
-    not_ok "add-desktop: $missing_gnome_files gnome manifest file(s) missing"
+    not_ok "add-desktop: $missing_ui_files ui manifest file(s) missing"
 fi
 
-missing_core_after_gnome="$(count_missing_files "$ROOT_A" core)"
-if [[ "$missing_core_after_gnome" -eq 0 ]]; then
-    ok "add-desktop: core files still present after gnome added"
+missing_core_after_ui="$(count_missing_files "$ROOT_A" core)"
+if [[ "$missing_core_after_ui" -eq 0 ]]; then
+    ok "add-desktop: core files still present after ui added"
 else
-    not_ok "add-desktop: $missing_core_after_gnome core file(s) missing after gnome added"
+    not_ok "add-desktop: $missing_core_after_ui core file(s) missing after ui added"
 fi
 
-TPL_SHA_GNOME="$(sha256_of "$SEED_TPL")"
-if [[ "$TPL_SHA_GNOME" == "$TPL_SHA_BEFORE" ]]; then
-    ok "add-desktop: template still preserved after gnome staged"
+TPL_SHA_UI="$(sha256_of "$SEED_TPL")"
+if [[ "$TPL_SHA_UI" == "$TPL_SHA_BEFORE" ]]; then
+    ok "add-desktop: template still preserved after ui staged"
 else
-    not_ok "add-desktop: template altered by gnome staging"
+    not_ok "add-desktop: template altered by ui staging"
 fi
 
 for rel in \
@@ -439,11 +439,11 @@ for rel in \
     fi
 done
 
-missing_gnome_after_kde="$(count_missing_files "$ROOT_A" gnome)"
-if [[ "$missing_gnome_after_kde" -eq 0 ]]; then
-    ok "legacy: gnome files intact"
+missing_ui_after_kde="$(count_missing_files "$ROOT_A" ui)"
+if [[ "$missing_ui_after_kde" -eq 0 ]]; then
+    ok "legacy: ui files intact"
 else
-    not_ok "legacy: $missing_gnome_after_kde gnome file(s) missing"
+    not_ok "legacy: $missing_ui_after_kde ui file(s) missing"
 fi
 
 missing_core_after_kde="$(count_missing_files "$ROOT_A" core)"
@@ -468,7 +468,7 @@ while IFS= read -r dest; do
         rm -f "$full"
         removed_count=$((removed_count + 1))
     fi
-done < <(manifest_files_for_pkg gnome)
+done < <(manifest_files_for_pkg ui)
 
 if [[ "$removed_count" -gt 0 ]]; then
     ok "rollback: removed $removed_count desktop package file(s)"
@@ -476,12 +476,12 @@ else
     not_ok "rollback: no desktop files removed (staging may have failed earlier)"
 fi
 
-missing_gnome_after_rollback="$(count_missing_files "$ROOT_A" gnome)"
-total_gnome="$(manifest_files_for_pkg gnome | grep -c . || echo 0)"
-if [[ "$missing_gnome_after_rollback" -eq "$total_gnome" ]]; then
-    ok "rollback: all gnome files removed"
+missing_ui_after_rollback="$(count_missing_files "$ROOT_A" ui)"
+total_ui="$(manifest_files_for_pkg ui | grep -c . || echo 0)"
+if [[ "$missing_ui_after_rollback" -eq "$total_ui" ]]; then
+    ok "rollback: all ui files removed"
 else
-    not_ok "rollback: $missing_gnome_after_rollback/$total_gnome gnome files missing (expected all removed)"
+    not_ok "rollback: $missing_ui_after_rollback/$total_ui ui files missing (expected all removed)"
 fi
 
 missing_core_after_rollback="$(count_missing_files "$ROOT_A" core)"
@@ -600,12 +600,12 @@ else
     not_ok "password-preservation: $refs_g2 pam_namtor ref(s) after upgrade"
 fi
 
-bash "$STAGE" "$ROOT_G1" "$REPO_ROOT" --package gnome >/dev/null 2>&1
+bash "$STAGE" "$ROOT_G1" "$REPO_ROOT" --package ui >/dev/null 2>&1
 refs_g3="$(count_pam_namtor_refs "$ROOT_G1")"
 if [[ "$refs_g3" -eq 0 ]]; then
-    ok "password-preservation: 0 pam_namtor refs after gnome added"
+    ok "password-preservation: 0 pam_namtor refs after ui added"
 else
-    not_ok "password-preservation: $refs_g3 pam_namtor ref(s) after gnome added"
+    not_ok "password-preservation: $refs_g3 pam_namtor ref(s) after ui added"
 fi
 
 DESTDIR="$ROOT_G1" bash "$UNINSTALL" "$PACKAGING_DIR" >/dev/null 2>&1

@@ -95,7 +95,7 @@ if [[ -n "$release_dir" ]]; then
         [[ -f "$f" ]] && local_models+=("$f")
         [[ -f "$f.sha256" ]] && local_models+=("$f.sha256")
     done
-    # Arch split packages: namtor, namtor-gnome .pkg.tar.zst.
+    # Arch split packages: namtor, namtor-ui .pkg.tar.zst.
     local_arch=()
     for f in "$release_dir"/*.pkg.tar.zst; do
         [[ -f "$f" ]] && local_arch+=("$f")

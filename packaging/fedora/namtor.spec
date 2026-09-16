@@ -9,18 +9,29 @@
 #   namtor       (base/core) — daemon, worker, CLI, PAM module, systemd
 #                units, sysusers, tmpfiles, D-Bus, polkit, manifests,
 #                bundled models + licence notices, lifecycle helper, SBOM.
-#   namtor-gnome — GTK4/libadwaita enrollment wizard (.desktop, .metainfo,
-#                .svg). Requires namtor = ver-rel. The single, desktop-
-#                neutral UI despite the name.
+#   namtor-ui    — GTK4/libadwaita enrollment wizard (.desktop, .metainfo,
+#                .svg). Requires namtor = ver-rel. The single,
+#                desktop-neutral UI.
 #
-# A third subpackage, namtor-kde (the Plasma 6 KCM), shipped up to and
-# including 0.1.0-2 and is gone — the project consolidated on one
-# desktop-neutral GTK4 UI. namtor-gnome carries `Obsoletes: namtor-kde`
-# so dnf removes the stale subpackage during the upgrade instead of
-# leaving it behind with an unsatisfiable `Requires: namtor = ver-rel`.
+# Two predecessors are obsoleted rather than simply dropped:
+#
+#   namtor-gnome — this same subpackage under its old, desktop-specific
+#                name, shipped up to and including 0.1.0-3. dnf does not
+#                migrate a rename on its own, so without `Obsoletes` the
+#                old subpackage lingers and FILE-CONFLICTS with this one:
+#                both own /usr/bin/namtor-enroll-wizard, the .desktop, the
+#                metainfo and the icon.
+#   namtor-kde   — the Plasma 6 KCM, shipped up to and including 0.1.0-2,
+#                removed when the project consolidated on one
+#                desktop-neutral GTK4 UI. Without `Obsoletes` it is left
+#                behind with an unsatisfiable `Requires: namtor = ver-rel`,
+#                which blocks core upgrades.
+#
+# An Obsoletes only fires on an upgrade to a NEWER version, which is why
+# Release is bumped alongside the rename.
 #
 # The install manifest (schema v2) carries per-entry `package` ownership
-# (core|gnome); stage.sh stages all of them into one buildroot and the
+# (core|ui); stage.sh stages all of them into one buildroot and the
 # %files sections partition the tree by subpackage.
 #
 # Supported architectures: x86_64, aarch64 (model-manifest target_arch=both).
@@ -46,7 +57,7 @@
 
 Name:           namtor
 Version:        0.1.0
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
 # Combined SPDX expression: the Rust core is GPL-3.0-only; the bundled ONNX
@@ -103,27 +114,36 @@ scripts, the bundled ONNX models with their licence notices, and the SBOM.
 Models are bundled from the signed deterministic archive (no network fetch
 at install time). PAM is OFF by default.
 
-Install namtor-gnome for the GTK4/libadwaita enrollment wizard and
+Install namtor-ui for the GTK4/libadwaita enrollment wizard and
 settings app.
 
 # ===========================================================================
-# namtor-gnome — GTK4/libadwaita enrollment wizard + settings
+# namtor-ui — GTK4/libadwaita enrollment wizard + settings
 # ===========================================================================
-%package gnome
+%package ui
 Summary:        Enrollment wizard and settings for Nam-tor (GTK4 + libadwaita)
 License:        GPL-3.0-only
 Requires:       %{name} = %{version}-%{release}
 Requires:       gtk4%{?_isa}
 Requires:       libadwaita%{?_isa}
-# UPGRADE BLOCKER FIX, not tidiness: namtor-kde declared
-# `Requires: namtor = %%{version}-%%{release}`. If it is merely dropped from
-# the spec, a machine that still has it installed keeps an unsatisfiable
-# dependency and dnf refuses to upgrade the core package. `Obsoletes` makes
-# dnf remove it as part of the transaction. Keep this until no supported
-# upgrade path starts from a release that shipped namtor-kde (<= 0.1.0-2).
+# UPGRADE BLOCKER FIX, not tidiness.
+#
+# namtor-gnome is this subpackage's former name. dnf migrates nothing on a
+# rename: without `Obsoletes` the old subpackage stays installed and
+# file-conflicts with this one on all four of its files. `Provides` keeps
+# anything that required the old name satisfiable through the transaction.
+#
+# namtor-kde declared `Requires: namtor = %%{version}-%%{release}`. If it is
+# merely dropped from the spec, a machine that still has it installed keeps
+# an unsatisfiable dependency and dnf refuses to upgrade the core package.
+#
+# Keep both until no supported upgrade path starts from a release that
+# shipped them (namtor-kde <= 0.1.0-2, namtor-gnome <= 0.1.0-3).
+Provides:       namtor-gnome = %{version}-%{release}
+Obsoletes:      namtor-gnome < %{version}-%{release}
 Obsoletes:      namtor-kde < %{version}-%{release}
 
-%description gnome
+%description ui
 The desktop integration for Nam-tor: a GTK4 + libadwaita enrollment wizard
 and settings app. Install this alongside the core namtor package to manage
 enrollment, review protection status, and toggle PAM services from the
@@ -156,7 +176,7 @@ cargo build --release --frozen \
     -p namtor-cli \
     -p namtor-camera \
     -p namtor-pam \
-    -p namtor-gnome
+    -p namtor-ui
 
 %check
 # --test-threads=1 serialises tests that mutate process-global env vars
@@ -166,7 +186,7 @@ cargo test --workspace -- --test-threads=1
 
 %install
 # Deterministic staging from packaging/install-manifest.toml — installs
-# all static files for every split package (core, gnome) into one
+# all static files for every split package (core, ui) into one
 # buildroot; the %files sections partition the tree by subpackage.
 ./packaging/stage.sh "%{buildroot}" "%{_builddir}/nam-tor-%{version}"
 
@@ -230,9 +250,9 @@ echo '{"model_id":"sface_2021dec","licence_url":"https://www.apache.org/licenses
 /var/lib/namtor/models/sface_2021dec
 
 # ===========================================================================
-# %files — namtor-gnome
+# %files — namtor-ui
 # ===========================================================================
-%files gnome
+%files ui
 %license COPYING.md
 /usr/bin/namtor-enroll-wizard
 %{_datadir}/applications/org.namtor.Wizard.desktop
@@ -264,7 +284,7 @@ if [ $1 -eq 1 ]; then
     echo "     1. Open the Nam-tor Settings app."
     echo "     2. Enroll your face."
     echo "     3. Choose which PAM services to enable (e.g. gdm-password)."
-    echo "   Install namtor-gnome for the desktop UI."
+    echo "   Install namtor-ui for the desktop UI."
     echo "   No CLI or root shell needed for setup."
 fi
 
@@ -297,18 +317,30 @@ if [ $1 -eq 2 ]; then
 fi
 
 # ===========================================================================
-# Scriptlets — namtor-gnome. Desktop + icon cache refresh only; no daemon
+# Scriptlets — namtor-ui. Desktop + icon cache refresh only; no daemon
 # or PAM lifecycle (that is core's responsibility).
 # ===========================================================================
-%post gnome
+%post ui
 /usr/bin/update-desktop-database -q %{_datadir}/applications 2>/dev/null || :
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
-%postun gnome
+%postun ui
 /usr/bin/update-desktop-database -q %{_datadir}/applications 2>/dev/null || :
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Wed Sep 16 2026 Nam-tor Project <namtor@example.invalid> - 0.1.0-4
+- Rename the namtor-gnome subpackage to namtor-ui: it is the single,
+  desktop-neutral GTK4/libadwaita UI and has no GNOME-only runtime
+  dependency, so the old name was the last desktop-specific artifact.
+- namtor-ui carries `Provides: namtor-gnome = ver-rel` and
+  `Obsoletes: namtor-gnome < ver-rel`. dnf does not migrate a rename on
+  its own, and the two subpackages own exactly the same four files, so
+  without this the upgrade fails on a file conflict.
+- The install manifest now says `package = "ui"`; `namtor-layout` aliases
+  the old `"gnome"` value so uninstall and diagnostics keep working
+  against a manifest installed before the rename.
+
 * Wed Sep 16 2026 Nam-tor Project <namtor@example.invalid> - 0.1.0-3
 - Drop the namtor-kde subpackage: the project consolidated on a single
   desktop-neutral GTK4/libadwaita UI, so the Plasma 6 KCM is gone along

@@ -32,7 +32,7 @@ Nam-tor ships as two split packages on all three distros:
 | Package | Arch | Fedora | Debian |
 |---|---|---|---|
 | Core | `namtor` | `namtor` | `namtor` |
-| Desktop UI | `namtor-gnome` | `namtor-gnome` | `namtor-gnome` |
+| Desktop UI | `namtor-ui` | `namtor-ui` | `namtor-ui` |
 
 The core package owns the daemon, worker, CLI, PAM module, bundled models,
 systemd units, D-Bus service, polkit policy, lifecycle helper, SBOM, and
@@ -40,14 +40,24 @@ licence texts. It is headless-safe (no GTK runtime deps). The desktop
 package owns only the UI files and depends on `namtor` with an exact
 version pin.
 
-A third package, `namtor-kde` (a Plasma 6 KCM in Qt6/QML), shipped up to
-0.1.0 and has been removed — Nam-tor has one desktop-neutral GTK4 UI now.
-It is **obsoleted rather than merely dropped**: it declared an exact
-version dependency on the core package, so a leftover install would block
-core upgrades on every package manager. `namtor-gnome` therefore carries
-Arch `replaces`/`conflicts`, Fedora `Obsoletes:`, and Debian
-`Replaces:`/`Breaks:` entries naming `namtor-kde`. These stay until no
-supported upgrade path starts from a release that shipped it. Shared directories are owned by core; desktop
+Two predecessor packages are **obsoleted rather than merely dropped**, and
+`namtor-ui` carries Arch `provides`/`conflicts`/`replaces`, Fedora
+`Provides:`/`Obsoletes:` and Debian `Provides:`/`Replaces:`/`Breaks:`
+entries naming both:
+
+- `namtor-gnome` — the desktop package's own former name, shipped up to
+  0.1.0-4 (Arch) / 0.1.0-3 (Fedora) / 0.1.0-2 (Debian). No package manager
+  migrates a rename on its own, and both packages own exactly the same four
+  files, so a leftover install **file-conflicts** with `namtor-ui`.
+- `namtor-kde` — a Plasma 6 KCM in Qt6/QML, shipped up to 0.1.0 and removed
+  when Nam-tor consolidated on one desktop-neutral GTK4 UI. It declared an
+  exact version dependency on the core package, so a leftover install would
+  **block core upgrades** on every package manager.
+
+An obsoletion only fires on an upgrade to a NEWER version, so each recipe's
+`pkgrel` / `Release:` / changelog version is bumped alongside the rename.
+These entries stay until no supported upgrade path starts from a release
+that shipped the old names. Shared directories are owned by core; desktop
 packages own only their own files dropped into them (no dir-ownership
 conflicts). See [`docs/evidence/public-release/20-arch-matrix.json`](../docs/evidence/public-release/20-arch-matrix.json),
 [`21-fedora-matrix.json`](../docs/evidence/public-release/21-fedora-matrix.json),

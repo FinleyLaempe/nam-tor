@@ -14,10 +14,10 @@
 # per-model hashes against model-manifest.toml before any compilation. No
 # network fetch occurs at build or install time.
 #
-# Split into namtor (core) and namtor-gnome binary packages.
+# Split into namtor (core) and namtor-ui binary packages.
 # The install manifest (schema v2) carries per-entry `package` ownership
-# (core|gnome); override_dh_auto_install calls
-# `stage.sh debian/<pkg> . --package core|gnome` to stage only the
+# (core|ui); override_dh_auto_install calls
+# `stage.sh debian/<pkg> . --package core|ui` to stage only the
 # entries owned by each binary package, producing a deterministic DESTDIR
 # layout with no file conflicts between packages.
 #
@@ -65,7 +65,7 @@ override_dh_auto_build:
 	    -p namtor-cli \
 	    -p namtor-camera \
 	    -p namtor-pam \
-	    -p namtor-gnome
+	    -p namtor-ui
 
 # ---------------------------------------------------------------------------
 # override_dh_auto_test: workspace tests, serialising env-var-mutating
@@ -93,9 +93,9 @@ override_dh_auto_install:
 	    debian/namtor/usr/lib/$(DEB_HOST_MULTIARCH)/security/pam_namtor.so
 	rmdir --ignore-fail-on-non-empty debian/namtor/usr/lib/security 2>/dev/null || true
 
-	# GNOME entries only (enroll-wizard binary, .desktop, .metainfo.xml,
+	# UI entries only (enroll-wizard binary, .desktop, .metainfo.xml,
 	# .svg).
-	./packaging/stage.sh debian/namtor-gnome . --package gnome
+	./packaging/stage.sh debian/namtor-ui . --package ui
 
 	# Bundle models from the verified archive (no network fetch).
 	mkdir -p debian/namtor/var/lib/namtor/models

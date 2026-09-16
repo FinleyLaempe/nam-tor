@@ -174,12 +174,12 @@ M04|production model validation call path|packaging/build-model-archive.sh|test_
 M05|system-bus client parity|packaging/fedora/namtor.spec|test_fedora_split.sh|dbus-1/system-services -> dbus-1/session-services in core %files
 M06|PAM-default-off|packaging/arch/namtor.install|test_install_default_off.sh|inject pam-install.sh call into post_install
 M07|no unexpected setuid|HANDOFF.md|test_doc_audit.sh|inject stale 'setuid helper' string
-M08|package builds (structural)|packaging/arch/PKGBUILD|test_arch_split.sh|remove namtor-gnome from pkgname array
+M08|package builds (structural)|packaging/arch/PKGBUILD|test_arch_split.sh|remove namtor-ui from pkgname array
 M09|uninstall closure|packaging/uninstall.sh|test_uninstall_closure.sh|rename tomllib -> tommutant (manifest parse gone)
 M10|docs claims|packaging/README.md|test_doc_audit.sh|inject stale 'models ensure' string
 M11|SBOM/signatures|packaging/sign-packages.sh|test_release_signatures.sh|rename 'namtor-models-' -> 'namtor-mutants-' (coverage pattern gone)
 M12|lifecycle phases|packaging/lifecycle.sh|test_lifecycle.sh|drop pre-install from accepted phase case
-M13|package builds (structural, debian)|packaging/debian/control|test_debian_split.sh|rename 'Package: namtor-gnome' -> 'Package: namtor-mutant-gnome'
+M13|package builds (structural, debian)|packaging/debian/control|test_debian_split.sh|rename 'Package: namtor-ui' -> 'Package: namtor-mutant-ui'
 EOF
 
 MUTATION_RESULTS="$BACKUP_DIR/mutations.tsv"
@@ -234,12 +234,12 @@ PY
         M06) apply_replace "post_install() {" "post_install() {
     /usr/share/namtor/pam-install.sh --target /etc/pam.d/gdm-password   # MUTANT" "$target" ;;
         M07) apply_replace "Experimental preview" "Experimental preview — setuid helper removed" "$target" ;;
-        M08) apply_replace $'    namtor-gnome\n' '' "$target" ;;
+        M08) apply_replace $'    namtor-ui\n' '' "$target" ;;
         M09) apply_replace_all "tomllib" "tommutant" "$target" ;;
         M10) apply_replace "Experimental preview" "Experimental preview — namtor-cli models ensure" "$target" ;;
         M11) apply_replace_all "namtor-models-" "namtor-mutants-" "$target" ;;
         M12) apply_replace "pre-install|post-install|pre-upgrade|post-upgrade|pre-remove|post-remove" "post-install|pre-upgrade|post-upgrade|pre-remove|post-remove" "$target" ;;
-        M13) apply_replace "Package: namtor-gnome" "Package: namtor-mutant-gnome" "$target" ;;
+        M13) apply_replace "Package: namtor-ui" "Package: namtor-mutant-ui" "$target" ;;
         *) echo "  FATAL: unknown mutation id $id" >&2; return 1 ;;
     esac
 

@@ -4,7 +4,7 @@
 #
 # Acceptance criteria (from the task spec):
 #   (a) PKGBUILD uses pkgbase=namtor with two pkgname entries
-#       (namtor, namtor-gnome).
+#       (namtor, namtor-ui).
 #   (b) makepkg builds two packages from one PKGBUILD.
 #   (c) Core package owns: daemon, worker, CLI, PAM module, systemd units,
 #       sysusers, tmpfiles, D-Bus, polkit, manifests, models, licences,
@@ -152,11 +152,11 @@ else
     not_ok "pkgname has $pkgname_count entries (expected 2)"
 fi
 
-expected_pkgnames="namtor namtor-gnome"
+expected_pkgnames="namtor namtor-ui"
 actual_pkgnames="$(printf '%s\n' "$pkgname_entries" | sort | tr '\n' ' ' | sed 's/ $//')"
 expected_sorted="$(printf '%s\n' "$expected_pkgnames" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')"
 if [[ "$actual_pkgnames" == "$expected_sorted" ]]; then
-    ok "pkgname entries are: namtor, namtor-gnome"
+    ok "pkgname entries are: namtor, namtor-ui"
 else
     not_ok "pkgname entries are '$actual_pkgnames' (expected '$expected_sorted')"
 fi
@@ -165,7 +165,7 @@ fi
 
 echo "--- (b) two package functions exist ---"
 
-for func in package_namtor package_namtor-gnome; do
+for func in package_namtor package_namtor-ui; do
     if grep -q "^${func}()" "$PKGBUILD"; then
         ok "function $func exists"
     else
@@ -219,59 +219,80 @@ else
     not_ok "core does not pre-write licence acceptance records"
 fi
 
-# --- (d) GNOME package: deps + content --------------------------------------
+# --- (d) UI package: deps + content -----------------------------------------
 
-echo "--- (d) gnome package deps + content ---"
+echo "--- (d) ui package deps + content ---"
 
-gnome_body="$(extract_func 'package_namtor-gnome' "$PKGBUILD")"
+ui_body="$(extract_func 'package_namtor-ui' "$PKGBUILD")"
 
-# GNOME depends on namtor=exact version.
-if printf '%s\n' "$gnome_body" | grep -qF 'namtor=$pkgver'; then
-    ok "gnome depends on namtor=\$pkgver (exact version)"
+# The UI package depends on namtor=exact version.
+if printf '%s\n' "$ui_body" | grep -qF 'namtor=$pkgver'; then
+    ok "ui depends on namtor=\$pkgver (exact version)"
 else
-    not_ok "gnome does not depend on namtor=\$pkgver (exact version)"
+    not_ok "ui does not depend on namtor=\$pkgver (exact version)"
 fi
 
-# GNOME depends on gtk4 + libadwaita.
+# The UI package depends on gtk4 + libadwaita.
 for dep in gtk4 libadwaita; do
-    if printf '%s\n' "$gnome_body" | grep -qE "['\"]${dep}['\"]| ${dep}['\" ]"; then
-        ok "gnome depends on $dep"
+    if printf '%s\n' "$ui_body" | grep -qE "['\"]${dep}['\"]| ${dep}['\" ]"; then
+        ok "ui depends on $dep"
     else
-        not_ok "gnome missing dependency: $dep"
+        not_ok "ui missing dependency: $dep"
     fi
 done
 
-# GNOME must NOT depend on Qt/KDE.
+# The UI package must NOT depend on Qt/KDE.
 for nodep in qt6-base kirigami kcoreaddons; do
-    if printf '%s\n' "$gnome_body" | grep -qE "depends=.*['\"]${nodep}['\"]|depends=.* ${nodep}['\" ]"; then
-        not_ok "gnome depends on $nodep (should not — Qt/KDE dep in gnome)"
+    if printf '%s\n' "$ui_body" | grep -qE "depends=.*['\"]${nodep}['\"]|depends=.* ${nodep}['\" ]"; then
+        not_ok "ui depends on $nodep (should not — Qt/KDE dep in the GTK UI)"
     else
-        ok "gnome does not depend on $nodep"
+        ok "ui does not depend on $nodep"
     fi
 done
 
-# GNOME stages --package gnome.
-if printf '%s\n' "$gnome_body" | grep -q -- '--package gnome'; then
-    ok "gnome stages --package gnome"
+# The UI package stages --package ui.
+if printf '%s\n' "$ui_body" | grep -q -- '--package ui'; then
+    ok "ui stages --package ui"
 else
-    not_ok "gnome does not stage --package gnome"
+    not_ok "ui does not stage --package ui"
 fi
 
-# --- (e) Obsoletion of the removed namtor-kde package -----------------------
+# --- (e) Obsoletion of both predecessor packages ----------------------------
 
-echo "--- (e) desktop package obsoletes namtor-kde ---"
+echo "--- (e) desktop package obsoletes namtor-gnome and namtor-kde ---"
+
+# namtor-gnome is this same package under its old name. pacman migrates
+# nothing on a rename, and both packages own /usr/bin/namtor-enroll-wizard,
+# the .desktop, the metainfo and the icon — so without
+# provides/conflicts/replaces the old package lingers and the install fails
+# on a file conflict.
+for field in provides conflicts replaces; do
+    if printf '%s\n' "$ui_body" | grep -qE "${field}=\\(.*namtor-gnome"; then
+        ok "desktop package ${field}=('namtor-gnome') (rename migration)"
+    else
+        not_ok "desktop package does not ${field} namtor-gnome — the pre-rename package will file-conflict"
+    fi
+done
+
+# An obsoletion only fires on an upgrade to a NEWER version, so the rename
+# is inert unless pkgrel moved past the last namtor-gnome release (0.1.0-4).
+if grep -qE '^pkgrel=([5-9]|[1-9][0-9])' "$PKGBUILD"; then
+    ok "pkgrel bumped past the last namtor-gnome release (obsoletion can fire)"
+else
+    not_ok "pkgrel not bumped — replaces=('namtor-gnome') never fires without a newer version"
+fi
 
 # The Plasma KCM package is gone. It is NOT enough to stop building it:
 # namtor-kde declared depends=("namtor=$pkgver"), so a machine that still
 # has it installed has an unsatisfiable dependency and pacman aborts the
 # WHOLE transaction rather than upgrading the core package. The surviving
 # desktop package must therefore replace and conflict with it.
-if printf '%s\n' "$gnome_body" | grep -qE "replaces=\(.*namtor-kde"; then
+if printf '%s\n' "$ui_body" | grep -qE "replaces=\(.*namtor-kde"; then
     ok "desktop package replaces=('namtor-kde') (unblocks core upgrades)"
 else
     not_ok "desktop package does not replace namtor-kde — a leftover namtor-kde will block core upgrades"
 fi
-if printf '%s\n' "$gnome_body" | grep -qE "conflicts=\(.*namtor-kde"; then
+if printf '%s\n' "$ui_body" | grep -qE "conflicts=\(.*namtor-kde"; then
     ok "desktop package conflicts=('namtor-kde')"
 else
     not_ok "desktop package does not conflict with namtor-kde"
@@ -345,7 +366,7 @@ fi
 echo "--- (h) desktop packages have no install hooks ---"
 
 # The desktop package function must not set install= to a non-empty value.
-for body_name in gnome_body; do
+for body_name in ui_body; do
     body="${!body_name}"
     install_line="$(printf '%s\n' "$body" | grep -E '^\s*install=' || true)"
     if [[ -z "$install_line" ]]; then
@@ -357,9 +378,9 @@ for body_name in gnome_body; do
     fi
 done
 
-# No namtor-gnome.install or namtor-kde.install files should exist (desktop
-# packages have no hooks; namtor-kde is gone entirely).
-for f in namtor-gnome.install namtor-kde.install; do
+# No namtor-ui.install, namtor-gnome.install or namtor-kde.install files
+# should exist (desktop packages have no hooks; the other two are gone).
+for f in namtor-ui.install namtor-gnome.install namtor-kde.install; do
     if [[ -f "$ARCH_DIR/$f" ]]; then
         not_ok "$f exists (desktop packages should have no install hook)"
     else
@@ -372,7 +393,7 @@ done
 echo "--- (i) no file conflicts between packages ---"
 
 # Stage each package into separate temp dirs and check for overlapping paths.
-# This uses stage.sh --package core|gnome against fake empty destdirs,
+# This uses stage.sh --package core|ui against fake empty destdirs,
 # then collects the file lists and checks for intersections.
 # We need the built binaries to exist for stage.sh to copy them; since we
 # may not have a release build, we create placeholder files for the sources
@@ -426,10 +447,10 @@ done
 # Stage each package and collect dest paths.
 conflict_found=0
 paths_core=""
-paths_gnome=""
+paths_ui=""
 
 dest_core="$(mk_temp_dir)"
-dest_gnome="$(mk_temp_dir)"
+dest_ui="$(mk_temp_dir)"
 
 if bash "$STAGE_SH" "$dest_core" "$stage_root" --package core >/dev/null 2>&1; then
     paths_core="$(cd "$dest_core" && find . -type f -o -type l | sed 's|^\./||' | sort)"
@@ -437,10 +458,10 @@ else
     not_ok "stage.sh --package core failed"
 fi
 
-if bash "$STAGE_SH" "$dest_gnome" "$stage_root" --package gnome >/dev/null 2>&1; then
-    paths_gnome="$(cd "$dest_gnome" && find . -type f -o -type l | sed 's|^\./||' | sort)"
+if bash "$STAGE_SH" "$dest_ui" "$stage_root" --package ui >/dev/null 2>&1; then
+    paths_ui="$(cd "$dest_ui" && find . -type f -o -type l | sed 's|^\./||' | sort)"
 else
-    not_ok "stage.sh --package gnome failed"
+    not_ok "stage.sh --package ui failed"
 fi
 
 # `--package kde` must now be REJECTED: the value is gone from the filter
@@ -452,13 +473,13 @@ else
     ok "stage.sh rejects --package kde (package removed)"
 fi
 
-# Check core vs gnome overlap.
-if [[ -n "$paths_core" && -n "$paths_gnome" ]]; then
-    overlap_cg="$(comm -12 <(printf '%s\n' "$paths_core") <(printf '%s\n' "$paths_gnome"))"
+# Check core vs ui overlap.
+if [[ -n "$paths_core" && -n "$paths_ui" ]]; then
+    overlap_cg="$(comm -12 <(printf '%s\n' "$paths_core") <(printf '%s\n' "$paths_ui"))"
     if [[ -z "$overlap_cg" ]]; then
-        ok "no file conflicts between core and gnome"
+        ok "no file conflicts between core and ui"
     else
-        not_ok "file conflicts between core and gnome: $(printf '%s' "$overlap_cg" | tr '\n' ' ')"
+        not_ok "file conflicts between core and ui: $(printf '%s' "$overlap_cg" | tr '\n' ' ')"
         conflict_found=1
     fi
 fi
@@ -524,7 +545,7 @@ else
     fi
 
     # Verify each package has its own depends in the srcinfo.
-    for pkg in namtor namtor-gnome; do
+    for pkg in namtor namtor-ui; do
         if printf '%s\n' "$srcinfo_output" | grep -q "^pkgname = ${pkg}$"; then
             ok "makepkg --printsrcinfo includes pkgname = $pkg"
         else

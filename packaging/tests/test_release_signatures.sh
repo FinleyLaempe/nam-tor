@@ -256,11 +256,11 @@ mkdir -p "$release_out"
 printf 'source tarball\n'  > "$release_out/namtor-0.1.0.tar.gz"
 printf 'model archive\n'   > "$release_out/namtor-models-0.1.0.tar.gz"
 printf 'arch core\n'       > "$release_out/namtor-0.1.0-1-x86_64.pkg.tar.zst"
-printf 'arch gnome\n'      > "$release_out/namtor-gnome-0.1.0-1-x86_64.pkg.tar.zst"
+printf 'arch ui\n'         > "$release_out/namtor-ui-0.1.0-1-x86_64.pkg.tar.zst"
 printf 'fedora core\n'     > "$release_out/namtor-0.1.0-1.fc40.x86_64.rpm"
-printf 'fedora gnome\n'    > "$release_out/namtor-gnome-0.1.0-1.fc40.x86_64.rpm"
+printf 'fedora ui\n'       > "$release_out/namtor-ui-0.1.0-1.fc40.x86_64.rpm"
 printf 'debian core\n'     > "$release_out/namtor_0.1.0-1_amd64.deb"
-printf 'debian gnome\n'    > "$release_out/namtor-gnome_0.1.0-1_amd64.deb"
+printf 'debian ui\n'       > "$release_out/namtor-ui_0.1.0-1_amd64.deb"
 printf '{"provenance":1}\n' > "$release_out/namtor.provenance.json"
 
 if [[ -n "$keyid_a" ]]; then
@@ -278,11 +278,11 @@ if [[ -n "$keyid_a" ]]; then
     # is always on in release-dir mode; --checksums adds the manifest).
     for art in namtor-0.1.0.tar.gz namtor-models-0.1.0.tar.gz \
                namtor-0.1.0-1-x86_64.pkg.tar.zst \
-               namtor-gnome-0.1.0-1-x86_64.pkg.tar.zst \
+               namtor-ui-0.1.0-1-x86_64.pkg.tar.zst \
                namtor-0.1.0-1.fc40.x86_64.rpm \
-               namtor-gnome-0.1.0-1.fc40.x86_64.rpm \
+               namtor-ui-0.1.0-1.fc40.x86_64.rpm \
                namtor_0.1.0-1_amd64.deb \
-               namtor-gnome_0.1.0-1_amd64.deb; do
+               namtor-ui_0.1.0-1_amd64.deb; do
         if [[ -f "$release_out/$art.asc" ]]; then
             pass=$((pass + 1))
         else
@@ -301,7 +301,7 @@ if [[ -n "$keyid_a" ]]; then
         fail=$((fail + 1)); failures+=("SHA256SUMS.asc missing"); echo "  FAIL: SHA256SUMS.asc missing"
     fi
     # The checksums manifest must list every artifact. The staged set above
-    # is 9: source tarball, model archive, provenance, and core+gnome for
+    # is 9: source tarball, model archive, provenance, and core+ui for
     # each of Arch/Fedora/Debian. It was 12 while namtor-kde existed.
     sums_lines="$(wc -l < "$release_out/SHA256SUMS")"
     if [[ "$sums_lines" -ge 9 ]]; then
