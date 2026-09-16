@@ -6,8 +6,8 @@
 use std::sync::mpsc::channel;
 use std::sync::{Mutex, OnceLock};
 
-use namtor_gnome::presenter::ProfilePresenter;
-use namtor_gnome::ManagerClient;
+use namtor_ui::presenter::ProfilePresenter;
+use namtor_ui::ManagerClient;
 
 // ---------------------------------------------------------------------------
 // GTK test thread: a dedicated thread that initializes GTK and runs all
@@ -168,7 +168,7 @@ pub fn for_each_button(widget: &gtk4::Widget, f: &mut dyn FnMut(&gtk4::Button)) 
 pub fn after<C: ManagerClient>(
     presenter: &mut ProfilePresenter<C>,
     action: impl FnOnce(&mut ProfilePresenter<C>),
-) -> namtor_gnome::PresenterModel {
+) -> namtor_ui::PresenterModel {
     action(presenter);
     presenter.model().clone()
 }

@@ -338,7 +338,7 @@ jobs:
                 # one declares depends=("namtor=$pkgver"). Removing only
                 # `namtor` leaves that dependency broken and pacman aborts
                 # the whole transaction.
-                timeout -k 10 120 pacman -Rns --noconfirm namtor-gnome namtor || \
+                timeout -k 10 120 pacman -Rns --noconfirm namtor-ui namtor || \
                   { echo "::error::uninstall failed"; exit 1; }
                 ;;
               fedora*)

@@ -65,7 +65,7 @@ M3_FLOW_EVIDENCE="${M3_FLOW_EVIDENCE:-$REPO_ROOT/docs/evidence/enrollment-redesi
 M3_FAIL_EVIDENCE="${M3_FAIL_EVIDENCE:-$REPO_ROOT/docs/evidence/enrollment-redesign/15-installed-failure.jsonl}"
 M3_TEST_UID="${M3_TEST_UID:-99999}"
 M3_TEST_NAME="${M3_TEST_NAME:-hil-continuous}"
-M3_GNOME_BIN="${M3_GNOME_BIN:-/usr/bin/namtor-enroll-wizard}"
+M3_UI_BIN="${M3_UI_BIN:-/usr/bin/namtor-enroll-wizard}"
 M3_DBUS_DEST="org.namtor.Manager"
 M3_DBUS_PATH="/org/namtor/Manager"
 M3_IFACE_V3="org.namtor.Manager3"
@@ -230,7 +230,7 @@ fi
 
 # Manager3 continuous-enrollment HIL prereqs. The v3 flow needs everything
 # the auth HIL needs plus gdbus (system-bus calls), pyatspi (accessibility
-# assertions), a display session (GNOME app launch), and the GNOME binary.
+# assertions), a display session (UI app launch), and the wizard binary.
 m3_missing=()
 if [[ "$NAMTOR_DRY_RUN" == "1" ]]; then
     m3_missing+=("dry_run_forced")
@@ -256,8 +256,8 @@ fi
 if [[ -z "${DISPLAY:-}" ]] && [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
     m3_missing+=("requires display_session")
 fi
-if [[ ! -x "$M3_GNOME_BIN" ]]; then
-    m3_missing+=("requires gnome_app($M3_GNOME_BIN)")
+if [[ ! -x "$M3_UI_BIN" ]]; then
+    m3_missing+=("requires ui_app($M3_UI_BIN)")
 fi
 if ! id namtor >/dev/null 2>&1; then
     m3_missing+=("requires namtor_user")
@@ -456,10 +456,10 @@ emit_record "restore" "pass" "$restore_msgs"
 # capturing, cancel unknown session, commit without stop, camera unplug.
 # ---------------------------------------------------------------------------
 
-m3_gnome_pid=""
+m3_ui_pid=""
 m3_cleanup() {
-    if [[ -n "$m3_gnome_pid" ]] && kill -0 "$m3_gnome_pid" 2>/dev/null; then
-        kill "$m3_gnome_pid" 2>/dev/null || true
+    if [[ -n "$m3_ui_pid" ]] && kill -0 "$m3_ui_pid" 2>/dev/null; then
+        kill "$m3_ui_pid" 2>/dev/null || true
     fi
     "$NAMTOR_CLI_BIN" remove "$M3_TEST_UID" 2>/dev/null || true
     systemctl stop namtor-daemon.service 2>/dev/null || true
@@ -533,17 +533,17 @@ assert_pam_disabled() {
 # Step M3-3 — PAM disabled before.
 assert_pam_disabled "pam_disabled_before" || true
 
-# Step M3-4 — launch the installed GNOME app.
-m3_cmd="$M3_GNOME_BIN &"
-"$M3_GNOME_BIN" &
-m3_gnome_pid=$!
+# Step M3-4 — launch the installed UI app.
+m3_cmd="$M3_UI_BIN &"
+"$M3_UI_BIN" &
+m3_ui_pid=$!
 sleep 2
-if kill -0 "$m3_gnome_pid" 2>/dev/null; then
+if kill -0 "$m3_ui_pid" 2>/dev/null; then
     emit_m3_record "$M3_FLOW_EVIDENCE" "launch_app" "$m3_cmd" 0 \
-        "namtor-enroll-wizard launched (pid $m3_gnome_pid)" true
+        "namtor-enroll-wizard launched (pid $m3_ui_pid)" true
 else
     emit_m3_record "$M3_FLOW_EVIDENCE" "launch_app" "$m3_cmd" 1 \
-        "GNOME app exited immediately" false
+        "UI app exited immediately" false
 fi
 
 # Step M3-5 — AT-SPI accessibility assertions via pyatspi.
@@ -831,18 +831,18 @@ emit_m3_withheld "$M3_FAIL_EVIDENCE" "unplug_camera" \
 
 # ---------------------------------------------------------------------------
 # Manager3 cleanup. Remove the disposable test profile, stop the daemon,
-# kill the GNOME app. PAM was never enabled (asserted above). The trap also
+# kill the UI app. PAM was never enabled (asserted above). The trap also
 # runs on exit for safety.
 # ---------------------------------------------------------------------------
 "$NAMTOR_CLI_BIN" remove "$M3_TEST_UID" 2>/dev/null || true
-if [[ -n "$m3_gnome_pid" ]] && kill -0 "$m3_gnome_pid" 2>/dev/null; then
-    kill "$m3_gnome_pid" 2>/dev/null || true
+if [[ -n "$m3_ui_pid" ]] && kill -0 "$m3_ui_pid" 2>/dev/null; then
+    kill "$m3_ui_pid" 2>/dev/null || true
 fi
 systemctl stop namtor-daemon.service 2>/dev/null || true
 systemctl stop namtor-daemon.socket 2>/dev/null || true
 emit_m3_record "$M3_FLOW_EVIDENCE" "cleanup" \
-    "remove uid $M3_TEST_UID; kill gnome; stop daemon" 0 \
-    "test profile removed, daemon stopped, gnome app killed" true
+    "remove uid $M3_TEST_UID; kill ui; stop daemon" 0 \
+    "test profile removed, daemon stopped, UI app killed" true
 
 trap - EXIT
 

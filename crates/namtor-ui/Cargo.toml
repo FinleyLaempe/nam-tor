@@ -1,9 +1,9 @@
 [package]
-name = "namtor-gnome"
+name = "namtor-ui"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "GNOME management UI for Nam-tor — D-Bus client (org.namtor.Manager)"
+description = "Nam-tor management UI — GTK4/libadwaita, desktop-neutral — D-Bus client (org.namtor.Manager)"
 
 [lib]
 path = "src/lib.rs"

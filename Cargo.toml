@@ -8,7 +8,6 @@ members = [
     "crates/namtor-collect",
     "crates/namtor-daemon",
     "crates/namtor-eval",
-    "crates/namtor-gnome",
     "crates/namtor-hwdb",
     "crates/namtor-layout",
     "crates/namtor-pad",
@@ -18,6 +17,7 @@ members = [
     "crates/namtor-proto",
     "crates/namtor-recog",
     "crates/namtor-store",
+    "crates/namtor-ui",
     "crates/namtor-uvc",
 ]
 

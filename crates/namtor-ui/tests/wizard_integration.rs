@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Regression test: the GNOME enrollment wizard must wire the real
+//! Regression test: the enrollment wizard must wire the real
 //! application UI end-to-end, not hard-code placeholder labels.
 //!
 //! All tests are behavioural: they construct real AppControllers,
@@ -7,8 +7,8 @@
 
 mod common;
 
-use namtor_gnome::fake::FakeManagerClient;
-use namtor_gnome::presenter::ProfilePresenter;
+use namtor_ui::fake::FakeManagerClient;
+use namtor_ui::presenter::ProfilePresenter;
 
 const TEST_UID: u32 = 1000;
 
@@ -27,7 +27,7 @@ fn wizard_renders_real_content_not_placeholders() {
             .build();
         let _guard = app.hold();
 
-        let shell = namtor_gnome::shell::Shell::new(&app);
+        let shell = namtor_ui::shell::Shell::new(&app);
         let content = shell
             .window()
             .content()
@@ -46,7 +46,7 @@ fn wizard_renders_real_content_not_placeholders() {
 /// FakeBus and asserting it transitions to online state with a presenter.
 #[test]
 fn wizard_uses_real_client_or_app_controller() {
-    use namtor_gnome::app::AppController;
+    use namtor_ui::app::AppController;
 
     common::run_gtk_test(|| {
         use gtk4::prelude::*;
@@ -66,7 +66,7 @@ fn wizard_uses_real_client_or_app_controller() {
         );
 
         let fake_bus = FakeBus::spawn().expect("spawn fake bus");
-        let client: namtor_client::types::ManagerResult<namtor_gnome::DbusManagerClient> =
+        let client: namtor_client::types::ManagerResult<namtor_ui::DbusManagerClient> =
             Ok(fake_bus.client);
         controller.borrow_mut().apply_connect_result(&rc, client);
 
@@ -86,7 +86,7 @@ fn wizard_uses_real_client_or_app_controller() {
 /// controller has a presenter after connecting to FakeBus.
 #[test]
 fn app_controller_uses_profile_presenter() {
-    use namtor_gnome::app::AppController;
+    use namtor_ui::app::AppController;
 
     common::run_gtk_test(|| {
         use gtk4::prelude::*;
@@ -118,8 +118,8 @@ fn app_controller_uses_profile_presenter() {
 #[test]
 fn app_controller_renders_profile_list_view() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::ProfileListView;
-    use namtor_gnome::view_model::{PresenterModel, ProfileRowView};
+    use namtor_ui::components::ProfileListView;
+    use namtor_ui::view_model::{PresenterModel, ProfileRowView};
 
     let mut model = PresenterModel::default();
     model.profiles.push(ProfileRowView {
@@ -152,7 +152,7 @@ fn app_controller_renders_profile_list_view() {
 #[test]
 fn app_controller_renders_pam_services() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::pam_services::render_pam_services;
+    use namtor_ui::components::pam_services::render_pam_services;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -182,7 +182,7 @@ fn app_controller_renders_pam_services() {
 #[test]
 fn app_controller_renders_system_status() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::system_status::render_system_status;
+    use namtor_ui::components::system_status::render_system_status;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -210,8 +210,8 @@ fn app_controller_renders_system_status() {
 #[test]
 fn app_controller_uses_enrollment_and_review_components() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::{EnrollmentViewComponent, ReviewViewComponent};
-    use namtor_gnome::view_model::{EnrollmentViewV3, ReviewViewV3};
+    use namtor_ui::components::{EnrollmentViewComponent, ReviewViewComponent};
+    use namtor_ui::view_model::{EnrollmentViewV3, ReviewViewV3};
 
     let view = EnrollmentViewV3 {
         phase: "capture".into(),
@@ -300,8 +300,8 @@ fn app_controller_calls_v3_lifecycle_methods() {
 #[test]
 fn enrollment_component_connects_callbacks() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::EnrollmentViewComponent;
-    use namtor_gnome::view_model::EnrollmentViewV3;
+    use namtor_ui::components::EnrollmentViewComponent;
+    use namtor_ui::view_model::EnrollmentViewV3;
 
     let view = EnrollmentViewV3 {
         phase: "capture".into(),
@@ -338,8 +338,8 @@ fn enrollment_component_connects_callbacks() {
 #[test]
 fn review_component_connects_callbacks() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::ReviewViewComponent;
-    use namtor_gnome::view_model::ReviewViewV3;
+    use namtor_ui::components::ReviewViewComponent;
+    use namtor_ui::view_model::ReviewViewV3;
 
     let review = ReviewViewV3 {
         ready_to_save: true,
@@ -376,8 +376,8 @@ fn review_component_connects_callbacks() {
 #[test]
 fn profile_list_component_connects_toggle() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::ProfileListView;
-    use namtor_gnome::view_model::{PresenterModel, ProfileRowView};
+    use namtor_ui::components::ProfileListView;
+    use namtor_ui::view_model::{PresenterModel, ProfileRowView};
 
     let mut model = PresenterModel::default();
     model.profiles.push(ProfileRowView {

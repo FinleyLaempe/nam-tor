@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Accessibility helpers for the GNOME enrollment UI.
+//! Accessibility helpers for the Nam-tor enrollment UI.
 //!
 //! Currently houses [`ProgressAnnouncer`], the rate-limiter that prevents
 //! screen-reader announcement flooding during live capture.

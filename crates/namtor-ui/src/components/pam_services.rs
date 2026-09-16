@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! PAM services inventory component for the Nam-tor GNOME management UI.
+//! PAM services inventory component for the Nam-tor management UI.
 //!
 //! Renders a list of PAM services as an [`adw::PreferencesGroup`] containing
 //! one [`adw::ActionRow`] per service with an [`adw::SwitchRow`] suffix

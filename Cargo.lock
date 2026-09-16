@@ -1645,26 +1645,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "namtor-gnome"
-version = "0.1.0"
-dependencies = [
- "gettext",
- "gio",
- "glib",
- "gtk4",
- "libadwaita",
- "namtor-client",
- "namtor-layout",
- "namtor-proto",
- "nix",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "zbus",
-]
-
-[[package]]
 name = "namtor-hwdb"
 version = "0.1.0"
 dependencies = [
@@ -1772,6 +1752,26 @@ dependencies = [
  "tempfile",
  "thiserror",
  "zeroize",
+]
+
+[[package]]
+name = "namtor-ui"
+version = "0.1.0"
+dependencies = [
+ "gettext",
+ "gio",
+ "glib",
+ "gtk4",
+ "libadwaita",
+ "namtor-client",
+ "namtor-layout",
+ "namtor-proto",
+ "nix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "zbus",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Polkit authorization error handling for the GNOME UI.
+//! Polkit authorization error handling for the Nam-tor UI.
 //!
 //! USA-11: distinguishes bus/check errors from denied/cancelled errors so
 //! the user sees a meaningful message instead of a raw D-Bus error string.

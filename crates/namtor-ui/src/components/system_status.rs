@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! System status component for the Nam-tor GNOME management UI.
+//! System status component for the Nam-tor management UI.
 //!
 //! Renders daemon, camera, model, and protection status as two
 //! [`adw::PreferencesGroup`]s: a "System status" group with one

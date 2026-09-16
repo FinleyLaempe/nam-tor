@@ -4,8 +4,8 @@
 //! This module is the **single source of truth** for the versioned manager wire
 //! contract. The introspection XML constant [`INTROSPECTION_XML`] is kept
 //! byte-identical to `docs/evidence/dbus-contract.xml` (asserted by the
-//! `contract_xml_matches_evidence_file` test). Both the GNOME and KDE clients
-//! generate their bindings from this one introspection source.
+//! `contract_xml_matches_evidence_file` test). Every client — the UI crate
+//! and namtor-cli — generates its bindings from this one introspection source.
 //!
 //! What is frozen here:
 //!

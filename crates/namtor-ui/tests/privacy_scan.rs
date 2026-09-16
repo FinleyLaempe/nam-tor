@@ -7,8 +7,8 @@
 //! appears, the test fails and names the leaking field. This is the CI
 //! enforcement of spec §9.2 ("no biometric data in the UI").
 
-use namtor_gnome::privacy::{forbidden_fields, FORBIDDEN_SUBSTRINGS};
-use namtor_gnome::{
+use namtor_ui::privacy::{forbidden_fields, FORBIDDEN_SUBSTRINGS};
+use namtor_ui::{
     client::{PamServiceCompatibility, PamServiceInfo, ProtectionKeyKind, ProtectionStatus},
     EnrollmentProgress, EnrollmentProgressV3, EnrollmentReviewV3, ProfileInfo, QualityLabel,
     ReviewOutcome, StatusReport,
@@ -134,7 +134,7 @@ fn enrollment_review_v3_carries_no_biometrics() {
 
 #[test]
 fn enrollment_view_v3_carries_no_biometrics() {
-    use namtor_gnome::view_model::EnrollmentViewV3;
+    use namtor_ui::view_model::EnrollmentViewV3;
     let sample = EnrollmentViewV3 {
         phase: "capturing".into(),
         quality_percent: 80,
@@ -151,7 +151,7 @@ fn enrollment_view_v3_carries_no_biometrics() {
 
 #[test]
 fn review_view_v3_carries_no_biometrics() {
-    use namtor_gnome::view_model::ReviewViewV3;
+    use namtor_ui::view_model::ReviewViewV3;
     let sample = ReviewViewV3 {
         ready_to_save: true,
         quality_percent: 85,
@@ -165,7 +165,7 @@ fn review_view_v3_carries_no_biometrics() {
 
 #[test]
 fn enrollment_state_carries_no_biometrics() {
-    use namtor_gnome::view_model::EnrollmentState;
+    use namtor_ui::view_model::EnrollmentState;
     let sample = EnrollmentState::Error("something went wrong".into());
     let hits = forbidden_fields(&sample);
     assert!(hits.is_empty(), "EnrollmentState leaked fields: {hits:?}");
@@ -173,7 +173,7 @@ fn enrollment_state_carries_no_biometrics() {
 
 #[test]
 fn presenter_model_carries_no_biometrics() {
-    use namtor_gnome::view_model::PresenterModel;
+    use namtor_ui::view_model::PresenterModel;
     let sample = PresenterModel::default();
     let hits = forbidden_fields(&sample);
     assert!(hits.is_empty(), "PresenterModel leaked fields: {hits:?}");
@@ -226,7 +226,7 @@ fn scan_flags_a_known_bad_struct() {
 /// view model types would fail the privacy scan.
 #[test]
 fn mutation_test_forbidden_fields_in_protection_view() {
-    let clean = namtor_gnome::view_model::ProtectionView {
+    let clean = namtor_ui::view_model::ProtectionView {
         label: "TPM2 (hardware-bound)".into(),
         warning: String::new(),
         is_software_fallback: false,
@@ -247,7 +247,7 @@ fn mutation_test_forbidden_fields_in_protection_view() {
             key: "injected",
         });
         let mut hits = Vec::new();
-        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        namtor_ui::privacy::scan_value(&json, &mut hits);
         assert!(
             hits.iter()
                 .any(|h: &String| h.to_lowercase().contains(forbidden)),
@@ -258,10 +258,10 @@ fn mutation_test_forbidden_fields_in_protection_view() {
 
 #[test]
 fn mutation_test_forbidden_fields_in_readiness_view() {
-    let clean = namtor_gnome::view_model::ReadinessView {
-        daemon: namtor_gnome::view_model::ReadinessLevel::Ready,
-        model: namtor_gnome::view_model::ReadinessLevel::Ready,
-        camera: namtor_gnome::view_model::ReadinessLevel::Ready,
+    let clean = namtor_ui::view_model::ReadinessView {
+        daemon: namtor_ui::view_model::ReadinessLevel::Ready,
+        model: namtor_ui::view_model::ReadinessLevel::Ready,
+        camera: namtor_ui::view_model::ReadinessLevel::Ready,
         has_enrolled_profiles: true,
         enabled_pam_count: 2,
     };
@@ -281,7 +281,7 @@ fn mutation_test_forbidden_fields_in_readiness_view() {
             key: "injected",
         });
         let mut hits = Vec::new();
-        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        namtor_ui::privacy::scan_value(&json, &mut hits);
         assert!(
             hits.iter()
                 .any(|h: &String| h.to_lowercase().contains(forbidden)),
@@ -292,7 +292,7 @@ fn mutation_test_forbidden_fields_in_readiness_view() {
 
 #[test]
 fn mutation_test_forbidden_fields_in_enrollment_view_v3() {
-    let clean = namtor_gnome::view_model::EnrollmentViewV3 {
+    let clean = namtor_ui::view_model::EnrollmentViewV3 {
         phase: "capturing".into(),
         quality_percent: 80,
         diversity_percent: 70,
@@ -321,7 +321,7 @@ fn mutation_test_forbidden_fields_in_enrollment_view_v3() {
             key: "injected",
         });
         let mut hits = Vec::new();
-        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        namtor_ui::privacy::scan_value(&json, &mut hits);
         assert!(
             hits.iter()
                 .any(|h: &String| h.to_lowercase().contains(forbidden)),
@@ -332,7 +332,7 @@ fn mutation_test_forbidden_fields_in_enrollment_view_v3() {
 
 #[test]
 fn mutation_test_forbidden_fields_in_review_view_v3() {
-    let clean = namtor_gnome::view_model::ReviewViewV3 {
+    let clean = namtor_ui::view_model::ReviewViewV3 {
         ready_to_save: true,
         quality_percent: 85,
         diversity_percent: 75,
@@ -355,7 +355,7 @@ fn mutation_test_forbidden_fields_in_review_view_v3() {
             key: "injected",
         });
         let mut hits = Vec::new();
-        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        namtor_ui::privacy::scan_value(&json, &mut hits);
         assert!(
             hits.iter()
                 .any(|h: &String| h.to_lowercase().contains(forbidden)),
@@ -370,21 +370,21 @@ fn mutation_test_forbidden_fields_in_review_view_v3() {
 /// no biometric internals.
 #[test]
 fn populated_presenter_model_carries_no_biometrics() {
-    use namtor_gnome::view_model::{
+    use namtor_ui::view_model::{
         AuthenticationView, EnrollmentState, EnrollmentView, EnrollmentViewV3, ErrorView,
         PendingMerge, PendingPamToggle, PendingReplace, PresenterModel, ProtectionView,
         QualityView, ReadinessLevel, ReadinessView, ReviewView, ReviewViewV3, SystemView,
     };
 
     let model = PresenterModel {
-        profiles: vec![namtor_gnome::view_model::ProfileRowView {
+        profiles: vec![namtor_ui::view_model::ProfileRowView {
             id: "id-1".into(),
             name: "Alice".into(),
             enabled: true,
             created: 1_700_000_000,
             last_used: 0,
         }],
-        status: Some(namtor_gnome::StatusReport {
+        status: Some(namtor_ui::StatusReport {
             api_version: 2,
             profiles: vec![],
             emitter_armed: false,
@@ -477,14 +477,14 @@ fn populated_presenter_model_carries_no_biometrics() {
 // (AuthenticationView, SystemView, ProfileSetupView) are scanned.
 // ===========================================================================
 
-use namtor_gnome::privacy::forbidden_words_in_ui_string;
-use namtor_gnome::view_model::{AuthenticationView, ProfileSetupView};
+use namtor_ui::privacy::forbidden_words_in_ui_string;
+use namtor_ui::view_model::{AuthenticationView, ProfileSetupView};
 
 /// `AuthenticationView` carries no biometric field names.
 #[test]
 fn authentication_view_carries_no_biometrics() {
     let sample = AuthenticationView {
-        recommended_service: Some(namtor_gnome::view_model::PamServiceRowView {
+        recommended_service: Some(namtor_ui::view_model::PamServiceRowView {
             id: "gdm-password".into(),
             display_name: "GDM Password".into(),
             enabled: false,
@@ -505,7 +505,7 @@ fn authentication_view_carries_no_biometrics() {
 /// `SystemView` carries no biometric field names.
 #[test]
 fn system_view_carries_no_biometrics() {
-    use namtor_gnome::view_model::{ProtectionView, SystemView};
+    use namtor_ui::view_model::{ProtectionView, SystemView};
     let sample = SystemView {
         daemon_running: true,
         camera_detected: true,
@@ -554,7 +554,7 @@ fn mutation_test_forbidden_fields_in_profile_setup_view() {
             key: "injected",
         });
         let mut hits = Vec::new();
-        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        namtor_ui::privacy::scan_value(&json, &mut hits);
         assert!(
             hits.iter()
                 .any(|h: &String| h.to_lowercase().contains(forbidden)),
@@ -567,7 +567,7 @@ fn mutation_test_forbidden_fields_in_profile_setup_view() {
 /// shaped JSON object is caught by the scan.
 #[test]
 fn mutation_test_forbidden_fields_in_system_view() {
-    use namtor_gnome::view_model::{ProtectionView, SystemView};
+    use namtor_ui::view_model::{ProtectionView, SystemView};
     let clean = SystemView {
         daemon_running: true,
         camera_detected: true,
@@ -594,7 +594,7 @@ fn mutation_test_forbidden_fields_in_system_view() {
             key: "injected",
         });
         let mut hits = Vec::new();
-        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        namtor_ui::privacy::scan_value(&json, &mut hits);
         assert!(
             hits.iter()
                 .any(|h: &String| h.to_lowercase().contains(forbidden)),
@@ -623,7 +623,7 @@ fn mutation_test_forbidden_fields_in_authentication_view() {
             key: "injected",
         });
         let mut hits = Vec::new();
-        namtor_gnome::privacy::scan_value(&json, &mut hits);
+        namtor_ui::privacy::scan_value(&json, &mut hits);
         assert!(
             hits.iter()
                 .any(|h: &String| h.to_lowercase().contains(forbidden)),
@@ -632,7 +632,7 @@ fn mutation_test_forbidden_fields_in_authentication_view() {
     }
 }
 
-/// Registry of every user-facing string literal in the GNOME UI source.
+/// Registry of every user-facing string literal in the UI source.
 /// Each entry is `(source_file, string)`. The biometric-wording scan and
 /// mutation tests operate on this registry. Keeping it in the test file
 /// makes the scan deterministic and CI-safe (no GTK init needed).
@@ -816,7 +816,7 @@ fn no_biometric_wording_in_ui_strings() {
 /// scan test above, and each is exercised by the populated model test.
 #[test]
 fn privacy_scan_covers_new_view_types() {
-    use namtor_gnome::view_model::{
+    use namtor_ui::view_model::{
         AuthenticationView, PendingPamToggle, PresenterModel, ProfileSetupView, SystemView,
     };
 
@@ -867,10 +867,10 @@ fn mutation_forbidden_word_rejected() {
     }
 }
 
-/// The UI string registry is non-empty and covers every GNOME source file
+/// The UI string registry is non-empty and covers every UI source file
 /// that renders user-facing text.
 #[test]
-fn ui_string_registry_covers_all_gnome_sources() {
+fn ui_string_registry_covers_all_ui_sources() {
     assert!(
         !UI_STRING_REGISTRY.is_empty(),
         "registry must not be vacuous"

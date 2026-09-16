@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Nam-tor GNOME Settings App — GTK4 + libadwaita front-end.
+//! Nam-tor Settings App — GTK4 + libadwaita front-end.
 //!
 //! The binary constructs an [`AppController`] which wires the adaptive
 //! settings shell to the live D-Bus daemon via `ProfilePresenter` and the
@@ -13,7 +13,7 @@ use gio::ApplicationFlags;
 use gtk4::prelude::*;
 use libadwaita as adw;
 
-use namtor_gnome::app::AppController;
+use namtor_ui::app::AppController;
 
 const USAGE: &str = "\
 Usage: namtor-enroll-wizard
@@ -45,7 +45,7 @@ fn main() -> std::process::ExitCode {
     clear_legacy_dark_theme_flag();
 
     let app = adw::Application::builder()
-        .application_id("org.namtor.Gnome")
+        .application_id(namtor_ui::APP_ID)
         .flags(ApplicationFlags::FLAGS_NONE)
         .build();
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Application controller wiring the GNOME settings shell to the live
+//! Application controller wiring the settings shell to the live
 //! D-Bus daemon via `ProfilePresenter` and the real UI components.
 //!
 //! The wizard binary (`src/bin/wizard.rs`) constructs an [`AppController`]

@@ -5,7 +5,7 @@
 //! headlessly on a dedicated GTK thread), and component APIs — never
 //! scanning source text.
 
-use namtor_gnome::shell::Destination;
+use namtor_ui::shell::Destination;
 
 mod common;
 
@@ -119,8 +119,8 @@ fn destination_is_copy() {
 
 use std::time::{Duration, Instant};
 
-use namtor_gnome::a11y::{ProgressAnnouncer, PROGRESS_ANNOUNCE_INTERVAL};
-use namtor_gnome::tr;
+use namtor_ui::a11y::{ProgressAnnouncer, PROGRESS_ANNOUNCE_INTERVAL};
+use namtor_ui::tr;
 
 /// Test 3: progress announcements are rate-limited to at most 4 per second
 /// (the 250 ms daemon throttle). A burst of 100 calls in one second fires
@@ -159,7 +159,7 @@ fn progress_announcer_interval_matches_daemon() {
 /// Test 4: guidance strings go through the `tr()` gettext seam.
 #[test]
 fn guidance_is_translatable() {
-    use namtor_gnome::client::Guidance;
+    use namtor_ui::client::Guidance;
     for variant in [
         Guidance::Centering,
         Guidance::BetterLighting,
@@ -186,7 +186,7 @@ fn tr_is_identity_in_test_environment() {
     assert_eq!(tr("Save"), "Save");
 }
 
-/// Test 5: RTL layout readiness. The GNOME UI must not ship custom CSS
+/// Test 5: RTL layout readiness. The UI must not ship custom CSS
 /// that breaks RTL — libadwaita handles RTL natively. Verified by checking
 /// no custom CSS files exist in the source tree (file-system check, not
 /// source-code scan).
@@ -214,8 +214,8 @@ fn rtl_layout_works() {
 fn text_scaling_200_no_clip() {
     use gtk4::prelude::*;
     use libadwaita::prelude::*;
-    use namtor_gnome::components::RecoveryView;
-    use namtor_gnome::view_model::RecoveryHint;
+    use namtor_ui::components::RecoveryView;
+    use namtor_ui::view_model::RecoveryHint;
 
     let hint = RecoveryHint {
         title: "Daemon unreachable".into(),
@@ -249,7 +249,7 @@ fn text_scaling_200_no_clip() {
     });
 }
 
-/// Registry of every actionable widget in the GNOME UI and its accessible
+/// Registry of every actionable widget in the UI and its accessible
 /// name. Each entry is `(source_file, widget_description, accessible_name)`.
 const ACTIONABLE_WIDGETS: &[(&str, &str, &str)] = &[
     ("shell.rs", "retry_button", "Retry connection"),
@@ -336,8 +336,8 @@ fn mutation_unlabeled_button_rejected() {
 
 /// A capture-phase view good enough to render. Used by the accessibility
 /// tests that need a real widget tree.
-fn capture_view() -> namtor_gnome::view_model::EnrollmentViewV3 {
-    namtor_gnome::view_model::EnrollmentViewV3 {
+fn capture_view() -> namtor_ui::view_model::EnrollmentViewV3 {
+    namtor_ui::view_model::EnrollmentViewV3 {
         phase: "capturing".into(),
         quality_percent: 72,
         diversity_percent: 40,
@@ -349,8 +349,8 @@ fn capture_view() -> namtor_gnome::view_model::EnrollmentViewV3 {
     }
 }
 
-fn review_view() -> namtor_gnome::view_model::ReviewViewV3 {
-    namtor_gnome::view_model::ReviewViewV3 {
+fn review_view() -> namtor_ui::view_model::ReviewViewV3 {
+    namtor_ui::view_model::ReviewViewV3 {
         ready_to_save: true,
         quality_percent: 82,
         diversity_percent: 100,
@@ -366,7 +366,7 @@ fn review_view() -> namtor_gnome::view_model::ReviewViewV3 {
 #[test]
 fn keyboard_traversal_order_is_logical() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::{EnrollmentViewComponent, ReviewViewComponent};
+    use namtor_ui::components::{EnrollmentViewComponent, ReviewViewComponent};
 
     common::run_gtk_test(|| {
         let mut enrollment = EnrollmentViewComponent::new();
@@ -400,7 +400,7 @@ fn keyboard_traversal_order_is_logical() {
 #[test]
 fn no_focus_trap_in_navigation() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::EnrollmentViewComponent;
+    use namtor_ui::components::EnrollmentViewComponent;
 
     common::run_gtk_test(|| {
         let mut enrollment = EnrollmentViewComponent::new();
@@ -422,7 +422,7 @@ fn no_focus_trap_in_navigation() {
 #[test]
 fn primary_actions_have_mnemonics() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::{EnrollmentViewComponent, ReviewViewComponent};
+    use namtor_ui::components::{EnrollmentViewComponent, ReviewViewComponent};
 
     common::run_gtk_test(|| {
         // One component per page: the component owns a single
@@ -519,7 +519,7 @@ fn window_has_content_and_is_presented() {
             .build();
         let _guard = app.hold();
 
-        let shell = namtor_gnome::shell::Shell::new(&app);
+        let shell = namtor_ui::shell::Shell::new(&app);
         assert!(
             shell.window().content().is_some(),
             "application window has no content; nothing would render"
@@ -545,7 +545,7 @@ fn shell_uses_view_stack_and_switcher() {
             .build();
         let _guard = app.hold();
 
-        let shell = namtor_gnome::shell::Shell::new(&app);
+        let shell = namtor_ui::shell::Shell::new(&app);
 
         assert_eq!(
             shell.view_stack().type_().name(),
@@ -591,7 +591,7 @@ fn offline_state_renders_on_every_destination() {
             .build();
         let _guard = app.hold();
 
-        let mut shell = namtor_gnome::shell::Shell::new(&app);
+        let mut shell = namtor_ui::shell::Shell::new(&app);
         shell.show_offline("bus not available", || {});
 
         for (dest, page) in [
@@ -630,7 +630,7 @@ fn shell_creates_three_preferences_pages() {
             .build();
         let _guard = app.hold();
 
-        let shell = namtor_gnome::shell::Shell::new(&app);
+        let shell = namtor_ui::shell::Shell::new(&app);
 
         let profiles = shell.profiles_page();
         let auth = shell.auth_page();
@@ -676,7 +676,7 @@ fn shell_adds_pages_to_view_stack() {
             .build();
         let _guard = app.hold();
 
-        let mut shell = namtor_gnome::shell::Shell::new(&app);
+        let mut shell = namtor_ui::shell::Shell::new(&app);
 
         // Setting the visible page to each of the three pages must work
         // (the pages are added to the view stack).
@@ -696,7 +696,7 @@ fn shell_adds_pages_to_view_stack() {
 #[test]
 fn shell_uses_push_subpage_for_enrollment() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::EnrollmentViewComponent;
+    use namtor_ui::components::EnrollmentViewComponent;
 
     common::run_gtk_test(|| {
         let app = libadwaita::Application::builder()
@@ -704,7 +704,7 @@ fn shell_uses_push_subpage_for_enrollment() {
             .build();
         let _guard = app.hold();
 
-        let shell = namtor_gnome::shell::Shell::new(&app);
+        let shell = namtor_ui::shell::Shell::new(&app);
 
         // Create a real NavigationPage and push it.
         let comp = EnrollmentViewComponent::new();
@@ -736,7 +736,7 @@ fn shell_uses_application_window_as_host() {
             .build();
         let _guard = app.hold();
 
-        let shell = namtor_gnome::shell::Shell::new(&app);
+        let shell = namtor_ui::shell::Shell::new(&app);
         assert_eq!(
             shell.window().type_().name(),
             "AdwApplicationWindow",
@@ -758,7 +758,7 @@ fn shell_does_not_use_scrolled_window() {
             .build();
         let _guard = app.hold();
 
-        let shell = namtor_gnome::shell::Shell::new(&app);
+        let shell = namtor_ui::shell::Shell::new(&app);
 
         // AdwPreferencesPage scrolls its own content, so no ancestor of the
         // view stack may be a ScrolledWindow (that would nest scrollers).
@@ -788,7 +788,7 @@ fn shell_does_not_use_breakpoint_widgets() {
             .build();
         let _guard = app.hold();
 
-        let shell = namtor_gnome::shell::Shell::new(&app);
+        let shell = namtor_ui::shell::Shell::new(&app);
         let content = shell
             .window()
             .content()
@@ -813,7 +813,7 @@ fn enrollment_component_builds_preferences_page() {
     use gtk4::prelude::*;
 
     common::run_gtk_test(|| {
-        let comp = namtor_gnome::components::EnrollmentViewComponent::new();
+        let comp = namtor_ui::components::EnrollmentViewComponent::new();
         let page = comp.page();
         assert_eq!(
             page.type_().name(),
@@ -837,7 +837,7 @@ fn review_component_builds_preferences_page() {
     use gtk4::prelude::*;
 
     common::run_gtk_test(|| {
-        let comp = namtor_gnome::components::ReviewViewComponent::new();
+        let comp = namtor_ui::components::ReviewViewComponent::new();
         let page = comp.page();
         assert_eq!(
             page.type_().name(),
@@ -859,8 +859,8 @@ fn review_component_builds_preferences_page() {
 #[test]
 fn profile_list_uses_preferences_group_and_action_rows() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::ProfileListView;
-    use namtor_gnome::view_model::{PresenterModel, ProfileRowView};
+    use namtor_ui::components::ProfileListView;
+    use namtor_ui::view_model::{PresenterModel, ProfileRowView};
 
     let mut model = PresenterModel::default();
     model.profiles.push(ProfileRowView {
@@ -902,13 +902,13 @@ fn profile_list_uses_preferences_group_and_action_rows() {
 #[test]
 fn pam_services_uses_preferences_group_and_action_rows() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::pam_services::render_pam_services;
+    use namtor_ui::components::pam_services::render_pam_services;
     use std::cell::RefCell;
     use std::rc::Rc;
 
     common::run_gtk_test(move || {
         let mut presenter =
-            namtor_gnome::ProfilePresenter::new(namtor_gnome::fake::FakeManagerClient::new(), 1000);
+            namtor_ui::ProfilePresenter::new(namtor_ui::fake::FakeManagerClient::new(), 1000);
         presenter.refresh();
         let presenter_rc = Rc::new(RefCell::new(presenter));
 
@@ -936,13 +936,13 @@ fn pam_services_uses_preferences_group_and_action_rows() {
 #[test]
 fn system_status_uses_preferences_group_and_action_rows() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::system_status::render_system_status;
+    use namtor_ui::components::system_status::render_system_status;
     use std::cell::RefCell;
     use std::rc::Rc;
 
     common::run_gtk_test(move || {
         let mut presenter =
-            namtor_gnome::ProfilePresenter::new(namtor_gnome::fake::FakeManagerClient::new(), 1000);
+            namtor_ui::ProfilePresenter::new(namtor_ui::fake::FakeManagerClient::new(), 1000);
         presenter.refresh();
         let presenter_rc = Rc::new(RefCell::new(presenter));
 
@@ -973,7 +973,7 @@ fn system_status_uses_preferences_group_and_action_rows() {
 fn app_controller_drives_new_shell_api() {
     use gtk4::prelude::*;
     use namtor_client::fake_bus::FakeBus;
-    use namtor_gnome::app::AppController;
+    use namtor_ui::app::AppController;
 
     common::run_gtk_test(|| {
         let app = libadwaita::Application::builder()
@@ -983,7 +983,7 @@ fn app_controller_drives_new_shell_api() {
 
         // Construct an online AppController using FakeBus.
         let fake_bus = FakeBus::spawn().expect("spawn fake bus");
-        let client: namtor_client::types::ManagerResult<namtor_gnome::DbusManagerClient> =
+        let client: namtor_client::types::ManagerResult<namtor_ui::DbusManagerClient> =
             Ok(fake_bus.client);
         let controller = AppController::new_offline_for_test(&app);
         let rc = controller.clone();

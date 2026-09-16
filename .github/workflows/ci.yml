@@ -32,7 +32,7 @@ jobs:
                 -p namtor-cli \
                 -p namtor-camera \
                 -p namtor-pam \
-                -p namtor-gnome
+                -p namtor-ui
       - name: Verify shippable binaries exist
         run: |
             for bin in namtor-daemon namtor-worker namtor-cli \

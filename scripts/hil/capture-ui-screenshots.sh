@@ -5,7 +5,8 @@
 # Captures screenshots of every named UI state (the 15-state matrix from
 # docs/evidence/enrollment-redesign/16-visual-review.md) for the enrollment
 # wizard, against a real namtor-daemon on the system bus.  The output
-# directory is docs/evidence/ui/real-run/<desktop>/.
+# directory is docs/evidence/ui/real-run/ui/ (one desktop-neutral UI;
+# the <desktop> split dates from when a Plasma KCM was captured too).
 #
 # This used to make a second pass over the Plasma KCM via kcmshell6. The
 # KCM was removed when the project consolidated on one desktop-neutral
@@ -25,7 +26,7 @@
 # Environment overrides (all have safe defaults):
 #   NAMTOR_HW_TEST       — must be "1" to run the live path
 #   NAMTOR_DAEMON_BIN    — daemon binary (default /usr/lib/namtor/namtor-daemon)
-#   NAMTOR_GNOME_BIN     — wizard binary (default /usr/bin/namtor-enroll-wizard)
+#   NAMTOR_UI_BIN        — wizard binary (default /usr/bin/namtor-enroll-wizard)
 #   NAMTOR_SOCKET        — daemon socket (default /run/namtor/auth.sock)
 #   NAMTOR_EVIDENCE_DIR  — screenshot root (default docs/evidence/ui/real-run)
 #                          (relative to repo root)
@@ -47,11 +48,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 NAMTOR_DAEMON_BIN="${NAMTOR_DAEMON_BIN:-/usr/lib/namtor/namtor-daemon}"
-NAMTOR_GNOME_BIN="${NAMTOR_GNOME_BIN:-/usr/bin/namtor-enroll-wizard}"
+NAMTOR_UI_BIN="${NAMTOR_UI_BIN:-/usr/bin/namtor-enroll-wizard}"
 NAMTOR_SOCKET="${NAMTOR_SOCKET:-/run/namtor/auth.sock}"
 NAMTOR_EVIDENCE_DIR="${NAMTOR_EVIDENCE_DIR:-$REPO_ROOT/docs/evidence/ui/real-run}"
 
-GNOME_DIR="$NAMTOR_EVIDENCE_DIR/gnome"
+UI_DIR="$NAMTOR_EVIDENCE_DIR/ui"
 MANIFEST="$NAMTOR_EVIDENCE_DIR/manifest.json"
 
 # D-Bus constants (match reference-auth-hil.sh).
@@ -63,7 +64,7 @@ IFACE_V3="org.namtor.Manager3"
 
 # State tracked for cleanup and manifest.
 DAEMON_STARTED_BY_US=0
-GNOME_PID=""
+UI_PID=""
 MANIFEST_ENTRIES=()
 
 # ---------------------------------------------------------------------------
@@ -71,9 +72,9 @@ MANIFEST_ENTRIES=()
 # kills any launched UI processes.  Never fails the script.
 # ---------------------------------------------------------------------------
 cleanup() {
-    if [[ -n "$GNOME_PID" ]] && kill -0 "$GNOME_PID" 2>/dev/null; then
-        kill "$GNOME_PID" 2>/dev/null || true
-        wait "$GNOME_PID" 2>/dev/null || true
+    if [[ -n "$UI_PID" ]] && kill -0 "$UI_PID" 2>/dev/null; then
+        kill "$UI_PID" 2>/dev/null || true
+        wait "$UI_PID" 2>/dev/null || true
     fi
     if [[ "$DAEMON_STARTED_BY_US" -eq 1 ]]; then
         systemctl stop namtor-daemon.service 2>/dev/null || true
@@ -228,7 +229,7 @@ start_daemon() {
 # ---------------------------------------------------------------------------
 
 # UI states (15 from the visual-review matrix).
-GNOME_STATES=(
+UI_STATES=(
     "profiles-empty"
     "profiles-populated"
     "setup"
@@ -248,13 +249,13 @@ GNOME_STATES=(
 
 
 # ---------------------------------------------------------------------------
-# Drive GNOME to a named state.  Best-effort: uses gdbus calls and
+# Drive the UI to a named state.  Best-effort: uses gdbus calls and
 # environment variables.  Returns 0 on success, 1 if the state could not
 # be reached (screenshot is still attempted).
 # ---------------------------------------------------------------------------
-drive_gnome_state() {
+drive_ui_state() {
     local state="$1"
-    local gnome_env=()
+    local ui_env=()
 
     case "$state" in
         profiles-empty)
@@ -321,29 +322,29 @@ drive_gnome_state() {
             ;;
         rtl)
             # Relaunch the app with an RTL locale.
-            gnome_env+=("LANG=ar" "LC_ALL=ar")
+            ui_env+=("LANG=ar" "LC_ALL=ar")
             ;;
         high-contrast)
             # Use GNOME high-contrast theme.
-            gnome_env+=("GTK_THEME=HighContrast")
+            ui_env+=("GTK_THEME=HighContrast")
             ;;
         200pct-text)
             # Scale text to 200%.
-            gnome_env+=("GDK_SCALE=2")
+            ui_env+=("GDK_SCALE=2")
             ;;
         *)
-            echo "WARN: unknown GNOME state '$state'" >&2
+            echo "WARN: unknown UI state '$state'" >&2
             ;;
     esac
 
     # For states that need a fresh app launch with env vars, kill and relaunch.
-    if [[ ${#gnome_env[@]} -gt 0 ]]; then
-        if [[ -n "$GNOME_PID" ]] && kill -0 "$GNOME_PID" 2>/dev/null; then
-            kill "$GNOME_PID" 2>/dev/null || true
-            wait "$GNOME_PID" 2>/dev/null || true
+    if [[ ${#ui_env[@]} -gt 0 ]]; then
+        if [[ -n "$UI_PID" ]] && kill -0 "$UI_PID" 2>/dev/null; then
+            kill "$UI_PID" 2>/dev/null || true
+            wait "$UI_PID" 2>/dev/null || true
         fi
-        env "${gnome_env[@]}" "$NAMTOR_GNOME_BIN" &
-        GNOME_PID=$!
+        env "${ui_env[@]}" "$NAMTOR_UI_BIN" &
+        UI_PID=$!
         sleep 3
     fi
 
@@ -362,8 +363,8 @@ drive_gnome_state() {
     esac
 }
 
-# Post-capture cleanup for GNOME states that stopped the daemon.
-post_gnome_state() {
+# Post-capture cleanup for UI states that stopped the daemon.
+post_ui_state() {
     local state="$1"
     case "$state" in
         system-degraded|offline)
@@ -388,7 +389,7 @@ capture_state() {
     local state="$2"
     local outpath
 
-    outpath="$GNOME_DIR/${state}.png"
+    outpath="$UI_DIR/${state}.png"
 
     echo "capture-ui-screenshots: capturing $desktop/$state → $outpath"
 
@@ -406,34 +407,34 @@ capture_state() {
 echo "capture-ui-screenshots: NAMTOR_HW_TEST=1, starting capture run"
 
 # Ensure output directories exist.
-mkdir -p "$GNOME_DIR"
+mkdir -p "$UI_DIR"
 
 # Start the daemon.
 if ! start_daemon; then
     echo "capture-ui-screenshots: cannot start daemon — recording all states as skip" >&2
-    for state in "${GNOME_STATES[@]}"; do
-        add_entry "$state" "gnome" "$GNOME_DIR/${state}.png" "skip" "daemon not started"
+    for state in "${UI_STATES[@]}"; do
+        add_entry "$state" "ui" "$UI_DIR/${state}.png" "skip" "daemon not started"
     done
     write_manifest
     exit 0
 fi
 
-# --- GNOME capture pass ---
+# --- UI capture pass ---
 
-# Launch the GNOME wizard.
-if [[ -x "$NAMTOR_GNOME_BIN" ]]; then
-    "$NAMTOR_GNOME_BIN" &
-    GNOME_PID=$!
+# Launch the wizard.
+if [[ -x "$NAMTOR_UI_BIN" ]]; then
+    "$NAMTOR_UI_BIN" &
+    UI_PID=$!
     sleep 3
 else
-    echo "capture-ui-screenshots: GNOME binary not found at $NAMTOR_GNOME_BIN" >&2
+    echo "capture-ui-screenshots: wizard binary not found at $NAMTOR_UI_BIN" >&2
 fi
 
-for state in "${GNOME_STATES[@]}"; do
-    drive_gnome_state "$state"
+for state in "${UI_STATES[@]}"; do
+    drive_ui_state "$state"
     sleep 1
-    capture_state "gnome" "$state"
-    post_gnome_state "$state"
+    capture_state "ui" "$state"
+    post_ui_state "$state"
     sleep 0.5
 done
 
@@ -441,6 +442,6 @@ done
 write_manifest
 
 echo "capture-ui-screenshots: capture run complete"
-echo "  Screenshots: $GNOME_DIR"
+echo "  Screenshots: $UI_DIR"
 echo "  Manifest:          $MANIFEST"
 exit 0

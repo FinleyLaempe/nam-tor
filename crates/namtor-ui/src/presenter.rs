@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Headless presenter driving the GNOME management UI.
+//! Headless presenter driving the Nam-tor management UI.
 //!
 //! The GTK view ([`crate::bin::wizard`]) is a thin adapter that renders
 //! [`PresenterModel`] and forwards user actions to [`ProfilePresenter`]. All

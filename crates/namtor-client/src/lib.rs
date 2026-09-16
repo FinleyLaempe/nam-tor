@@ -4,7 +4,7 @@
 //! Shared D-Bus client crate for Nam-tor UIs — wire types, zbus proxies,
 //! [`ManagerClient`] trait, live D-Bus backend, and test fake.
 //!
-//! The UI crate (`namtor-gnome`) depends on this crate so that it and
+//! The UI crate (`namtor-ui`) depends on this crate so that it and
 //! `namtor-cli` cannot drift in their D-Bus contract surface.
 
 #![warn(missing_docs)]

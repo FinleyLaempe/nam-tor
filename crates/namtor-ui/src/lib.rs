@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! GNOME management UI for Nam-tor — D-Bus client (spec §9.1, §9.2).
+//! Nam-tor management UI — D-Bus client (spec §9.1, §9.2).
+//!
+//! Desktop-neutral: GTK4/libadwaita, but no GNOME-only runtime dependency.
 //!
 //! GTK4 + libadwaita application. The UI talks to the daemon exclusively
 //! over the **system** D-Bus `org.namtor.Manager` (v1) and `org.namtor.Manager2`
 //! (v2) interfaces (task 14). There is no direct template-store access from
-//! the GNOME process: every operation — list, enroll, commit, rename,
+//! the UI process: every operation — list, enroll, commit, rename,
 //! enable, delete, merge, replace, PAM toggle — goes through the bus. This
 //! keeps biometric data inside the privileged daemon and lets polkit gate
 //! every mutation.
@@ -23,6 +25,15 @@
 //! and is the only place GTK is constructed.
 //!
 //! ---------------------------------------------------------------------------
+
+/// GTK application id.
+///
+/// MUST equal the installed desktop entry's basename and its
+/// `StartupWMClass`, or the compositor cannot associate the window with its
+/// `.desktop` file and shows a fallback icon and name. It is also the
+/// D-Bus name GTK claims for window activation, so it is ABI for installed
+/// systems: it does NOT track the crate name.
+pub const APP_ID: &str = "org.namtor.Wizard";
 
 pub mod a11y;
 pub mod app;

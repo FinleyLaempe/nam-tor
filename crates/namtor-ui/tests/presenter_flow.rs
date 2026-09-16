@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Integration tests driving the GNOME presenter with a fake D-Bus service.
+//! Integration tests driving the UI presenter with a fake D-Bus service.
 
 mod common;
 
 use std::sync::Arc;
 
 use common::after;
-use namtor_gnome::{
+use namtor_ui::{
     fake::{FakeManagerClient, Mode},
     EnrollmentProgressV3, EnrollmentState, ManagerClient, PamServiceRowView,
 };
 
 const TEST_UID: u32 = 1000;
 
-fn new_presenter() -> namtor_gnome::ProfilePresenter<FakeManagerClient> {
-    namtor_gnome::ProfilePresenter::new(FakeManagerClient::new(), TEST_UID)
+fn new_presenter() -> namtor_ui::ProfilePresenter<FakeManagerClient> {
+    namtor_ui::ProfilePresenter::new(FakeManagerClient::new(), TEST_UID)
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn quality_never_labelled_accuracy() {
 #[test]
 fn camera_loss_recoverable() {
     let fake = FakeManagerClient::new();
-    let mut presenter = namtor_gnome::ProfilePresenter::new(fake, TEST_UID);
+    let mut presenter = namtor_ui::ProfilePresenter::new(fake, TEST_UID);
     after(&mut presenter, |p| {
         p.start_enrollment_v3("Grace V3");
     });
@@ -264,7 +264,7 @@ fn poor_quality_shows_guidance() {
 #[test]
 fn daemon_restart_recoverable() {
     let fake = Arc::new(FakeManagerClient::new());
-    let mut presenter = namtor_gnome::ProfilePresenter::from_arc(Arc::clone(&fake), TEST_UID);
+    let mut presenter = namtor_ui::ProfilePresenter::from_arc(Arc::clone(&fake), TEST_UID);
     after(&mut presenter, |p| {
         p.start_enrollment_v3("Ivan V3");
     });
@@ -289,7 +289,7 @@ fn daemon_restart_recoverable() {
 #[test]
 fn save_failure_recoverable() {
     let fake = FakeManagerClient::new();
-    let mut presenter = namtor_gnome::ProfilePresenter::new(fake, TEST_UID);
+    let mut presenter = namtor_ui::ProfilePresenter::new(fake, TEST_UID);
     after(&mut presenter, |p| {
         p.start_enrollment_v3("Judy V3");
     });
@@ -373,20 +373,17 @@ fn cancel_pending_safe_when_idle() {
 /// PAM service row view carries no biometric data.
 #[test]
 fn pam_service_row_view_has_no_biometrics() {
-    use namtor_gnome::client::PamServiceInfo;
+    use namtor_ui::client::PamServiceInfo;
     let info = PamServiceInfo {
         id: "gdm-password".into(),
         display_name: "GDM Password".into(),
         enabled: true,
-        compatibility: namtor_gnome::client::PamServiceCompatibility::Safe,
+        compatibility: namtor_ui::client::PamServiceCompatibility::Safe,
         description: "GNOME Display Manager".into(),
     };
     let view = PamServiceRowView::from_info(info);
     assert_eq!(view.id, "gdm-password");
-    assert_eq!(
-        view.compatibility,
-        namtor_gnome::PamServiceCompatibility::Safe
-    );
+    assert_eq!(view.compatibility, namtor_ui::PamServiceCompatibility::Safe);
 }
 
 /// DbusManagerClient must connect to a real D-Bus bus and successfully
@@ -395,7 +392,7 @@ fn pam_service_row_view_has_no_biometrics() {
 #[test]
 fn dbus_client_uses_system_bus() {
     use namtor_client::fake_bus::FakeBus;
-    use namtor_gnome::ManagerClient;
+    use namtor_ui::ManagerClient;
 
     let fake_bus = FakeBus::spawn().expect("spawn fake bus");
     let status = fake_bus.client.get_status();
@@ -417,7 +414,7 @@ fn unsupported_pam_service_cannot_be_toggled() {
         .model()
         .pam_services
         .iter()
-        .find(|s| s.compatibility == namtor_gnome::PamServiceCompatibility::Unsupported)
+        .find(|s| s.compatibility == namtor_ui::PamServiceCompatibility::Unsupported)
         .map(|s| s.id.clone())
         .expect("an unsupported service exists in the fake");
     assert!(
@@ -460,7 +457,7 @@ fn unsupported_pam_service_cannot_be_toggled() {
 #[test]
 fn failed_pam_toggle_reverts_to_previous_state() {
     let fake = FakeManagerClient::new();
-    let mut presenter = namtor_gnome::ProfilePresenter::new(fake, TEST_UID);
+    let mut presenter = namtor_ui::ProfilePresenter::new(fake, TEST_UID);
     after(&mut presenter, |p| {
         p.refresh();
     });
@@ -506,7 +503,7 @@ fn high_impact_pam_service_requires_confirmation() {
         .model()
         .pam_services
         .iter()
-        .find(|s| s.compatibility == namtor_gnome::PamServiceCompatibility::Risky)
+        .find(|s| s.compatibility == namtor_ui::PamServiceCompatibility::Risky)
         .map(|s| s.id.clone())
         .expect("a risky service exists");
     assert!(
@@ -577,7 +574,7 @@ fn high_impact_pam_service_requires_confirmation() {
 /// phrases. The confirmation dialog renders this text verbatim.
 #[test]
 fn high_impact_warning_contains_required_phrases() {
-    let warning = namtor_gnome::components::pam_services::HIGH_IMPACT_WARNING;
+    let warning = namtor_ui::components::pam_services::HIGH_IMPACT_WARNING;
     assert!(warning.contains("FAR/FRR"), "warning names FAR/FRR");
     assert!(
         warning.contains("real-attack PAD"),
@@ -605,7 +602,7 @@ fn disabling_risky_service_needs_no_confirmation() {
         .model()
         .pam_services
         .iter()
-        .find(|s| s.compatibility == namtor_gnome::PamServiceCompatibility::Risky)
+        .find(|s| s.compatibility == namtor_ui::PamServiceCompatibility::Risky)
         .map(|s| s.id.clone())
         .expect("a risky service exists");
 
@@ -651,7 +648,7 @@ fn set_pam_service_enabled_refuses_unsupported() {
         .model()
         .pam_services
         .iter()
-        .find(|s| s.compatibility == namtor_gnome::PamServiceCompatibility::Unsupported)
+        .find(|s| s.compatibility == namtor_ui::PamServiceCompatibility::Unsupported)
         .map(|s| s.id.clone())
         .expect("an unsupported service exists");
 
@@ -1004,7 +1001,7 @@ fn stale_signal_ignored() {
 fn daemon_loss_restores_retry() {
     let fake = FakeManagerClient::new();
     fake.set_mode(Mode::DaemonDown("daemon stopped".into()));
-    let mut presenter = namtor_gnome::ProfilePresenter::new(fake, TEST_UID);
+    let mut presenter = namtor_ui::ProfilePresenter::new(fake, TEST_UID);
     let model = after(&mut presenter, |p| {
         p.start_enrollment_v3("Karl V3");
     });
@@ -1025,7 +1022,7 @@ fn daemon_loss_restores_retry() {
 fn save_failure_low_diversity_stays_stopped() {
     let fake = FakeManagerClient::new();
     fake.set_mode(Mode::LowDiversity);
-    let mut presenter = namtor_gnome::ProfilePresenter::new(fake, TEST_UID);
+    let mut presenter = namtor_ui::ProfilePresenter::new(fake, TEST_UID);
     after(&mut presenter, |p| {
         p.start_enrollment_v3("Lena V3");
     });
@@ -1051,7 +1048,7 @@ fn save_failure_low_diversity_stays_stopped() {
 fn restart_after_error() {
     let fake = FakeManagerClient::new();
     fake.set_mode(Mode::DaemonDown("daemon stopped".into()));
-    let mut presenter = namtor_gnome::ProfilePresenter::new(fake, TEST_UID);
+    let mut presenter = namtor_ui::ProfilePresenter::new(fake, TEST_UID);
     after(&mut presenter, |p| {
         p.start_enrollment_v3("Mona V3");
     });

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Settings shell for the Nam-tor GNOME settings app.
+//! Settings shell for the Nam-tor settings app.
 //!
 //! The shell owns a top-level [`adw::ApplicationWindow`] whose content *is*
 //! the user interface — the standalone settings-app shape:
@@ -26,7 +26,7 @@
 //!
 //! Note: the Rust `libadwaita` crate drops the `Adw` prefix — the types are
 //! `adw::ViewStack`, `adw::PreferencesPage`, etc. The `v1_5` feature is
-//! enabled in `crates/namtor-gnome/Cargo.toml`.
+//! enabled in `crates/namtor-ui/Cargo.toml`.
 
 use std::rc::Rc;
 

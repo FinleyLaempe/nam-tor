@@ -1,14 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
-# Desktop entry for the Nam-tor GNOME management UI.
+# Desktop entry for the Nam-tor management UI.
 #
 # Installed to /usr/share/applications/org.namtor.Wizard.desktop.
-# GNOME Shell and the Activities search use this to discover and launch
-# the enrollment wizard. The Keywords field feeds Settings/Shell search
-# so the app is findable by "face", "authentication", "biometric", etc.
+# Desktop shells and their application search use this to discover and
+# launch the enrollment wizard. The Keywords field feeds that search so the
+# app is findable by "face", "authentication", "biometric", etc.
 #
-# The application ID (org.namtor.Wizard) matches the gtk4 Application
-# constructed in crates/namtor-gnome/src/bin/wizard.rs so the desktop
-# entry and the running process share a D-Bus window-activation path.
+# The application ID (org.namtor.Wizard) is `namtor_ui::APP_ID`, used by
+# the gtk4 Application constructed in crates/namtor-ui/src/bin/wizard.rs,
+# so the desktop entry and the running process share a D-Bus
+# window-activation path. It is ABI: it does not track the crate name.
 
 [Desktop Entry]
 Type=Application
@@ -19,8 +20,7 @@ Comment[de]=Gesichts-Authentifizierungsprofile verwalten
 Exec=namtor-enroll-wizard
 Icon=org.namtor.Wizard
 Terminal=false
-Categories=Settings;Security;GTK;GNOME;
+Categories=Settings;Security;GTK;
 Keywords=face;authentication;biometric;iris;infrared;login;security;namtor;
 StartupNotify=true
 StartupWMClass=org.namtor.Wizard
-X-GNOME-UsesNotifications=false

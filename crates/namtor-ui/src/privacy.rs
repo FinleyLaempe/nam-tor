@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Privacy scan over the UI-facing data types.
 //!
-//! The GNOME UI must never receive embeddings, raw frames, match scores, or
+//! The UI must never receive embeddings, raw frames, match scores, or
 //! thresholds (spec §9.2, task 26). This module serializes each public
 //! D-Bus struct to a JSON sample and asserts no field name carries a
 //! forbidden biometric / matcher term. The scan is exercised by

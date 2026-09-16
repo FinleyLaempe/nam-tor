@@ -7,9 +7,9 @@
 //! — no source scanning.
 
 use gtk4::prelude::*;
-use namtor_gnome::client::Guidance;
-use namtor_gnome::components::{EnrollmentViewComponent, ReviewViewComponent};
-use namtor_gnome::view_model::{CaptureSignal, EnrollmentViewV3, GuidanceView, ReviewViewV3};
+use namtor_ui::client::Guidance;
+use namtor_ui::components::{EnrollmentViewComponent, ReviewViewComponent};
+use namtor_ui::view_model::{CaptureSignal, EnrollmentViewV3, GuidanceView, ReviewViewV3};
 
 mod common;
 
@@ -317,7 +317,7 @@ fn no_forbidden_privacy_substring_reaches_the_ui() {
         }));
     }
     for s in rendered {
-        let hits = namtor_gnome::privacy::forbidden_words_in_ui_string(&s);
+        let hits = namtor_ui::privacy::forbidden_words_in_ui_string(&s);
         assert!(hits.is_empty(), "leak in {s:?}: {hits:?}");
     }
 }

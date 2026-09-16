@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Tests for the GNOME bug fixes (USA-0/2/3/5/6/8/9/10/11/12/16).
+//! Tests for the UI bug fixes (USA-0/2/3/5/6/8/9/10/11/12/16).
 //!
 //! All tests are behavioural: they construct real presenter/model state,
 //! real GTK widgets (headlessly), or real enum values — never scanning
@@ -8,8 +8,8 @@
 mod common;
 
 use common::after;
-use namtor_gnome::view_model::{EnrollmentViewV3, ErrorView, RecoveryHint};
-use namtor_gnome::{
+use namtor_ui::view_model::{EnrollmentViewV3, ErrorView, RecoveryHint};
+use namtor_ui::{
     fake::FakeManagerClient, polkit_auth::PolkitAuthError, EnrollmentState, ManagerClient,
     ManagerError, ProfilePresenter,
 };
@@ -70,7 +70,7 @@ fn usa_0_async_pam_toggle() {
 fn usa_2_retry_connection() {
     use namtor_client::fake_bus::FakeBus;
     use namtor_client::types::ManagerError;
-    use namtor_gnome::app::AppController;
+    use namtor_ui::app::AppController;
 
     common::run_gtk_test(move || {
         use gtk4::prelude::*;
@@ -92,7 +92,7 @@ fn usa_2_retry_connection() {
             "controller must start with no presenter"
         );
 
-        let fail_result: namtor_client::types::ManagerResult<namtor_gnome::DbusManagerClient> = Err(
+        let fail_result: namtor_client::types::ManagerResult<namtor_ui::DbusManagerClient> = Err(
             ManagerError::DaemonUnavailable("test-daemon-unavailable".into()),
         );
         controller
@@ -105,7 +105,7 @@ fn usa_2_retry_connection() {
         );
 
         let fake_bus = FakeBus::spawn().expect("spawn fake bus");
-        let success_result: namtor_client::types::ManagerResult<namtor_gnome::DbusManagerClient> =
+        let success_result: namtor_client::types::ManagerResult<namtor_ui::DbusManagerClient> =
             Ok(fake_bus.client);
         controller
             .borrow_mut()
@@ -248,7 +248,7 @@ fn usa_3_cancel_replace_clears_pending() {
 #[test]
 fn usa_5_render_stopped_shows_error() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::EnrollmentViewComponent;
+    use namtor_ui::components::EnrollmentViewComponent;
 
     let view = EnrollmentViewV3 {
         phase: "capture".into(),
@@ -299,7 +299,7 @@ fn usa_5_render_stopped_shows_error() {
 /// `AppController` headlessly and calling `retry_connection`.
 #[test]
 fn usa_6_reconnect_mechanism_present() {
-    use namtor_gnome::app::AppController;
+    use namtor_ui::app::AppController;
 
     common::run_gtk_test(move || {
         use gtk4::prelude::*;
@@ -344,7 +344,7 @@ fn usa_8_polkit_restart_daemon_action_present() {
 #[test]
 fn usa_8_restart_and_logs_rows_wired() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::system_status::render_system_status;
+    use namtor_ui::components::system_status::render_system_status;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -388,7 +388,7 @@ fn usa_8_restart_and_logs_rows_wired() {
 #[test]
 fn usa_9_completion_cue_present() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::EnrollmentViewComponent;
+    use namtor_ui::components::EnrollmentViewComponent;
 
     let complete_view = EnrollmentViewV3 {
         phase: "capture".into(),
@@ -441,8 +441,8 @@ fn usa_9_completion_cue_present() {
 #[test]
 fn usa_10_rename_button_present() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::ProfileListView;
-    use namtor_gnome::view_model::{PresenterModel, ProfileRowView};
+    use namtor_ui::components::ProfileListView;
+    use namtor_ui::view_model::{PresenterModel, ProfileRowView};
 
     let mut model = PresenterModel::default();
     model.profiles.push(ProfileRowView {
@@ -479,7 +479,7 @@ fn usa_10_rename_button_present() {
 /// 3. Assert the model shows the updated name after refresh
 #[test]
 fn usa_10_rename_dialog() {
-    use namtor_gnome::presenter::after;
+    use namtor_ui::presenter::after;
 
     let mut presenter = ProfilePresenter::new(FakeManagerClient::new(), TEST_UID);
 
@@ -603,7 +603,7 @@ fn usa_11_denied_without_cancel_maps_to_denied() {
 fn usa_12_recovery_no_double_title() {
     use gtk4::prelude::*;
     use libadwaita::prelude::*;
-    use namtor_gnome::components::RecoveryView;
+    use namtor_ui::components::RecoveryView;
 
     let hint = RecoveryHint {
         title: "Nam-tor daemon is not running".into(),
@@ -635,7 +635,7 @@ fn usa_12_recovery_no_double_title() {
 #[test]
 fn usa_12_recovery_shows_steps_as_subtitle() {
     use gtk4::prelude::*;
-    use namtor_gnome::components::RecoveryView;
+    use namtor_ui::components::RecoveryView;
 
     let hint = RecoveryHint {
         title: "Daemon unreachable".into(),

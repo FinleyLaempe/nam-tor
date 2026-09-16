@@ -67,3 +67,66 @@ fn style_manager_accepts_the_default_colour_scheme() {
         );
     });
 }
+
+// ---------------------------------------------------------------------------
+// Application id <-> desktop entry
+//
+// The app id is ABI for installed systems: it is the basename of the
+// installed `.desktop` file, the `StartupWMClass` the compositor matches
+// against, and the D-Bus name GTK claims for window activation. It does not
+// track the crate name, which is why renaming the crate to `namtor-ui` left
+// it at `org.namtor.Wizard`.
+// ---------------------------------------------------------------------------
+
+const APP_ID: &str = namtor_ui::APP_ID;
+const DESKTOP_ENTRY: &str = "../../packaging/applications/org.namtor.Wizard.desktop";
+
+#[test]
+fn app_id_matches_desktop_entry_basename() {
+    let entry =
+        std::path::Path::new("../../packaging/applications").join(format!("{APP_ID}.desktop"));
+    assert!(
+        entry.exists(),
+        "no desktop entry for app id {APP_ID}: {entry:?}"
+    );
+}
+
+#[test]
+fn app_id_matches_startup_wm_class() {
+    let txt = std::fs::read_to_string(DESKTOP_ENTRY).expect("read desktop entry");
+    assert!(
+        txt.lines()
+            .any(|l| l.trim() == format!("StartupWMClass={APP_ID}")),
+        "StartupWMClass does not match app id {APP_ID}"
+    );
+}
+
+#[test]
+fn wizard_builds_its_application_with_the_shared_app_id() {
+    assert!(
+        WIZARD_SRC.contains(".application_id(namtor_ui::APP_ID)"),
+        "the wizard must construct its application from namtor_ui::APP_ID, \
+         not a literal that can drift from the desktop entry"
+    );
+}
+
+/// The UI is desktop-neutral: GTK4/libadwaita with no GNOME-only runtime
+/// dependency. Pinning `Categories` to GNOME hides the app from every other
+/// desktop's settings search, and `X-GNOME-*` keys are dead weight there.
+#[test]
+fn desktop_entry_is_not_desktop_specific() {
+    let txt = std::fs::read_to_string(DESKTOP_ENTRY).expect("read desktop entry");
+    for line in txt.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        if let Some(cats) = line.strip_prefix("Categories=") {
+            assert!(
+                !cats.contains("GNOME"),
+                "Categories pins the app to GNOME: {cats}"
+            );
+        }
+        assert!(!line.starts_with("X-GNOME-"), "GNOME-specific key: {line}");
+    }
+}

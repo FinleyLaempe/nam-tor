@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! View model for the Nam-tor GNOME management UI.
+//! View model for the Nam-tor management UI.
 //
 // allow: SIZE_OK — this is a flat registry of small privacy-safe view-model
 // structs (one per UI surface). The 302-LOC pre-existing size predates task

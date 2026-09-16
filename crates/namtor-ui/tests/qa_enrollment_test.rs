@@ -17,7 +17,7 @@
 mod common;
 
 use namtor_client::fake_bus::FakeBus;
-use namtor_gnome::presenter::ProfilePresenter;
+use namtor_ui::presenter::ProfilePresenter;
 
 const TEST_UID: u32 = 1000;
 

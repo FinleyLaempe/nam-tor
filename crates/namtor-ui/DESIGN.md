@@ -1,6 +1,6 @@
-# Nam-tor GNOME Design System
+# Nam-tor UI Design System
 
-This document defines the visual and interaction language for the Nam-tor GNOME application. The UI follows the GNOME Human Interface Guidelines (HIG) and leverages `libadwaita` to provide a native, accessible, and polished experience.
+This document defines the visual and interaction language for the Nam-tor management UI (`namtor-ui`). The app is GTK4 + `libadwaita` and follows the GNOME Human Interface Guidelines (HIG) because that is libadwaita's design language — not because the app is GNOME-only. It has no GNOME-specific runtime dependency and ships as the single, desktop-neutral UI.
 
 ## 0. Research Log
 
@@ -10,7 +10,7 @@ This document defines the visual and interaction language for the Nam-tor GNOME 
 
 ## 1. Design Philosophy
 
-- **Native & Seamless**: Use Adwaita components strictly. Avoid custom "brand" styles that clash with the GNOME desktop environment.
+- **Native & Seamless**: Use Adwaita components strictly. Avoid custom "brand" styles that clash with the host desktop.
 - **Adaptive First**: The UI adapts to available space — narrow windows (< 600px) use a bottom switcher bar; wide windows (≥ 600px) use a title-bar switcher.
 - **Atomic Interaction**: Every operation (enrollment, deletion, etc.) must have a clear start, progress, and resolution state.
 - **Safe by Default**: Biometric data is never surfaced. Feedback is coarse (e.g., "High Quality") to maintain privacy.
@@ -252,7 +252,7 @@ Tab traversal follows visual order:
 
 **Policy**: All styling comes from libadwaita defaults. Custom CSS is forbidden because:
 
-1. It breaks consistency with the GNOME desktop
+1. It breaks consistency with the host desktop
 2. It requires maintenance across libadwaita versions
 3. It can interfere with accessibility (high contrast, large text modes)
 4. libadwaita's default palette already meets WCAG AA
