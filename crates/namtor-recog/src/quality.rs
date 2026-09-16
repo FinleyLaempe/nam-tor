@@ -37,6 +37,13 @@ const ILLUM_DARK_ZERO: f32 = 20.0;
 /// while a bright one still carries gradient information.
 const ILLUM_BRIGHT_ZERO: f32 = 280.0;
 
+/// Sample value at or above which a pixel is treated as clipped to white.
+///
+/// 250 rather than 255 because 8-bit IR sensors clip a few counts below the
+/// nominal maximum once gain is applied; a pixel at 250 carries no more
+/// gradient than one at 255.
+const SATURATED_AT: u8 = 250;
+
 /// Degrees of yaw attributed to a nose offset of one full inter-ocular
 /// distance. A quarter-IOD offset therefore reads as ~22.5 deg, which is where
 /// embedding quality starts to degrade.
@@ -73,6 +80,18 @@ pub struct FrameMetrics {
     /// (near-zero) spread means the landmarks collapsed and the detection is
     /// not trustworthy.
     pub landmark_spread: f32,
+    /// Fraction of face-box samples clipped to white (`>= 250`), `0.0..=1.0`.
+    ///
+    /// Independent of [`Self::illumination`] on purpose (review finding F6):
+    /// mean intensity alone cannot tell a bright-but-usable frame from one
+    /// whose highlights have been clipped away, because a uniformly white box
+    /// still scores `illumination == 0.23` under the asymmetric band. A high
+    /// saturated fraction means the identity information in those samples is
+    /// gone and no amount of gain will bring it back.
+    ///
+    /// `0.0` when the pixels are unmeasurable (truncated buffer, box clipped
+    /// out of frame) — absence of evidence, not evidence of clipping.
+    pub saturated_fraction: f32,
 }
 
 impl FrameMetrics {
@@ -86,6 +105,7 @@ impl FrameMetrics {
             roll_deg: 0.0,
             face_fraction: 0.0,
             landmark_spread: 0.0,
+            saturated_fraction: 0.0,
         }
     }
 }
@@ -113,6 +133,7 @@ pub fn measure(frame: &[u8], w: u32, h: u32, det: &Detection) -> FrameMetrics {
         if !pixels.is_empty() {
             m.blur = (variance_of_laplacian(&pixels, roi.w, roi.h) / BLUR_SHARP_AT).clamp(0.0, 1.0);
             m.illumination = illumination_score(mean_intensity(&pixels));
+            m.saturated_fraction = saturated_fraction(&pixels);
         }
     }
     m
@@ -246,6 +267,15 @@ fn mean_intensity(data: &[u8]) -> f32 {
     }
     let sum: u64 = data.iter().map(|&v| v as u64).sum();
     sum as f32 / data.len() as f32
+}
+
+/// Fraction of samples clipped to white (`>= SATURATED_AT`), `0.0` when empty.
+fn saturated_fraction(data: &[u8]) -> f32 {
+    if data.is_empty() {
+        return 0.0;
+    }
+    let clipped = data.iter().filter(|&&v| v >= SATURATED_AT).count();
+    clipped as f32 / data.len() as f32
 }
 
 /// Map a mean intensity through the peaked illumination band.
@@ -441,6 +471,61 @@ mod tests {
         assert!(dark < 0.3, "dark scored {dark}");
         assert!(score(240) < score(200), "bright side is not decreasing");
         assert!(score(60) < score(100), "dark side is not increasing");
+    }
+
+    // ---- saturation (review finding F6) -----------------------------------
+
+    #[test]
+    fn saturated_fraction_is_one_for_a_blown_out_face_box() {
+        let frame = vec![255u8; 64 * 64];
+        let d = centered_detection(64, 64);
+        let m = measure(&frame, 64, 64, &d);
+        assert_eq!(m.saturated_fraction, 1.0, "metrics {m:?}");
+    }
+
+    #[test]
+    fn saturated_fraction_is_zero_for_a_well_exposed_face_box() {
+        let frame = vec![130u8; 64 * 64];
+        let d = centered_detection(64, 64);
+        assert_eq!(measure(&frame, 64, 64, &d).saturated_fraction, 0.0);
+    }
+
+    #[test]
+    fn saturated_fraction_is_measured_over_the_face_box_only() {
+        // Left half blown out, right half correctly exposed.
+        let mut frame = vec![130u8; 64 * 64];
+        for y in 0..64usize {
+            for x in 0..32usize {
+                frame[y * 64 + x] = 255;
+            }
+        }
+        let blown = detection_with_box(0.0, 0.0, 32.0, 64.0);
+        let ok = detection_with_box(32.0, 0.0, 32.0, 64.0);
+        assert_eq!(measure(&frame, 64, 64, &blown).saturated_fraction, 1.0);
+        assert_eq!(measure(&frame, 64, 64, &ok).saturated_fraction, 0.0);
+    }
+
+    #[test]
+    fn saturated_fraction_tolerates_a_specular_highlight() {
+        // 2% of the box at full white is a glint, not a blown-out frame.
+        let mut frame = vec![130u8; 100 * 100];
+        for px in frame.iter_mut().take(200) {
+            *px = 255;
+        }
+        let d = centered_detection(100, 100);
+        let f = measure(&frame, 100, 100, &d).saturated_fraction;
+        assert!((f - 0.02).abs() < 1e-3, "saturated_fraction {f}");
+    }
+
+    #[test]
+    fn saturated_fraction_is_zero_when_pixels_are_unmeasurable() {
+        // Truncated buffer: no pixel-derived metric is measurable, and the
+        // saturation term must not accuse an unreadable frame of being blown
+        // out (review finding F8 ambiguity).
+        let frame = vec![255u8; 10];
+        let d = centered_detection(64, 64);
+        let m = measure(&frame, 64, 64, &d);
+        assert_eq!(m.saturated_fraction, 0.0, "metrics {m:?}");
     }
 
     #[test]
