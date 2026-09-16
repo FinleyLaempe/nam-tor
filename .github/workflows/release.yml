@@ -95,7 +95,7 @@ jobs:
             lint: namcap
             build: makepkg
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # --- Install distro build toolchain ---
       - name: Install build toolchain (Arch)
@@ -130,13 +130,15 @@ jobs:
       # --- Lint the package definition (per-distro linter) ---
       - name: Lint PKGBUILD (namcap)
         if: matrix.distro == 'arch'
-        run: namcap packaging/arch/PKGBUILD || \
-             echo "::warning::namcap produced warnings; treat as non-blocking"
+        run: |
+            namcap packaging/arch/PKGBUILD || \
+              echo "::warning::namcap produced warnings; treat as non-blocking"
 
       - name: Lint RPM spec (rpmlint)
         if: startsWith(matrix.distro, 'fedora')
-        run: rpmlint packaging/fedora/namtor.spec || \
-             echo "::warning::rpmlint produced warnings; treat as non-blocking"
+        run: |
+            rpmlint packaging/fedora/namtor.spec || \
+              echo "::warning::rpmlint produced warnings; treat as non-blocking"
 
       - name: Lint Debian control (dpkg-checkbuilddeps)
         if: startsWith(matrix.distro, 'debian')
@@ -174,7 +176,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
             cd "$GITHUB_WORKSPACE"
-            # Plain tar, not `git archive`: actions/checkout@v4 falls back to
+            # Plain tar, not `git archive`: actions/checkout@v5 falls back to
             # a REST API download (no .git dir) when git isn't preinstalled
             # in the container, so git archive would fail even after
             # installing git in the toolchain step above.
@@ -247,6 +249,12 @@ jobs:
       # `systemd-analyze verify` only parses the unit file statically —
       # no live bus needed — so it's safe without a timeout guard too,
       # but it's wrapped anyway for defense in depth.
+      # The pam_namtor.so link check is written as an explicit `if ...; then
+      # exit 1; fi`. Two shorter-looking forms are both silently useless:
+      # `ldd X | grep -v 'not found'` exits 0 whenever ANY line is not "not
+      # found" (i.e. always), and `! ldd X | grep 'not found'` puts the
+      # pipeline in a tested context, which suppresses `set -e` for the whole
+      # statement — so a step with anything after it swallows the failure.
       # `--man=no` disables the Documentation=man: resolution pass, which
       # shells out to man(1): without it the check reports `Protocol error`
       # and exits 1 in any container that has no man-db, which is a property
@@ -265,7 +273,10 @@ jobs:
             timeout -k 10 10 /usr/lib/namtor/namtor-daemon --version || \
               timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
             timeout -k 10 10 namtor-cli status || true
-            ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
+            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+              echo "::error::pam_namtor.so has unresolved shared libraries"
+              exit 1
+            fi
             timeout -k 10 10 systemd-analyze verify --man=no /usr/lib/systemd/system/namtor-daemon.service
 
       - name: Install + smoke test (Fedora)
@@ -275,7 +286,10 @@ jobs:
             timeout -k 10 10 /usr/lib/namtor/namtor-daemon --version || \
               timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
             timeout -k 10 10 namtor-cli status || true
-            ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
+            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+              echo "::error::pam_namtor.so has unresolved shared libraries"
+              exit 1
+            fi
             timeout -k 10 10 systemd-analyze verify --man=no /usr/lib/systemd/system/namtor-daemon.service
 
       - name: Install + smoke test (Debian)
@@ -286,7 +300,10 @@ jobs:
             timeout -k 10 10 /usr/lib/namtor/namtor-daemon --version || \
               timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
             timeout -k 10 10 namtor-cli status || true
-            ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
+            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+              echo "::error::pam_namtor.so has unresolved shared libraries"
+              exit 1
+            fi
             timeout -k 10 10 systemd-analyze verify --man=no /usr/lib/systemd/system/namtor-daemon.service
 
       # --- Upgrade test: rebuild with a bumped pkgrel and reinstall ---
@@ -304,14 +321,21 @@ jobs:
                 ;;
             esac
             timeout -k 10 10 namtor-cli status || true
-            ldd /usr/lib/security/pam_namtor.so | grep -v 'not found'
+            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+              echo "::error::pam_namtor.so has unresolved shared libraries"
+              exit 1
+            fi
 
       # --- Uninstall test ---
       - name: Uninstall test
         run: |
             case "${{ matrix.distro }}" in
               arch)
-                timeout -k 10 120 pacman -Rns --noconfirm namtor || \
+                # All three split packages are installed above, and the
+                # desktop ones declare depends=("namtor=$pkgver").
+                # Removing only `namtor` leaves those dependencies broken
+                # and pacman aborts the whole transaction.
+                timeout -k 10 120 pacman -Rns --noconfirm namtor-gnome namtor-kde namtor || \
                   { echo "::error::uninstall failed"; exit 1; }
                 ;;
               fedora*)
@@ -330,7 +354,7 @@ jobs:
                   echo "::error::uninstall left $f behind"; exit 1
                 fi
             done
-            echo "::uninstall verified clean"
+            echo "::notice::uninstall verified clean"
 
       # --- Upload the built package artifact ---
       - name: Upload package artifact
@@ -350,7 +374,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Write package-matrix.json from matrix results
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -363,10 +387,13 @@ jobs:
             mkdir -p artifacts
             python3 - <<'PY'
             import json, os
+            # MUST mirror the build matrix above. Listing a cell that is
+            # not in the matrix publishes a "pass" for a platform nobody
+            # tested — a release-integrity defect, not a cosmetic one.
+            # Enforced by packaging/tests/test_workflow_lint.sh, which
+            # cross-checks this list against the `- distro:` matrix entries.
             cells = [
                 ("arch", "x86_64"),
-                ("fedora40", "x86_64"),
-                ("debian12", "x86_64"),
             ]
             results = []
             for distro, arch in cells:
@@ -410,7 +437,7 @@ jobs:
     # Skip publish on dry-run (workflow_dispatch default).
     if: github.event_name == 'push' || github.event.inputs.dry_run != 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download all package artifacts
         uses: actions/download-artifact@v4
