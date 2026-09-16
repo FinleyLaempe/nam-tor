@@ -15,7 +15,27 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledPackages {
     pub core: bool,
-    pub gnome: bool,
+    pub ui: bool,
+    /// True if the obsolete `namtor-gnome` package (the UI package under its
+    /// pre-rename name) is still registered with the system package manager.
+    ///
+    /// This needs a different probe from `legacy_kde`. `namtor-gnome` owned
+    /// *exactly* the four files `namtor-ui` owns today — the wizard binary,
+    /// the desktop entry, the metainfo and the icon — so no file on disk
+    /// distinguishes the two and a file probe would report every healthy
+    /// install as stranded. The only local signal is the package database,
+    /// so this probes the two databases that expose per-package state as
+    /// plain paths: dpkg's `/var/lib/dpkg/info/<pkg>.list` and pacman's
+    /// `/var/lib/pacman/local/<pkg>-<version>/`. RPM's database is a binary
+    /// store with no per-package path, so on Fedora a stranded install is
+    /// caught by dnf's `Obsoletes:` instead of reported here.
+    ///
+    /// Worth reporting because the two packages file-conflict: both own
+    /// `/usr/bin/namtor-enroll-wizard`. The new packages declare
+    /// `provides`/`conflicts`/`replaces`/`Obsoletes`/`Breaks` so a normal
+    /// upgrade clears it, but a machine that never takes that upgrade path
+    /// stays stuck.
+    pub legacy_gnome: bool,
     /// True if the obsolete `namtor-kde` package (the Plasma 6 KCM, dropped
     /// when the project consolidated on one desktop-neutral GTK4 UI) is
     /// still installed.
@@ -38,8 +58,11 @@ impl std::fmt::Display for InstalledPackages {
         if self.core {
             parts.push("namtor");
         }
-        if self.gnome {
-            parts.push("namtor-gnome");
+        if self.ui {
+            parts.push("namtor-ui");
+        }
+        if self.legacy_gnome {
+            parts.push("namtor-gnome (obsolete)");
         }
         if self.legacy_kde {
             parts.push("namtor-kde (obsolete)");
@@ -62,23 +85,65 @@ pub fn detect_installed_packages(root: &Path) -> InstalledPackages {
     let daemon = root.join("usr/lib/namtor/namtor-daemon");
     let manifest = root.join("usr/share/namtor/install-manifest.toml");
     let wizard = root.join("usr/bin/namtor-enroll-wizard");
-    let gnome_desktop = root.join("usr/share/applications/org.namtor.Wizard.desktop");
+    let ui_desktop = root.join("usr/share/applications/org.namtor.Wizard.desktop");
     // The KCM desktop entry was the only file namtor-kde owned that had a
     // stable, unambiguous path, so it stays the probe for a leftover
     // install of that obsolete package.
     let legacy_kcm_desktop = root.join("usr/share/applications/org.namtor.kcm.desktop");
 
     let core = daemon.exists() && manifest.exists();
-    let gnome = wizard.exists() && gnome_desktop.exists();
+    let ui = wizard.exists() && ui_desktop.exists();
+    let legacy_gnome = package_db_knows(root, "namtor-gnome");
     let legacy_kde = legacy_kcm_desktop.exists();
     let manual = daemon.exists() && !manifest.exists();
 
     InstalledPackages {
         core,
-        gnome,
+        ui,
+        legacy_gnome,
         legacy_kde,
         manual,
     }
+}
+
+/// Is `pkg` registered with a system package manager whose database exposes
+/// per-package state as a plain path? Probes dpkg and pacman; returns false
+/// for rpm, whose database is a binary store.
+///
+/// Privacy-safe: the result is a single boolean and no path ever leaves
+/// this function.
+fn package_db_knows(root: &Path, pkg: &str) -> bool {
+    // dpkg: /var/lib/dpkg/info/<pkg>.list, written while the package is
+    // unpacked and removed only on purge.
+    if root
+        .join("var/lib/dpkg/info")
+        .join(format!("{pkg}.list"))
+        .exists()
+    {
+        return true;
+    }
+    // pacman: /var/lib/pacman/local/<pkg>-<pkgver>-<pkgrel>/desc. The
+    // version is not known here, so match on the directory prefix and
+    // require the `desc` file, which every installed package has.
+    let pacman_local = root.join("var/lib/pacman/local");
+    let Ok(entries) = std::fs::read_dir(&pacman_local) else {
+        return false;
+    };
+    let prefix = format!("{pkg}-");
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        // `namtor-gnome-0.1.0-2` matches; `namtor-gnome-extra-0.1.0-2`
+        // would too, so require the remainder to start with a digit — the
+        // first character of a pacman `pkgver`.
+        let Some(rest) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if rest.starts_with(|c: char| c.is_ascii_digit()) && entry.path().join("desc").exists() {
+            return true;
+        }
+    }
+    false
 }
 
 /// An old-style install artifact detected on the system, indicating a prior
@@ -354,6 +419,34 @@ mod tests {
         fs::write(path, b"x").unwrap();
     }
 
+    /// A healthy split install: both current packages, no stranded
+    /// predecessor. Pins that the `namtor-gnome` probe does NOT fire on the
+    /// files `namtor-ui` legitimately owns — the two packages own exactly
+    /// the same four files, so a file probe here would report every healthy
+    /// install as stranded.
+    #[test]
+    fn detect_both_split_packages() {
+        let tmp = TempDir::new().unwrap();
+        touch(tmp.path(), "usr/lib/namtor/namtor-daemon");
+        touch(tmp.path(), "usr/share/namtor/install-manifest.toml");
+        touch(tmp.path(), "usr/bin/namtor-enroll-wizard");
+        touch(
+            tmp.path(),
+            "usr/share/applications/org.namtor.Wizard.desktop",
+        );
+        let pkgs = detect_installed_packages(tmp.path());
+        assert!(pkgs.core);
+        assert!(pkgs.ui);
+        assert!(
+            !pkgs.legacy_gnome,
+            "namtor-ui owns the same files namtor-gnome did; a healthy \
+             install must not be reported as stranded"
+        );
+        assert!(!pkgs.legacy_kde);
+        assert!(!pkgs.manual);
+        assert_eq!(format!("{pkgs}"), "namtor, namtor-ui");
+    }
+
     #[test]
     fn detect_both_split_packages_plus_obsolete_kde() {
         let tmp = TempDir::new().unwrap();
@@ -367,7 +460,7 @@ mod tests {
         touch(tmp.path(), "usr/share/applications/org.namtor.kcm.desktop");
         let pkgs = detect_installed_packages(tmp.path());
         assert!(pkgs.core);
-        assert!(pkgs.gnome);
+        assert!(pkgs.ui);
         assert!(
             pkgs.legacy_kde,
             "a leftover namtor-kde install must be reported — it blocks core upgrades"
@@ -375,8 +468,69 @@ mod tests {
         assert!(!pkgs.manual);
         assert_eq!(
             format!("{pkgs}"),
-            "namtor, namtor-gnome, namtor-kde (obsolete)"
+            "namtor, namtor-ui, namtor-kde (obsolete)"
         );
+    }
+
+    /// A machine that installed namtor-ui without the package manager
+    /// clearing the pre-rename namtor-gnome: dpkg still lists it, and the
+    /// two file-conflict on /usr/bin/namtor-enroll-wizard.
+    #[test]
+    fn detect_stranded_namtor_gnome_via_dpkg_database() {
+        let tmp = TempDir::new().unwrap();
+        touch(tmp.path(), "usr/lib/namtor/namtor-daemon");
+        touch(tmp.path(), "usr/share/namtor/install-manifest.toml");
+        touch(tmp.path(), "usr/bin/namtor-enroll-wizard");
+        touch(
+            tmp.path(),
+            "usr/share/applications/org.namtor.Wizard.desktop",
+        );
+        touch(tmp.path(), "var/lib/dpkg/info/namtor-gnome.list");
+        let pkgs = detect_installed_packages(tmp.path());
+        assert!(pkgs.ui);
+        assert!(
+            pkgs.legacy_gnome,
+            "a stranded namtor-gnome must be reported — it file-conflicts with namtor-ui"
+        );
+        assert_eq!(
+            format!("{pkgs}"),
+            "namtor, namtor-ui, namtor-gnome (obsolete)"
+        );
+    }
+
+    #[test]
+    fn detect_stranded_namtor_gnome_via_pacman_database() {
+        let tmp = TempDir::new().unwrap();
+        touch(tmp.path(), "usr/bin/namtor-enroll-wizard");
+        touch(
+            tmp.path(),
+            "usr/share/applications/org.namtor.Wizard.desktop",
+        );
+        touch(tmp.path(), "var/lib/pacman/local/namtor-gnome-0.1.0-2/desc");
+        assert!(detect_installed_packages(tmp.path()).legacy_gnome);
+    }
+
+    /// The pacman probe matches on a directory prefix, so it must not fire
+    /// on `namtor-ui` itself or on some other package whose name merely
+    /// starts with `namtor-gnome`.
+    #[test]
+    fn pacman_probe_does_not_match_a_different_package() {
+        let tmp = TempDir::new().unwrap();
+        touch(tmp.path(), "var/lib/pacman/local/namtor-ui-0.1.0-3/desc");
+        touch(
+            tmp.path(),
+            "var/lib/pacman/local/namtor-gnome-extra-0.1.0-2/desc",
+        );
+        assert!(!detect_installed_packages(tmp.path()).legacy_gnome);
+    }
+
+    /// A pacman entry with no `desc` is not an installed package.
+    #[test]
+    fn pacman_probe_requires_the_desc_file() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("var/lib/pacman/local/namtor-gnome-0.1.0-2"))
+            .unwrap();
+        assert!(!detect_installed_packages(tmp.path()).legacy_gnome);
     }
 
     #[test]
@@ -386,7 +540,7 @@ mod tests {
         touch(tmp.path(), "usr/share/namtor/install-manifest.toml");
         let pkgs = detect_installed_packages(tmp.path());
         assert!(pkgs.core);
-        assert!(!pkgs.gnome);
+        assert!(!pkgs.ui);
         assert!(!pkgs.legacy_kde);
         assert!(!pkgs.manual);
         assert_eq!(format!("{pkgs}"), "namtor");
@@ -407,7 +561,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let pkgs = detect_installed_packages(tmp.path());
         assert!(!pkgs.core);
-        assert!(!pkgs.gnome);
+        assert!(!pkgs.ui);
         assert!(!pkgs.legacy_kde);
         assert!(!pkgs.manual);
         assert_eq!(format!("{pkgs}"), "none");
@@ -637,7 +791,8 @@ mod tests {
     fn installed_packages_display_no_forbidden_tokens() {
         let pkgs = InstalledPackages {
             core: true,
-            gnome: true,
+            ui: true,
+            legacy_gnome: false,
             legacy_kde: false,
             manual: false,
         };

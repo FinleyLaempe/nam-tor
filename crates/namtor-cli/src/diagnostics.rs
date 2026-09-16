@@ -1740,14 +1740,14 @@ mod tests {
         .unwrap();
         let report = run_doctor(&cfg);
         assert!(report.packages.core, "core package detected");
-        assert!(report.packages.gnome, "gnome package detected");
+        assert!(report.packages.ui, "ui package detected");
         assert!(
             report.packages.legacy_kde,
             "leftover obsolete namtor-kde detected"
         );
         assert!(!report.packages.manual, "not manual install");
         let text = format!("{report}");
-        assert!(text.contains("namtor, namtor-gnome, namtor-kde (obsolete)"));
+        assert!(text.contains("namtor, namtor-ui, namtor-kde (obsolete)"));
     }
 
     #[test]

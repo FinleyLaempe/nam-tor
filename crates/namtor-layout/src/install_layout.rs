@@ -69,18 +69,30 @@ impl ManifestDests {
 /// which is **installed on the user's system** and read at runtime by
 /// `packaging/uninstall.sh` and `namtor-cli` diagnostics. A newly built
 /// `namtor-cli` routinely reads an *older* manifest than the one in this
-/// source tree. `#[serde(other)]` on [`Package::Unknown`] is therefore
-/// load-bearing: without it, a manifest written by a release that still had
-/// a `namtor-kde` package (`package = "kde"`) would fail to deserialize at
-/// all, taking down uninstall and diagnostics rather than degrading to "an
-/// entry this build does not own".
+/// source tree. Two things are therefore load-bearing:
+///
+/// - `#[serde(other)]` on [`Package::Unknown`]: without it, a manifest
+///   written by a release that still had a `namtor-kde` package
+///   (`package = "kde"`) would fail to deserialize at all, taking down
+///   uninstall and diagnostics rather than degrading to "an entry this
+///   build does not own".
+/// - `#[serde(alias = "gnome")]` on [`Package::Ui`]: the UI package was
+///   renamed from `namtor-gnome` to `namtor-ui`, so every manifest
+///   installed before that rename says `package = "gnome"`. Without the
+///   alias those entries would fall through to `Unknown` and
+///   `uninstall.sh` would silently leave the wizard, its desktop entry,
+///   its metainfo and its icon on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Package {
     /// `namtor` — daemon, worker, PAM, CLI, models, services, SBOM.
     Core,
-    /// `namtor-gnome` — GTK4/libadwaita wizard + settings.
-    Gnome,
+    /// `namtor-ui` — GTK4/libadwaita wizard + settings.
+    ///
+    /// The alias is on-disk compatibility, not a synonym: see the
+    /// `On-disk compatibility` note on this enum.
+    #[serde(alias = "gnome")]
+    Ui,
     /// A package name this build does not know — most likely `kde`, from a
     /// manifest installed before the Plasma KCM was dropped in favour of a
     /// single desktop-neutral UI. Entries owned by an unknown package are
@@ -797,7 +809,7 @@ src = \"target/release/namtor-enroll-wizard\"
 mode = \"0755\"
 owner = \"root\"
 group = \"root\"
-package = \"gnome\"
+package = \"ui\"
 
 [[files]]
 dest = \"/usr/share/applications/org.namtor.kcm.desktop\"
@@ -842,7 +854,7 @@ package = \"kde\"
             .iter()
             .find(|f| f.dest == "/usr/bin/namtor-enroll-wizard")
             .expect("wizard entry exists");
-        assert_eq!(wizard.package, Some(Package::Gnome));
+        assert_eq!(wizard.package, Some(Package::Ui));
 
         // The fixture deliberately carries a `package = "kde"` entry, which
         // no longer names a package this build ships. It must degrade to
@@ -888,9 +900,9 @@ package = \"kde\"
         assert_eq!(split.files[0].package, Some(Package::Unknown));
 
         // An unknown package is owned by nothing this build stages, so it
-        // never leaks into a core or gnome DESTDIR.
+        // never leaks into a core or UI DESTDIR.
         assert!(split.package_dests(Package::Core).files.is_empty());
-        assert!(split.package_dests(Package::Gnome).files.is_empty());
+        assert!(split.package_dests(Package::Ui).files.is_empty());
 
         // And it is not a validation error — degrading, not failing, is the
         // whole point.
@@ -899,6 +911,53 @@ package = \"kde\"
             "an unknown package must not be a validation error: {:?}",
             split.validate()
         );
+    }
+
+    /// The other half of the installed-manifest compatibility contract: the
+    /// UI package was renamed `namtor-gnome` -> `namtor-ui`, so every
+    /// manifest installed before that rename says `package = "gnome"`.
+    ///
+    /// This must map to [`Package::Ui`], not fall through to
+    /// [`Package::Unknown`] — an `Unknown` entry is staged by nothing and
+    /// matches no `--package` filter, so `uninstall.sh` reading an old
+    /// manifest would silently leave the wizard binary, its desktop entry,
+    /// its metainfo and its icon behind.
+    #[test]
+    fn old_manifest_with_renamed_gnome_package_deserialises_as_ui() {
+        let tmp = TempDir::new().unwrap();
+        let manifest = tmp.path().join("old-install-manifest.toml");
+        fs::write(
+            &manifest,
+            "\
+schema_version = 2
+
+[[files]]
+dest = \"/usr/bin/namtor-enroll-wizard\"
+src = \"target/release/namtor-enroll-wizard\"
+mode = \"0755\"
+owner = \"root\"
+group = \"root\"
+package = \"gnome\"
+",
+        )
+        .unwrap();
+
+        let split = LayoutPaths::parse_split_manifest(&manifest)
+            .expect("a manifest predating the namtor-gnome -> namtor-ui rename must still parse");
+        assert_eq!(split.files.len(), 1);
+        assert_eq!(
+            split.files[0].package,
+            Some(Package::Ui),
+            "package = \"gnome\" must alias to Package::Ui, not degrade to Unknown"
+        );
+
+        // And it is really owned: the entry stages into the UI DESTDIR.
+        let ui_dests = split.package_dests(Package::Ui);
+        assert!(ui_dests
+            .files
+            .iter()
+            .any(|d| d == "/usr/bin/namtor-enroll-wizard"));
+        assert!(split.package_dests(Package::Core).files.is_empty());
     }
 
     #[test]
@@ -940,7 +999,7 @@ src = \"x\"
 mode = \"0755\"
 owner = \"root\"
 group = \"root\"
-package = \"gnome\"
+package = \"ui\"
 ",
         )
         .unwrap();
@@ -976,7 +1035,7 @@ src = \"y\"
 mode = \"0755\"
 owner = \"root\"
 group = \"root\"
-package = \"gnome\"
+package = \"ui\"
 ",
         )
         .unwrap();
@@ -1062,17 +1121,17 @@ on_purge = \"remove\"
             .files
             .contains(&"/usr/share/applications/org.namtor.kcm.desktop".to_string()));
 
-        let gnome_dests = split.package_dests(Package::Gnome);
-        assert!(gnome_dests
+        let ui_dests = split.package_dests(Package::Ui);
+        assert!(ui_dests
             .files
             .contains(&"/usr/bin/namtor-enroll-wizard".to_string()));
-        assert!(!gnome_dests
+        assert!(!ui_dests
             .files
             .contains(&"/usr/lib/namtor/namtor-daemon".to_string()));
 
         // The fixture's `package = "kde"` entry parses as `Unknown` and so
         // belongs to neither shipped package — it is filtered out of both.
-        assert!(!gnome_dests
+        assert!(!ui_dests
             .files
             .contains(&"/usr/share/applications/org.namtor.kcm.desktop".to_string()));
         let unknown_dests = split.package_dests(Package::Unknown);
@@ -1117,12 +1176,12 @@ on_purge = \"remove\"
     }
 
     #[test]
-    fn repo_manifest_gnome_package_has_no_kde_payload() {
+    fn repo_manifest_ui_package_has_no_kde_payload() {
         let manifest = repo_manifest_path();
         let split = LayoutPaths::parse_split_manifest(&manifest).expect("repo manifest must parse");
 
-        let gnome_dests = split.package_dests(Package::Gnome);
-        for dest in &gnome_dests.files {
+        let ui_dests = split.package_dests(Package::Ui);
+        for dest in &ui_dests.files {
             // GNOME files must not contain Qt/KDE indicators in the path.
             assert!(
                 !dest.contains("kcm")

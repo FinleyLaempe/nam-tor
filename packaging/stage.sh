@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Deterministic DESTDIR staging from packaging/install-manifest.toml.
 #
-# Usage: packaging/stage.sh <DESTDIR> [SRCDIR] [--package core|gnome|all]
+# Usage: packaging/stage.sh <DESTDIR> [SRCDIR] [--package core|ui|all]
 #
 #   DESTDIR  — empty root to stage into (created if absent).
 #   SRCDIR   — repo root containing both the build output (target/release/)
 #              and the packaging/ tree. Defaults to the current git toplevel.
 #   --package — stage only entries owned by the given split package
-#              (core, gnome). Defaults to "all" (stage every entry).
+#              (core, ui). Defaults to "all" (stage every entry).
 #
 # Every file declared in install-manifest.toml is copied from
 # $SRCDIR/<src> to $DESTDIR/<dest> with the declared mode. Owners/groups are
@@ -17,7 +17,7 @@
 # which is what the evidence gate checks).
 #
 # Split-package filtering: entries with `package = "core"` belong to the
-# `namtor` package and `package = "gnome"` to `namtor-gnome`. When
+# `namtor` package and `package = "ui"` to `namtor-ui`. When
 # `--package` is specified, only that package's entries (dirs + files) are
 # staged. Shared directories owned by core (e.g. /usr/share/applications)
 # are staged under core; the desktop package stages only its own files and
@@ -54,7 +54,7 @@ done
 set -- "${args[@]}"
 
 if [[ $# -lt 1 ]]; then
-    echo "usage: $0 <DESTDIR> [SRCDIR] [--package core|gnome|all]" >&2
+    echo "usage: $0 <DESTDIR> [SRCDIR] [--package core|ui|all]" >&2
     exit 2
 fi
 destdir="$1"
@@ -71,9 +71,9 @@ if [[ ! -f "$manifest_path" ]]; then
 fi
 
 case "$package_filter" in
-    core|gnome|all) ;;
+    core|ui|all) ;;
     *)
-        echo "error: --package must be one of: core, gnome, all (got: $package_filter)" >&2
+        echo "error: --package must be one of: core, ui, all (got: $package_filter)" >&2
         exit 2
         ;;
 esac

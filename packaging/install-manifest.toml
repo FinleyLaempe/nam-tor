@@ -13,7 +13,7 @@
 #                           this version governs packaging migrations only.
 #
 #   [retention]
-#     purge_owner        string   — which package (core|gnome) owns the
+#     purge_owner        string   — which package (core|ui) owns the
 #                                   purge of biometric state (templates,
 #                                   models cache, backoff).
 #
@@ -21,7 +21,7 @@
 #     path               string   — a runtime-generated state path (not an
 #                                   installed file). Created by the daemon at
 #                                   runtime; lifecycle declared here.
-#     package            string   — core|gnome
+#     package            string   — core|ui
 #     on_upgrade         string   — "preserve" | "remove"
 #     on_purge           string   — "preserve" | "remove"
 #
@@ -38,13 +38,19 @@
 #
 # Split packages:
 #   core  — namtor (daemon, worker, PAM, CLI, models, services, SBOM, notice)
-#   gnome — namtor-gnome (GTK4/libadwaita wizard + settings)
+#   ui    — namtor-ui (GTK4/libadwaita wizard + settings)
 #
-# A third `kde` package (the Plasma 6 KCM) existed up to and including the
-# 0.1.0 release and appears as `package = "kde"` in manifests installed by
-# it. Nothing writes that value any more, but `namtor-layout`'s `Package`
-# enum still accepts it (degrading to `Unknown`) because uninstall.sh and
-# namtor-cli read the INSTALLED manifest, which may predate this build.
+# Two historical spellings still appear in manifests on installed systems,
+# and `namtor-layout`'s `Package` enum keeps accepting both because
+# uninstall.sh and namtor-cli read the INSTALLED manifest, which may
+# predate this build:
+#
+#   package = "gnome" — the UI package before it was renamed namtor-gnome
+#                       -> namtor-ui. Aliased to `ui`, so uninstall still
+#                       owns and removes those four files.
+#   package = "kde"   — a third package (the Plasma 6 KCM) that existed up
+#                       to and including the 0.1.0 release. Nothing writes
+#                       it any more; it degrades to `Unknown`.
 #
 # Shared directories (e.g. /usr/share/applications) are owned by core; the
 # desktop package owns only its own files dropped into them.
@@ -275,7 +281,7 @@ group = "root"
 symlink = false
 package = "core"
 
-# GNOME management UI binary (GTK4 + libadwaita enrollment wizard).
+# Management UI binary (GTK4 + libadwaita enrollment wizard).
 [[files]]
 dest = "/usr/bin/namtor-enroll-wizard"
 src = "target/release/namtor-enroll-wizard"
@@ -283,7 +289,7 @@ mode = "0755"
 owner = "root"
 group = "root"
 symlink = false
-package = "gnome"
+package = "ui"
 
 # PAM module (cdylib). The crate `namtor-pam` produces `libnamtor_pam.so`;
 # it is installed under its canonical PAM path `pam_namtor.so` (no `lib`
@@ -399,7 +405,7 @@ symlink = false
 package = "core"
 
 # ---------------------------------------------------------------------------
-# GNOME desktop integration (applications, metainfo, icons)
+# Desktop integration (applications, metainfo, icons)
 # ---------------------------------------------------------------------------
 [[files]]
 dest = "/usr/share/applications/org.namtor.Wizard.desktop"
@@ -408,7 +414,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
-package = "gnome"
+package = "ui"
 
 [[files]]
 dest = "/usr/share/metainfo/org.namtor.Wizard.metainfo.xml"
@@ -417,7 +423,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
-package = "gnome"
+package = "ui"
 
 [[files]]
 dest = "/usr/share/icons/hicolor/scalable/apps/org.namtor.Wizard.svg"
@@ -426,7 +432,7 @@ mode = "0644"
 owner = "root"
 group = "root"
 symlink = false
-package = "gnome"
+package = "ui"
 
 # ---------------------------------------------------------------------------
 # Quirks database — per-device quirks TOML files read by the daemon and
