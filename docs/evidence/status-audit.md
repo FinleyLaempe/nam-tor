@@ -115,7 +115,7 @@ gates and is recorded as `WITHHELD: <reason>` rather than fake-success.
 
 | Input | Blocks | Status |
 |---|---|---|
-| Root: install systemd units, `namtor` user, `namtor-auth` group | Live daemon run, G1.1/G1.5 HIL | `WITHHELD: needs root install` |
+| Root: install systemd units, `namtor` user, `namtor-auth` group | Live daemon run, G1.1/G1.5 HIL, **and all end-to-end enrollment HIL** | `WITHHELD: needs root install` — **highest-value unlock, see note below** |
 | Python onnxruntime binding compatible with system Python | R4 INT8-vs-FP32, task 16 cohort tooling | `WITHHELD: python3 -c "import onnxruntime" fails (Python 3.14 incompat)` |
 | Model selection + upstream licence acceptance for restricted models | R4, production inference | `WITHHELD: no restricted model bundled; redistributable models admit without acceptance record` |
 | R5 cohort dataset (licence-verified) | G3, z-norm calibration, task 16 | `WITHHELD: no dataset selected` |
@@ -124,23 +124,41 @@ gates and is recorded as `WITHHELD: <reason>` rather than fake-success.
 | Scripted reference-hardware S3 HIL run (20x) | G1.6, R10 | `WITHHELD: no S3 cycle executed` |
 | Signing keys + distro packaging matrices | Packages, task 6 | `WITHHELD: no signing keys` |
 
+**Note on the root input (2026-09-16).** Everything else HIL needs is present
+on the reference machine: the reference IR camera (Sonix `3277:0018`, IR at
+`/dev/video2`, GREY8 640x360@30), a TPM2 device at `/dev/tpm0`, and the real
+ONNX weights under `var/lib/namtor/models/`. The remaining blocker for an
+end-to-end enrollment run is the IR emitter, which is armed through the UVC
+XU and the quirks table from the daemon and therefore needs the root install.
+Measured directly over 5 live frames with the emitter unarmed:
+`mean=0.1/255, min=0, max=4` — an essentially black image, in which face
+detection cannot succeed regardless of pipeline quality. So this single input
+gates the entire G1/G2 HIL family, not just the two gates listed above.
+
 ---
 
 ## 5. Test and CI baseline
 
 | Item | Status | Evidence |
 |---|---|---|
-| Workspace lib tests | 1404 passed, 0 failed, 12 ignored (HW-gated) | workspace `cargo test -- --test-threads=1` |
-| Integration tests (pam e2e + g5_structural) | 19 + 2 passed | `w1-auth.txt` |
-| GNOME test suite (enrollment redesign) | 83 passed (21 shell + 33 presenter + 29 privacy) | `cargo test -p namtor-gnome` |
+| Workspace tests | 1622 passed, 0 failed | workspace `cargo test -- --test-threads=1`, 2026-09-16 |
+| Integration tests (pam e2e + g5_structural) | passed | `w1-auth.txt` |
+| UI test suite (`namtor-ui`) | 148 passed (36 shell + 34 presenter + 29 privacy + 10 guidance + …) | `cargo test -p namtor-ui` |
 | `cargo fmt --all -- --check` | clean | workspace fmt check |
 | `cargo clippy --workspace --all-targets -- -D warnings` | no warnings | workspace clippy |
 | SPDX headers | enforced by `scripts/check-spdx.sh` | `ci-baseline.md` gate 6 |
-| `cargo audit` | 0 vulnerabilities, 329 deps | `ci-baseline.md` gate 7 |
+| `cargo audit` | 0 vulnerabilities | gate 7; RUSTSEC-2026-0285 (rustls 0.23.41, TLS 1.3 handshake across encryption levels) fixed by bumping to 0.23.45 on 2026-09-16. rustls enters only as a build-dependency of `ort-sys` via `ureq`, so it never shipped in the auth path. `encoding` (unmaintained) and `chacha20` (yanked) remain tolerated warnings; `chacha20` is not in the compiled tree for this target. |
 | PAM release `.so` size | 457920 < 512000 bytes | release build |
 
-CI is green on the mock path (no camera, no weights, no root). This is a code
-state, not a gate pass.
+Both GitHub workflows are green as of 2026-09-16: `CI` (all four jobs, with
+no `--skip` and no `--exclude` — the previously-skipped
+`concurrent_connections_serialise_on_camera_lock` deadlock was resolved by
+making the listener poll) and `release` (dry run, first success in the
+workflow's history; the install/smoke, upgrade, uninstall and artifact steps
+had never once executed before).
+
+This is still a code and pipeline state, not a gate pass. Every WITHHELD gate
+in section 2 remains withheld.
 
 ---
 
@@ -186,3 +204,45 @@ completion, not a biometric accuracy gate pass.
 
 For the current RC gate snapshot, see `docs/evidence/rc-g2-g5.md`.
 
+
+---
+
+## 7. Verification discipline
+
+Two rules, both learned from defects found in this repository rather than
+asserted in the abstract.
+
+### A `FIXED` marker must cite a named test, or it does not count
+
+`todo.md` carried an entry marked **FIXED** for USA-0b (the enrollment
+"diversity" number meaning reservoir fill on the capture screen and true
+pairwise cosine distance on the review screen). The bug was still live. The
+claimed fix — "use `capture.diversity_percent()` in both places" — had never
+been applied: `compute_progress` still read `snapshot.coverage_percent`, and
+`diversity_percent` was still a private `fn` with exactly one caller, which is
+structural proof the change never landed. The user-visible symptom stood
+exactly as originally described: the capture screen climbed to 100% as the
+100-slot reservoir filled, then review showed a single-digit number under the
+same label.
+
+It is now genuinely fixed, and the evidence is a named test:
+`manager::worker::tests::capture_and_review_report_the_same_diversity_metric`,
+which fails `100 != 3` against the pre-fix code.
+
+The same rule caught a second instance: a hardware-gated test skipped with
+"no real ONNX weights on this machine" when the weights were present all
+along, at the documented repo-relative path. A skip whose stated reason is
+false is worse than a failure, because it hides a runnable test.
+
+### Nothing load-bearing may live only in an untracked file
+
+`AGENTS.md`, `todo.md` and `HANDOFF.md` are deliberately gitignored
+(`.gitignore`, "Internal agent / planning notes — kept locally, not
+published", untracked in `9d82035` when the repo was prepared for public
+publication). That decision stands.
+
+The consequence is that anything written only there does not survive a fresh
+clone — including, ironically, the USA-0b correction above, whose whole point
+is that unverifiable claims rot. Load-bearing project state belongs in this
+ledger, in `docs/architecture.md`, or in the plan under
+`docs/superpowers/plans/`, all of which are tracked.
