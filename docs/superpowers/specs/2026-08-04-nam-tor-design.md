@@ -1293,6 +1293,19 @@ polkit actions: `org.namtor.enroll-self`, `enroll-other`, `delete`, `configure`.
 
 ### 9.2 GNOME
 
+> **AMENDMENT (2026-09-16, production-readiness Phase 2).** The settings
+> application described here still exists and is still GTK4 + libadwaita in
+> Rust — but it is no longer "the GNOME UI". With §9.3's KCM removed it is
+> the project's single, desktop-neutral front-end, and it has no GNOME-only
+> runtime dependency: its `.desktop` entry no longer pins `Categories` to
+> GNOME and carries no `X-GNOME-*` keys. The crate is `crates/namtor-ui`
+> (was `crates/namtor-gnome`) and the package is `namtor-ui` on all three
+> distros, which obsolete `namtor-gnome` so a normal upgrade migrates it.
+> Nothing user-visible moved: the binary is still `namtor-enroll-wizard`,
+> the desktop/AppStream/icon id is still `org.namtor.Wizard`, and the
+> polkit action ids and D-Bus names are untouched. The Shell extension
+> below was never built. Read "GNOME" in this section as "the Nam-tor UI".
+
 - **Settings application**: GTK4 + libadwaita, Rust. Enrollment wizard, device
   status, operating point selection, per-service policy, aging control, enrollment
   deletion.

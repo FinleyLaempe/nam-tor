@@ -187,6 +187,23 @@ marked `(defined)`.
 - `docs/evidence/manager-disconnect.md` — manager disconnect and
   cancellation fault handling.
 - `docs/evidence/manager-fault-matrix.md` — manager fault matrix.
+- **SUPERSEDED IN PART (2026-09-16):** the UI evidence below was recorded
+  when the crate was `namtor-gnome` and the package was `namtor-gnome`, and
+  its paths and prose still say "GNOME". It is left byte-identical because
+  it records what the 0.1.0 release shipped. The crate is now
+  `crates/namtor-ui` and the package is `namtor-ui` on all three distros;
+  `namtor-gnome` is an obsoleted predecessor that a normal upgrade removes.
+  The app itself, its binary `namtor-enroll-wizard` and its
+  `org.namtor.Wizard` desktop/AppStream/icon ids are unchanged, so the
+  behavioural findings below still hold — only the crate and package names
+  moved. No claim that Nam-tor ships a GNOME-specific UI may be made from
+  these files for any release after 0.1.0. See
+  `docs/adr/single-desktop-ui.md`. The screenshot harness
+  `scripts/hil/capture-ui-screenshots.sh` now writes to
+  `docs/evidence/ui/real-run/ui/` rather than `.../real-run/gnome/`; the
+  withheld placeholder manifest at `docs/evidence/ui/real-run/manifest.json`
+  still names the old path and is left as-is until a real HIL run
+  regenerates it.
 - `docs/evidence/gnome-qa/report.md` — GNOME wizard and settings QA results.
 - `docs/evidence/ui/gnome/enrollment.json` — GNOME enrollment AT-SPI
   scenarios.

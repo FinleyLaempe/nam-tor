@@ -70,6 +70,19 @@ The package is **not** renamed in this change. `namtor-gnome` keeps its
 name for now; renaming it to `namtor-ui` is a separate change with its own
 upgrade-path obligations.
 
+> **Follow-up, 2026-09-16.** That separate change has landed. The crate is
+> `crates/namtor-ui` and the package is `namtor-ui` on all three distros,
+> which carry `provides`/`conflicts`/`replaces` (Arch), `Provides:`/
+> `Obsoletes:` (Fedora) and `Provides:`/`Replaces:`/`Breaks:` (Debian) on
+> `namtor-gnome`, with a version bump in each recipe so the obsoletion can
+> actually fire. The two packages own exactly the same four files, so
+> without that a leftover `namtor-gnome` file-conflicts with `namtor-ui`.
+> `namtor-layout`'s `Package::Ui` carries `#[serde(alias = "gnome")]` so an
+> install manifest written before the rename still resolves. The
+> `org.namtor.Wizard` desktop/AppStream/icon ids, the
+> `namtor-enroll-wizard` binary name, the polkit action ids and the D-Bus
+> names are unchanged — they are ABI and never tracked the crate name.
+
 ## Consequences
 
 **Good.**
@@ -84,8 +97,8 @@ upgrade-path obligations.
 - Plasma users get a GTK application in a Qt desktop. It will not match the
   System Settings look, and it will not appear in the System Settings tree —
   it is a standalone app launched from its `.desktop` entry.
-- The name `namtor-gnome` now misdescribes a desktop-neutral package. That
-  is confusing until it is renamed.
+- The name `namtor-gnome` misdescribed a desktop-neutral package. Resolved
+  by the 2026-09-16 follow-up above, which renamed it to `namtor-ui`.
 
 **Neutral.**
 - The D-Bus contract, polkit action ids and bus names are untouched. They are
