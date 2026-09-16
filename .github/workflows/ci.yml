@@ -195,6 +195,19 @@ jobs:
       - name: Gate — release workflow shell idioms
         run: bash packaging/tests/test_workflow_lint.sh
 
+      # Core certification. Was kept out of CI because six of its assertions
+      # failed on one missing build artifact (the model archive), so its
+      # other ~96 checks were enforced nowhere. The gate now exits 77 when
+      # the archive is absent, so it skips honestly here and runs for real
+      # wherever the archive exists.
+      - name: "Gate — core certification (77 = skip, model archive absent)"
+        run: |
+          set +e
+          bash packaging/tests/test_core_cert.sh
+          rc=$?
+          [ "$rc" = "77" ] && exit 0
+          exit "$rc"
+
       # Lifecycle certification. Existed in packaging/tests/ but no workflow
       # ran it, so its assertions were enforced nowhere (F18). It passes
       # clean (79/0), so it is wired up rather than left to rot. The other

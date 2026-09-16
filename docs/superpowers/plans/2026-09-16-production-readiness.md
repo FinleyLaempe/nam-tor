@@ -1860,3 +1860,18 @@ Verified: leak=0 and rc=0 on all nine gates individually (previously 4/4/19/6/11
 3. This one — array mutation inside `$( )` discarded, so cleanup had nothing to clean.
 
 When a shell gate reports success, confirm it can actually fail. A gate that cannot fail is indistinguishable from one that passes, and both of the first two shipped in CI for some time.
+
+### F18 second update — `test_core_cert.sh` diagnosed and wired into CI
+
+Confirmed the diagnosis by building the artifact: `packaging/build-model-archive.sh` produced `namtor-models-0.1.0.tar.gz` (36 MB) from the bundled weights, and the suite then passed **102 passed, 0 failed**. So all six failures were one missing build artifact, and the other ~96 assertions had been correct all along — enforced nowhere purely because the suite was never wired up.
+
+Fixed the actual cause: the gate now exits **77 (skip)** when the archive is absent, matching `test_model_archive.sh`'s existing convention, instead of recording six hard failures. Verified both paths: `rc=0` with the archive present, `rc=77` without.
+
+Wired into `packaging-gates` with the same 77-is-skip handling `ci.yml` already uses, so it skips honestly on a runner that has not fetched the archive and runs for real wherever it exists (the release path fetches it via `gh release download models-v0.1.0`). The build artifact is gitignored (`.gitignore:34`) and was removed after testing.
+
+**F18 remaining: two suites.**
+
+- **`test_pam_install.sh`** — 6 failures around `--restore-backup` and preflight. The most valuable of the remainder, since it guards `/etc/pam.d` edits. Needs someone to determine whether the script or the assertions are wrong; not a mechanical fix.
+- **`test_desktop_cert.sh`** — 13 assertions naming tests and symbols that no longer exist (drift from `46e442c`) plus 2 `git check-ignore` trailing-slash quirks. The assertions must be re-derived from current code rather than patched individually.
+
+`test_release_ledger.sh` stays out of CI by design until it gains a read-only mode — it rewrites timestamps into tracked evidence as a side effect, which is why it was never wired up.

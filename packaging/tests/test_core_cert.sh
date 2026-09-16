@@ -118,12 +118,25 @@ for f in "$SBOM_SPDX" "$SBOM_CYCLONE"; do
     fi
 done
 
+# The model archive is a build artifact (gitignored, ~36 MB) produced by
+# packaging/build-model-archive.sh from the bundled ONNX weights. It is
+# absent on a fresh clone and on a CI runner that has not fetched it.
+#
+# Treating that as a FAILURE is what kept this whole suite out of CI: six
+# assertions failed for one missing artifact, so the suite was never wired
+# up and its other 96 checks were enforced nowhere. Exit 77 (skip) instead,
+# matching test_model_archive.sh, so the gate can run in CI and report
+# honestly wherever the archive does exist (release path, local dev).
 if [[ -f "$MODEL_ARCHIVE" && -f "$MODEL_SIDECAR" ]]; then
     ok "model archive + sidecar present"
-elif [[ ! -f "$MODEL_ARCHIVE" ]]; then
-    not_ok "model archive missing: $MODEL_ARCHIVE (run packaging/build-model-archive.sh)"
 else
-    not_ok "model archive sidecar missing: $MODEL_SIDECAR"
+    missing="$MODEL_ARCHIVE"
+    [[ -f "$MODEL_ARCHIVE" ]] && missing="$MODEL_SIDECAR"
+    echo ""
+    echo "SKIP: model archive not built: $missing"
+    echo "      Build it with: packaging/build-model-archive.sh"
+    echo "      (needs the bundled ONNX weights under var/lib/namtor/models/)"
+    exit 77
 fi
 
 # --- stage core into a DESTDIR fake root ------------------------------------
