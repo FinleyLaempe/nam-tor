@@ -188,6 +188,10 @@ jobs:
         run: bash packaging/tests/test_doc_audit.sh
       - name: Gate — support bundle (privacy-safe diagnostics)
         run: bash packaging/tests/test_support_bundle.sh
+      - name: Gate — man pages exist and are installed
+        run: bash packaging/tests/test_man_pages.sh
+      - name: Gate — release workflow shell idioms
+        run: bash packaging/tests/test_workflow_lint.sh
 
       # Meta-gate: runs every suite above + a mutation matrix that injects a
       # known defect per gate category, verifies the right gate catches it,
