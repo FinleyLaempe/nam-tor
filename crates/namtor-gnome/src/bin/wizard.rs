@@ -15,7 +15,26 @@ use libadwaita as adw;
 
 use namtor_gnome::app::AppController;
 
+const USAGE: &str = "\
+Usage: namtor-enroll-wizard
+
+Nam-tor management UI (GTK4/libadwaita). Takes no arguments.
+
+Options:
+  -h, --help       Print this help and exit
+  -V, --version    Print the version and exit";
+
 fn main() -> std::process::ExitCode {
+    // MUST precede adw::Application::builder() so --version works headlessly.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = namtor_layout::cli_preamble::handle(
+        "namtor-enroll-wizard",
+        env!("CARGO_PKG_VERSION"),
+        USAGE,
+        &args,
+    ) {
+        return std::process::ExitCode::from(code);
+    }
     let app = adw::Application::builder()
         .application_id("org.namtor.Gnome")
         .flags(ApplicationFlags::FLAGS_NONE)

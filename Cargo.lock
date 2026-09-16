@@ -1531,6 +1531,7 @@ version = "0.1.0"
 dependencies = [
  "namtor-capture",
  "namtor-hwdb",
+ "namtor-layout",
  "namtor-uvc",
  "tempfile",
  "thiserror",
@@ -1652,6 +1653,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "namtor-client",
+ "namtor-layout",
  "namtor-proto",
  "nix",
  "serde",
@@ -1802,6 +1804,7 @@ dependencies = [
  "libc",
  "libseccomp",
  "namtor-capture",
+ "namtor-layout",
  "namtor-proto",
  "nix",
  "ort",

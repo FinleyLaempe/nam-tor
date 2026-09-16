@@ -9,8 +9,35 @@
 use std::ffi::CString;
 use std::process::ExitCode;
 
+const USAGE: &str = "\
+Usage: namtor-worker --read-fd N --write-fd M [OPTIONS]
+
+Sandboxed inference worker. Spawned by namtor-daemon; not meant to be run
+by hand.
+
+Options:
+      --read-fd N        Request pipe read end
+      --write-fd M       Reply pipe write end
+      --frame-memfd F    Shared frame memfd
+      --frame-len L      Shared frame length in bytes
+      --models-dir DIR   Model root override
+      --apply-sandbox    Apply seccomp + Landlock before serving
+  -h, --help             Print this help and exit
+  -V, --version          Print the version and exit";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // `handle_known` leaves the worker's own flags alone; only --version and
+    // --help are intercepted here.
+    if let Some(code) = namtor_layout::cli_preamble::handle_known(
+        "namtor-worker",
+        env!("CARGO_PKG_VERSION"),
+        USAGE,
+        &args,
+    ) {
+        return ExitCode::from(code);
+    }
 
     // Self-test modes (escape suites) take priority.
     let mut i = 0;

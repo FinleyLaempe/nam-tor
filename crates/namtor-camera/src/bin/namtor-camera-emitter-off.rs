@@ -8,8 +8,27 @@ use std::process::ExitCode;
 
 use namtor_camera::watchdog::force_off_on_device;
 
+const USAGE: &str = "\
+Usage: namtor-camera-emitter-off <device>
+
+Best-effort IR emitter force-off, invoked by systemd's ExecStopPost= on
+unexpected teardown.
+
+Options:
+  -h, --help       Print this help and exit
+  -V, --version    Print the version and exit";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `handle_known` leaves the <device> positional alone.
+    if let Some(code) = namtor_layout::cli_preamble::handle_known(
+        "namtor-camera-emitter-off",
+        env!("CARGO_PKG_VERSION"),
+        USAGE,
+        &args,
+    ) {
+        return ExitCode::from(code);
+    }
     if args.len() != 1 {
         eprintln!("usage: namtor-camera-emitter-off <device>");
         return ExitCode::from(2);

@@ -7,6 +7,7 @@ license = "GPL-3.0-only"
 [dependencies]
 namtor-uvc = { path = "../namtor-uvc" }
 namtor-hwdb = { path = "../namtor-hwdb" }
+namtor-layout = { path = "../namtor-layout" }
 namtor-capture = { path = "../namtor-capture" }
 thiserror = { workspace = true }
 toml = "0.8"

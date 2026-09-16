@@ -9,6 +9,7 @@ landlock = "0.4"
 libc = "0.2"
 libseccomp = "0.4"
 namtor-capture = { path = "../namtor-capture" }
+namtor-layout = { path = "../namtor-layout" }
 namtor-proto = { path = "../namtor-proto" }
 nix = { version = "0.29", features = ["fs", "mman", "process", "socket", "user"] }
 serde = { workspace = true }

@@ -45,7 +45,25 @@ mod live_capture;
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
+const USAGE: &str = "\
+Usage: namtor-daemon
+
+Nam-tor authentication daemon. Started by systemd with no arguments.
+
+Options:
+  -h, --help       Print this help and exit
+  -V, --version    Print the version and exit";
+
 fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = namtor_layout::cli_preamble::handle(
+        "namtor-daemon",
+        env!("CARGO_PKG_VERSION"),
+        USAGE,
+        &args,
+    ) {
+        return ExitCode::from(code);
+    }
     init_tracing();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
