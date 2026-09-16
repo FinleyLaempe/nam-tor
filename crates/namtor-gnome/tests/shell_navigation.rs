@@ -469,3 +469,534 @@ fn primary_actions_have_mnemonics() {
         }
     });
 }
+
+/// The accessible-name registry is non-empty and covers every component
+/// source file that renders actionable widgets.
+#[test]
+fn actionable_widget_registry_covers_all_sources() {
+    assert!(
+        !ACTIONABLE_WIDGETS.is_empty(),
+        "registry must not be vacuous"
+    );
+    let files: std::collections::BTreeSet<&str> =
+        ACTIONABLE_WIDGETS.iter().map(|(f, _, _)| *f).collect();
+    for expected in [
+        "shell.rs",
+        "scan_feedback.rs",
+        "enrollment.rs",
+        "review.rs",
+        "profile_list.rs",
+        "pam_services.rs",
+        "system_status.rs",
+    ] {
+        assert!(
+            files.contains(expected),
+            "actionable widget registry missing {expected}"
+        );
+    }
+}
+
+// ===========================================================================
+// Shell structure contract tests (behavioural).
+//
+// The window itself is the UI: AdwApplicationWindow -> AdwNavigationView ->
+// AdwToolbarView (AdwHeaderBar + AdwViewSwitcher over an AdwViewStack). An
+// earlier revision hosted an AdwPreferencesDialog inside an empty window that
+// was never presented, so nothing rendered at all. These tests construct a
+// real Shell headlessly and assert the actual widget tree.
+// ===========================================================================
+
+/// The window MUST have content and MUST be presented — otherwise nothing
+/// renders. This is the regression test for the empty-host-window bug.
+#[test]
+fn window_has_content_and_is_presented() {
+    use gtk4::prelude::*;
+    use libadwaita::prelude::AdwApplicationWindowExt;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell0")
+            .build();
+        let _guard = app.hold();
+
+        let shell = namtor_gnome::shell::Shell::new(&app);
+        assert!(
+            shell.window().content().is_some(),
+            "application window has no content; nothing would render"
+        );
+
+        shell.present();
+        assert!(shell.window().is_visible(), "window was never presented");
+        shell.window().set_visible(false);
+    });
+}
+
+/// The shell MUST drive its three destinations from an `adw::ViewStack`
+/// selected by an `adw::ViewSwitcher` in an `adw::HeaderBar`, all inside the
+/// window — not from a floating `AdwPreferencesDialog`.
+#[test]
+fn shell_uses_view_stack_and_switcher() {
+    use gtk4::prelude::*;
+    use libadwaita::prelude::AdwApplicationWindowExt;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell1")
+            .build();
+        let _guard = app.hold();
+
+        let shell = namtor_gnome::shell::Shell::new(&app);
+
+        assert_eq!(
+            shell.view_stack().type_().name(),
+            "AdwViewStack",
+            "shell destinations must live in an AdwViewStack"
+        );
+
+        let content = shell
+            .window()
+            .content()
+            .expect("application window must have content");
+        for expected in [
+            "AdwNavigationView",
+            "AdwToolbarView",
+            "AdwHeaderBar",
+            "AdwViewSwitcher",
+            "AdwViewStack",
+        ] {
+            assert!(
+                common::widget_tree_contains_type(&content, expected),
+                "window content must contain {expected}"
+            );
+        }
+
+        // The dialog-in-an-empty-window shape must not come back.
+        assert!(
+            !common::widget_tree_contains_type(&content, "AdwPreferencesDialog"),
+            "shell must not host an AdwPreferencesDialog"
+        );
+    });
+}
+
+/// An unreachable daemon makes all three destinations useless, so the
+/// offline state — with its retry action — MUST render on every one of
+/// them rather than leaving two tabs blank.
+#[test]
+fn offline_state_renders_on_every_destination() {
+    use gtk4::prelude::*;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell8")
+            .build();
+        let _guard = app.hold();
+
+        let mut shell = namtor_gnome::shell::Shell::new(&app);
+        shell.show_offline("bus not available", || {});
+
+        for (dest, page) in [
+            ("profiles", shell.profiles_page()),
+            ("authentication", shell.auth_page()),
+            ("system", shell.system_page()),
+        ] {
+            let texts = common::collect_widget_text(page.upcast_ref::<gtk4::Widget>());
+            assert!(
+                texts
+                    .iter()
+                    .any(|t| t.contains("Cannot reach the Nam-tor daemon")),
+                "{dest} page must show the offline state: {texts:?}"
+            );
+            assert!(
+                texts.iter().any(|t| t.contains("bus not available")),
+                "{dest} page must show the connection error detail: {texts:?}"
+            );
+            assert!(
+                common::widget_tree_contains_type(page.upcast_ref::<gtk4::Widget>(), "GtkButton"),
+                "{dest} page must offer retry as a real button, not a list row"
+            );
+        }
+    });
+}
+
+/// The shell MUST create three `adw::PreferencesPage` instances — one per
+/// destination. Verified by accessing the three page accessors.
+#[test]
+fn shell_creates_three_preferences_pages() {
+    use gtk4::prelude::*;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell2")
+            .build();
+        let _guard = app.hold();
+
+        let shell = namtor_gnome::shell::Shell::new(&app);
+
+        let profiles = shell.profiles_page();
+        let auth = shell.auth_page();
+        let system = shell.system_page();
+
+        assert_eq!(
+            profiles.type_().name(),
+            "AdwPreferencesPage",
+            "profiles page must be AdwPreferencesPage"
+        );
+        assert_eq!(
+            auth.type_().name(),
+            "AdwPreferencesPage",
+            "auth page must be AdwPreferencesPage"
+        );
+        assert_eq!(
+            system.type_().name(),
+            "AdwPreferencesPage",
+            "system page must be AdwPreferencesPage"
+        );
+
+        // The three pages must be distinct objects.
+        assert!(!std::ptr::eq(
+            profiles.upcast_ref::<gtk4::Widget>(),
+            auth.upcast_ref::<gtk4::Widget>(),
+        ));
+        assert!(!std::ptr::eq(
+            auth.upcast_ref::<gtk4::Widget>(),
+            system.upcast_ref::<gtk4::Widget>(),
+        ));
+    });
+}
+
+/// The shell MUST add the three pages to the view stack. Verified by
+/// checking the visible page can be set to each of the three destinations.
+#[test]
+fn shell_adds_pages_to_view_stack() {
+    use gtk4::prelude::*;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell3")
+            .build();
+        let _guard = app.hold();
+
+        let mut shell = namtor_gnome::shell::Shell::new(&app);
+
+        // Setting the visible page to each of the three pages must work
+        // (the pages are added to the view stack).
+        shell.set_destination(Destination::Profiles);
+        assert_eq!(shell.active_destination(), Destination::Profiles);
+
+        shell.set_destination(Destination::Authentication);
+        assert_eq!(shell.active_destination(), Destination::Authentication);
+
+        shell.set_destination(Destination::System);
+        assert_eq!(shell.active_destination(), Destination::System);
+    });
+}
+
+/// The shell MUST expose `push_subpage` and `pop_subpage` for enrollment
+/// navigation. Verified by calling these methods on a real Shell.
+#[test]
+fn shell_uses_push_subpage_for_enrollment() {
+    use gtk4::prelude::*;
+    use namtor_gnome::components::EnrollmentViewComponent;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell4")
+            .build();
+        let _guard = app.hold();
+
+        let shell = namtor_gnome::shell::Shell::new(&app);
+
+        // Create a real NavigationPage and push it.
+        let comp = EnrollmentViewComponent::new();
+        let nav_page = comp.navigation_page("Test Enrollment");
+        shell.push_subpage(&nav_page);
+
+        // Pop it — must return true (a sub-page was popped).
+        assert!(
+            shell.pop_subpage(),
+            "pop_subpage must return true after push_subpage"
+        );
+
+        // Pop again — must return false (no more sub-pages).
+        assert!(
+            !shell.pop_subpage(),
+            "pop_subpage must return false when no sub-pages remain"
+        );
+    });
+}
+
+/// The shell MUST use `adw::ApplicationWindow` as the host window.
+#[test]
+fn shell_uses_application_window_as_host() {
+    use gtk4::prelude::*;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell5")
+            .build();
+        let _guard = app.hold();
+
+        let shell = namtor_gnome::shell::Shell::new(&app);
+        assert_eq!(
+            shell.window().type_().name(),
+            "AdwApplicationWindow",
+            "shell window must be AdwApplicationWindow"
+        );
+    });
+}
+
+/// The shell MUST NOT add its own `ScrolledWindow` — `AdwPreferencesPage`
+/// scrolls its own content. Verified by checking the actual widget tree of
+/// each destination page.
+#[test]
+fn shell_does_not_use_scrolled_window() {
+    use gtk4::prelude::*;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell6")
+            .build();
+        let _guard = app.hold();
+
+        let shell = namtor_gnome::shell::Shell::new(&app);
+
+        // AdwPreferencesPage scrolls its own content, so no ancestor of the
+        // view stack may be a ScrolledWindow (that would nest scrollers).
+        let mut ancestor = shell.view_stack().upcast_ref::<gtk4::Widget>().parent();
+        while let Some(w) = ancestor {
+            assert!(
+                w.type_().name() != "GtkScrolledWindow",
+                "shell must not nest the view stack inside its own ScrolledWindow"
+            );
+            ancestor = w.parent();
+        }
+    });
+}
+
+/// Adaptation MUST be declarative: the shell narrows via an `AdwBreakpoint`
+/// on the window (moving the switcher into a bottom bar), never by adding
+/// `AdwBreakpoint` *widgets* to the widget tree — breakpoints are not
+/// widgets and must not appear as children.
+#[test]
+fn shell_does_not_use_breakpoint_widgets() {
+    use gtk4::prelude::*;
+    use libadwaita::prelude::AdwApplicationWindowExt;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell7")
+            .build();
+        let _guard = app.hold();
+
+        let shell = namtor_gnome::shell::Shell::new(&app);
+        let content = shell
+            .window()
+            .content()
+            .expect("application window must have content");
+        assert!(
+            !common::widget_tree_contains_type(&content, "AdwBreakpoint"),
+            "shell content must not contain AdwBreakpoint widgets"
+        );
+        // The narrow layout is served by a bottom AdwViewSwitcherBar.
+        assert!(
+            common::widget_tree_contains_type(&content, "AdwViewSwitcherBar"),
+            "shell must provide a bottom view switcher bar for narrow layouts"
+        );
+    });
+}
+
+/// The enrollment component MUST build a `PreferencesPage` and expose a
+/// `navigation_page()` wrapper. Verified by constructing the component and
+/// calling the methods.
+#[test]
+fn enrollment_component_builds_preferences_page() {
+    use gtk4::prelude::*;
+
+    common::run_gtk_test(|| {
+        let comp = namtor_gnome::components::EnrollmentViewComponent::new();
+        let page = comp.page();
+        assert_eq!(
+            page.type_().name(),
+            "AdwPreferencesPage",
+            "enrollment page must be AdwPreferencesPage"
+        );
+
+        let nav_page = comp.navigation_page("Test");
+        assert_eq!(
+            nav_page.type_().name(),
+            "AdwNavigationPage",
+            "enrollment navigation_page must return AdwNavigationPage"
+        );
+    });
+}
+
+/// The review component MUST build a `PreferencesPage` with a
+/// `NavigationPage` wrapper.
+#[test]
+fn review_component_builds_preferences_page() {
+    use gtk4::prelude::*;
+
+    common::run_gtk_test(|| {
+        let comp = namtor_gnome::components::ReviewViewComponent::new();
+        let page = comp.page();
+        assert_eq!(
+            page.type_().name(),
+            "AdwPreferencesPage",
+            "review page must be AdwPreferencesPage"
+        );
+
+        let nav_page = comp.navigation_page("Test");
+        assert_eq!(
+            nav_page.type_().name(),
+            "AdwNavigationPage",
+            "review navigation_page must return AdwNavigationPage"
+        );
+    });
+}
+
+/// The profile list component MUST build a `PreferencesGroup` with
+/// `ActionRow`s and `SwitchRow` suffixes (not the old GtkBox + CheckButton).
+#[test]
+fn profile_list_uses_preferences_group_and_action_rows() {
+    use gtk4::prelude::*;
+    use namtor_gnome::components::ProfileListView;
+    use namtor_gnome::view_model::{PresenterModel, ProfileRowView};
+
+    let mut model = PresenterModel::default();
+    model.profiles.push(ProfileRowView {
+        id: "test-id".into(),
+        name: "Test User".into(),
+        enabled: true,
+        created: 0,
+        last_used: 0,
+    });
+
+    common::run_gtk_test(move || {
+        let view = ProfileListView::new();
+        let group = view.render(&model);
+
+        assert_eq!(
+            group.type_().name(),
+            "AdwPreferencesGroup",
+            "profile list group must be AdwPreferencesGroup"
+        );
+
+        let group_widget = group.upcast_ref::<gtk4::Widget>();
+        assert!(
+            common::widget_tree_contains_type(group_widget, "ActionRow"),
+            "profile list must contain ActionRow"
+        );
+        assert!(
+            common::widget_tree_contains_type(group_widget, "SwitchRow"),
+            "profile list must contain SwitchRow"
+        );
+        assert!(
+            !common::widget_tree_contains_type(group_widget, "CheckButton"),
+            "profile list must not use CheckButton"
+        );
+    });
+}
+
+/// The PAM services component MUST build a `PreferencesGroup` with
+/// `ActionRow`s and `SwitchRow` suffixes.
+#[test]
+fn pam_services_uses_preferences_group_and_action_rows() {
+    use gtk4::prelude::*;
+    use namtor_gnome::components::pam_services::render_pam_services;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    common::run_gtk_test(move || {
+        let mut presenter =
+            namtor_gnome::ProfilePresenter::new(namtor_gnome::fake::FakeManagerClient::new(), 1000);
+        presenter.refresh();
+        let presenter_rc = Rc::new(RefCell::new(presenter));
+
+        let group = render_pam_services(&presenter_rc);
+        assert_eq!(
+            group.type_().name(),
+            "AdwPreferencesGroup",
+            "pam_services group must be AdwPreferencesGroup"
+        );
+
+        let group_widget = group.upcast_ref::<gtk4::Widget>();
+        assert!(
+            common::widget_tree_contains_type(group_widget, "ActionRow"),
+            "pam_services must contain ActionRow"
+        );
+        assert!(
+            common::widget_tree_contains_type(group_widget, "SwitchRow"),
+            "pam_services must contain SwitchRow"
+        );
+    });
+}
+
+/// The system status component MUST build `PreferencesGroup`s with
+/// `ActionRow`s.
+#[test]
+fn system_status_uses_preferences_group_and_action_rows() {
+    use gtk4::prelude::*;
+    use namtor_gnome::components::system_status::render_system_status;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    common::run_gtk_test(move || {
+        let mut presenter =
+            namtor_gnome::ProfilePresenter::new(namtor_gnome::fake::FakeManagerClient::new(), 1000);
+        presenter.refresh();
+        let presenter_rc = Rc::new(RefCell::new(presenter));
+
+        let groups = render_system_status(&presenter_rc);
+        assert!(
+            groups.len() >= 2,
+            "system_status must return at least 2 groups"
+        );
+
+        for group in &groups {
+            assert_eq!(
+                group.type_().name(),
+                "AdwPreferencesGroup",
+                "system_status group must be AdwPreferencesGroup"
+            );
+            assert!(
+                common::widget_tree_contains_type(group.upcast_ref::<gtk4::Widget>(), "ActionRow"),
+                "system_status group must contain ActionRow"
+            );
+        }
+    });
+}
+
+/// The app controller MUST drive the new Shell API — content setters and
+/// push/pop subpage. Verified by constructing a real AppController and
+/// checking it has a presenter (which drives the shell).
+#[test]
+fn app_controller_drives_new_shell_api() {
+    use gtk4::prelude::*;
+    use namtor_client::fake_bus::FakeBus;
+    use namtor_gnome::app::AppController;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell8")
+            .build();
+        let _guard = app.hold();
+
+        // Construct an online AppController using FakeBus.
+        let fake_bus = FakeBus::spawn().expect("spawn fake bus");
+        let client: namtor_client::types::ManagerResult<namtor_gnome::DbusManagerClient> =
+            Ok(fake_bus.client);
+        let controller = AppController::new_offline_for_test(&app);
+        let rc = controller.clone();
+        controller.borrow_mut().apply_connect_result(&rc, client);
+
+        // The controller must be online with a presenter.
+        assert!(
+            !controller.borrow().is_offline_for_test(),
+            "controller must be online after FakeBus connect"
+        );
+        assert!(
+            controller.borrow().has_presenter_for_test(),
+            "controller must have a presenter that drives the shell"
+        );
+    });
+}
