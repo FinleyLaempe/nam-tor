@@ -1875,3 +1875,21 @@ Wired into `packaging-gates` with the same 77-is-skip handling `ci.yml` already 
 - **`test_desktop_cert.sh`** — 13 assertions naming tests and symbols that no longer exist (drift from `46e442c`) plus 2 `git check-ignore` trailing-slash quirks. The assertions must be re-derived from current code rather than patched individually.
 
 `test_release_ledger.sh` stays out of CI by design until it gains a read-only mode — it rewrites timestamps into tracked evidence as a side effect, which is why it was never wired up.
+
+### F18 correction — `test_lifecycle_cert.sh` was wired into the wrong CI job
+
+I wired it into `packaging-gates` after verifying it passed locally (79/0). It then **failed in CI** with 26 "missing" files:
+
+```
+- fresh install: usr/lib/namtor/namtor-worker missing
+- upgrade: re-stage core over existing fails
+- add-desktop: stage.sh --package ui fails
+```
+
+Cause: the suite stages real binaries from `target/release/` (`DAEMON_BIN`, `WORKER_BIN`, `CLI_BIN`, `PAM_SO`, `UI_BIN`, `EMITTER_OFF_BIN`) through `stage.sh`. The `packaging-gates` job installs system dependencies and runs shell gates — it **never builds the workspace**, so there was nothing to stage. It passed locally only because this working tree has a populated `target/release/`.
+
+My error: verifying a gate locally and inferring it would pass in CI. A gate's environment is part of the gate.
+
+Fixed by moving it to the **`build` job**, which does `cargo build --release` for every shippable crate and then asserts each binary exists — so the suite runs against genuinely compiled artifacts instead of skipping or failing. Placement verified by parsing the YAML and asserting the step resolves under `jobs.build`, not by reading the diff.
+
+Note the contrast with `test_core_cert.sh`, which belongs in `packaging-gates`: it exits 77 before touching any binary when the model archive is absent, so it never needs the build.

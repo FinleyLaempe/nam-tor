@@ -43,6 +43,15 @@ jobs:
             test -f target/release/libnamtor_pam.so || {
               echo "::error::missing libnamtor_pam.so"; exit 1; }
 
+      # Lifecycle certification. Existed in packaging/tests/ but no workflow
+      # ran it, so its assertions were enforced nowhere (F18). It belongs in
+      # THIS job rather than packaging-gates: it stages real
+      # target/release/ binaries through stage.sh, and packaging-gates never
+      # builds them — wiring it there made it fail with 26 "missing" files
+      # that had simply never been compiled.
+      - name: Gate — lifecycle certification (stages real release binaries)
+        run: bash packaging/tests/test_lifecycle_cert.sh
+
   rust:
     runs-on: ubuntu-latest
     steps:
@@ -207,15 +216,6 @@ jobs:
           rc=$?
           [ "$rc" = "77" ] && exit 0
           exit "$rc"
-
-      # Lifecycle certification. Existed in packaging/tests/ but no workflow
-      # ran it, so its assertions were enforced nowhere (F18). It passes
-      # clean (79/0), so it is wired up rather than left to rot. The other
-      # four unrun suites — test_core_cert.sh, test_pam_install.sh,
-      # test_desktop_cert.sh, test_release_ledger.sh — have real failures or
-      # side effects and still need an owner decision; see the plan's F18.
-      - name: Gate — lifecycle certification
-        run: bash packaging/tests/test_lifecycle_cert.sh
 
       # Meta-gate: runs every suite above + a mutation matrix that injects a
       # known defect per gate category, verifies the right gate catches it,
