@@ -18,13 +18,16 @@ use namtor_pam_config::{
 
 use std::collections::HashMap;
 
-use crate::dbus::{action, AuthzDecision, PeerIdentity, PolkitAuthority};
+use namtor_capture::source::CaptureSource;
+
+use crate::daemon::CaptureFactory;
+use crate::dbus::{action, ApiError, AuthzDecision, PeerIdentity, PolkitAuthority};
 use crate::manager::contract::{
     EnrollmentProgressV3, EnrollmentReviewV3, PamServiceCompatibility, PamServiceInfo,
     PollProgressReply, ProtectionStatus,
 };
 use crate::manager::observation::GuidanceProgress;
-use crate::manager::session::{EnrollmentCapture, ReviewSnapshot};
+use crate::manager::session::{EmbedSource, EnrollmentCapture, ReviewSnapshot};
 use crate::manager::store::ProfileStore;
 use crate::manager::worker::{
     EventReceiver, SystemWorkerClock, WorkerCommand, WorkerEvent, WorkerRegistry,
@@ -367,6 +370,14 @@ struct Manager3Session {
     display_name: String,
 }
 
+/// Factory producing a fresh [`EmbedSource`] for each v3 enrollment session.
+///
+/// Fallible, unlike the v1 [`crate::dbus::EmbedFactory`]: the production
+/// implementation loads ONNX weights off disk, which can fail, and a session
+/// started with a broken embedder would capture nothing while reporting
+/// success.
+pub type Manager3EmbedFactory = Box<dyn FnMut() -> Result<Box<dyn EmbedSource>, ApiError> + Send>;
+
 /// v3 `org.namtor.Manager3` service. Continuous enrollment lifecycle
 /// backed by the worker registry. No biometric material crosses this surface.
 pub struct Manager3Service<P: PolkitAuthority> {
@@ -375,9 +386,17 @@ pub struct Manager3Service<P: PolkitAuthority> {
     workers: Mutex<WorkerRegistry>,
     sessions: Mutex<HashMap<String, Manager3Session>>,
     signals: Mutex<Vec<Manager3Signal>>,
+    /// Opened per session in [`Self::start_enrollment`]. Behind a `Mutex`
+    /// because the factory is `FnMut` (it owns the camera inventory) while
+    /// the service itself is shared across bus tasks.
+    capture_factory: Option<Mutex<CaptureFactory>>,
+    embed_factory: Option<Mutex<Manager3EmbedFactory>>,
 }
 
 impl<P: PolkitAuthority> Manager3Service<P> {
+    /// Construct without capture/embed factories. Sessions can be created and
+    /// authorized but capture nothing — used by the bus-mechanics and
+    /// authorization tests. Production must use [`Self::new_with_capture`].
     pub fn new(polkit: P, store: Arc<dyn ProfileStore>) -> Self {
         Self {
             polkit,
@@ -385,7 +404,52 @@ impl<P: PolkitAuthority> Manager3Service<P> {
             workers: Mutex::new(WorkerRegistry::new()),
             sessions: Mutex::new(HashMap::new()),
             signals: Mutex::new(Vec::new()),
+            capture_factory: None,
+            embed_factory: None,
         }
+    }
+
+    /// Construct with the factories real enrollment needs: one produces a
+    /// [`CaptureSource`] from the selected camera, the other a production
+    /// [`EmbedSource`]
+    /// ([`PipelineEmbedSource`](crate::manager::embed::PipelineEmbedSource)).
+    ///
+    /// Both are opened lazily, per session, in [`Self::start_enrollment`] —
+    /// the camera is not held open between enrollments.
+    pub fn new_with_capture(
+        polkit: P,
+        store: Arc<dyn ProfileStore>,
+        capture_factory: CaptureFactory,
+        embed_factory: Manager3EmbedFactory,
+    ) -> Self {
+        let mut svc = Self::new(polkit, store);
+        svc.capture_factory = Some(Mutex::new(capture_factory));
+        svc.embed_factory = Some(Mutex::new(embed_factory));
+        svc
+    }
+
+    /// Open a capture source and an embedder for a new session. Returns
+    /// `(None, None)` when no factories are configured.
+    ///
+    /// A factory that fails is an error, not a silent downgrade: a session
+    /// whose camera would not open must not be created and then report zero
+    /// frames forever.
+    #[allow(clippy::type_complexity)]
+    fn build_capture_embed(
+        &self,
+    ) -> Result<(Option<Box<dyn CaptureSource>>, Option<Box<dyn EmbedSource>>), Manager3ApiError>
+    {
+        let capture = match self.capture_factory.as_ref() {
+            Some(f) => Some(
+                lock(f)().map_err(|e| Manager3ApiError::State(format!("capture source: {e}")))?,
+            ),
+            None => None,
+        };
+        let embed = match self.embed_factory.as_ref() {
+            Some(f) => Some(lock(f)().map_err(Manager3ApiError::from)?),
+            None => None,
+        };
+        Ok((capture, embed))
     }
 
     pub fn drain_signals(&self) -> Vec<Manager3Signal> {
@@ -450,13 +514,14 @@ impl<P: PolkitAuthority> Manager3Service<P> {
             action::ENROLL_OTHER
         };
         self.authz(action, peer, uid)?;
+        let (source, embed) = self.build_capture_embed()?;
         let capture = EnrollmentCapture::new(
             uid,
             peer.uid,
             peer.bus_name.clone(),
             name.to_string(),
-            None,
-            None,
+            source,
+            embed,
             100,
         );
         let session_id = Self::gen_session_id();
@@ -1410,6 +1475,143 @@ mod tests {
     fn new_svc3() -> Manager3Service<StubPolkit> {
         let store: Arc<dyn ProfileStore> = Arc::new(NullProfileStore);
         Manager3Service::new(StubPolkit, store)
+    }
+
+    /// Paced greyscale replay source for the v3 wiring tests.
+    ///
+    /// Frames are served with a small delay so the session behaves like a
+    /// live 30 fps camera rather than draining instantly: an instantly
+    /// exhausted source makes `poll_progress` report `has_progress: false`
+    /// regardless of how many frames were captured, which would test the
+    /// wrong thing.
+    struct ReplaySource3 {
+        left: usize,
+        fill: u8,
+        started: bool,
+    }
+
+    impl ReplaySource3 {
+        fn new(frames: usize, fill: u8) -> Self {
+            Self {
+                left: frames,
+                fill,
+                started: false,
+            }
+        }
+    }
+
+    impl namtor_capture::source::CaptureSource for ReplaySource3 {
+        fn caps(&self) -> namtor_capture::source::SourceCaps {
+            namtor_capture::source::SourceCaps {
+                spectrum: namtor_capture::source::Spectrum::Ir,
+                format: namtor_capture::frame::PixFmt::Grey8,
+                width: 8,
+                height: 8,
+                fps: 30,
+                has_metadata: false,
+            }
+        }
+        fn start(&mut self) -> Result<(), namtor_capture::source::CaptureError> {
+            self.started = true;
+            Ok(())
+        }
+        fn next_frame(
+            &mut self,
+        ) -> Result<Option<namtor_capture::frame::Frame>, namtor_capture::source::CaptureError>
+        {
+            if !self.started {
+                return Err(namtor_capture::source::CaptureError::NotStarted);
+            }
+            if self.left == 0 {
+                return Ok(None);
+            }
+            self.left -= 1;
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let fill = self.fill.wrapping_add(self.left as u8);
+            Ok(Some(namtor_capture::frame::Frame {
+                data: vec![fill; 64],
+                format: namtor_capture::frame::PixFmt::Grey8,
+                width: 8,
+                height: 8,
+                ts_mono: std::time::Duration::from_millis(0),
+                sof: None,
+                emitter: namtor_capture::frame::EmitterState::On,
+                quality: None,
+            }))
+        }
+        fn stop(&mut self) {
+            self.started = false;
+        }
+    }
+
+    fn new_svc3_with_sources() -> Manager3Service<StubPolkit> {
+        let store: Arc<dyn ProfileStore> = Arc::new(NullProfileStore);
+        Manager3Service::new_with_capture(
+            StubPolkit,
+            store,
+            Box::new(|| Ok(Box::new(ReplaySource3::new(10_000, 120)))),
+            Box::new(|| {
+                Ok(Box::new(crate::manager::session::MockEmbedSource::new(8))
+                    as Box<dyn crate::manager::session::EmbedSource>)
+            }),
+        )
+    }
+
+    /// Before task 3.6 `start_enrollment` passed `None, None` for both
+    /// sources, so the worker's first `pump()` returned
+    /// `ApiError::State("no capture source for session")` and tore the
+    /// session down. GUI enrollment could not capture a single frame.
+    #[test]
+    fn v3_start_enrollment_wires_a_real_capture_and_embed_source() {
+        let svc = new_svc3_with_sources();
+        let sid = svc.start_enrollment(&peer(0), 0, "alice").expect("start");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut progressed = None;
+        while std::time::Instant::now() < deadline {
+            let reply = svc.poll_progress(&peer(0), &sid).expect("poll");
+            if reply.has_progress && reply.progress.frames_accepted > 0 {
+                progressed = Some(reply.progress);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let progress = progressed.expect("no progress from a wired session");
+        assert!(progress.frames_seen > 0, "progress {progress:?}");
+        assert!(progress.frames_accepted > 0, "progress {progress:?}");
+        assert!(!progress.guidance.is_empty(), "progress {progress:?}");
+        svc.cancel_enrollment(&peer(0), &sid).ok();
+    }
+
+    /// A camera that will not open must surface as an error from
+    /// `StartEnrollment`, not as a session that silently produces nothing.
+    #[test]
+    fn v3_start_enrollment_reports_a_capture_open_failure() {
+        let store: Arc<dyn ProfileStore> = Arc::new(NullProfileStore);
+        let svc = Manager3Service::new_with_capture(
+            StubPolkit,
+            store,
+            Box::new(|| Err(crate::DaemonError::Capture("no IR camera found".into()))),
+            Box::new(|| {
+                Ok(Box::new(crate::manager::session::MockEmbedSource::new(8))
+                    as Box<dyn crate::manager::session::EmbedSource>)
+            }),
+        );
+        let err = svc.start_enrollment(&peer(0), 0, "alice").unwrap_err();
+        assert!(
+            matches!(err, Manager3ApiError::State(ref m) if m.contains("no IR camera found")),
+            "unexpected error {err:?}"
+        );
+        // The failed start must not have left a session behind.
+        assert!(svc.start_enrollment(&peer(0), 0, "alice").is_err());
+    }
+
+    /// Without factories the service still creates sessions, which is what
+    /// the authorization and bus-mechanics tests rely on.
+    #[test]
+    fn v3_start_enrollment_without_factories_still_creates_a_session() {
+        let svc = new_svc3();
+        assert!(svc.start_enrollment(&peer(0), 0, "alice").is_ok());
     }
 
     #[test]
