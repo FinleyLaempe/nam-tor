@@ -1,0 +1,165 @@
+.TH PAM_NAMTOR 8 "2026-09-16" "namtor 0.1.0" "System Manager's Manual"
+.SH NAME
+pam_namtor \- PAM module for Nam-tor infrared face authentication
+.SH SYNOPSIS
+.B auth sufficient pam_namtor.so
+.SH DESCRIPTION
+.B pam_namtor.so
+is the PAM authentication module of Nam-tor. It carries no machine-learning
+or image-handling code: it resolves the target user, connects to
+.BR namtor\-daemon (8)
+on
+.IR /run/namtor/auth.sock ,
+drives one authentication exchange and maps the daemon's verdict to a PAM
+return code. Detection, liveness checking and template matching all happen
+inside the daemon; the module sees only a pass/fail verdict.
+.PP
+The module is
+.IR fail\-closed .
+It returns
+.B PAM_SUCCESS
+only when the daemon returned a positive match. Every other outcome \(em an
+unreachable or unresponsive daemon, a protocol error, a timeout, an unknown
+user, an internal panic \(em returns
+.B PAM_AUTHINFO_UNAVAIL
+so that the stack falls through to the next module. A fault in Nam-tor can
+therefore never grant access, and with the recommended
+.B sufficient
+control it never denies it either: password authentication proceeds as if
+the module were not installed.
+.SS Per-service opt-in
+Installing the package does
+.B not
+enable face authentication anywhere. The module is shipped to
+.I /usr/lib/security/pam_namtor.so
+and no PAM service file is touched, so a fresh install changes no login
+path. An administrator opts in one service at a time, either through the
+Settings app (which drives the
+.I org.namtor.Manager2
+system-bus interface) or with
+.IR /usr/share/namtor/pam\-install.sh ,
+which defaults to
+.IR /etc/pam.d/gdm\-password .
+.PP
+Both paths use the same transactional editor. It inserts a marked block
+.RB ( "# namtor\-begin" " \&...\& " "# namtor\-end" )
+containing a single
+.B auth sufficient pam_namtor.so
+line, never deletes or reorders stock lines, refuses the edit unless a
+password fallback remains below the inserted block, and keeps a checksummed
+backup at
+.IR <file>.namtor.bak
+for rollback. Removal deletes only the marked block.
+.SS Remote authentication
+If
+.B PAM_RHOST
+is set to a non-empty value the module refuses immediately with
+.BR PAM_AUTHINFO_UNAVAIL ,
+before contacting the daemon and regardless of configuration. A face
+presented to a camera attached to one machine says nothing about a session
+originating on another, so remote logins always fall through to another
+authentication factor.
+.SS Keypress fallback
+While the daemon is working, the module polls standard input. Any keypress
+abandons the face attempt and returns
+.BR PAM_AUTHINFO_UNAVAIL ,
+so a user who would rather type a password does not have to wait out the
+timeout. The abandoned attempt is timed out by the daemon on its side.
+Polling requires a terminal on standard input; in graphical services where
+there is none, the attempt simply runs to completion.
+.SH OPTIONS
+The module recognises no module arguments. Any arguments in the PAM
+configuration line are ignored.
+.SH MODULE TYPES PROVIDED
+Only the
+.B auth
+module type is implemented.
+.B pam_sm_setcred
+and
+.B pam_sm_acct_mgmt
+are present because the PAM ABI requires them and both return
+.BR PAM_SUCCESS ;
+the module manages no credentials and performs no authorisation.
+.SH RETURN VALUES
+.TP
+.B PAM_SUCCESS
+The daemon matched the presented face against an enrolled template.
+.TP
+.B PAM_AUTH_ERR
+The daemon completed the exchange and reported no match.
+.TP
+.B PAM_MAXTRIES
+The daemon is rate-limiting authentication attempts for this user.
+.TP
+.B PAM_AUTHINFO_UNAVAIL
+Face authentication could not be attempted or could not be completed:
+the socket is absent, the daemon is unreachable or returned an error,
+.B PAM_RHOST
+was set, the user is unknown, or a keypress cancelled the attempt. The
+stack should fall through to another factor.
+.SH FILES
+.TP
+.I /usr/lib/security/pam_namtor.so
+The module itself.
+.TP
+.I /run/namtor/auth.sock
+Daemon authentication socket, group
+.IR namtor\-auth .
+The service invoking the module must be able to reach it.
+.TP
+.I /etc/pam.d/gdm\-password
+Default target service for
+.IR pam\-install.sh .
+Any PAM service file may be used instead.
+.TP
+.I /usr/share/namtor/pam\-install.sh
+Enable the module for one PAM service.
+.TP
+.I /usr/share/namtor/pam\-uninstall.sh
+Remove the module's block from one PAM service.
+.TP
+.I /usr/share/namtor/pam\-preflight.sh
+Check the conditions for a safe edit without changing anything.
+.SH ENVIRONMENT
+.TP
+.B NAMTOR_SOCKET
+Path to the daemon authentication socket, overriding
+.IR /run/namtor/auth.sock .
+Intended for testing.
+.SH EXAMPLES
+Enable face authentication for the GNOME display manager, keeping password
+authentication as the fallback:
+.PP
+.RS 4
+.nf
+namtor\-cli enroll
+/usr/share/namtor/pam\-install.sh \-\-target /etc/pam.d/gdm\-password
+.fi
+.RE
+.PP
+Disable it again:
+.PP
+.RS 4
+.nf
+/usr/share/namtor/pam\-uninstall.sh \-\-target /etc/pam.d/gdm\-password
+.fi
+.RE
+.SH SECURITY CONSIDERATIONS
+Use the
+.B sufficient
+control, and keep a password-capable
+.B auth
+line below the Nam-tor block; the installer refuses an edit that would not.
+Face authentication is a convenience factor: it is not resistant to a
+determined attacker with a high-quality artefact, and it should not be the
+only way into a machine that holds secrets worth that effort.
+.PP
+The module logs one line per failure to standard error, which PAM forwards
+to the journal. That line carries a fixed reason code and the PAM result
+only \(em never embeddings, scores, frames or any other biometric detail.
+.SH SEE ALSO
+.BR namtor\-cli (1),
+.BR namtor\-daemon (8),
+.BR pam.conf (5),
+.BR pam.d (5),
+.BR pam (8)

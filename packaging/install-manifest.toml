@@ -404,6 +404,20 @@ group = "root"
 symlink = false
 package = "core"
 
+# The PAM module's page. `namtor-daemon.8` cross-references pam_namtor(8);
+# a dangling cross-reference is flagged by Debian lintian, and `man
+# pam_namtor` is where an administrator looks to find out what the module
+# does before enabling it. Installed with the core package, which owns
+# /usr/lib/security/pam_namtor.so.
+[[files]]
+dest = "/usr/share/man/man8/pam_namtor.8"
+src = "docs/man/pam_namtor.8"
+mode = "0644"
+owner = "root"
+group = "root"
+symlink = false
+package = "core"
+
 # ---------------------------------------------------------------------------
 # Desktop integration (applications, metainfo, icons)
 # ---------------------------------------------------------------------------

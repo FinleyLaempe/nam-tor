@@ -184,13 +184,18 @@ package_namtor() {
     # SBOM, lifecycle helper).
     ./packaging/stage.sh "$pkgdir" "$srcdir/nam-tor-$pkgver" --package core
 
-    # Man pages come from the manifest (docs/man/namtor-daemon.8 ->
-    # /usr/share/man/man8, docs/man/namtor-cli.1 -> /usr/share/man/man1).
-    # `Documentation=man:namtor-daemon(8)` in the shipped units only resolves
-    # if they are actually installed — `systemd-analyze verify` shells out to
-    # man(1) and exits 1 with `Protocol error` otherwise.
+    # Man pages come from the manifest (docs/man/namtor-daemon.8 and
+    # docs/man/pam_namtor.8 -> /usr/share/man/man8, docs/man/namtor-cli.1 ->
+    # /usr/share/man/man1). `Documentation=man:namtor-daemon(8)` in the
+    # shipped units only resolves if they are actually installed —
+    # `systemd-analyze verify` shells out to man(1) and exits 1 with
+    # `Protocol error` otherwise. pam_namtor.8 is not a Documentation= target
+    # but namtor-daemon.8 cross-references it, and a dangling cross-reference
+    # is a lintian finding on the Debian side.
     test -f "$pkgdir/usr/share/man/man8/namtor-daemon.8" || {
         echo "error: man8/namtor-daemon.8 not staged" >&2; return 1; }
+    test -f "$pkgdir/usr/share/man/man8/pam_namtor.8" || {
+        echo "error: man8/pam_namtor.8 not staged" >&2; return 1; }
     test -f "$pkgdir/usr/share/man/man1/namtor-cli.1" || {
         echo "error: man1/namtor-cli.1 not staged" >&2; return 1; }
 

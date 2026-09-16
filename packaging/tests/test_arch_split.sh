@@ -433,6 +433,7 @@ for f in \
     COPYING.md \
     docs/man/namtor-daemon.8 \
     docs/man/namtor-cli.1 \
+    docs/man/pam_namtor.8 \
     docs/evidence/packaging/namtor.spdx.json \
     docs/evidence/packaging/namtor.cyclonedx.json; do
     mkdir -p "$stage_root/$(dirname "$f")"
