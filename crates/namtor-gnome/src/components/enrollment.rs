@@ -340,9 +340,13 @@ impl EnrollmentViewComponent {
     /// Wrap the component's `PreferencesPage` in a `NavigationPage` ready
     /// for `push_subpage`. The `title` is shown in the navigation header.
     pub fn navigation_page(&self, title: &str) -> adw::NavigationPage {
+        // The sub-page carries its own AdwHeaderBar so AdwNavigationView
+        // renders a back button and the page title above the content.
+        let toolbar = adw::ToolbarView::builder().content(&self.page).build();
+        toolbar.add_top_bar(&adw::HeaderBar::new());
         adw::NavigationPage::builder()
             .title(tr(title))
-            .child(&self.page)
+            .child(&toolbar)
             .build()
     }
 }

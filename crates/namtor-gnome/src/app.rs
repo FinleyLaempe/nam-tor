@@ -8,8 +8,8 @@
 //! (GTK is single-threaded) and renders the three destinations — Profiles,
 //! Authentication, System — plus the enrollment flow.
 //!
-//! The enrollment flow uses [`adw::PreferencesDialog::push_subpage`] /
-//! [`pop_subpage`] for the capture and review sub-pages, wrapped in
+//! The enrollment flow uses [`Shell::push_subpage`] / [`Shell::pop_subpage`]
+//! for the capture and review sub-pages, wrapped in
 //! [`adw::NavigationPage`] per the libadwaita 1.5 migration guide.
 //!
 //! If the daemon is unreachable the controller routes every destination to
@@ -58,18 +58,19 @@ impl AppController {
     pub fn build(app: &adw::Application) -> ControllerRc {
         let mut shell = Shell::new(app);
 
-        let (presenter, offline) = match DbusManagerClient::connect() {
+        let (presenter, offline_detail) = match DbusManagerClient::connect() {
             Ok(client) => {
                 let uid = current_uid();
                 let p = Rc::new(RefCell::new(ProfilePresenter::new(client, uid)));
-                (Some(p), false)
+                (Some(p), None)
             }
             Err(err) => {
                 let detail = err.to_string();
                 shell.show_offline(&detail, || {});
-                (None, true)
+                (None, Some(detail))
             }
         };
+        let offline = offline_detail.is_some();
 
         if let Some(ref presenter) = presenter {
             presenter.borrow_mut().refresh();
@@ -86,12 +87,17 @@ impl AppController {
             offline,
         }));
 
-        // USA-2: wire the offline retry button to retry_connection.
-        if offline {
+        // USA-2: wire the offline retry button to retry_connection. The
+        // connect error detail is re-rendered so the user keeps seeing why
+        // the daemon could not be reached.
+        if let Some(detail) = offline_detail {
             let rc = Rc::clone(&controller);
-            controller.borrow_mut().shell.show_offline("", move || {
-                rc.borrow_mut().retry_connection(&rc);
-            });
+            controller
+                .borrow_mut()
+                .shell
+                .show_offline(&detail, move || {
+                    rc.borrow_mut().retry_connection(&rc);
+                });
         } else {
             let rc = Rc::clone(&controller);
             controller.borrow_mut().render_all(&rc);

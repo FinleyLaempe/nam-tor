@@ -258,7 +258,7 @@ const ACTIONABLE_WIDGETS: &[(&str, &str, &str)] = &[
     ("navigation.rs", "resume_button", "Resume capture"),
     ("navigation.rs", "discard_button", "Discard profile"),
     ("navigation.rs", "name_entry", "Profile name"),
-    ("shell.rs", "retry_row", "Retry connection"),
+    ("shell.rs", "retry_button", "Retry connection"),
     ("enrollment.rs", "start_btn", "Start enrollment"),
     ("enrollment.rs", "cancel_btn (setup)", "Cancel enrollment"),
     ("enrollment.rs", "stop_btn", "Stop capture"),
@@ -438,16 +438,45 @@ fn actionable_widget_registry_covers_all_sources() {
 // ===========================================================================
 // Shell structure contract tests (behavioural).
 //
-// The shell was redesigned from ApplicationWindow + ViewStack + ViewSwitcherBar
-// to PreferencesDialog + PreferencesPage + PreferencesGroup. These tests
-// construct a real Shell headlessly and assert the actual widget tree.
+// The window itself is the UI: AdwApplicationWindow -> AdwNavigationView ->
+// AdwToolbarView (AdwHeaderBar + AdwViewSwitcher over an AdwViewStack). An
+// earlier revision hosted an AdwPreferencesDialog inside an empty window that
+// was never presented, so nothing rendered at all. These tests construct a
+// real Shell headlessly and assert the actual widget tree.
 // ===========================================================================
 
-/// The shell MUST use `adw::PreferencesDialog` as the primary container,
-/// not the old `adw::ViewStack` / `ViewSwitcherBar` / `ViewSwitcher`.
+/// The window MUST have content and MUST be presented — otherwise nothing
+/// renders. This is the regression test for the empty-host-window bug.
 #[test]
-fn shell_uses_preferences_dialog() {
+fn window_has_content_and_is_presented() {
     use gtk4::prelude::*;
+    use libadwaita::prelude::AdwApplicationWindowExt;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell0")
+            .build();
+        let _guard = app.hold();
+
+        let shell = namtor_gnome::shell::Shell::new(&app);
+        assert!(
+            shell.window().content().is_some(),
+            "application window has no content; nothing would render"
+        );
+
+        shell.present();
+        assert!(shell.window().is_visible(), "window was never presented");
+        shell.window().set_visible(false);
+    });
+}
+
+/// The shell MUST drive its three destinations from an `adw::ViewStack`
+/// selected by an `adw::ViewSwitcher` in an `adw::HeaderBar`, all inside the
+/// window — not from a floating `AdwPreferencesDialog`.
+#[test]
+fn shell_uses_view_stack_and_switcher() {
+    use gtk4::prelude::*;
+    use libadwaita::prelude::AdwApplicationWindowExt;
 
     common::run_gtk_test(|| {
         let app = libadwaita::Application::builder()
@@ -457,28 +486,74 @@ fn shell_uses_preferences_dialog() {
 
         let shell = namtor_gnome::shell::Shell::new(&app);
 
-        // The dialog is a PreferencesDialog (type system proves this).
-        let dialog = shell.dialog();
         assert_eq!(
-            dialog.type_().name(),
-            "AdwPreferencesDialog",
-            "shell dialog must be AdwPreferencesDialog"
+            shell.view_stack().type_().name(),
+            "AdwViewStack",
+            "shell destinations must live in an AdwViewStack"
         );
 
-        // The widget tree must not contain old-style containers.
-        let dialog_widget = dialog.upcast_ref::<gtk4::Widget>();
+        let content = shell
+            .window()
+            .content()
+            .expect("application window must have content");
+        for expected in [
+            "AdwNavigationView",
+            "AdwToolbarView",
+            "AdwHeaderBar",
+            "AdwViewSwitcher",
+            "AdwViewStack",
+        ] {
+            assert!(
+                common::widget_tree_contains_type(&content, expected),
+                "window content must contain {expected}"
+            );
+        }
+
+        // The dialog-in-an-empty-window shape must not come back.
         assert!(
-            !common::widget_tree_contains_type(dialog_widget, "ViewStack"),
-            "shell must not use AdwViewStack"
+            !common::widget_tree_contains_type(&content, "AdwPreferencesDialog"),
+            "shell must not host an AdwPreferencesDialog"
         );
-        assert!(
-            !common::widget_tree_contains_type(dialog_widget, "ViewSwitcherBar"),
-            "shell must not use AdwViewSwitcherBar"
-        );
-        assert!(
-            !common::widget_tree_contains_type(dialog_widget, "ViewSwitcher"),
-            "shell must not use AdwViewSwitcher"
-        );
+    });
+}
+
+/// An unreachable daemon makes all three destinations useless, so the
+/// offline state — with its retry action — MUST render on every one of
+/// them rather than leaving two tabs blank.
+#[test]
+fn offline_state_renders_on_every_destination() {
+    use gtk4::prelude::*;
+
+    common::run_gtk_test(|| {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.shell8")
+            .build();
+        let _guard = app.hold();
+
+        let mut shell = namtor_gnome::shell::Shell::new(&app);
+        shell.show_offline("bus not available", || {});
+
+        for (dest, page) in [
+            ("profiles", shell.profiles_page()),
+            ("authentication", shell.auth_page()),
+            ("system", shell.system_page()),
+        ] {
+            let texts = common::collect_widget_text(page.upcast_ref::<gtk4::Widget>());
+            assert!(
+                texts
+                    .iter()
+                    .any(|t| t.contains("Cannot reach the Nam-tor daemon")),
+                "{dest} page must show the offline state: {texts:?}"
+            );
+            assert!(
+                texts.iter().any(|t| t.contains("bus not available")),
+                "{dest} page must show the connection error detail: {texts:?}"
+            );
+            assert!(
+                common::widget_tree_contains_type(page.upcast_ref::<gtk4::Widget>(), "GtkButton"),
+                "{dest} page must offer retry as a real button, not a list row"
+            );
+        }
     });
 }
 
@@ -528,10 +603,10 @@ fn shell_creates_three_preferences_pages() {
     });
 }
 
-/// The shell MUST add the three pages to the dialog. Verified by checking
-/// the dialog's visible page can be set to each of the three pages.
+/// The shell MUST add the three pages to the view stack. Verified by
+/// checking the visible page can be set to each of the three destinations.
 #[test]
-fn shell_adds_pages_to_dialog() {
+fn shell_adds_pages_to_view_stack() {
     use gtk4::prelude::*;
 
     common::run_gtk_test(|| {
@@ -543,7 +618,7 @@ fn shell_adds_pages_to_dialog() {
         let mut shell = namtor_gnome::shell::Shell::new(&app);
 
         // Setting the visible page to each of the three pages must work
-        // (the pages are added to the dialog).
+        // (the pages are added to the view stack).
         shell.set_destination(Destination::Profiles);
         assert_eq!(shell.active_destination(), Destination::Profiles);
 
@@ -609,8 +684,9 @@ fn shell_uses_application_window_as_host() {
     });
 }
 
-/// The shell MUST NOT use `ScrolledWindow` — `PreferencesDialog` handles
-/// scrolling internally. Verified by checking the actual widget tree.
+/// The shell MUST NOT add its own `ScrolledWindow` — `AdwPreferencesPage`
+/// scrolls its own content. Verified by checking the actual widget tree of
+/// each destination page.
 #[test]
 fn shell_does_not_use_scrolled_window() {
     use gtk4::prelude::*;
@@ -622,25 +698,28 @@ fn shell_does_not_use_scrolled_window() {
         let _guard = app.hold();
 
         let shell = namtor_gnome::shell::Shell::new(&app);
-        let dialog = shell.dialog();
-        assert!(
-            !common::widget_tree_contains_type(
-                dialog.upcast_ref::<gtk4::Widget>(),
-                "ScrolledWindow"
-            ),
-            "shell dialog must not contain ScrolledWindow"
-        );
+
+        // AdwPreferencesPage scrolls its own content, so no ancestor of the
+        // view stack may be a ScrolledWindow (that would nest scrollers).
+        let mut ancestor = shell.view_stack().upcast_ref::<gtk4::Widget>().parent();
+        while let Some(w) = ancestor {
+            assert!(
+                w.type_().name() != "GtkScrolledWindow",
+                "shell must not nest the view stack inside its own ScrolledWindow"
+            );
+            ancestor = w.parent();
+        }
     });
 }
 
-/// The shell MUST NOT use `Breakpoint`-based adaptive switching —
-/// `PreferencesDialog` handles adaptation internally. Verified by
-/// checking the dialog's widget tree does not contain explicit
-/// `AdwBreakpoint` widgets (the `PreferencesDialog` manages its own
-/// adaptation without user-added breakpoints).
+/// Adaptation MUST be declarative: the shell narrows via an `AdwBreakpoint`
+/// on the window (moving the switcher into a bottom bar), never by adding
+/// `AdwBreakpoint` *widgets* to the widget tree — breakpoints are not
+/// widgets and must not appear as children.
 #[test]
-fn shell_does_not_use_breakpoint() {
+fn shell_does_not_use_breakpoint_widgets() {
     use gtk4::prelude::*;
+    use libadwaita::prelude::AdwApplicationWindowExt;
 
     common::run_gtk_test(|| {
         let app = libadwaita::Application::builder()
@@ -649,15 +728,18 @@ fn shell_does_not_use_breakpoint() {
         let _guard = app.hold();
 
         let shell = namtor_gnome::shell::Shell::new(&app);
-        let dialog = shell.dialog();
-        // PreferencesDialog handles adaptation internally; the shell code
-        // must not add explicit Breakpoint widgets to the dialog.
+        let content = shell
+            .window()
+            .content()
+            .expect("application window must have content");
         assert!(
-            !common::widget_tree_contains_type(
-                dialog.upcast_ref::<gtk4::Widget>(),
-                "AdwBreakpoint"
-            ),
-            "shell dialog must not contain explicit AdwBreakpoint widgets"
+            !common::widget_tree_contains_type(&content, "AdwBreakpoint"),
+            "shell content must not contain AdwBreakpoint widgets"
+        );
+        // The narrow layout is served by a bottom AdwViewSwitcherBar.
+        assert!(
+            common::widget_tree_contains_type(&content, "AdwViewSwitcherBar"),
+            "shell must provide a bottom view switcher bar for narrow layouts"
         );
     });
 }

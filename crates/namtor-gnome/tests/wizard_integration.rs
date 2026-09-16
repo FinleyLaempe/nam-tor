@@ -19,6 +19,7 @@ const TEST_UID: u32 = 1000;
 #[test]
 fn wizard_renders_real_content_not_placeholders() {
     use gtk4::prelude::*;
+    use libadwaita::prelude::AdwApplicationWindowExt;
 
     common::run_gtk_test(|| {
         let app = libadwaita::Application::builder()
@@ -27,8 +28,11 @@ fn wizard_renders_real_content_not_placeholders() {
         let _guard = app.hold();
 
         let shell = namtor_gnome::shell::Shell::new(&app);
-        let dialog = shell.dialog();
-        let texts = common::collect_widget_text(dialog.upcast_ref::<gtk4::Widget>());
+        let content = shell
+            .window()
+            .content()
+            .expect("application window must have content");
+        let texts = common::collect_widget_text(&content);
 
         assert!(
             !texts.iter().any(|t| t.contains("will appear here")),
