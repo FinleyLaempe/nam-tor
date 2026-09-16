@@ -1751,3 +1751,26 @@ start the IR stream: Device("ioctl failed: VIDIOC_REQBUFS: EBUSY: Device or reso
 The race was **latent, and hidden by F13 itself** — the enrollment test always bailed out at the false model check before it ever reached the camera, so the two never overlapped. Fixing the false skip exposed it. Now serialised on a `static CAMERA: Mutex<()>` with the poison discarded, so a panicking sibling cannot fail the other for an unrelated reason.
 
 A good illustration of why a false skip is worse than a failure: it had been concealing a genuine concurrency bug in the same file.
+
+### F18 update — measured state of the five unrun suites
+
+Each run directly, 2026-09-16:
+
+| suite | result | in CI now? |
+|---|---|---|
+| `test_lifecycle_cert.sh` | **79 passed, 0 failed** | **YES — wired up** |
+| `test_core_cert.sh` | 95 passed, 6 failed | no |
+| `test_pam_install.sh` | 31 passed, 6 failed | no |
+| `test_desktop_cert.sh` | 78 passed, 15 failed | no |
+| `test_release_ledger.sh` | not run — rewrites timestamps into `docs/evidence/` as a side effect | no |
+
+`test_lifecycle_cert.sh` passed clean and is now a CI gate, so its assertions are enforced instead of merely existing.
+
+The remaining four still need an owner decision, and each fails for a different reason:
+
+- **`test_core_cert.sh`** — all 6 failures are the absent `namtor-models-0.1.0.tar.gz`. That is a generated artifact (`packaging/build-model-archive.sh`), not tracked. Either build it in the job before running the gate, or make the gate skip with exit 77 when the archive is absent, matching how `test_model_archive.sh` already handles the hardware-gated case.
+- **`test_pam_install.sh`** — 6 failures around `--restore-backup` and preflight. Needs someone to read whether the script or the assertions are wrong; this one guards PAM stack edits, so it is the most valuable of the four to get running.
+- **`test_desktop_cert.sh`** — 15 failures: 13 assertions naming tests and symbols that no longer exist (the drift traces to commit `46e442c`, long before this programme) plus 2 `git check-ignore` quirks where `.gitignore` entries use trailing slashes. The assertions must be re-derived from the current code, not patched one by one.
+- **`test_release_ledger.sh`** — has a write side effect on tracked evidence files, which is presumably why it was never wired up. It needs a read-only mode before it can be a gate.
+
+A certification suite nobody runs implies coverage that does not exist. Either wire each one up or delete it; leaving them is the worst of the three options.

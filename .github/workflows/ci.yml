@@ -195,6 +195,15 @@ jobs:
       - name: Gate — release workflow shell idioms
         run: bash packaging/tests/test_workflow_lint.sh
 
+      # Lifecycle certification. Existed in packaging/tests/ but no workflow
+      # ran it, so its assertions were enforced nowhere (F18). It passes
+      # clean (79/0), so it is wired up rather than left to rot. The other
+      # four unrun suites — test_core_cert.sh, test_pam_install.sh,
+      # test_desktop_cert.sh, test_release_ledger.sh — have real failures or
+      # side effects and still need an owner decision; see the plan's F18.
+      - name: Gate — lifecycle certification
+        run: bash packaging/tests/test_lifecycle_cert.sh
+
       # Meta-gate: runs every suite above + a mutation matrix that injects a
       # known defect per gate category, verifies the right gate catches it,
       # and reverts from a verified backup. Emits 28-ci-baseline.json +
