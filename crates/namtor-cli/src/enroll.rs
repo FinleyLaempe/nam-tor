@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use namtor_recog::pipeline::RecognitionPipeline;
+use namtor_recog::quality::laplacian_stddev;
 use namtor_store::template::{EnrollmentMeta, Template, TemplateRecord};
 use namtor_store::{StoreError, TemplateStore};
 
@@ -233,7 +234,12 @@ pub fn run_enroll(
                 if quality < 0.5 {
                     continue;
                 }
-                let blur = variance_of_laplacian(&frame.data, frame.width, frame.height);
+                // Review finding F7: this used to be a byte-for-byte copy of
+                // `namtor_recog::quality::laplacian_stddev`. The copy is gone
+                // and the CLI delegates, so the two cannot drift. The
+                // arithmetic is unchanged, so the `< 3.0` reject below still
+                // means exactly what it meant when it was calibrated.
+                let blur = laplacian_stddev(&frame.data, frame.width, frame.height);
                 if blur < 3.0 {
                     eprintln!("  frame {i}: skipped (blur={blur:.1})");
                     continue;
@@ -647,30 +653,6 @@ fn activate_emitter(dev: &str, vid_pid: &str) -> Result<EmitterGuard, String> {
         xu: Some(xu),
         vid_pid: vid_pid.to_string(),
     })
-}
-
-fn variance_of_laplacian(data: &[u8], width: u32, height: u32) -> f32 {
-    let w = width as usize;
-    let h = height as usize;
-    if data.len() < w * h || w < 3 || h < 3 {
-        return 0.0;
-    }
-    let mut laplacian = vec![0f32; w * h];
-    for y in 1..h - 1 {
-        for x in 1..w - 1 {
-            let idx = y * w + x;
-            let center = data[idx] as f32;
-            let up = data[idx - w] as f32;
-            let down = data[idx + w] as f32;
-            let left = data[idx - 1] as f32;
-            let right = data[idx + 1] as f32;
-            laplacian[idx] = -4.0 * center + up + down + left + right;
-        }
-    }
-    let mean: f32 = laplacian.iter().sum::<f32>() / laplacian.len() as f32;
-    let var: f32 =
-        laplacian.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / laplacian.len() as f32;
-    var.sqrt()
 }
 
 #[cfg(test)]

@@ -15,7 +15,7 @@
 
 use crate::detect::{Detection, Landmarks};
 
-/// Variance-of-Laplacian value treated as "fully sharp" once reached.
+/// [`laplacian_stddev`] value treated as "fully sharp" once reached.
 ///
 /// Matches the threshold the CLI already uses (`>= ~50` is sharp, `< ~5` is
 /// junk), so the normalised [`FrameMetrics::blur`] is directly comparable with
@@ -60,7 +60,7 @@ pub struct FrameMetrics {
     /// Detector confidence for the face box, `0.0..=1.0`.
     pub detection_confidence: f32,
     /// Sharpness, `0.0..=1.0`, higher = sharper. Normalised
-    /// variance-of-Laplacian measured **inside the face box only**.
+    /// [`laplacian_stddev`] measured **inside the face box only**.
     pub blur: f32,
     /// Illumination adequacy, `0.0..=1.0`. Peaked: a dark frame *and* a blown
     /// out frame both score low, only a well-exposed one scores high.
@@ -131,7 +131,7 @@ pub fn measure(frame: &[u8], w: u32, h: u32, det: &Detection) -> FrameMetrics {
     if let Some(roi) = clip_box(det, w, h) {
         let pixels = crop(frame, w, h, roi);
         if !pixels.is_empty() {
-            m.blur = (variance_of_laplacian(&pixels, roi.w, roi.h) / BLUR_SHARP_AT).clamp(0.0, 1.0);
+            m.blur = (laplacian_stddev(&pixels, roi.w, roi.h) / BLUR_SHARP_AT).clamp(0.0, 1.0);
             m.illumination = illumination_score(mean_intensity(&pixels));
             m.saturated_fraction = saturated_fraction(&pixels);
         }
@@ -298,12 +298,34 @@ fn illumination_score(mean: f32) -> f32 {
 }
 
 /// Standard deviation of the 4-neighbour Laplacian response over a greyscale
-/// buffer — the classic "variance of Laplacian" sharpness measure.
+/// buffer: the sharpness term behind [`FrameMetrics::blur`].
 ///
-/// This is the canonical implementation; `namtor-cli` carries a copy that is
-/// slated to delegate here. Returns `0.0` for buffers too small or too short
-/// to filter.
-pub fn variance_of_laplacian(data: &[u8], width: u32, height: u32) -> f32 {
+/// Named for what it returns. The literature calls the family "variance of
+/// Laplacian", but this takes the square root of that variance, so the value
+/// is a **standard deviation** and is linear in contrast rather than
+/// quadratic. Review finding F7: the old name promised a variance and
+/// returned a standard deviation, and `namtor-cli` carried a byte-for-byte
+/// duplicate of the body. This is now the only implementation; the CLI
+/// delegates here.
+///
+/// ## Denominator
+///
+/// Both the mean and the variance divide by the **full** `w * h` buffer
+/// length, not by the `(w - 2) * (h - 2)` interior the kernel actually
+/// writes. The one-pixel border stays at the `0.0` it was initialised to and
+/// is averaged in, which pulls the result down by roughly the border's share
+/// of the buffer (~6% on a 64x64 ROI, ~0.6% on a 640x360 frame).
+///
+/// This is deliberate and is **kept** rather than corrected: every threshold
+/// in the tree is calibrated against this arithmetic — [`BLUR_SHARP_AT`]
+/// here and the CLI's hard `blur < 3.0` reject in `enroll.rs`. Changing the
+/// denominator would silently raise every measured value and shift both
+/// gates, on a metric whose absolute scale has no external meaning anyway
+/// (only the ordering between frames does). Retune the thresholds against
+/// real captures first, in one change, if it is ever worth it.
+///
+/// Returns `0.0` for buffers too small or too short to filter.
+pub fn laplacian_stddev(data: &[u8], width: u32, height: u32) -> f32 {
     let w = width as usize;
     let h = height as usize;
     if w < 3 || h < 3 || data.len() < w * h {
@@ -770,11 +792,50 @@ mod tests {
         assert_eq!(measure(&f, 64, 64, &d).landmark_spread, 1.0);
     }
 
+    /// Review finding F7, pinned executably: the denominator is the **full**
+    /// `w * h` buffer, not the `(w - 2) * (h - 2)` interior the kernel writes.
+    ///
+    /// On an 8x8 one-pixel checkerboard every interior Laplacian response is
+    /// exactly +-1020 and every border response is the 0.0 it was initialised
+    /// to, in a 18/18 sign balance, so the mean is 0 and the result reduces to
+    /// `1020 * sqrt(interior / total)`:
+    ///
+    /// * full-buffer denominator (what this returns): `1020 * sqrt(36/64)` = **765**
+    /// * interior-only denominator (what the name "variance of Laplacian"
+    ///   would normally imply): **1020**
+    ///
+    /// Keeping the border in is a deliberate decision, not an oversight: the
+    /// CLI's hard `blur < 3.0` reject and [`BLUR_SHARP_AT`] are both
+    /// calibrated against these numbers. If this test ever fails at 765, the
+    /// denominator changed and both gates need retuning in the same change.
     #[test]
-    fn variance_of_laplacian_rejects_undersized_input() {
-        assert_eq!(variance_of_laplacian(&[1, 2, 3, 4], 2, 2), 0.0);
-        assert_eq!(variance_of_laplacian(&[], 0, 0), 0.0);
-        assert_eq!(variance_of_laplacian(&[1, 2, 3], 64, 64), 0.0);
+    fn laplacian_stddev_averages_the_zeroed_border_in() {
+        let got = laplacian_stddev(&checkerboard(8, 8), 8, 8);
+        assert!((got - 765.0).abs() < 0.01, "expected 765.0, got {got}");
+        // Sanity: the interior-only figure this deliberately is NOT.
+        assert!((got - 1020.0).abs() > 1.0, "border was excluded: {got}");
+    }
+
+    /// The border's share shrinks as the ROI grows, so the same measurement is
+    /// not comparable across ROI sizes in absolute terms — only the ordering
+    /// between frames of one size is. Documented here so nobody reads
+    /// [`FrameMetrics::blur`] as an absolute sharpness in physical units.
+    #[test]
+    fn laplacian_stddev_border_bias_shrinks_with_size() {
+        let small = laplacian_stddev(&checkerboard(8, 8), 8, 8);
+        let large = laplacian_stddev(&checkerboard(64, 64), 64, 64);
+        assert!(small < large, "small {small} !< large {large}");
+        assert!(
+            large < 1020.0,
+            "large {large} reached the interior-only value"
+        );
+    }
+
+    #[test]
+    fn laplacian_stddev_rejects_undersized_input() {
+        assert_eq!(laplacian_stddev(&[1, 2, 3, 4], 2, 2), 0.0);
+        assert_eq!(laplacian_stddev(&[], 0, 0), 0.0);
+        assert_eq!(laplacian_stddev(&[1, 2, 3], 64, 64), 0.0);
     }
 
     #[test]
