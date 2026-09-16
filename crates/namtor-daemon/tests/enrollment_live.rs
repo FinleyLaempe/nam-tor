@@ -16,6 +16,13 @@
 //! the same reason it does there, and an installed system and a developer
 //! checkout both work with no arguments.
 //!
+//! The emitter this test **arms itself**, through the shipped
+//! `namtor_camera::emitter_ctrl` + `namtor_camera::watchdog` API, bounded by
+//! the device's own `max_on_ms` and restored on every exit path including
+//! panic. See [`hw_emitter`] for the safety argument. It used to skip here,
+//! claiming activation needed root inside the daemon; the quirks entry's
+//! measured `[access] requires_root = false` says otherwise, and it does.
+//!
 //! Every skip below names the thing it could not find, and where it looked.
 //! Review finding F13: this test used to skip with "no real ONNX weights on
 //! this machine" while the weights sat in the repo-relative model directory
@@ -26,6 +33,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
+use namtor_camera::watchdog::SystemClock;
+
 use namtor_capture::frame::PixFmt;
 use namtor_capture::ir_uvc::{IrUvc, ParityPolicy, V4l2IrStream};
 use namtor_capture::source::{CaptureSource, SourceCaps, Spectrum};
@@ -33,6 +42,8 @@ use namtor_daemon::manager::embed::PipelineEmbedSource;
 use namtor_daemon::manager::observation::{derive_guidance, observation_from};
 use namtor_daemon::manager::session::EnrollmentCapture;
 use namtor_layout::{InstallRoot, LayoutPaths};
+
+mod hw_emitter;
 
 /// The reference camera: Sonix 3277:0018, IR node at `/dev/video2`, GREY 8-bit
 /// 640x360@30, metadata node at `/dev/video3`.
@@ -64,6 +75,27 @@ const EMITTER_PROBE_FRAMES: usize = 5;
 /// IR scene sits far above this; the floor only has to separate "black" from
 /// "not black".
 const EMITTER_DARK_MEAN: f32 = 4.0;
+
+/// Mean sample value a genuinely armed emitter must clear, measured the same
+/// way as [`EMITTER_DARK_MEAN`].
+///
+/// `quirks/devices/3277-0018.toml` measured mode 2 at mean 41.0 across the
+/// alternation and 81.9 on the illuminated half; [`brightest_mean`] reads the
+/// illuminated half, and reads it in the first few frames, before the
+/// firmware AE has decayed — quirks records the first pair at 217.2, and this
+/// test observed 253.0 with a subject close to the lens. The floor therefore
+/// sits far below every one of those numbers, because its only job is to
+/// separate "the LED came on" from "the write was accepted but nothing
+/// happened" — a distinction a GET_CUR readback alone cannot make.
+const EMITTER_LIT_MEAN: f32 = 20.0;
+
+/// Upper bound on frames pumped through the enrollment session. The real
+/// bound is the emitter watchdog; this only stops a fast camera from running
+/// on after the watchdog has already shut the LED off.
+const MAX_PUMP_FRAMES: usize = 120;
+
+/// Installed quirks directory, mirroring `LayoutPaths::quirks_dirs`.
+const INSTALLED_QUIRKS_DIR: &str = "/usr/share/namtor/quirks/devices";
 
 /// Serialises access to the reference camera across this binary's tests.
 ///
@@ -144,6 +176,24 @@ fn model_dir_candidates() -> Vec<(&'static str, PathBuf)> {
         "source layout",
         LayoutPaths::resolve(&repo, &source_manifest, InstallRoot::Source).models_dir,
     ));
+    out
+}
+
+/// Every quirks directory to search for the reference device's emitter
+/// configuration, in precedence order.
+///
+/// `LayoutPaths::quirks_dirs` carries the source entry as the *relative*
+/// `quirks/devices`, which resolves only for a process started at the repo
+/// root; `cargo test` starts in the crate directory. The repo-relative path
+/// is therefore built from `CARGO_MANIFEST_DIR` instead, exactly as
+/// [`model_dir_candidates`] does for weights.
+fn quirks_dir_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(dir) = std::env::var_os("NAMTOR_QUIRKS_DIR") {
+        out.push(PathBuf::from(dir));
+    }
+    out.push(PathBuf::from(INSTALLED_QUIRKS_DIR));
+    out.push(repo_root().join("quirks").join("devices"));
     out
 }
 
@@ -232,21 +282,25 @@ fn brightest_mean(source: &mut dyn CaptureSource, frames: usize) -> f32 {
 /// `start_enrollment` passed `None, None` and the first `pump()` failed with
 /// "no capture source for session".
 ///
-/// Two preconditions this test cannot arrange for itself:
+/// Two preconditions. The test arranges one and can only check the other:
 ///
-/// * **A face in front of the camera.** Without one every frame is a counted
-///   `rejected_no_face` and `frames_accepted` stays 0.
-/// * **An armed IR emitter.** Emitter activation lives in the daemon binary
-///   (`src/bin/namtor-daemon/live_capture.rs`), behind the UVC XU and the
-///   quirks table, not in this crate's library surface. Pulling frames
-///   straight off `/dev/video2` with the emitter dark yields a near-black
-///   buffer, which YuNet will not detect a face in.
+/// * **An armed IR emitter** — *arranged*. `/dev/video2` returns an
+///   essentially black buffer with the emitter dark (measured mean 0.1/255),
+///   and YuNet finds nothing in black. The emitter is armed here, from this
+///   process, as this user: the reference device's quirks entry records
+///   `[access] requires_root = false` as a measured fact, and the seat ACL on
+///   the node gives the desktop user `rw`. Everything about *how* — RAII
+///   force-off, start-up reconciliation, `max_on_ms` watchdog — lives in
+///   [`hw_emitter`].
+/// * **A face in front of the camera** — *checked only*. Nothing this process
+///   can do puts one there. Without one every frame is a counted
+///   `rejected_no_face` and the final assertion fails, saying so.
 ///
-/// The second one is *checked*, not assumed: [`brightest_mean`] reads the
-/// scene before the session starts and the test skips with the measurement in
-/// hand when the sensor is dark. Review finding F13/F14 — asserting
-/// `frames_accepted > 0` against a black frame produces a failure that blames
-/// the pipeline for a missing emitter.
+/// Both emitter states are measured in **photons**, not just in GET_CUR
+/// bytes: dark before arming, lit after, dark again after teardown. Review
+/// finding F13/F14 — a readback proves the device accepted a write, not that
+/// an LED came on, and an assertion that trusts the former reintroduces
+/// exactly the class of false signal F13 is about.
 #[test]
 #[ignore = "requires the reference camera; run with NAMTOR_HW_TEST=1"]
 fn live_enrollment_session_accepts_frames_from_the_reference_camera() {
@@ -258,67 +312,199 @@ fn live_enrollment_session_accepts_frames_from_the_reference_camera() {
         return;
     };
 
-    let mut source = open_reference_camera();
-    let mean = brightest_mean(source.as_mut(), EMITTER_PROBE_FRAMES);
-    if mean < EMITTER_DARK_MEAN {
-        source.stop();
+    let quirks_dirs = quirks_dir_candidates();
+    let Some((quirks_dir, emitter_cfg)) =
+        hw_emitter::emitter_cfg(&quirks_dirs, hw_emitter::REFERENCE_VID_PID)
+    else {
         eprintln!(
-            "skipping: {IR_NODE} returns an unlit image — brightest frame mean {mean:.2}/255 \
-             over {EMITTER_PROBE_FRAMES} frames, below the {EMITTER_DARK_MEAN:.1} floor. The IR \
-             emitter is not armed, so no detector can find a face here and every frame would \
-             be counted rejected_no_face. Arming it needs the UVC extension unit and the quirks \
-             table in src/bin/namtor-daemon/live_capture.rs, which runs inside namtor-daemon as \
-             root; this test links the library only. Run it with namtor-daemon holding the \
-             emitter on (owner-gated item O1). Models were found, so this is the only \
-             remaining blocker."
+            "skipping: no quirks entry for {} in any of {:?}. Without it there is no emitter \
+             control to write, and {IR_NODE} stays dark.",
+            hw_emitter::REFERENCE_VID_PID,
+            quirks_dirs,
         );
         return;
-    }
-    eprintln!("emitter: scene is lit (brightest frame mean {mean:.2}/255)");
-
-    let embed = PipelineEmbedSource::load(&yunet, &sface).expect("load recognition pipeline");
-    let mut capture = EnrollmentCapture::new(
-        1000,
-        1000,
-        ":1.hw".into(),
-        "hw".into(),
-        Some(source),
-        Some(Box::new(embed)),
-        64,
+    };
+    eprintln!(
+        "quirks: {} (via {}); emitter method {:?} unit {:?} selector {:?} \
+         payload_on {:02x?} payload_off {:02x?}",
+        hw_emitter::REFERENCE_VID_PID,
+        quirks_dir.display(),
+        emitter_cfg.method,
+        emitter_cfg.unit,
+        emitter_cfg.selector,
+        emitter_cfg.payload_on,
+        emitter_cfg.payload_off,
     );
 
-    let mut guidance_seen = std::collections::HashSet::new();
-    for i in 0..120 {
-        let snapshot = match capture.pump() {
-            Ok(Some(s)) => s,
-            Ok(None) => break,
-            Err(e) => panic!("pump failed on frame {i}: {e}"),
-        };
-        if let Some(m) = snapshot.metrics {
-            let obs = observation_from(&m, capture.diversity_percent());
-            let g = derive_guidance(&obs);
-            guidance_seen.insert(format!("{g:?}"));
-            if i % 20 == 0 {
+    let mut source = open_reference_camera();
+    let dark_before = brightest_mean(source.as_mut(), EMITTER_PROBE_FRAMES);
+    eprintln!(
+        "emitter disarmed: brightest frame mean {dark_before:.2}/255 over \
+         {EMITTER_PROBE_FRAMES} frames"
+    );
+
+    // Loading SFace reads ~37 MiB off disk and builds a graph. Do it *before*
+    // arming, so that cost is not spent with the LED lit.
+    let embed = PipelineEmbedSource::load(&yunet, &sface).expect("load recognition pipeline");
+
+    let budget_ms = hw_emitter::max_on_ms(&emitter_cfg);
+    let clock = SystemClock;
+
+    // Everything inside this block runs with the emitter potentially lit. The
+    // block exists so the guard, and the capture session holding the V4L2
+    // node, are both dropped before the post-conditions below are measured.
+    let outcome = {
+        let mut armed = match hw_emitter::ArmedEmitter::arm(Path::new(IR_NODE), &emitter_cfg) {
+            Ok(a) => a,
+            Err(e) => {
+                source.stop();
                 eprintln!(
-                    "frame {i:3}: conf={:.2} blur={:.2} illum={:.2} sat={:.2} \
-                     yaw={:+.1} roll={:+.1} face={:.3} spread={:.2} -> {g:?}",
-                    m.detection_confidence,
-                    m.blur,
-                    m.illumination,
-                    m.saturated_fraction,
-                    m.yaw_deg,
-                    m.roll_deg,
-                    m.face_fraction,
-                    m.landmark_spread,
+                    "skipping: could not arm the IR emitter on {IR_NODE}: {e}\n\
+                     The quirks entry claims [access] requires_root = false. If the error above \
+                     is EACCES or EPERM that claim is wrong for this kernel and this test needs \
+                     namtor-daemon to hold the emitter on instead (owner-gated item O1). Any \
+                     other errno is a device or configuration fault, not a privilege one. \
+                     Models and quirks were both found, so this is the only remaining blocker."
                 );
+                return;
+            }
+        };
+        let mut watchdog = hw_emitter::watchdog_for(&emitter_cfg, &clock);
+        watchdog.arm();
+        eprintln!(
+            "emitter armed: GET_CUR read back {:02x?}; watchdog budget {budget_ms} ms",
+            armed.readback(),
+        );
+
+        let lit = brightest_mean(source.as_mut(), EMITTER_PROBE_FRAMES);
+        eprintln!(
+            "emitter armed: brightest frame mean {lit:.2}/255 over {EMITTER_PROBE_FRAMES} frames"
+        );
+
+        let mut capture = EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.hw".into(),
+            "hw".into(),
+            Some(source),
+            Some(Box::new(embed)),
+            64,
+        );
+
+        let mut guidance_seen = std::collections::HashSet::new();
+        let mut best_confidence = 0.0f32;
+        let mut pumped = 0usize;
+        let mut watchdog_fired = false;
+        for i in 0..MAX_PUMP_FRAMES {
+            if watchdog.check_expired() {
+                // Spec §4.10.2: the emitter goes off the instant the budget
+                // is spent, before anything else happens on this iteration.
+                armed.force_off();
+                watchdog.disarm();
+                watchdog_fired = true;
+                eprintln!(
+                    "watchdog: {budget_ms} ms emitter budget spent after {i} pumped frames; \
+                     emitter forced off, capture stopped"
+                );
+                break;
+            }
+            let snapshot = match capture.pump() {
+                Ok(Some(s)) => s,
+                Ok(None) => break,
+                Err(e) => panic!("pump failed on frame {i}: {e}"),
+            };
+            pumped += 1;
+            if let Some(m) = snapshot.metrics {
+                best_confidence = best_confidence.max(m.detection_confidence);
+                let obs = observation_from(&m, capture.diversity_percent());
+                let g = derive_guidance(&obs);
+                guidance_seen.insert(format!("{g:?}"));
+                if i % 20 == 0 {
+                    eprintln!(
+                        "frame {i:3}: conf={:.2} blur={:.2} illum={:.2} sat={:.2} \
+                         yaw={:+.1} roll={:+.1} face={:.3} spread={:.2} -> {g:?}",
+                        m.detection_confidence,
+                        m.blur,
+                        m.illumination,
+                        m.saturated_fraction,
+                        m.yaw_deg,
+                        m.roll_deg,
+                        m.face_fraction,
+                        m.landmark_spread,
+                    );
+                }
             }
         }
-    }
 
-    let snapshot = capture.snapshot();
+        // Force off explicitly rather than waiting for `Drop`, so the LED is
+        // dark while the reservoir is summarised and the node released.
+        armed.force_off();
+        let off_readback = armed.current();
+        eprintln!(
+            "emitter guard: is_armed={} after force_off (watchdog_fired={watchdog_fired})",
+            armed.is_armed(),
+        );
+        let snapshot = capture.snapshot();
+        let diversity = capture.diversity_percent();
+        // Releases /dev/video2 (V4l2Stream::drop does STREAMOFF + munmap) so
+        // the post-condition probe below can reopen it.
+        drop(capture);
+
+        Outcome {
+            lit,
+            snapshot,
+            diversity,
+            guidance_seen,
+            best_confidence,
+            pumped,
+            watchdog_fired,
+            off_readback,
+        }
+    };
+
+    // --- Emitter post-conditions come first. A pipeline assertion that fires
+    // --- below must not be able to hide the proof that the LED went out.
+    match &outcome.off_readback {
+        Ok(bytes) => eprintln!("emitter disarmed: GET_CUR read back {bytes:02x?}"),
+        Err(e) => eprintln!("emitter disarmed: readback failed: {e}"),
+    }
+    let after = hw_emitter::read_control(Path::new(IR_NODE), &emitter_cfg);
+    assert_eq!(
+        after.as_deref().ok(),
+        Some(emitter_cfg.payload_off.as_slice()),
+        "the emitter control must read back payload_off after teardown; got {after:02x?}"
+    );
+
+    let mut source = open_reference_camera();
+    let dark_after = brightest_mean(source.as_mut(), EMITTER_PROBE_FRAMES);
+    source.stop();
     eprintln!(
-        "seen={} accepted={} rejected={} (no_face={} below_floor={} torn={} embed_err={}) \
-         diversity={}% guidance={guidance_seen:?}",
+        "emitter restored: brightest frame mean {dark_after:.2}/255 over \
+         {EMITTER_PROBE_FRAMES} frames (was {:.2} armed, {dark_before:.2} before arming)",
+        outcome.lit,
+    );
+    assert!(
+        dark_after < EMITTER_DARK_MEAN,
+        "emitter still lighting the scene after teardown: brightest frame mean \
+         {dark_after:.2}/255 is at or above the {EMITTER_DARK_MEAN:.1} dark floor"
+    );
+
+    // --- Then: did arming actually do anything?
+    assert!(
+        outcome.lit >= EMITTER_LIT_MEAN,
+        "the emitter control accepted payload_on but the scene stayed dark: brightest frame \
+         mean {:.2}/255, below the {EMITTER_LIT_MEAN:.1} lit floor (quirks measured 41.0 mean / \
+         81.9 illuminated for mode 2). The write succeeded and the LED did not come on.",
+        outcome.lit,
+    );
+
+    // --- Then: the pipeline.
+    let snapshot = &outcome.snapshot;
+    eprintln!(
+        "pumped={} watchdog_fired={} seen={} accepted={} rejected={} (no_face={} below_floor={} \
+         torn={} embed_err={}) best_conf={:.3} diversity={}% guidance={:?}",
+        outcome.pumped,
+        outcome.watchdog_fired,
         snapshot.frames_captured,
         snapshot.frames_accepted,
         snapshot.frames_rejected,
@@ -326,7 +512,9 @@ fn live_enrollment_session_accepts_frames_from_the_reference_camera() {
         snapshot.rejected_below_floor,
         snapshot.rejected_torn,
         snapshot.rejected_embed_error,
-        capture.diversity_percent(),
+        outcome.best_confidence,
+        outcome.diversity,
+        outcome.guidance_seen,
     );
     assert!(snapshot.frames_captured > 0, "no frames pulled");
     assert_eq!(
@@ -336,8 +524,27 @@ fn live_enrollment_session_accepts_frames_from_the_reference_camera() {
     );
     assert!(
         snapshot.frames_accepted > 0,
-        "no frame was accepted; is a face in front of {IR_NODE}?"
+        "no frame was accepted out of {} seen ({} rejected for no face, best detection \
+         confidence {:.3}). The emitter WAS armed and lit (brightest frame mean {:.2}/255), so \
+         this is not the emitter: is a face in front of {IR_NODE}?",
+        snapshot.frames_captured,
+        snapshot.rejected_no_face,
+        outcome.best_confidence,
+        outcome.lit,
     );
+}
+
+/// What the armed section produced, carried out of the block so the emitter
+/// guard and the V4L2 node are released before any of it is asserted on.
+struct Outcome {
+    lit: f32,
+    snapshot: namtor_daemon::manager::session::ProgressSnapshot,
+    diversity: u32,
+    guidance_seen: std::collections::HashSet<String>,
+    best_confidence: f32,
+    pumped: usize,
+    watchdog_fired: bool,
+    off_readback: Result<Vec<u8>, String>,
 }
 
 /// Camera-only: no model weights needed. Pulls real IR frames and measures
