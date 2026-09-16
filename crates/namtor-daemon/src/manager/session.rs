@@ -400,7 +400,7 @@ impl EnrollmentCapture {
         let ready_to_save = self.reservoir.len() >= MIN_CANDIDATES;
         let quality_percent = self.avg_quality_percent();
         let diversity_percent = self.diversity_percent();
-        let guidance = self.review_guidance(quality_percent);
+        let guidance = self.review_guidance(quality_percent, diversity_percent);
         Ok(ReviewSnapshot {
             ready_to_save,
             quality_percent,
@@ -419,7 +419,13 @@ impl EnrollmentCapture {
         observation::clamp_percent(avg)
     }
 
-    fn diversity_percent(&self) -> u32 {
+    /// Mean pairwise `1 - cosine_similarity` across the reservoir, as a 0-100
+    /// percentage. This is the true pose-spread metric and MUST be the only
+    /// quantity reported as "diversity" on either the capture screen or the
+    /// review screen. Reservoir *fill* ([`ProgressSnapshot::coverage_percent`])
+    /// is a different quantity: it reaches 100% once the bounded reservoir is
+    /// full, regardless of how alike the retained candidates are (USA-0b).
+    pub fn diversity_percent(&self) -> u32 {
         if self.reservoir.len() < 2 {
             return 0;
         }
@@ -439,7 +445,16 @@ impl EnrollmentCapture {
         observation::clamp_percent((sum_dist / count) * 100.0)
     }
 
-    fn review_guidance(&self, quality_percent: u32) -> String {
+    /// Derive the review-screen guidance from the same
+    /// [`CaptureObservation`] shape the capture screen uses. `embedding_spread`
+    /// carries the measured [`Self::diversity_percent`], not a hardcoded 100:
+    /// the two screens must build the observation from the same measurements
+    /// so their guidance can never disagree. (Today
+    /// [`observation::derive_guidance`] does not read `embedding_spread`, so
+    /// this changes no output — it removes the fabricated input that would
+    /// silently diverge the moment the spread term enters the precedence
+    /// ladder.)
+    fn review_guidance(&self, quality_percent: u32, diversity_percent: u32) -> String {
         let q = quality_percent.min(100) as u8;
         let obs = CaptureObservation {
             detection_suitability: q,
@@ -447,7 +462,7 @@ impl EnrollmentCapture {
             blur_estimate: q,
             pose_frontality: q,
             illumination: q,
-            embedding_spread: 100,
+            embedding_spread: diversity_percent.min(100) as u8,
         };
         guidance_to_snake_case(observation::derive_guidance(&obs))
     }

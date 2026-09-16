@@ -471,7 +471,11 @@ fn compute_progress(
     let frames_seen = snapshot.frames_captured;
     let frames_accepted = capture.reservoir_len() as u32;
     let frames_rejected = frames_seen.saturating_sub(frames_accepted);
-    let diversity_percent = snapshot.coverage_percent.min(100);
+    // USA-0b: the capture screen must report the SAME quantity as the review
+    // screen. `snapshot.coverage_percent` is reservoir fill, which hits 100%
+    // once the bounded reservoir is full no matter how alike the candidates
+    // are; real diversity is mean pairwise cosine distance.
+    let diversity_percent = capture.diversity_percent().min(100);
     let obs = CaptureObservation {
         detection_suitability: quality_percent.min(100) as u8,
         landmark_stability: 100,
@@ -674,6 +678,61 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, WorkerEvent::Progress(_)))
             .count()
+    }
+
+    /// Embedder whose outputs are near-identical: a constant base vector with
+    /// a single small per-frame bump. True mean pairwise `1 - cos` is a few
+    /// percent while the reservoir still fills to 100%. That divergence is
+    /// exactly the USA-0b regime — reservoir fill and real pose spread are
+    /// different quantities and must never share the "diversity" label.
+    #[derive(Default)]
+    struct NearIdenticalEmbed {
+        n: usize,
+    }
+    impl crate::manager::session::EmbedSource for NearIdenticalEmbed {
+        fn embed(
+            &mut self,
+            _frame: &Frame,
+        ) -> Result<Option<(Vec<f32>, u8)>, crate::dbus::ApiError> {
+            let mut v = vec![1.0_f32; 8];
+            v[self.n % 8] += 0.6;
+            self.n += 1;
+            Ok(Some((v, 80)))
+        }
+    }
+
+    #[test]
+    fn capture_and_review_report_the_same_diversity_metric() {
+        let frames: Vec<Frame> = (0..40).map(|i| grey_frame(110 + (i % 20))).collect();
+        let mut capture = EnrollmentCapture::new(
+            1000,
+            1000,
+            ":1.42".into(),
+            "alice".into(),
+            Some(Box::new(MockSource::finite(frames))),
+            Some(Box::new(NearIdenticalEmbed::default())),
+            40,
+        );
+        capture.pump_until_exhausted().unwrap();
+
+        let snap = capture.snapshot();
+        assert_eq!(
+            snap.coverage_percent, 100,
+            "fixture must fill the reservoir, otherwise it does not exercise the bug"
+        );
+        let progress = compute_progress(&snap, &capture);
+
+        capture.stop().unwrap();
+        let review = capture.review_snapshot().unwrap();
+        assert!(
+            review.diversity_percent < 20,
+            "fixture must have low true pairwise diversity, got {}",
+            review.diversity_percent
+        );
+        assert_eq!(
+            progress.diversity_percent, review.diversity_percent,
+            "capture screen and review screen disagree under the same label"
+        );
     }
 
     #[test]
