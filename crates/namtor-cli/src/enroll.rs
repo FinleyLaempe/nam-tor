@@ -469,7 +469,7 @@ fn describe_capture_error(
         namtor_capture::source::CaptureError::Busy(_) => format!(
             "the IR camera {dev} is in use by another program.\n  \
              Close whatever is using it — a video call, a camera app, or a running\n  \
-             namtor daemon (`systemctl stop namtor`) — and try again.\n  \
+             namtor daemon (`sudo systemctl stop namtor-daemon`) — and try again.\n  \
              `fuser -v {dev}` names the program holding it."
         ),
         other => format!("{stage} {dev}: {other}"),
@@ -695,6 +695,20 @@ mod tests {
         assert!(msg.contains("/dev/video2"), "{msg}");
         assert!(msg.contains("in use by another program"), "{msg}");
         assert!(msg.contains("fuser"), "{msg}");
+        // A remedy that names a unit systemd does not have is worse than no
+        // remedy: it sends the user to a "Unit not found" error. Checked
+        // against the unit files the packages actually install.
+        let units =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/systemd");
+        let named = std::fs::read_dir(&units)
+            .expect("packaging/systemd must exist")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "service"))
+            .any(|e| {
+                let stem = e.path().file_stem().unwrap().to_string_lossy().into_owned();
+                msg.contains(&format!("systemctl stop {stem}"))
+            });
+        assert!(named, "the message names no installed service unit: {msg}");
         assert!(
             !msg.contains("VIDIOC_S_FMT"),
             "an ioctl name is not a remedy: {msg}"
