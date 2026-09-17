@@ -1,3 +1,22 @@
+namtor (0.3.1-1) unstable; urgency=medium
+
+  * Ship the PAM editor as `namtor pam-edit`. The install scripts and
+    lifecycle.sh all drove a namtor-pam-edit binary that was never shipped, and
+    lifecycle.sh warns and skips when it is missing — so PAM snapshot, migrate,
+    disable-all and purge were all silent no-ops, and removing the package left
+    pam_namtor.so entries behind in /etc/pam.d.
+  * Refuse to enable a PAM service with no password fallback. The check
+    classified the candidate stack, which already contained the namtor block,
+    and the classifier returns Safe on seeing that block before it ever
+    evaluates the fallback rule.
+  * Refuse to write a PAM block for a pam_namtor.so that is not installed.
+  * Add `namtor pam-edit restore` to revert a service from its verified backup.
+  * Group resolution no longer takes its path from the environment.
+  * Cover the no-TPM software-fallback path in the UI; wire up the three CI
+    gates that nothing ran.
+
+ -- finley <finley.laempe@math.uni-freiburg.de>  Thu, 17 Sep 2026 06:28:09 +0200
+
 namtor (0.3.0-1) unstable; urgency=medium
 
   * One `namtor` multi-call binary replaces four separate executables

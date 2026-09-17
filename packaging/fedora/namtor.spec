@@ -56,7 +56,7 @@
 %global debug_package %{nil}
 
 Name:           namtor
-Version:        0.3.0
+Version:        0.3.1
 Release:        1%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
@@ -338,6 +338,33 @@ fi
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.1-1
+- Ship the PAM editor. pam-install.sh, pam-uninstall.sh and lifecycle.sh are
+  all installed to /usr/share/namtor/ and all three drove a `namtor-pam-edit`
+  binary that the install manifest has never shipped. lifecycle.sh warns and
+  skips when it cannot find it, so every PAM lifecycle phase was a silent
+  no-op: pre-upgrade snapshot, post-upgrade migrate, pre-remove disable-all and
+  post-remove purge never ran, and removing the package left pam_namtor.so
+  entries in /etc/pam.d pointing at a module that had just been deleted. The
+  editor is now `namtor pam-edit`, a fifth role of the multi-call binary, and
+  adds no bytes because namtor-daemon already linked the crate.
+- Refuse to enable a PAM service that has no password fallback. The check
+  classified the candidate stack, which already contained the namtor block,
+  and the classifier short-circuits on that block and returns Safe before it
+  evaluates the fallback rule — so the check was defeated by the very block it
+  exists to validate. It classifies the stock stack now.
+- Refuse to write a PAM block referencing a pam_namtor.so that is not
+  installed. EditError::ModuleNotFound existed and was mapped to a D-Bus error
+  but nothing ever produced it. The preflight runs before the backup, so a
+  refusal leaves no trace.
+- `namtor pam-edit restore` reverts a service to its pre-Nam-tor bytes from the
+  verified backup, undoing damage that `disable` would carry forward.
+- Group resolution no longer reads its path from NAMTOR_GROUP_FILE, which let
+  anything able to set the daemon's environment redirect the group-membership
+  lookup that decides who may authenticate.
+- Cover the no-TPM software-fallback path in the settings UI, which had no test
+  at all, and run the three CI gates that no workflow ran.
+
 * Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.0-1
 - One `namtor` multi-call binary replaces namtor-daemon, namtor-worker,
   namtor-cli and namtor-camera-emitter-off: 73.7 MB of separate executables
