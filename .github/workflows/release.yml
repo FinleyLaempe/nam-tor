@@ -323,6 +323,16 @@ jobs:
         if: startsWith(matrix.distro, 'debian')
         run: |
             cp -r packaging/debian ./debian
+            # `debian/rules override_dh_auto_configure` verifies the model
+            # archive at $(CURDIR)/namtor-models-<ver>.tar.gz before anything
+            # is built, and the download step puts it in /tmp — so the build
+            # died with "archive not found" in the source root. The Arch cell
+            # copies both tarballs next to its PKGBUILD for the same reason.
+            cp "/tmp/namtor-models-$MODELVER.tar.gz" .
+            # `override_dh_auto_build` runs `cargo build --frozen`, which is
+            # --locked --offline: the registry cache has to be populated
+            # first, exactly as the Arch cell does before makepkg.
+            cargo fetch --locked
             dpkg-buildpackage -us -uc -b
             mv ../namtor_*.deb /tmp/
 
