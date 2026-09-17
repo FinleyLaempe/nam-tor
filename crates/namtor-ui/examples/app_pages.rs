@@ -57,7 +57,16 @@ fn main() {
 
         let rc = AppController::new_online_for_test(app, bus.client);
         let window = rc.borrow().shell_for_test().window().clone();
-        window.set_default_size(560, 820);
+        // NAMTOR_PREVIEW_SIZE=360x780 renders at the narrowest width the
+        // adaptive layout claims to support.
+        let (w, h) = std::env::var("NAMTOR_PREVIEW_SIZE")
+            .ok()
+            .and_then(|v| {
+                let (a, b) = v.split_once('x')?;
+                Some((a.parse().ok()?, b.parse().ok()?))
+            })
+            .unwrap_or((560, 820));
+        window.set_default_size(w, h);
         window.present();
 
         let out = out.clone();
