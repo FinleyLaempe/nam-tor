@@ -5,21 +5,26 @@
 # Triggered ONLY by tag pushes (`v*`) — never on branch pushes. This
 # prevents accidental releases.
 #
-# Matrix: Arch Linux only (x86_64) for now.
+# Matrix: Arch Linux (x86_64) and Debian 12 (amd64).
 #
-# Fedora and Debian cells are still disabled, but for one reason now
-# rather than two. The Debian blocker is GONE: it was that Debian 12
-# bookworm ships no KDE Frameworks 6 at all (libkf6kirigami-dev et al.
-# only appear in trixie/13), which made the Plasma KCM unbuildable there.
-# The KCM has been removed and nothing in the tree needs KF6 or Qt6, so
-# the Debian cell is now technically possible — it is left disabled only
-# because it has never been exercised end to end, not because of a
-# missing dependency. The Fedora blocker is separate and unchanged: the
-# .spec needs further debugging.
+# Debian was disabled because Debian 12 bookworm ships no KDE Frameworks 6
+# (libkf6kirigami-dev et al. only appear in trixie/13), which made the
+# Plasma KCM unbuildable there. The KCM is gone and nothing in the tree
+# needs KF6 or Qt6, so that blocker went with it — after which the cell
+# stayed off only because it had never been exercised end to end. That is
+# a reason to exercise it, not to leave it off: the packaging gates check
+# the .deb's structure statically, but until the cell ran, no .deb was
+# ever built or installed, and the release shipped Arch artifacts only
+# while the project claimed to support three distros.
 #
-# Re-add their `include:` matrix entries once those are resolved; the
-# lint/build/install/smoke/upgrade/uninstall steps for both are already
-# written below and gated by `if: startsWith(matrix.distro, ...)`.
+# Fedora is still disabled and the reason is unchanged: the .spec needs
+# further debugging. Its lint/build/install/smoke/upgrade/uninstall steps
+# are written below and gated by `if: startsWith(matrix.distro, 'fedora')`;
+# re-add its `include:` entry once the spec builds.
+#
+# `workflow_dispatch` with `dry_run: true` runs the whole matrix and
+# publishes nothing, which is how a newly-enabled cell gets exercised
+# without a tag riding on it.
 #
 # The raw ONNX model weights (var/lib/namtor/models/*.onnx) are
 # gitignored and never committed (see AGENTS.md: "No model weights,
@@ -100,6 +105,13 @@ jobs:
             container: archlinux:latest
             lint: namcap
             build: makepkg
+          # --- Debian 12 (bookworm) ---
+          - distro: debian12
+            arch: amd64
+            runner: ubuntu-latest
+            container: debian:12
+            lint: dpkg-checkbuilddeps
+            build: dpkg-buildpackage
     steps:
       - uses: actions/checkout@v5
 
