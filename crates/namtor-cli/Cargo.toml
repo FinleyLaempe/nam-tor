@@ -25,5 +25,8 @@ zvariant = { version = "5", default-features = false }
 signal-hook = "0.3"
 
 [dev-dependencies]
+# `signal` is test-only: the SIGINT registration test reads and restores the
+# process's signal disposition.
+nix = { version = "0.29", features = ["fs", "user", "signal"] }
 tempfile = { workspace = true }
 serde_json = "1"
