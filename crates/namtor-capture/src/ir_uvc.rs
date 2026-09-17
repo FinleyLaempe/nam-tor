@@ -149,10 +149,18 @@ impl<S: Streamer, P: EmitterPolicy> CaptureSource for IrUvc<S, P> {
 /// index. A counter incremented once per dequeue assumes the consumer never
 /// misses a frame; enrollment spends ~100 ms of ONNX per frame against a
 /// sensor producing one every 33 ms, so the ring overruns and the driver
-/// drops frames continuously. One dropped frame inverted the labelling for
-/// the rest of the stream: every illuminated frame recorded as dark and
-/// every dark one as illuminated, which runs PAD's strobe differential
-/// backwards and hands enrollment the unlit frames to find a face in.
+/// drops frames continuously. After a gap of odd length the label inverted
+/// for the rest of the stream: every illuminated frame recorded as dark and
+/// every dark one as illuminated.
+///
+/// Neither shipped consumer was harmed by that, and the reason is worth
+/// stating so nobody relaxes it by accident. `VerifyEngine` pairs frames by
+/// label, and an inverted label still alternates, so pairs still form; it
+/// then calls `illuminated_first`, which reorders the pair by measured mean
+/// brightness and discards the label. Enrollment's `PipelineEmbedSource`
+/// ignores the label entirely and embeds every frame. So the label was
+/// wrong, and nothing downstream currently depends on it being right —
+/// which is exactly the state in which a later reader trusts it.
 ///
 /// The driver's `sequence` counts frames it produced whether or not they
 /// were dequeued, so stepping by its delta keeps the phase on the sensor. A
@@ -291,13 +299,9 @@ impl Streamer for V4l2IrStream {
     ///
     /// [`ParityPolicy`] labels a frame emitter-on or emitter-off from the
     /// parity of this counter. Counting one per dequeue silently assumed the
-    /// consumer never misses a frame. It does: enrollment spends ~100 ms of
-    /// ONNX per frame against a sensor producing one every 33 ms, so the
-    /// four-buffer ring overruns and the driver drops frames continuously.
-    /// Each dropped frame of odd length inverted the labelling for the whole
-    /// rest of the stream — every illuminated frame recorded as dark and
-    /// every dark one as illuminated — which feeds PAD's strobe differential
-    /// backwards and hands enrollment the unlit frames to look for a face in.
+    /// consumer never misses a frame. It does — see [`PhaseTracker`], which
+    /// also records why no shipped consumer was harmed by the resulting
+    /// mislabelling, and why the label is worth getting right anyway.
     ///
     /// The driver's `sequence` counts frames it produced, dequeued or not,
     /// so stepping by its delta keeps the phase pinned to the sensor. A

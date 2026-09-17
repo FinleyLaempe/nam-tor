@@ -1411,16 +1411,17 @@ struct LiveEnrollment {
 /// source. So this uses the CLI's enrollment path, which is equally shipped
 /// and equally real, and notes the difference rather than hiding it.
 ///
-/// One cause of that measurement has since been found and fixed: a consumer
-/// this far behind the sensor makes the driver drop frames, and the strobe
-/// phase was counted one per dequeue rather than from the driver's frame
-/// sequence, so a single dropped frame inverted emitter-on/emitter-off for
-/// the rest of the stream — enrollment was searching the unlit frames for a
-/// face. See `PhaseTracker` in `namtor-capture::ir_uvc`. `EnrollmentCapture`
-/// now also logs the dropped-frame count at stop, so a repeat is visible
-/// rather than inferred. **The measurement above predates that fix and has
-/// not been retaken**; whether the AE clipping alone still starves the
-/// session is an open question for the next run on the reference camera.
+/// Two things about that measurement have changed since it was taken, and
+/// neither of them explains it. A consumer this far behind the sensor makes
+/// the driver drop frames, and the strobe phase was counted one per dequeue
+/// rather than from the driver's frame sequence, so a gap of odd length
+/// inverted emitter-on/emitter-off for the rest of the stream; that is fixed
+/// (`PhaseTracker` in `namtor-capture::ir_uvc`), but enrollment never read
+/// the label, so it was not the cause. `EnrollmentCapture` now also logs the
+/// dropped-frame count at stop, which is the number this note had to infer.
+/// **The measurement above has not been retaken**, and the AE-clipping
+/// explanation for it still stands unrefuted — it is the thing to look at on
+/// the next run with the reference camera.
 ///
 /// Every armed window is bounded by the device's own `max_on_ms` watchdog and
 /// closed explicitly; `payload_off` is restored on every path including panic.
