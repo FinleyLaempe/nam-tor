@@ -455,7 +455,8 @@ fn radial_gate_input_on_the_reference_camera() {
                 continue;
             };
             let bbox = detection_bbox(&best.box_, w, h);
-            let verdict = match run_analytic_pad(&d, w, h, on_mean, Some(bbox), &pad_cfg) {
+            let nose = Some(best.landmarks.nose);
+            let verdict = match run_analytic_pad(&d, w, h, on_mean, Some(bbox), &pad_cfg, nose) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("  pad failed: {e}");

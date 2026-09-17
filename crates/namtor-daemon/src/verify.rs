@@ -402,7 +402,13 @@ impl VerifyEngine {
 
         let on_mean = mean_u8(&on.data);
         let face_bbox = detection_bbox(&result.detection.box_, w, h);
-        let pad = match run_analytic_pad(&d, w, h, on_mean, Some(face_bbox), &self.pad_config) {
+        // Anchor the radial gate on the detector's nose landmark. It was
+        // already computed here and thrown away; the gate fell back to the
+        // positive-energy centroid, which on a real face sits in the
+        // nostril/mouth shadow and inverted the falloff the gate looks for.
+        let nose = Some(result.detection.landmarks.nose);
+        let pad = match run_analytic_pad(&d, w, h, on_mean, Some(face_bbox), &self.pad_config, nose)
+        {
             Ok(p) => p,
             Err(_) => return VerifyOutcome::unavailable("pad failed"),
         };

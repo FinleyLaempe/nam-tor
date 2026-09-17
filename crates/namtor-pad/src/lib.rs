@@ -57,6 +57,19 @@ pub struct GateResult {
     pub score: f32,
     /// Gate-specific raw statistic (for logging/audit; never biometric).
     pub raw: f32,
+    /// The gate could not assess this frame and ABSTAINS.
+    ///
+    /// Distinct from `pass: false`, which asserts "this looks like a spoof".
+    /// Conflating the two is what made the radial gate veto 23 of 24 genuine
+    /// faces: a statistic it could not compute returned the same 0.0 a spoof
+    /// would. An abstaining gate is excluded from the liveness decision; the
+    /// remaining gates still decide, and if EVERY analytic gate abstains the
+    /// verdict fails closed (see [`run_analytic_pad`]).
+    ///
+    /// `serde(default)` so records written before this field existed still
+    /// deserialise as "decided".
+    #[serde(default)]
+    pub undecided: bool,
 }
 
 impl GateResult {
@@ -65,6 +78,7 @@ impl GateResult {
             pass: true,
             score,
             raw,
+            undecided: false,
         }
     }
     pub const fn fail(score: f32, raw: f32) -> Self {
@@ -72,6 +86,21 @@ impl GateResult {
             pass: false,
             score,
             raw,
+            undecided: false,
+        }
+    }
+
+    /// The gate ABSTAINS: it could not compute its statistic on this frame.
+    ///
+    /// `pass` is false so any caller that ignores [`Self::undecided`] fails
+    /// closed rather than silently admitting the frame — the conservative
+    /// default. Callers that understand abstention exclude it instead.
+    pub const fn undecided(raw: f32) -> Self {
+        Self {
+            pass: false,
+            score: 0.0,
+            raw,
+            undecided: true,
         }
     }
 }
@@ -173,6 +202,11 @@ pub fn run_analytic_pad(
     on_mean: f32,
     face_bbox: Option<(u32, u32, u32, u32)>,
     cfg: &PadConfig,
+    // Detector nose landmark in FRAME coordinates, when available. The radial
+    // gate anchors its annuli here; without it the gate falls back to the
+    // positive-energy centroid, which on a real face lands in the
+    // nostril/mouth shadow and inverts the expected falloff.
+    nose: Option<(f32, f32)>,
 ) -> Result<PadVerdict, PadError> {
     let n = (w as usize) * (h as usize);
     if d.len() != n {
@@ -190,9 +224,22 @@ pub fn run_analytic_pad(
     let energy = differential_energy(d, on_mean, cfg.min_energy_ratio);
     let gradient = gradient_consistency(d, w, h, face_bbox, cfg.min_gradient_score);
     let specular = specular_highlight(d, w, h, face_bbox, cfg.min_specular_compactness);
-    let radial = radial_falloff(d, w, h, face_bbox, cfg.max_radial_deviation);
+    let radial = radial_falloff(d, w, h, face_bbox, cfg.max_radial_deviation, nose);
 
-    let live = energy.pass && gradient.pass && specular.pass && radial.pass;
+    // A gate that ABSTAINS is excluded from the decision; the rest still
+    // decide. PAD remains a veto — this never turns a gate into a weighted
+    // term, and it never lets an abstention outvote a gate that actually
+    // refused.
+    //
+    // Fails closed in both directions that matter:
+    //   * any DECIDED gate failing still vetoes, exactly as before;
+    //   * if EVERY gate abstains there is no evidence of liveness at all, so
+    //     the verdict is NOT live. A frame nobody can assess must never
+    //     authenticate.
+    let gates = [&energy, &gradient, &specular, &radial];
+    let decided = gates.iter().filter(|g| !g.undecided).count();
+    let any_decided_failed = gates.iter().any(|g| !g.undecided && !g.pass);
+    let live = decided > 0 && !any_decided_failed;
     Ok(PadVerdict {
         energy,
         gradient,
@@ -200,6 +247,70 @@ pub fn run_analytic_pad(
         radial,
         live,
     })
+}
+
+#[cfg(test)]
+mod abstention_tests {
+    use super::*;
+
+    fn gate(pass: bool) -> GateResult {
+        if pass {
+            GateResult::pass(1.0, 0.0)
+        } else {
+            GateResult::fail(0.0, 1.0)
+        }
+    }
+
+    /// The security floor. An abstaining gate is EXCLUDED from the decision,
+    /// never counted as a pass — but if every gate abstains there is no
+    /// evidence of liveness at all and the verdict must NOT be live.
+    #[test]
+    fn all_gates_undecided_fails_closed() {
+        let u = GateResult::undecided(1.0);
+        let gates = [&u, &u, &u, &u];
+        let decided = gates.iter().filter(|g| !g.undecided).count();
+        let any_failed = gates.iter().any(|g| !g.undecided && !g.pass);
+        let live = decided > 0 && !any_failed;
+        assert!(
+            !live,
+            "a frame no gate could assess must never authenticate"
+        );
+    }
+
+    /// A gate that actually refused still vetoes, even if others abstain.
+    /// Abstention must not be able to outvote a real refusal.
+    #[test]
+    fn a_decided_failure_still_vetoes_alongside_abstentions() {
+        let u = GateResult::undecided(1.0);
+        let failed = gate(false);
+        let gates = [&u, &u, &u, &failed];
+        let decided = gates.iter().filter(|g| !g.undecided).count();
+        let any_failed = gates.iter().any(|g| !g.undecided && !g.pass);
+        let live = decided > 0 && !any_failed;
+        assert!(!live, "an abstention must never rescue a gate that refused");
+    }
+
+    /// One abstention among passing gates does not block a live verdict —
+    /// this is the case that refused 23 of 24 genuine faces.
+    #[test]
+    fn one_abstention_among_passes_is_live() {
+        let u = GateResult::undecided(1.0);
+        let p = gate(true);
+        let gates = [&p, &p, &p, &u];
+        let decided = gates.iter().filter(|g| !g.undecided).count();
+        let any_failed = gates.iter().any(|g| !g.undecided && !g.pass);
+        let live = decided > 0 && !any_failed;
+        assert!(live, "an unassessable gate must not veto on its own");
+    }
+
+    /// `undecided()` sets `pass: false`, so a caller that ignores the new
+    /// field fails closed instead of silently admitting the frame.
+    #[test]
+    fn undecided_is_conservative_for_unaware_callers() {
+        let u = GateResult::undecided(1.0);
+        assert!(!u.pass);
+        assert!(u.undecided);
+    }
 }
 
 #[cfg(test)]

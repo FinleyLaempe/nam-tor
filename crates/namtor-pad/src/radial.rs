@@ -129,9 +129,33 @@ fn positive_centroid(img: &[f32], cw: u32, ch: u32) -> (f32, f32) {
     }
 }
 
-fn monotonic_falloff_score(img: &[f32], cw: u32, ch: u32) -> f32 {
+/// Score the outward falloff, or `None` when the statistic cannot be computed.
+///
+/// `anchor` is the binning origin in CROP coordinates — the detector's nose
+/// landmark when one is available, otherwise the positive-energy centroid.
+///
+/// Returning `None` rather than 0.0 is the point. A 0.0 is indistinguishable
+/// from "this is a spoof", and because PAD is a veto that conflation refused
+/// 23 of 24 genuine faces. `None` means ABSTAIN.
+fn monotonic_falloff_score(
+    img: &[f32],
+    cw: u32,
+    ch: u32,
+    anchor: Option<(f32, f32)>,
+) -> Option<f32> {
     const BINS: usize = 8;
-    let (cx, cy) = positive_centroid(img, cw, ch);
+    let (cx, cy) = match anchor {
+        // Anchoring on the energy centroid was the original defect. On a real
+        // face the centroid lands between the nostrils, philtrum and mouth
+        // shadow — IR-dark cavities — so the innermost annulus is DARKER than
+        // the cheeks and the profile rises outward. Measured on the reference
+        // camera: [122.71, 122.83, 122.51, 122.30, 126.63, 128.51, 133.29,
+        // 131.27], dynamic_range = -8.56. The nose TIP is the nearest point to
+        // a near-field emitter, so it is the anchor the 1/d² model actually
+        // assumes.
+        Some((ax, ay)) if ax >= 0.0 && ay >= 0.0 && ax < cw as f32 && ay < ch as f32 => (ax, ay),
+        _ => positive_centroid(img, cw, ch),
+    };
     let max_radius = ((cw as f32).hypot(ch as f32) / 2.0).max(1.0);
     let mut sums = [0.0f32; BINS];
     let mut counts = [0usize; BINS];
@@ -147,18 +171,24 @@ fn monotonic_falloff_score(img: &[f32], cw: u32, ch: u32) -> f32 {
         }
     }
     if counts.contains(&0) {
-        return 0.0;
+        // An annulus with no pixels: the crop is too small or too eccentric
+        // for 8 bins. Not evidence of anything.
+        return None;
     }
     let means = std::array::from_fn::<_, BINS, _>(|index| sums[index] / counts[index] as f32);
     let dynamic_range = means[0] - means[BINS - 1];
     if dynamic_range <= means[0].abs() * 0.05 {
-        return 0.0;
+        // Too little outward contrast to judge. A flat print produces this,
+        // but so does a live face whose anchor sits in a shadowed cavity, and
+        // this statistic cannot tell them apart. Abstain and let the energy,
+        // gradient, specular and learned-PAD gates decide.
+        return None;
     }
     let decreasing = means
         .windows(2)
         .filter(|pair| pair[1] <= pair[0] + dynamic_range * 0.10)
         .count();
-    decreasing as f32 / (BINS - 1) as f32
+    Some(decreasing as f32 / (BINS - 1) as f32)
 }
 
 /// Compute the radial-falloff gate.
@@ -174,6 +204,7 @@ pub fn radial_falloff(
     h: u32,
     bbox: Option<(u32, u32, u32, u32)>,
     max_deviation: f32,
+    nose: Option<(f32, f32)>,
 ) -> GateResult {
     let (crop, cw, ch) = crop_bbox(d, w, h, bbox);
     if crop.is_empty() || cw < 8 || ch < 8 {
@@ -183,15 +214,27 @@ pub fn radial_falloff(
         // refusing, so the daemon journalled this veto as
         // `pad veto: radial (0.000)` — indistinguishable in the audit log from
         // a gate that passed outright. Score 0.0 means raw 1.0.
-        return GateResult::fail(0.0, SCORE_INVERSION);
+        // A crop this small is unassessable, not spoof evidence: abstain.
+        return GateResult::undecided(SCORE_INVERSION);
     }
-    let score = monotonic_falloff_score(&crop, cw, ch);
-    let raw = 1.0 - score;
-    let pass = raw <= max_deviation;
-    if pass {
-        GateResult::pass(score, raw)
-    } else {
-        GateResult::fail(score, raw)
+    // The detector reports the nose in FRAME coordinates; bins are measured in
+    // CROP coordinates, so rebase it onto the bbox origin.
+    let anchor = nose.map(|(nx, ny)| match bbox {
+        Some((bx, by, _, _)) => (nx - bx as f32, ny - by as f32),
+        None => (nx, ny),
+    });
+    match monotonic_falloff_score(&crop, cw, ch, anchor) {
+        Some(score) => {
+            let raw = SCORE_INVERSION - score;
+            if raw <= max_deviation {
+                GateResult::pass(score, raw)
+            } else {
+                GateResult::fail(score, raw)
+            }
+        }
+        // Could not compute the statistic. ABSTAIN rather than veto — this is
+        // the path that refused 23 of 24 genuine faces when it returned 0.0.
+        None => GateResult::undecided(SCORE_INVERSION),
     }
 }
 
@@ -234,7 +277,7 @@ mod tests {
         let w = 64u32;
         let h = 64u32;
         let d = make_falloff(w, h, 32.0, 32.0, 5000.0, 5.0);
-        let r = radial_falloff(&d, w, h, None, 0.55);
+        let r = radial_falloff(&d, w, h, None, 0.55, None);
         assert!(r.pass, "clean 1/r² falloff should pass: R²={}", 1.0 - r.raw);
         assert!(r.score > 0.8, "R² should be high: {}", r.score);
     }
@@ -245,7 +288,7 @@ mod tests {
         let h = 112u32;
         let d = make_face_shading(w, h, 48.0, 50.0);
 
-        let result = radial_falloff(&d, w, h, None, 0.55);
+        let result = radial_falloff(&d, w, h, None, 0.55, None);
 
         assert!(result.pass, "convex face shading should pass: {result:?}");
     }
@@ -255,7 +298,7 @@ mod tests {
         let w = 32u32;
         let h = 32u32;
         let d = vec![50.0; (w * h) as usize];
-        let r = radial_falloff(&d, w, h, None, 0.55);
+        let r = radial_falloff(&d, w, h, None, 0.55, None);
         assert!(!r.pass, "flat image should fail");
     }
 
@@ -266,14 +309,14 @@ mod tests {
         let d: Vec<f32> = (0..(w * h))
             .map(|i| if i % 2 == 0 { 80.0 } else { 10.0 })
             .collect();
-        let r = radial_falloff(&d, w, h, None, 0.55);
+        let r = radial_falloff(&d, w, h, None, 0.55, None);
         assert!(!r.pass, "noise should fail");
     }
 
     #[test]
     fn tiny_crop_fails() {
         let d = vec![10.0; 16];
-        let r = radial_falloff(&d, 4, 4, None, 0.55);
+        let r = radial_falloff(&d, 4, 4, None, 0.55, None);
         assert!(!r.pass);
     }
 
@@ -284,7 +327,7 @@ mod tests {
         // *perfect* falloff fit produces. `raw = SCORE_INVERSION - score`
         // holds on every other path and the calibration bridge inverts it.
         let d = vec![10.0; 16];
-        let r = radial_falloff(&d, 4, 4, None, 0.55);
+        let r = radial_falloff(&d, 4, 4, None, 0.55, None);
         assert!(!r.pass);
         assert_eq!(r.score, 0.0);
         assert_eq!(
@@ -336,7 +379,7 @@ mod tests {
         let (w, h) = (55u32, 48u32);
         let d = from_annular_profile(w, h, MEASURED_LIVE_FACE_PROFILE);
 
-        let r = radial_falloff(&d, w, h, None, 0.55);
+        let r = radial_falloff(&d, w, h, None, 0.55, None);
 
         assert!(!r.pass, "measured live face is vetoed: {r:?}");
         assert_eq!(
@@ -355,7 +398,7 @@ mod tests {
         let (w, h) = (55u32, 48u32);
         let d = from_annular_profile(w, h, MEASURED_LIVE_FACE_PROFILE);
         for max_deviation in [0.55f32, 0.75, 0.90, 0.95, 0.99] {
-            let r = radial_falloff(&d, w, h, None, max_deviation);
+            let r = radial_falloff(&d, w, h, None, max_deviation, None);
             assert!(
                 !r.pass,
                 "max_deviation={max_deviation} still vetoes; the threshold is not the knob: {r:?}"
@@ -376,7 +419,7 @@ mod tests {
         let shallow = [126.0f32, 125.6, 125.2, 124.8, 124.4, 124.0, 123.6, 123.2];
         let d = from_annular_profile(w, h, shallow);
 
-        let r = radial_falloff(&d, w, h, None, 0.55);
+        let r = radial_falloff(&d, w, h, None, 0.55, None);
 
         assert!(r.raw > 0.0, "the profile really does decrease outward");
         assert_eq!(r.score, 0.0, "yet it scores the same as a flat print");
@@ -393,7 +436,7 @@ mod tests {
         let deep = [126.0f32, 118.0, 110.0, 103.0, 96.0, 89.0, 82.0, 76.0];
         let d = from_annular_profile(w, h, deep);
 
-        let r = radial_falloff(&d, w, h, None, 0.55);
+        let r = radial_falloff(&d, w, h, None, 0.55, None);
 
         assert!(r.pass, "a deep monotone falloff passes: {r:?}");
         assert!(r.score > 0.9, "score={}", r.score);
@@ -401,7 +444,7 @@ mod tests {
 
     #[test]
     fn empty_d_fails() {
-        let r = radial_falloff(&[], 0, 0, None, 0.55);
+        let r = radial_falloff(&[], 0, 0, None, 0.55, None);
         assert!(!r.pass);
     }
 
@@ -417,7 +460,7 @@ mod tests {
                 d[((y + 16) * w + (x + 16)) as usize] = inner[(y * 32 + x) as usize];
             }
         }
-        let r = radial_falloff(&d, w, h, Some((16, 16, 32, 32)), 0.55);
+        let r = radial_falloff(&d, w, h, Some((16, 16, 32, 32)), 0.55, None);
         assert!(r.pass, "bbox-isolated falloff should pass: R²={}", r.score);
     }
 
