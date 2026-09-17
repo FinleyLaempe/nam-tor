@@ -44,10 +44,17 @@ const SRK_PERSISTENT_HANDLE: u32 = 0x8100_0001;
 
 /// Real TPM2 backend via the `tpm2-tools` CLI.
 pub struct Tpm2Backend {
+    /// Which hierarchy the primary key is derived from. `"o"` (owner/storage)
+    /// in production.
+    ///
+    /// Configurable so a test can derive a primary from a DIFFERENT seed and
+    /// prove a sealed blob will not open under it — see
+    /// `real_tpm_blob_does_not_unseal_under_a_different_primary`.
     backend_id: String,
     tpm2_bin: PathBuf,
     pcr_selection: Option<PcrSelection>,
     persistent_srk: Option<u32>,
+    hierarchy: String,
 }
 
 impl Tpm2Backend {
@@ -68,6 +75,7 @@ impl Tpm2Backend {
                 tpm2_bin,
                 pcr_selection,
                 persistent_srk: None,
+                hierarchy: "o".into(),
             }),
             Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
@@ -77,6 +85,18 @@ impl Tpm2Backend {
             }
             Err(e) => Err(StoreError::Tpm2(format!("could not exec tpm2: {e}"))),
         }
+    }
+
+    /// Derive the primary key from a different hierarchy.
+    ///
+    /// Production always uses the owner/storage hierarchy. This exists so a
+    /// test can obtain a primary derived from a DIFFERENT seed on the same
+    /// TPM, which is the nearest executable stand-in for "a different TPM":
+    /// the blob's parent key is simply not available, which is exactly why a
+    /// sealed template does not travel between machines.
+    pub fn with_hierarchy(mut self, hierarchy: &str) -> Self {
+        self.hierarchy = hierarchy.to_string();
+        self
     }
 
     pub fn with_persistent_srk(mut self, handle: u32) -> Self {
@@ -127,7 +147,7 @@ impl Tpm2Backend {
         Ok(run_tpm2(
             &self.tpm2_bin,
             "createprimary",
-            &["-C", "o", "-c", str_path(ctx_path)?],
+            &["-C", &self.hierarchy, "-c", str_path(ctx_path)?],
         )?)
     }
 
@@ -519,6 +539,58 @@ mod tests {
         let blob = backend.seal(&key).expect("seal");
         let unsealed = backend.unseal(&blob).expect("unseal");
         assert_eq!(unsealed, key);
+    }
+
+    /// Gate **G5.5** — a sealed template must not open under a different key.
+    ///
+    /// The gate is written as "cross-hardware unseal", which reads as needing
+    /// a second TPM-equipped machine. What actually makes a template
+    /// device-bound is narrower: the blob is sealed under a primary key
+    /// derived from the TPM's storage seed, and a blob cannot be loaded under
+    /// a parent that is not that key. That is testable on one TPM, by
+    /// deriving a primary from a *different* hierarchy — a different seed,
+    /// hence a genuinely different key.
+    ///
+    /// **What this does and does not establish.** It establishes that the
+    /// binding is real: move the blob to a machine whose storage seed differs
+    /// and it will not open, for the same reason it does not open here. It
+    /// does NOT establish that two physical TPMs have different seeds — that
+    /// is a property of the TPM specification and the manufacturer, not of
+    /// this code — so the literal two-machine run stays WITHHELD. This is the
+    /// half that is ours to prove.
+    #[test]
+    #[ignore = "requires a TPM and tpm2-tools; run with NAMTOR_HW_TEST=1"]
+    fn real_tpm_blob_does_not_unseal_under_a_different_primary() {
+        if !hw_enabled() {
+            return;
+        }
+        let mut owner = Tpm2Backend::new(None).expect("TPM2 probe");
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        let blob = owner.seal(&key).expect("seal under the storage primary");
+
+        // Sanity: it opens under the key it was sealed to. Without this a
+        // broken seal would make the negative assertion below pass for the
+        // wrong reason.
+        assert_eq!(
+            owner.unseal(&blob).expect("unseal under its own primary"),
+            key,
+            "the blob must open under the key it was sealed to"
+        );
+
+        // A primary from the endorsement hierarchy: same TPM, different seed,
+        // therefore a different key — the situation a different machine puts
+        // the blob in.
+        let mut other = Tpm2Backend::new(None)
+            .expect("TPM2 probe")
+            .with_hierarchy("e");
+        let result = other.unseal(&blob);
+        assert!(
+            result.is_err(),
+            "a template sealed under the storage primary must NOT open under a \
+             primary derived from a different seed; got {} bytes back",
+            result.map(|v| v.len()).unwrap_or(0)
+        );
     }
 
     #[test]
