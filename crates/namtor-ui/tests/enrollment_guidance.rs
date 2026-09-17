@@ -788,3 +788,77 @@ fn only_encouraging_guidance_is_styled_as_success() {
         );
     });
 }
+
+// ===========================================================================
+// The silhouette is read as the overall verdict
+// ===========================================================================
+
+/// Every style class on the silhouette's icon.
+fn silhouette_classes(bucket: u8, encouraging: bool) -> Vec<String> {
+    use gtk4::prelude::*;
+    let w = namtor_ui::components::scan_feedback::silhouette(bucket, encouraging);
+    let icon = first_image(&w).expect("the silhouette carries an icon");
+    icon.css_classes().iter().map(|s| s.to_string()).collect()
+}
+
+fn first_image(widget: &gtk4::Widget) -> Option<gtk4::Image> {
+    use gtk4::prelude::*;
+    if let Some(i) = widget.downcast_ref::<gtk4::Image>() {
+        return Some(i.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        if let Some(found) = first_image(&c) {
+            return Some(found);
+        }
+        child = c.next_sibling();
+    }
+    None
+}
+
+/// The silhouette is the largest element on the capture page, so it is read
+/// as the overall verdict whatever else is on screen. It was coloured from
+/// image quality alone, so on "Adjust your pose" — headline an instruction,
+/// "Needs attention" naming the missing head angles — the biggest thing on
+/// the page was the same success-green as "Enrollment complete". Found by
+/// rendering the page and looking at it.
+#[test]
+fn a_scan_that_still_needs_something_is_not_painted_green() {
+    common::run_gtk_test(|| {
+        for bucket in [2u8, 3] {
+            let classes = silhouette_classes(bucket, false);
+            assert!(
+                !classes.iter().any(|c| c == "success"),
+                "bucket {bucket} with work outstanding claimed success: {classes:?}"
+            );
+        }
+    });
+}
+
+/// Green is reserved for a scan that needs nothing, so the finished state is
+/// still distinguishable at a glance.
+#[test]
+fn a_finished_scan_is_green() {
+    common::run_gtk_test(|| {
+        let classes = silhouette_classes(2, true);
+        assert!(
+            classes.iter().any(|c| c == "success"),
+            "a scan that needs nothing must look finished: {classes:?}"
+        );
+    });
+}
+
+/// A dim view is something the user can see and fix, so it keeps its warning
+/// whether or not the scan is otherwise content.
+#[test]
+fn a_dim_view_keeps_its_warning() {
+    common::run_gtk_test(|| {
+        for encouraging in [false, true] {
+            let classes = silhouette_classes(0, encouraging);
+            assert!(
+                classes.iter().any(|c| c == "warning"),
+                "a dim view must stay flagged (encouraging={encouraging}): {classes:?}"
+            );
+        }
+    });
+}

@@ -45,6 +45,31 @@ fn bucket_class(bucket: u8) -> &'static str {
     }
 }
 
+/// Style class for the silhouette.
+///
+/// The silhouette is the largest thing on the page, so it is read as the
+/// overall verdict whatever else is on screen. Colouring it by
+/// [`bucket_class`] alone painted it success-green whenever image quality was
+/// high — including on "Adjust your pose", where the headline is an
+/// instruction, "Needs attention" says "Head angles", and the biggest element
+/// on the page was the same green as "Enrollment complete". Green is reserved
+/// for a scan that needs nothing; a high bucket with something still
+/// outstanding is neutral, and a low one keeps its warning, because a dim
+/// view is a thing the user can see and fix.
+fn silhouette_class(bucket: u8, encouraging: bool) -> &'static str {
+    match bucket {
+        b if b >= 2 => {
+            if encouraging {
+                "success"
+            } else {
+                "dim-label"
+            }
+        }
+        1 => "dim-label",
+        _ => "warning",
+    }
+}
+
 /// Translated one-word verdict for a quality bucket.
 fn bucket_label(bucket: u8) -> String {
     tr(match bucket {
@@ -58,10 +83,10 @@ fn bucket_label(bucket: u8) -> String {
 /// preview the app deliberately does not have. Its tint follows the quality
 /// bucket, so the frame itself reports whether the camera can currently see
 /// a usable face.
-pub fn silhouette(quality_bucket: u8) -> gtk4::Widget {
+pub fn silhouette(quality_bucket: u8, encouraging: bool) -> gtk4::Widget {
     let icon = gtk4::Image::from_icon_name("avatar-default-symbolic");
     icon.set_pixel_size(SILHOUETTE_ICON_PX);
-    icon.set_css_classes(&[bucket_class(quality_bucket)]);
+    icon.set_css_classes(&[silhouette_class(quality_bucket, encouraging)]);
     icon.set_halign(gtk4::Align::Center);
     icon.set_valign(gtk4::Align::Center);
     icon.set_vexpand(true);
@@ -171,7 +196,7 @@ pub fn hero_with(
         .margin_top(6)
         .margin_bottom(12)
         .build();
-    column.append(&silhouette(quality_bucket));
+    column.append(&silhouette(quality_bucket, encouraging));
     column.append(&headline_block(
         headline_text,
         encouraging,
