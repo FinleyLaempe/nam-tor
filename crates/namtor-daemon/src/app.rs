@@ -278,6 +278,51 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Close every open capture when the machine is about to suspend, so the
+    // IR emitter is dark before sleep.
+    //
+    // Nothing did this. Both the auth capture (open through the 30 s warm
+    // window after a PAM prepare) and any enrollment session could be armed
+    // when the lid closed. `ReconcileGuard::handle_sleep_event` was written
+    // for this and never constructed outside its own tests, and
+    // `ResumeMonitor` was never started. The subscription holds a logind
+    // delay inhibitor, without which logind does not wait for the handler.
+    //
+    // Resume needs no work here: both capture factories re-enumerate sysfs
+    // every time they open, so a camera renumbered by the resume is found
+    // fresh by the next auth or enrollment.
+    {
+        let dispatcher = Arc::clone(&dispatcher);
+        let svc3 = bus_service.as_ref().map(|(_, _, svc3)| Arc::clone(svc3));
+        let spawned = std::thread::Builder::new()
+            .name("namtor-sleep".into())
+            .spawn(move || {
+                let result =
+                    namtor_camera::resume::ResumeMonitor::run_with_delay_inhibitor(|event| {
+                        if event == namtor_camera::resume::SleepEvent::Suspend {
+                            dispatcher.release_for_suspend();
+                            if let Some(svc3) = &svc3 {
+                                let n = svc3.cancel_all_sessions();
+                                if n > 0 {
+                                    tracing::info!(
+                                        sessions = n,
+                                        "enrollment sessions cancelled for suspend"
+                                    );
+                                }
+                            }
+                        } else {
+                            tracing::info!("resumed; captures reopen on demand");
+                        }
+                    });
+                if let Err(e) = result {
+                    tracing::warn!(error = %e, "sleep monitor stopped");
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "sleep monitor not started");
+        }
+    }
+
     let started = if std::env::var("LISTEN_FDS").is_ok() {
         tracing::info!(fd = 3, "adopting socket-activation listener");
         startup::from_fd(3, socket_path, auth_gid, dispatcher)?

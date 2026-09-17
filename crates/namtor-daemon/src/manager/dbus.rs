@@ -487,6 +487,27 @@ impl<P: PolkitAuthority> Manager3Service<P> {
         format!("sess3-{}", C.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// Cancel every enrollment session, because the machine is about to
+    /// suspend.
+    ///
+    /// Each session's worker owns a capture whose emitter guard darkens the
+    /// IR emitter on drop, so shutting the workers down is what turns the
+    /// emitter off. Same mechanism as a client disconnect, applied to all.
+    pub fn cancel_all_sessions(&self) -> usize {
+        let owners: Vec<String> = {
+            let sessions = lock(&self.sessions);
+            let mut names: Vec<String> = sessions.values().map(|s| s.bus_name.clone()).collect();
+            names.sort();
+            names.dedup();
+            names
+        };
+        let before = lock(&self.sessions).len();
+        for name in owners {
+            self.handle_disconnect_by_bus_name(&name);
+        }
+        before
+    }
+
     pub fn handle_disconnect_by_bus_name(&self, bus_name: &str) {
         let to_remove: Vec<String> = {
             let sessions = lock(&self.sessions);
@@ -1823,6 +1844,35 @@ mod tests {
         let bus_name = peer(0).bus_name;
         svc.handle_disconnect_by_bus_name(&bus_name);
         assert!(!lock(&svc.sessions).contains_key(&sid));
+    }
+
+    /// Suspend cancels every enrollment session, from every client.
+    ///
+    /// Each session's worker owns a capture whose emitter guard darkens the IR
+    /// emitter on drop; with no `PrepareForSleep` handling, a session open when
+    /// the lid closed kept the emitter armed through suspend.
+    #[test]
+    fn v3_cancel_all_sessions_ends_every_session() {
+        let svc = new_svc3();
+        let a = svc.start_enrollment(&peer(0), 0, "root-profile").unwrap();
+        let b = svc.start_enrollment(&peer(1000), 1000, "alice").unwrap();
+        assert!(lock(&svc.sessions).contains_key(&a));
+        assert!(lock(&svc.sessions).contains_key(&b));
+
+        let cancelled = svc.cancel_all_sessions();
+
+        assert_eq!(cancelled, 2, "both sessions were open");
+        assert!(
+            lock(&svc.sessions).is_empty(),
+            "no session may survive suspend"
+        );
+    }
+
+    #[test]
+    fn v3_cancel_all_sessions_with_none_open_is_a_noop() {
+        let svc = new_svc3();
+        assert_eq!(svc.cancel_all_sessions(), 0);
+        assert!(lock(&svc.sessions).is_empty());
     }
 
     #[test]

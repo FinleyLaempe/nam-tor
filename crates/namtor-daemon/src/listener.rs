@@ -232,6 +232,11 @@ impl Listener {
                         };
                         let _ = encode(&reply, &mut writer);
                         let _ = writer.flush();
+                        // The only exit from this loop that skipped the
+                        // cleanup. A client that sent a clean Prepare and then
+                        // a Verify with rhost set left the capture open — and
+                        // the IR emitter armed — for the whole warm window.
+                        self.ensure_release(&last_auth_body, &mut released);
                         return Ok(());
                     }
 
@@ -713,6 +718,58 @@ mod tests {
             recorded,
             vec![AuthPhase::Verify, AuthPhase::Release],
             "listener must dispatch cleanup Release after disconnect"
+        );
+    }
+
+    /// A refused rhost after a clean Prepare must still release the capture.
+    ///
+    /// The rhost refusal was the one exit from the connection loop that skipped
+    /// `ensure_release`, so this sequence left the capture open — and the IR
+    /// emitter armed — for the whole warm window.
+    #[test]
+    fn rhost_refusal_after_prepare_releases_the_capture() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let sock = tmp.path().join("auth.sock");
+        let (dispatcher, phases) = ReleaseTrackingDispatcher::new();
+        let our_gid = nix::unistd::getgid().as_raw() as u32;
+        let listener = Listener::bind(&sock, our_gid, Arc::new(dispatcher)).expect("bind");
+        let h = serve(listener);
+
+        let s = connect_and_hello(&sock);
+        let hello: HelloMsg = serde_json::from_value(recv_msg(&s)).expect("hello");
+
+        send_msg(
+            &s,
+            &AuthRequest::Auth(AuthBody {
+                nonce: hello.nonce,
+                target_uid: 1000,
+                phase: AuthPhase::Prepare,
+                rhost: None,
+                deadline_us: 5_000_000,
+            }),
+        );
+        let _: AuthReply = serde_json::from_value(recv_msg(&s)).expect("prepare reply");
+
+        send_msg(
+            &s,
+            &AuthRequest::Auth(AuthBody {
+                nonce: hello.nonce,
+                target_uid: 1000,
+                phase: AuthPhase::Verify,
+                rhost: Some("attacker.example".into()),
+                deadline_us: 5_000_000,
+            }),
+        );
+        let refused: AuthReply = serde_json::from_value(recv_msg(&s)).expect("refusal");
+        assert_eq!(refused.verdict, Verdict::Refused);
+        drop(s);
+        h.join().expect("join");
+
+        let recorded = phases.lock().expect("phases").clone();
+        assert_eq!(
+            recorded,
+            vec![AuthPhase::Prepare, AuthPhase::Release],
+            "a refused rhost must not leave the prepared capture open"
         );
     }
 

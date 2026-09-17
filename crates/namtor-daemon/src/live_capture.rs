@@ -267,10 +267,26 @@ type OpenFn = Box<dyn FnMut(&DiscoveredCamera) -> Result<Box<dyn CaptureSource>,
 /// pending-request queue (via [`Reconciler`]) holds auth requests during
 /// reconciliation and drops them if the queue overflows.
 //
-// allow(dead_code): the guard is the reconciliation surface for the daemon
-// main loop (run() in namtor-daemon.rs). Wiring it into the accept loop is a
-// separate integration step that also requires the systemd units the human
-// installs; the logic + tests land first per the task plan.
+// allow(dead_code): NOT wired into the daemon, and not going to be as-is.
+//
+// This comment used to call wiring "a separate integration step", which read
+// as though suspend and hotplug were handled and merely pending. They were
+// not handled at all. The daemon now covers them with less machinery:
+//
+// - Hotplug and renumbering: both capture factories (`factory_with_*`)
+//   re-enumerate sysfs on every open, and the auth capture is opened per PAM
+//   request, so the next auth after a replug or a resume finds the camera
+//   fresh without a long-lived reconciler.
+// - Suspend: `app.rs` subscribes to logind's `PrepareForSleep` under a delay
+//   inhibitor and calls `DaemonDispatcher::release_for_suspend` and
+//   `Manager3Service::cancel_all_sessions`, which close every capture so the
+//   IR emitter is dark before sleep.
+//
+// What this guard adds beyond that is draining auth requests queued across a
+// resume, which the per-request model does not need because PAM clients do not
+// queue. It is kept, with its tests, as the design reference for that
+// behaviour; if a long-lived capture is ever introduced, this is where to
+// start.
 #[allow(dead_code)]
 pub struct ReconcileGuard {
     hotplug: HotplugState,

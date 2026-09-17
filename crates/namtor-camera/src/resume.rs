@@ -234,6 +234,88 @@ impl ResumeMonitor {
     }
 }
 
+/// Take a logind `delay` inhibitor for sleep.
+///
+/// Without one, `PrepareForSleep(true)` is a notification, not a request:
+/// logind does not wait for listeners, so the machine can be suspended before
+/// a handler has run. A delay lock makes logind hold off (up to
+/// `InhibitDelayMaxSec`, 5 s by default) until the fd is closed, which is the
+/// window the emitter write needs.
+fn take_sleep_delay_lock(
+    proxy: &zbus::blocking::Proxy<'_>,
+) -> Result<zbus::zvariant::OwnedFd, String> {
+    let fd: zbus::zvariant::OwnedFd = proxy
+        .call(
+            "Inhibit",
+            &(
+                "sleep",
+                "Nam-tor",
+                "Turn the IR emitter off before suspend",
+                "delay",
+            ),
+        )
+        .map_err(|e| format!("Inhibit(sleep, delay): {e}"))?;
+    Ok(fd)
+}
+
+impl ResumeMonitor {
+    /// Subscribe to logind's `PrepareForSleep` and call `on_event` for each
+    /// transition, holding a delay inhibitor so a suspend handler actually
+    /// gets to run before the machine sleeps.
+    ///
+    /// The inhibitor is released immediately after the suspend handler
+    /// returns — holding it longer only delays the user's suspend — and
+    /// re-taken on resume for the next cycle. Failing to take it is logged and
+    /// not fatal: the handler still runs, it just is not guaranteed to win the
+    /// race, which is no worse than having no subscription at all.
+    ///
+    /// Blocks until the bus connection is lost.
+    pub fn run_with_delay_inhibitor(mut on_event: impl FnMut(SleepEvent)) -> Result<(), String> {
+        use zbus::blocking::Connection;
+
+        let conn = Connection::system().map_err(|e| format!("connect to system bus: {e}"))?;
+        let proxy = zbus::blocking::Proxy::new(
+            &conn,
+            "org.freedesktop.login1",
+            "/org/freedesktop/login1",
+            "org.freedesktop.login1.Manager",
+        )
+        .map_err(|e| format!("create login1 proxy: {e}"))?;
+
+        // Subscribe BEFORE taking the lock, so there is no gap in which a
+        // suspend could begin that we hold up but never hear about.
+        let signals = proxy
+            .receive_signal("PrepareForSleep")
+            .map_err(|e| format!("subscribe PrepareForSleep: {e}"))?;
+
+        let mut lock = match take_sleep_delay_lock(&proxy) {
+            Ok(fd) => Some(fd),
+            Err(e) => {
+                eprintln!("namtor: no sleep delay inhibitor, suspend handling is best-effort: {e}");
+                None
+            }
+        };
+
+        for msg in signals {
+            let suspending: bool = msg
+                .body()
+                .deserialize::<bool>()
+                .map_err(|e| format!("PrepareForSleep payload not bool: {e}"))?;
+            if suspending {
+                on_event(SleepEvent::Suspend);
+                // Work done: let the suspend proceed.
+                drop(lock.take());
+            } else {
+                on_event(SleepEvent::Resume);
+                if lock.is_none() {
+                    lock = take_sleep_delay_lock(&proxy).ok();
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

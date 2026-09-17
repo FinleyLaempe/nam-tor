@@ -69,6 +69,32 @@ pub struct DaemonDispatcher<S: WorkerSupervisor, C: Clock, V: VerifyRunner> {
 }
 
 impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> DaemonDispatcher<S, C, V> {
+    /// Close the auth capture and return the lifecycle to Cold, because the
+    /// machine is about to suspend.
+    ///
+    /// The auth capture is opened by `prepare_for_auth` and stays open through
+    /// the whole warm window — 30 s — until `release` or `tick` cools it. The
+    /// daemon never listened for logind's `PrepareForSleep`, so closing a
+    /// laptop lid right after an unlock suspended the machine with the IR
+    /// emitter still armed. (The `ReconcileGuard` written to handle this was
+    /// never constructed outside its own tests.) `Lifecycle::release` is
+    /// infallible and forces Cold from any phase, so this is safe to call
+    /// whatever the daemon was doing.
+    pub fn release_for_suspend(&self) {
+        let mut st = match self.state.lock() {
+            Ok(g) => g,
+            // A poisoned lock still guards a capture that must be closed.
+            Err(p) => p.into_inner(),
+        };
+        let was_open = st.daemon.capture_open();
+        if let Err(e) = st.daemon.release() {
+            tracing::warn!(error = %e, "release before suspend failed");
+        }
+        if was_open {
+            tracing::info!("auth capture closed for suspend; emitter off");
+        }
+    }
+
     /// Build a dispatcher over the given daemon, verify runner, and backoff
     /// store. `backoff_path` enables atomic disk persistence after each
     /// mutation; pass `None` for an in-memory store.
@@ -673,5 +699,65 @@ mod tests {
             Some(path.to_path_buf()),
             clock,
         )
+    }
+
+    // --- suspend -------------------------------------------------------------
+
+    /// A suspend during the warm window must close the auth capture and return
+    /// the lifecycle to Cold.
+    ///
+    /// The capture stays open for up to 30 s after `prepare_for_auth`, and the
+    /// daemon never listened for `PrepareForSleep`, so closing a lid right
+    /// after an unlock suspended the machine with the IR emitter armed.
+    #[test]
+    fn release_for_suspend_closes_a_warm_capture() {
+        let (disp, _clock) = build(VerifyOutcome::no_match("none"));
+        {
+            let mut st = disp.state.lock().unwrap();
+            st.daemon
+                .prepare_for_auth(Requester {
+                    uid: 1000,
+                    label: "pam".into(),
+                })
+                .unwrap();
+            assert!(st.daemon.capture_open(), "prepare opens the capture");
+            assert_eq!(st.daemon.phase(), LcPhase::Warming);
+        }
+
+        disp.release_for_suspend();
+
+        let st = disp.state.lock().unwrap();
+        assert!(!st.daemon.capture_open(), "suspend must close the capture");
+        assert_eq!(st.daemon.phase(), LcPhase::Cold);
+    }
+
+    /// Mid-verification is the worst case, and must be handled the same way.
+    #[test]
+    fn release_for_suspend_closes_a_capture_mid_verification() {
+        let (disp, _clock) = build(VerifyOutcome::no_match("none"));
+        {
+            let mut st = disp.state.lock().unwrap();
+            let req = Requester {
+                uid: 1000,
+                label: "pam".into(),
+            };
+            st.daemon.prepare_for_auth(req.clone()).unwrap();
+            st.daemon.verify_start(req).unwrap();
+            assert_eq!(st.daemon.phase(), LcPhase::Verifying);
+        }
+        disp.release_for_suspend();
+        let st = disp.state.lock().unwrap();
+        assert!(!st.daemon.capture_open());
+        assert_eq!(st.daemon.phase(), LcPhase::Cold);
+    }
+
+    /// With nothing open, a suspend is a harmless no-op.
+    #[test]
+    fn release_for_suspend_with_no_capture_is_a_noop() {
+        let (disp, _clock) = build(VerifyOutcome::no_match("none"));
+        disp.release_for_suspend();
+        let st = disp.state.lock().unwrap();
+        assert!(!st.daemon.capture_open());
+        assert_eq!(st.daemon.phase(), LcPhase::Cold);
     }
 }
