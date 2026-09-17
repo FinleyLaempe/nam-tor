@@ -6,7 +6,6 @@ __pycache__/
 /ml/**/data/
 /ml/**/weights/
 /fixtures/large/
- 
 # opencode internal
 /.omo/
 # python build artifacts

@@ -519,21 +519,30 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "[q] No generated build output in source tree"
-if git -C "$REPO_ROOT" check-ignore .omo >/dev/null 2>&1; then
-    ok ".omo/ is gitignored"
-else
-    not_ok ".omo/ is not gitignored"
-fi
-if git -C "$REPO_ROOT" check-ignore packaging/arch/src >/dev/null 2>&1; then
-    ok "packaging/arch/src/ is gitignored"
-else
-    not_ok "packaging/arch/src/ is not gitignored"
-fi
-if git -C "$REPO_ROOT" check-ignore packaging/arch/pkg >/dev/null 2>&1; then
-    ok "packaging/arch/pkg/ is gitignored"
-else
-    not_ok "packaging/arch/pkg/ is not gitignored"
-fi
+# Ask about a representative FILE inside the directory, not the directory.
+#
+# These .gitignore entries end in `/`, so they match directories only, and
+# `git check-ignore` decides whether a path is a directory by looking at the
+# working tree. Querying the bare directory name therefore depended on whether
+# a build had been run locally: on a clean checkout git saw a file, no `dir/`
+# pattern matched, and the gate failed while .gitignore was correct. Adding a
+# trailing slash fixed that but made the gate vacuous — a nonexistent path
+# ending in `/` matched a stray whitespace-only line in .gitignore no matter
+# what, so the check passed even with the real pattern commented out.
+#
+# A file path underneath the directory has neither problem: it needs no
+# trailing slash, needs not exist, and is what actually has to be ignored.
+check_gitignored() {
+    local dir="$1"
+    if git -C "$REPO_ROOT" check-ignore -q "${dir%/}/gitignore-probe"; then
+        ok "$dir is gitignored"
+    else
+        not_ok "$dir is not gitignored"
+    fi
+}
+check_gitignored ".omo/"
+check_gitignored "packaging/arch/src/"
+check_gitignored "packaging/arch/pkg/"
 SCREENSHOT_COUNT=$(git -C "$REPO_ROOT" ls-files 'crates/namtor-ui/**/*.png' \
                     'crates/namtor-ui/**/*.jpg' 'crates/namtor-ui/**/*.jpeg' 2>/dev/null \
                     | wc -l)
@@ -610,10 +619,17 @@ else
     not_ok "Fedora ui missing exact namtor Requires"
 fi
 ui_depends_deb=$(awk '/^Package: namtor-ui$/{f=1;next} f&&/^Depends:/{f=2;next} f==2&&/^[[:space:]]/{gsub(/[[:space:]]/,"");print;next} f==2&&!/^[[:space:]]/{exit}' "$DEBIAN_CONTROL" | tr -d '\n')
-if printf '%s' "$ui_depends_deb" | grep -q 'namtor(=0.2.0-1)'; then
-    ok "Debian ui Depends on namtor (= 0.2.0-1) (exact)"
+# Derive the expected version from debian/changelog rather than hardcoding it.
+# A literal here goes stale the moment the version moves, and a stale literal
+# makes this gate fail while the packaging is correct — or, worse, pass against
+# a version nobody ships any more.
+deb_ver="$(sed -n '1s/.*(\([^)]*\)).*/\1/p' "$PACKAGING_DIR/debian/changelog")"
+if [[ -z "$deb_ver" ]]; then
+    not_ok "could not read version from debian/changelog"
+elif printf '%s' "$ui_depends_deb" | grep -qF "namtor(=${deb_ver})"; then
+    ok "Debian ui Depends on namtor (= ${deb_ver}) (exact)"
 else
-    not_ok "Debian ui missing exact namtor Depends"
+    not_ok "Debian ui missing exact namtor Depends (= ${deb_ver}); got: ${ui_depends_deb}"
 fi
 
 # ---------------------------------------------------------------------------
