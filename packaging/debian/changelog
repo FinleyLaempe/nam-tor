@@ -1,3 +1,19 @@
+namtor (0.3.2-1) unstable; urgency=medium
+
+  * Fix the enrollment scan page freezing the app: the progress poll was
+    registered inside the render it triggers, doubling every 500 ms.
+  * Fix every error route dead-ending with no message and inert buttons.
+  * Fix Back permanently breaking Enroll and leaking the camera session.
+  * Surface polkit denials on PAM toggles instead of silently reverting.
+  * Stop presenting invented values as measurements on the scan, review and
+    System pages.
+  * Report a daemon that dies mid-scan instead of freezing the numbers.
+  * Wire the screen-reader announcement throttle; show a readable "last used"
+    time; make the troubleshooting rows do something; load a real gettext
+    catalog.
+
+ -- finley <finley.laempe@math.uni-freiburg.de>  Thu, 17 Sep 2026 07:32:20 +0200
+
 namtor (0.3.1-1) unstable; urgency=medium
 
   * Ship the PAM editor as `namtor pam-edit`. The install scripts and

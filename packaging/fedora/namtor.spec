@@ -56,7 +56,7 @@
 %global debug_package %{nil}
 
 Name:           namtor
-Version:        0.3.1
+Version:        0.3.2
 Release:        1%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
@@ -338,6 +338,39 @@ fi
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.2-1
+- The enrollment scan page destroyed itself. The 500 ms progress poll was
+  registered inside the render it triggers, with its source id discarded, so
+  the timer count doubled on every tick that produced progress - 1024 timers
+  after five seconds, each issuing its own blocking D-Bus call on the GTK main
+  thread. The scan page froze the app within seconds of a real scan.
+- Every error route dead-ended. The Error state built a Dismiss button and
+  never added it to a container, discarded the message, and re-rendered the
+  capture page with Stop and Cancel wired to empty closures - the destination
+  for a missing camera, a polkit denial, a busy session and a review timeout
+  alike. It now shows what failed, the recovery steps, and two buttons that
+  work.
+- Pressing Back permanently broke Enroll. Nothing observed AdwNavigationView's
+  back button, Escape or swipe gesture, so the controller kept a page that was
+  no longer on the stack: Enroll then rendered into a detached page and did
+  nothing for the rest of the process, while the daemon session stayed open
+  with the camera and IR emitter running.
+- A polkit denial on a PAM toggle was invisible: the result was discarded, the
+  switch flipped and quietly flipped back 50 ms later.
+- Three screens presented invented values as measurements: the scan announced
+  "0% - Poor" before the camera returned a frame, the review screen derived
+  its quality verdict from readiness rather than quality, and the System page
+  reported "IR Camera - Detected" from nothing but daemon reachability.
+- A daemon that died mid-scan was indistinguishable from a scan that stopped
+  improving.
+- An unrecognised guidance word was printed verbatim as the page headline.
+- The screen-reader announcement throttle was wired up; it had been written,
+  tested and never called while two widgets re-announced on every poll.
+- "last used: epoch 1726550400" is now a readable relative time, and the two
+  troubleshooting rows that did nothing now show a copyable command.
+- tr() actually loads a gettext catalog; nothing had ever called into gettext,
+  so no translation could be loaded even if one were shipped.
+
 * Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.1-1
 - Ship the PAM editor. pam-install.sh, pam-uninstall.sh and lifecycle.sh are
   all installed to /usr/share/namtor/ and all three drove a `namtor-pam-edit`
