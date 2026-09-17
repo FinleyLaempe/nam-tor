@@ -25,6 +25,7 @@ use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::{ActionRowExt, MessageDialogExt, PreferencesGroupExt};
 
+use crate::client::ManagerClient;
 use crate::components::pam_services::render_pam_services;
 use crate::components::system_status::render_system_status;
 use crate::components::{
@@ -545,11 +546,36 @@ impl AppController {
                     let presenter_save = Rc::clone(presenter);
                     let rc_save = Rc::clone(rc);
                     let on_save = move || {
-                        {
+                        // Run the commit on a worker thread. It used to be a
+                        // blocking `commit_profile_v3` on the GTK main thread,
+                        // so the window froze for its whole duration with no
+                        // spinner — and `EnrollmentState::Saving` was set and
+                        // overwritten inside that one call, making the arm
+                        // that renders it dead code.
+                        let started = {
                             let mut p = presenter_save.borrow_mut();
-                            p.save_profile_v3();
-                        }
-                        rc_save.borrow_mut().after_save(&rc_save);
+                            p.begin_save_v3()
+                        };
+                        let Some((session, client)) = started else {
+                            return;
+                        };
+                        // Paint the Saving state before blocking anything.
+                        rc_save.borrow_mut().render_enrollment(&rc_save);
+
+                        let presenter_done = Rc::clone(&presenter_save);
+                        let rc_done = Rc::clone(&rc_save);
+                        glib::MainContext::default().spawn_local(async move {
+                            let result =
+                                gio::spawn_blocking(move || client.commit_profile_v3(&session))
+                                    .await
+                                    .unwrap_or_else(|_| {
+                                        Err(crate::client::ManagerError::State(
+                                            "the save task did not complete".into(),
+                                        ))
+                                    });
+                            presenter_done.borrow_mut().finish_save_v3(result);
+                            rc_done.borrow_mut().after_save(&rc_done);
+                        });
                     };
 
                     let presenter_resume = Rc::clone(presenter);
@@ -589,14 +615,7 @@ impl AppController {
                     self.shell.pop_subpage();
                     self.review_nav_page = None;
                 }
-                let view = model.enrollment_view_v3.clone();
-                self.enrollment_view.render(
-                    view.as_ref(),
-                    true,
-                    move |_| {},
-                    move || {},
-                    move || {},
-                );
+                self.enrollment_view.render_saving();
             }
             EnrollmentState::Error(detail) => {
                 // A failed scan must say what failed and offer a way out. The

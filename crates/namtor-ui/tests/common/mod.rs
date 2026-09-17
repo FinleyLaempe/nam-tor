@@ -209,3 +209,21 @@ pub fn has_accessible_role(widget: &gtk4::Widget, role: gtk4::AccessibleRole) ->
     }
     false
 }
+
+/// The first widget of a given type in a depth-first walk.
+pub fn first_widget_of_type<T: gtk4::glib::object::IsA<gtk4::Widget> + Clone>(
+    widget: &gtk4::Widget,
+) -> Option<T> {
+    use gtk4::prelude::*;
+    if let Some(t) = widget.downcast_ref::<T>() {
+        return Some(t.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        if let Some(t) = first_widget_of_type::<T>(&c) {
+            return Some(t);
+        }
+        child = c.next_sibling();
+    }
+    None
+}

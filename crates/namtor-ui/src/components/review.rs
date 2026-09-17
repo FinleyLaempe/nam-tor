@@ -11,7 +11,7 @@ use crate::tr;
 use crate::view_model::ReviewViewV3;
 use gtk4::prelude::*;
 use libadwaita as adw;
-use libadwaita::prelude::{PreferencesGroupExt, PreferencesPageExt};
+use libadwaita::prelude::{MessageDialogExt, PreferencesGroupExt, PreferencesPageExt};
 
 pub struct ReviewViewComponent {
     page: adw::PreferencesPage,
@@ -118,7 +118,44 @@ impl ReviewViewComponent {
             gtk4::accessible::Property::Label(&tr("Save profile")),
             gtk4::accessible::Property::Description(&tr("Commit the captured profile to storage")),
         ]);
-        save_btn.connect_clicked(move |_| on_save());
+        // Saving a scan the daemon calls unfinished stays possible — it is a
+        // deliberate escape hatch — but it must not be silent. Nothing told
+        // the user the resulting profile may simply fail to recognise them,
+        // which is the outcome they would otherwise discover at the lock
+        // screen.
+        if view.ready_to_save {
+            save_btn.connect_clicked(move |_| on_save());
+        } else {
+            let on_save = std::rc::Rc::new(on_save);
+            save_btn.connect_clicked(move |btn| {
+                let on_save = std::rc::Rc::clone(&on_save);
+                let dialog = adw::MessageDialog::builder()
+                    .heading(tr("Save an unfinished scan?"))
+                    .body(tr(
+                        "This scan did not collect enough for the daemon to call it \
+                         ready. Saving it now may produce a profile that does not \
+                         recognise you, and you would find out at the lock screen. \
+                         Resuming the capture takes a few more seconds.",
+                    ))
+                    .build();
+                if let Some(win) = btn.root().and_downcast_ref::<adw::ApplicationWindow>() {
+                    dialog.set_transient_for(Some(win));
+                }
+                dialog.set_accessible_role(gtk4::AccessibleRole::Dialog);
+                dialog.add_response("resume", &tr("_Keep Capturing"));
+                dialog.add_response("save", &tr("_Save Anyway"));
+                dialog.set_response_appearance("save", adw::ResponseAppearance::Destructive);
+                dialog.set_default_response(Some("resume"));
+                dialog.set_close_response("resume");
+                dialog.connect_response(None, move |dlg, response| {
+                    if response == "save" {
+                        on_save();
+                    }
+                    dlg.close();
+                });
+                dialog.present();
+            });
+        }
 
         let resume_btn = gtk4::Button::builder()
             .label(tr("_Resume Capture"))

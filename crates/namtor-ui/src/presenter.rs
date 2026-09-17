@@ -606,19 +606,49 @@ impl<C: ManagerClient> ProfilePresenter<C> {
     /// v3: Commit the enrollment to a persistent profile. Transitions to
     /// Saving, then back to Setup (profile list) on success.
     pub fn save_profile_v3(&mut self) -> &PresenterModel {
-        let Some(session) = self.model.enrollment_session_v3.clone() else {
+        let Some((session, client)) = self.begin_save_v3() else {
             return &self.model;
         };
+        // The synchronous path, kept so tests can drive a save in one call.
+        // The UI uses `begin_save_v3` + `finish_save_v3` with the commit on a
+        // worker thread; both go through the same two halves, so there is one
+        // state machine rather than two that can drift.
+        let result = client.commit_profile_v3(&session);
+        self.finish_save_v3(result);
+        &self.model
+    }
+
+    /// Start a save: validate, enter [`EnrollmentState::Saving`], and hand
+    /// back what a worker thread needs to do the blocking commit.
+    ///
+    /// `Saving` used to be unobservable. `save_profile_v3` set it and then
+    /// made the blocking `commit_profile_v3` call on the GTK main thread,
+    /// overwriting the state before returning — so the arm rendering it was
+    /// dead code and the window simply froze for the length of the commit,
+    /// with no spinner and no indication anything was happening.
+    ///
+    /// Returns `None` when a save cannot start (no session, wrong state, or
+    /// one already in flight).
+    pub fn begin_save_v3(&mut self) -> Option<(String, Arc<C>)> {
+        let session = self.model.enrollment_session_v3.clone()?;
         if self.model.enrollment_state != EnrollmentState::Reviewing
             && self.model.enrollment_state != EnrollmentState::Stopped
         {
-            return &self.model;
-        }
-        if self.model.enrollment_state == EnrollmentState::Saving {
-            return &self.model;
+            return None;
         }
         self.model.enrollment_state = EnrollmentState::Saving;
-        match self.client.commit_profile_v3(&session) {
+        self.model.is_loading = true;
+        self.model.error = None;
+        Some((session, Arc::clone(&self.client)))
+    }
+
+    /// Apply the outcome of the commit started by [`Self::begin_save_v3`].
+    pub fn finish_save_v3(
+        &mut self,
+        result: Result<crate::client::ProfileId, ManagerError>,
+    ) -> &PresenterModel {
+        self.model.is_loading = false;
+        match result {
             Ok(profile_id) => {
                 self.model.enrollment_state = EnrollmentState::Setup;
                 self.model.enrollment_session_v3 = None;

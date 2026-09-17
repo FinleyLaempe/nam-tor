@@ -246,6 +246,65 @@ impl EnrollmentViewComponent {
         self.groups = vec![hero_group, signals_group, counts_group, actions_group];
     }
 
+    /// Render the in-progress save: a spinner and a line saying what is
+    /// happening, with no controls.
+    ///
+    /// `EnrollmentState::Saving` was unreachable until the commit moved off
+    /// the GTK main thread — the old `save_profile_v3` set the state and
+    /// overwrote it inside one blocking call — so this arm rendered the
+    /// capture page with every callback stubbed out and the window simply
+    /// froze. There are deliberately no buttons: a commit in flight cannot be
+    /// cancelled, and offering a control that does nothing is what the Error
+    /// state used to do.
+    pub fn render_saving(&mut self) -> &adw::PreferencesPage {
+        self.clear();
+
+        let group = adw::PreferencesGroup::new();
+        group.update_property(&[gtk4::accessible::Property::Label(&tr("Saving profile"))]);
+
+        let column = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(18)
+            .halign(gtk4::Align::Center)
+            .margin_top(24)
+            .margin_bottom(24)
+            .build();
+
+        let spinner = gtk4::Spinner::builder()
+            .spinning(true)
+            .width_request(32)
+            .height_request(32)
+            .halign(gtk4::Align::Center)
+            .build();
+        column.append(&spinner);
+
+        let headline = gtk4::Label::builder()
+            .label(tr("Saving your face model…"))
+            .css_classes(["title-2"])
+            .halign(gtk4::Align::Center)
+            .build();
+        headline.set_accessible_role(gtk4::AccessibleRole::Status);
+        headline.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Saving your face model",
+        ))]);
+        column.append(&headline);
+
+        let detail = gtk4::Label::builder()
+            .label(tr("This takes a moment. Do not close the window."))
+            .css_classes(["dim-label"])
+            .wrap(true)
+            .justify(gtk4::Justification::Center)
+            .max_width_chars(36)
+            .halign(gtk4::Align::Center)
+            .build();
+        column.append(&detail);
+
+        group.add(&column);
+        self.page.add(&group);
+        self.groups = vec![group];
+        &self.page
+    }
+
     /// Render a failed enrollment: what went wrong, what to do about it, and
     /// two buttons that work.
     ///

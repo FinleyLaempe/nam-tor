@@ -1290,3 +1290,68 @@ fn a_recovered_poll_clears_the_failure_run() {
         "isolated failures that keep recovering must not fail the scan"
     );
 }
+
+// --- saving off the main thread ---------------------------------------------
+
+fn reviewed_presenter(name: &str) -> namtor_ui::ProfilePresenter<FakeManagerClient> {
+    let mut presenter = new_presenter();
+    after(&mut presenter, |p| {
+        p.start_enrollment_v3(name);
+    });
+    after(&mut presenter, |p| {
+        p.stop_enrollment_v3();
+    });
+    after(&mut presenter, |p| {
+        p.review_enrollment_v3();
+    });
+    presenter
+}
+
+/// `Saving` must be observable between the two halves of a save.
+///
+/// It used to be set and overwritten inside one blocking call on the GTK main
+/// thread, so the arm that renders it was dead code and the window froze with
+/// no indication anything was happening.
+#[test]
+fn saving_is_observable_while_the_commit_runs() {
+    let mut p = reviewed_presenter("Pia V3");
+    let (session, client) = p.begin_save_v3().expect("a reviewed scan can be saved");
+    assert_eq!(p.model().enrollment_state, EnrollmentState::Saving);
+    assert!(p.model().is_loading, "the UI must know work is in flight");
+
+    // The commit happens elsewhere; the presenter is free meanwhile.
+    let result = client.commit_profile_v3(&session);
+    p.finish_save_v3(result);
+
+    assert_eq!(p.model().enrollment_state, EnrollmentState::Setup);
+    assert!(!p.model().is_loading);
+    assert_eq!(p.model().profiles.len(), 1);
+}
+
+/// A second save cannot start while one is in flight — no duplicate commit.
+#[test]
+fn a_save_in_flight_cannot_be_started_twice() {
+    let mut p = reviewed_presenter("Quinn V3");
+    assert!(p.begin_save_v3().is_some());
+    assert!(
+        p.begin_save_v3().is_none(),
+        "Saving is not Reviewing/Stopped, so a second begin must refuse"
+    );
+}
+
+/// A failed commit returns to Stopped with the error, so the user can retry.
+#[test]
+fn a_failed_commit_returns_to_stopped_with_an_error() {
+    let mut p = reviewed_presenter("Ravi V3");
+    let (_session, _client) = p.begin_save_v3().unwrap();
+    p.finish_save_v3(Err(namtor_ui::client::ManagerError::State(
+        "disk full".into(),
+    )));
+    assert_eq!(p.model().enrollment_state, EnrollmentState::Stopped);
+    assert!(!p.model().is_loading, "loading must clear on failure too");
+    assert!(p.model().error.is_some());
+    assert!(
+        p.model().enrollment_session_v3.is_some(),
+        "the session must survive a failed save so it can be retried"
+    );
+}

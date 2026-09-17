@@ -767,3 +767,67 @@ fn a_future_last_used_does_not_render_negative_time() {
     assert_eq!(got, "just now");
     assert!(!got.contains('-'), "negative duration leaked: {got:?}");
 }
+
+// ===========================================================================
+// The Saving state renders something real
+// ===========================================================================
+
+/// `render_saving` must show a spinner and a status line, and no buttons: a
+/// commit in flight cannot be cancelled, and offering a control that does
+/// nothing is what the Error state used to do.
+#[test]
+fn the_saving_state_shows_progress_and_no_dead_controls() {
+    use gtk4::prelude::*;
+    use namtor_ui::components::enrollment::EnrollmentViewComponent;
+    common::run_gtk_test(|| {
+        let mut c = EnrollmentViewComponent::new();
+        let page = c.render_saving();
+        let w = page.upcast_ref::<gtk4::Widget>();
+        assert_eq!(
+            common::count_widgets_of_type::<gtk4::Spinner>(w),
+            1,
+            "saving must show a spinner"
+        );
+        assert_eq!(
+            common::count_widgets_of_type::<gtk4::Button>(w),
+            0,
+            "saving must not offer controls that cannot act"
+        );
+        let texts = common::collect_widget_text(w);
+        assert!(
+            texts.iter().any(|t| t.contains("Saving")),
+            "saving must say what is happening: {texts:?}"
+        );
+    });
+}
+
+/// `render_error` must show the message and two working buttons. The Error
+/// arm used to build a Dismiss button and never add it to any container.
+#[test]
+fn the_error_state_shows_the_message_and_two_buttons() {
+    use gtk4::prelude::*;
+    use namtor_ui::components::enrollment::EnrollmentViewComponent;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    common::run_gtk_test(|| {
+        let dismissed = Rc::new(Cell::new(false));
+        let d = Rc::clone(&dismissed);
+        let mut c = EnrollmentViewComponent::new();
+        let page = c.render_error("no IR camera found", None, move || d.set(true), || {});
+        let w = page.upcast_ref::<gtk4::Widget>().clone();
+        let texts = common::collect_widget_text(&w);
+        assert!(
+            texts.iter().any(|t| t.contains("no IR camera found")),
+            "the failure detail must be shown: {texts:?}"
+        );
+        assert_eq!(
+            common::count_widgets_of_type::<gtk4::Button>(&w),
+            2,
+            "Try Again and Cancel must both be present"
+        );
+        // And they must actually be wired: click the first button.
+        let btn = common::first_widget_of_type::<gtk4::Button>(&w).expect("a button");
+        btn.emit_clicked();
+        assert!(dismissed.get(), "Try Again must invoke its callback");
+    });
+}
