@@ -56,7 +56,7 @@
 %global debug_package %{nil}
 
 Name:           namtor
-Version:        0.3.5
+Version:        0.3.6
 Release:        1%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
@@ -338,6 +338,23 @@ fi
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.6-1
+- A suspend arriving during an authentication no longer waits out logind's
+  delay window. The dispatcher mutex is held across the blocking verify, and a
+  verify can stall as long as the camera withholds a frame — which is what the
+  start of a suspend causes — so the machine could sleep with the IR emitter
+  still lit. The handler now gives up after 750 ms and darkens the emitter
+  directly from the record the daemon writes before arming.
+- Hardened the second half of the V4L2 buffer leak: mmap_buffers could orphan
+  a mapping the same way request_buffers did, which pins the driver queue and
+  makes every later camera open fail with EBUSY.
+- The PAM module accepts a timeout_ms= argument beside socket=, bounding the
+  daemon round trip and the spec 8.4 keypress window.
+- UI messages with runtime parts (profile names, error details) were
+  permanently untranslatable, because the interpolated value went into the
+  gettext msgid.
+- A test asserted a build artifact that its own build never produces.
+
 * Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.5-1
 - SECURITY: the PAM module read its daemon socket path from the
   NAMTOR_SOCKET environment variable. Since it returns PAM_SUCCESS on a match,
