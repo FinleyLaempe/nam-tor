@@ -329,6 +329,14 @@ jobs:
             cp "/tmp/namtor-$PKGVER.tar.gz" ~/rpmbuild/SOURCES/
             cp "/tmp/namtor-models-$MODELVER.tar.gz" ~/rpmbuild/SOURCES/
             cp packaging/fedora/namtor.spec ~/rpmbuild/SPECS/
+            # `%build` runs `cargo build --release --frozen`, which is
+            # --locked --offline, and rpmbuild starts from an empty registry
+            # cache: "failed to download `aead v0.5.2`". The cache lives in
+            # $CARGO_HOME and is shared, so fetching here from the checkout
+            # is what makes the offline build inside rpmbuild possible — the
+            # same thing the Arch cell does before makepkg and the Debian
+            # cell before dpkg-buildpackage.
+            cargo fetch --locked
             rpmbuild -ba ~/rpmbuild/SPECS/namtor.spec
             find ~/rpmbuild/RPMS -name 'namtor-*.rpm' -exec cp {} /tmp/ \;
 
