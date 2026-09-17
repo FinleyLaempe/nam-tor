@@ -1,23 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Combined sandbox escape suite (G5.2).
 //!
-//! Runs `namtor-worker --apply-sandbox --self-test <kind>` for each escape
+//! Runs `namtor worker --apply-sandbox --self-test <kind>` for each escape
 //! kind and asserts the sandbox denies it. Positive control: `write` to an
 //! inherited fd succeeds.
 
 use std::process::Command;
 
-fn worker_bin() -> String {
-    env!("CARGO_BIN_EXE_namtor-worker").to_string()
+fn namtor_bin() -> String {
+    env!("CARGO_BIN_EXE_namtor").to_string()
 }
 
 fn run_self_test(kind: &str) -> (std::process::ExitStatus, String) {
-    let out = Command::new(worker_bin())
+    let out = Command::new(namtor_bin())
+        .arg("worker")
         .arg("--apply-sandbox")
         .arg("--self-test")
         .arg(kind)
         .output()
-        .expect("spawn namtor-worker");
+        .expect("spawn namtor worker");
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     (out.status, stdout)
 }

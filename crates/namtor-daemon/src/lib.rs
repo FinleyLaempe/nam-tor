@@ -7,6 +7,7 @@
 //! cold-camera lifecycle (spec §5.5).
 
 pub mod acl;
+pub mod app;
 pub mod backoff;
 pub mod daemon;
 pub mod dbus;
@@ -15,6 +16,7 @@ pub mod fusion;
 pub mod licence;
 pub mod lifecycle;
 pub mod listener;
+pub mod live_capture;
 pub mod manager;
 pub mod models;
 pub mod nonce;

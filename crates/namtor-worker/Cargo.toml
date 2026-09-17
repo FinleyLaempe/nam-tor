@@ -48,7 +48,3 @@ openvino = []
 # Optional R100 (RidgeRun / custom CPU EP) backend evaluator (Task 31). Same
 # semantics as `openvino`: variant-only, OFF by default, no default change.
 r100 = []
-
-[[bin]]
-name = "namtor-worker"
-path = "src/bin/namtor-worker.rs"

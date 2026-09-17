@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `namtor-cli` binary: user-facing CLI entry point.
+//! `namtor cli`: user-facing CLI entry point.
+//!
+//! Reached as `namtor cli <command>` (or through the `namtor-cli` compat
+//! symlink, which dispatches here on argv[0]). clap owns everything after
+//! the `cli` subcommand, so `#[command(version)]` and clap's own `--help`
+//! keep working unchanged.
 
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use namtor_cli::diagnostics::{
+use crate::diagnostics::{
     collect_model_info, collect_systemd_status, create_bundle, filter_log_lines,
     get_daemon_version, run_doctor, BundleInfo, DiagnosticConfig,
 };
-use namtor_cli::status::{run_status_command, DbusStatusSource};
+use crate::status::{run_status_command, DbusStatusSource};
 use namtor_layout::{InstallRoot, LayoutPaths};
 
 #[derive(Debug, Parser)]
-#[command(name = "namtor-cli", about = "Nam-tor user CLI", version)]
+#[command(name = "namtor cli", about = "Nam-tor user CLI", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -94,8 +99,10 @@ fn installed_layout() -> LayoutPaths {
     )
 }
 
-fn main() -> ExitCode {
-    let cli = Cli::parse();
+/// Entry point for `namtor cli`. `argv` is the full argument vector clap
+/// should parse, including argv[0] (the program name shown in usage).
+pub fn main(argv: Vec<String>) -> ExitCode {
+    let cli = Cli::parse_from(argv);
     match cli.command {
         Command::Status => cmd_status(),
         Command::Enroll {
@@ -108,7 +115,7 @@ fn main() -> ExitCode {
         } => {
             if old {
                 let layout = installed_layout();
-                namtor_cli::enroll::run_enroll(
+                crate::enroll::run_enroll(
                     &models_dir.unwrap_or(layout.models_dir),
                     &templates_dir.unwrap_or(layout.templates_dir),
                     &key_path.unwrap_or(layout.key_path),
@@ -116,10 +123,10 @@ fn main() -> ExitCode {
                     user,
                 )
             } else {
-                namtor_cli::enroll::run_enroll_v3(user)
+                crate::enroll::run_enroll_v3(user)
             }
         }
-        Command::Verify { user } => namtor_cli::verify::run_verify(user),
+        Command::Verify { user } => crate::verify::run_verify(user),
         Command::List {
             templates_dir,
             key_path,
@@ -127,13 +134,13 @@ fn main() -> ExitCode {
         } => {
             if local {
                 let layout = installed_layout();
-                namtor_cli::list::run_list_local(
+                crate::list::run_list_local(
                     &templates_dir.unwrap_or(layout.templates_dir),
                     &key_path.unwrap_or(layout.key_path),
                 )
             } else {
-                match namtor_cli::list::DbusProfileSource::connect() {
-                    Ok(source) => namtor_cli::list::run_list_daemon(&source),
+                match crate::list::DbusProfileSource::connect() {
+                    Ok(source) => crate::list::run_list_daemon(&source),
                     Err(e) => {
                         eprintln!("list: {e}");
                         std::process::ExitCode::FAILURE
@@ -150,14 +157,14 @@ fn main() -> ExitCode {
         } => {
             if local {
                 let layout = installed_layout();
-                namtor_cli::list::run_remove_local(
+                crate::list::run_remove_local(
                     uid,
                     &templates_dir.unwrap_or(layout.templates_dir),
                     &key_path.unwrap_or(layout.key_path),
                 )
             } else {
-                match namtor_cli::list::DbusProfileSource::connect() {
-                    Ok(source) => namtor_cli::list::run_remove_daemon(&source, uid, &profile_id),
+                match crate::list::DbusProfileSource::connect() {
+                    Ok(source) => crate::list::run_remove_daemon(&source, uid, &profile_id),
                     Err(e) => {
                         eprintln!("remove: {e}");
                         std::process::ExitCode::FAILURE

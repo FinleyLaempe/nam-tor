@@ -1,0 +1,21 @@
+[package]
+name = "namtor"
+version = "0.2.0"
+edition.workspace = true
+license = "GPL-3.0-only"
+description = "Nam-tor — single multi-call executable: daemon, sandboxed worker, CLI, emitter-off"
+
+[dependencies]
+namtor-camera = { path = "../namtor-camera" }
+namtor-cli = { path = "../namtor-cli" }
+namtor-daemon = { path = "../namtor-daemon" }
+namtor-layout = { path = "../namtor-layout" }
+namtor-worker = { path = "../namtor-worker", features = ["onnx"] }
+
+[dev-dependencies]
+namtor-capture = { path = "../namtor-capture" }
+namtor-proto = { path = "../namtor-proto" }
+
+[[bin]]
+name = "namtor"
+path = "src/main.rs"

@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `namtor-worker` binary: the sandboxed inference process.
+//! `namtor worker` subcommand: the sandboxed inference process.
 //!
-//! Task 3 wires argument parsing; Task 9 fills in the
-//! [`namtor_worker::run_main`] loop. Task 6 adds `--seccomp-self-test` for the
-//! sandbox escape tests: the binary applies seccomp, attempts one action, and
+//! Reached as `namtor worker ...` — the daemon re-execs `/proc/self/exe` with
+//! this subcommand so the worker is the same *file* but still a separate
+//! *process* (spec §3.4: the sandbox is the privilege boundary, not a UID
+//! drop). Task 3 wires argument parsing; Task 9 fills in the
+//! [`crate::run_main`] loop. Task 6 adds `--seccomp-self-test` for the
+//! sandbox escape tests: the process applies seccomp, attempts one action, and
 //! reports the errno so the integration test can assert denial.
 
 use std::ffi::CString;
 use std::process::ExitCode;
 
-const USAGE: &str = "\
-Usage: namtor-worker --read-fd N --write-fd M [OPTIONS]
+pub const USAGE: &str = "\
+Usage: namtor worker --read-fd N --write-fd M [OPTIONS]
 
-Sandboxed inference worker. Spawned by namtor-daemon; not meant to be run
+Sandboxed inference worker. Re-execed by `namtor daemon`; not meant to be run
 by hand.
 
 Options:
@@ -25,16 +28,16 @@ Options:
   -h, --help             Print this help and exit
   -V, --version          Print the version and exit";
 
-fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-
+/// Entry point for `namtor worker`. `args` are the arguments *after* the
+/// subcommand name.
+pub fn main(args: &[String]) -> ExitCode {
     // `handle_known` leaves the worker's own flags alone; only --version and
     // --help are intercepted here.
     if let Some(code) = namtor_layout::cli_preamble::handle_known(
-        "namtor-worker",
+        "namtor worker",
         env!("CARGO_PKG_VERSION"),
         USAGE,
-        &args,
+        args,
     ) {
         return ExitCode::from(code);
     }
@@ -52,6 +55,7 @@ fn main() -> ExitCode {
             "--apply-sandbox" if i + 2 < args.len() && args[i + 1] == "--self-test" => {
                 return combined_escape_test(&args[i + 2]);
             }
+            #[cfg(feature = "onnx")]
             "--ioctl-probe" if i + 1 < args.len() => {
                 return ioctl_probe(&args[i + 1]);
             }
@@ -95,7 +99,7 @@ fn main() -> ExitCode {
                 i += 2;
             }
             other => {
-                eprintln!("namtor-worker: unknown arg {other}");
+                eprintln!("namtor worker: unknown arg {other}");
                 return ExitCode::from(2);
             }
         }
@@ -104,19 +108,14 @@ fn main() -> ExitCode {
     let (read_fd, write_fd) = match (read_fd, write_fd) {
         (Some(r), Some(w)) => (r, w),
         _ => {
-            eprintln!("usage: namtor-worker --read-fd N --write-fd M [--frame-memfd F --frame-len L] [--apply-sandbox]");
+            eprintln!("usage: namtor worker --read-fd N --write-fd M [--frame-memfd F --frame-len L] [--apply-sandbox]");
             return ExitCode::from(2);
         }
     };
 
-    let backend = namtor_worker::infer::default_backend();
-    let backend: Box<dyn namtor_worker::infer::InferenceBackend> = match &models_dir {
-        Some(dir) => Box::new(
-            namtor_worker::infer_onnx::OnnxCpu::new(1).with_root(std::path::PathBuf::from(dir)),
-        ),
-        None => backend,
-    };
-    match namtor_worker::run_main(
+    let backend = crate::infer::default_backend();
+    let backend = with_models_dir(backend, models_dir.as_deref());
+    match crate::run_main(
         read_fd,
         write_fd,
         backend,
@@ -126,10 +125,35 @@ fn main() -> ExitCode {
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("namtor-worker: {e}");
+            eprintln!("namtor worker: {e}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// Point the real ONNX backend at `--models-dir` when one was given.
+///
+/// Without the `onnx` feature there is no `OnnxCpu` to re-root, so the
+/// deterministic mock backend is returned unchanged.
+#[cfg(feature = "onnx")]
+fn with_models_dir(
+    backend: Box<dyn crate::infer::InferenceBackend>,
+    models_dir: Option<&str>,
+) -> Box<dyn crate::infer::InferenceBackend> {
+    match models_dir {
+        Some(dir) => {
+            Box::new(crate::infer_onnx::OnnxCpu::new(1).with_root(std::path::PathBuf::from(dir)))
+        }
+        None => backend,
+    }
+}
+
+#[cfg(not(feature = "onnx"))]
+fn with_models_dir(
+    backend: Box<dyn crate::infer::InferenceBackend>,
+    _models_dir: Option<&str>,
+) -> Box<dyn crate::infer::InferenceBackend> {
+    backend
 }
 
 /// Create a `CString` from a `&'static str` literal known to be NUL-free.
@@ -148,7 +172,7 @@ fn cstr(s: &'static str) -> CString {
 /// Apply seccomp then attempt `kind`; print the errno (or "ok") and exit.
 /// Exit code 0 = action succeeded, 1 = action denied (EPERM), 2 = usage.
 fn seccomp_self_test(kind: &str) -> ExitCode {
-    if let Err(e) = namtor_worker::sandbox::seccomp::apply_seccomp() {
+    if let Err(e) = crate::sandbox::seccomp::apply_seccomp() {
         eprintln!("seccomp apply failed: {e}");
         return ExitCode::FAILURE;
     }
@@ -356,7 +380,7 @@ fn errno() -> i32 {
 
 /// Apply landlock then attempt `kind`; print the errno (or "ok") and exit.
 fn landlock_self_test(kind: &str) -> ExitCode {
-    if let Err(e) = namtor_worker::sandbox::landlock::apply_landlock() {
+    if let Err(e) = crate::sandbox::landlock::apply_landlock() {
         eprintln!("landlock apply failed: {e}");
         return ExitCode::FAILURE;
     }
@@ -414,7 +438,7 @@ fn test_read_inherited() -> TestResult {
 /// Combined sandbox escape test: apply both landlock + seccomp, then attempt
 /// the named escape kind. Used by `tests/escape.rs` (G5.2).
 fn combined_escape_test(kind: &str) -> ExitCode {
-    if let Err(e) = namtor_worker::sandbox::apply_sandbox() {
+    if let Err(e) = crate::sandbox::apply_sandbox() {
         eprintln!("sandbox apply failed: {e}");
         return ExitCode::FAILURE;
     }
@@ -533,9 +557,10 @@ fn test_fork() -> TestResult {
 /// by SEC-6 task 9 to measure the ioctl surface before narrowing the seccomp
 /// allowlist. No sandbox is applied — the probe exists to observe the
 /// unrestricted syscall surface.
+#[cfg(feature = "onnx")]
 fn ioctl_probe(model_path: &str) -> ExitCode {
     let path = std::path::Path::new(model_path);
-    let mut backend = namtor_worker::infer_onnx::OnnxCpu::new(1);
+    let mut backend = crate::infer_onnx::OnnxCpu::new(1);
     let spec = namtor_proto::worker::ModelSpec {
         id: "probe".into(),
         quant: namtor_proto::worker::Quant::Fp32,
@@ -567,7 +592,7 @@ fn ioctl_probe(model_path: &str) -> ExitCode {
         ts_us: 0,
     };
     println!("PROBE_START");
-    use namtor_worker::infer::InferenceBackend;
+    use crate::infer::InferenceBackend;
     for _ in 0..5 {
         if let Err(e) = backend.run(&loaded, &frame, &frame_ref) {
             eprintln!("probe run failed: {e}");

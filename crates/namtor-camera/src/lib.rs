@@ -4,6 +4,7 @@
 
 pub mod always_on;
 pub mod emitter_ctrl;
+pub mod emitter_off_cli;
 pub mod hotplug;
 pub mod inventory;
 pub mod resume;

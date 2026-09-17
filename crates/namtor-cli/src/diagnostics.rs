@@ -215,7 +215,12 @@ pub struct DiagnosticConfig {
     pub key_path: PathBuf,
     pub models_dir: PathBuf,
     pub daemon_socket: PathBuf,
+    /// The single multi-call executable (`/usr/bin/namtor`), which is what
+    /// `namtor daemon` runs from.
     pub daemon_bin: PathBuf,
+    /// The `namtor-cli` compat symlink to [`Self::daemon_bin`]. Checked
+    /// separately: a package that dropped the symlink still breaks every
+    /// documented `namtor-cli ...` invocation.
     pub cli_bin: PathBuf,
     pub quirks_dirs: Vec<PathBuf>,
     pub auth_outcome: AuthOutcome,
@@ -255,8 +260,8 @@ impl DiagnosticConfig {
             key_path: layout.key_path.clone(),
             models_dir: layout.models_dir.clone(),
             daemon_socket: layout.daemon_socket.clone(),
-            daemon_bin: layout.daemon_bin.clone(),
-            cli_bin: layout.cli_bin.clone(),
+            daemon_bin: layout.namtor_bin.clone(),
+            cli_bin: layout.cli_symlink.clone(),
             quirks_dirs: layout.quirks_dirs.clone(),
             auth_outcome: AuthOutcome::Unavailable,
             root,
@@ -468,7 +473,7 @@ fn check_package(cfg: &DiagnosticConfig) -> DiagnosticCheck {
         missing.push("namtor-cli");
     }
     if !cfg.daemon_bin.exists() {
-        missing.push("namtor-daemon");
+        missing.push("namtor");
     }
     if missing.is_empty() {
         DiagnosticCheck::Ok {
@@ -1445,8 +1450,8 @@ mod tests {
         );
         let layout_text = format!(
             "{} {} {} {} {} {} {:?}",
-            layout.daemon_bin.display(),
-            layout.cli_bin.display(),
+            layout.namtor_bin.display(),
+            layout.cli_symlink.display(),
             layout.models_dir.display(),
             layout.templates_dir.display(),
             layout.key_path.display(),
@@ -1469,14 +1474,9 @@ mod tests {
             InstallRoot::Source,
         );
         assert!(
-            layout.daemon_bin.ends_with("target/release/namtor-daemon"),
-            "source daemon_bin = {}",
-            layout.daemon_bin.display()
-        );
-        assert!(
-            layout.cli_bin.ends_with("target/release/namtor-cli"),
-            "source cli_bin = {}",
-            layout.cli_bin.display()
+            layout.namtor_bin.ends_with("target/release/namtor"),
+            "source namtor_bin = {}",
+            layout.namtor_bin.display()
         );
     }
 
@@ -1490,14 +1490,14 @@ mod tests {
 
         let layout = LayoutPaths::resolve(tmp.path(), &staged_manifest, InstallRoot::Staged);
         assert_eq!(
-            layout.daemon_bin,
-            tmp.path().join("usr/lib/namtor/namtor-daemon"),
-            "staged daemon_bin rebased under DESTDIR"
+            layout.namtor_bin,
+            tmp.path().join("usr/bin/namtor"),
+            "staged namtor_bin rebased under DESTDIR"
         );
         assert_eq!(
-            layout.cli_bin,
+            layout.cli_symlink,
             tmp.path().join("usr/bin/namtor-cli"),
-            "staged cli_bin rebased under DESTDIR"
+            "staged cli symlink rebased under DESTDIR"
         );
         assert_eq!(layout.models_dir, tmp.path().join("var/lib/namtor/models"));
         assert_eq!(
@@ -1516,15 +1516,15 @@ mod tests {
         let alt_manifest = tmp.path().join("install-manifest.toml");
         fs::write(
             &alt_manifest,
-            "[[files]]\ndest = \"/usr/libexec/namtor-daemon\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n\n\
-             [[files]]\ndest = \"/usr/bin/namtor-cli\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n",
+            "[[files]]\ndest = \"/usr/libexec/namtor\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n\n\
+             [[files]]\ndest = \"/usr/libexec/namtor-cli\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n",
         )
         .unwrap();
 
         let layout = LayoutPaths::resolve(tmp.path(), &alt_manifest, InstallRoot::Installed);
         assert_eq!(
-            layout.daemon_bin,
-            PathBuf::from("/usr/libexec/namtor-daemon"),
+            layout.namtor_bin,
+            PathBuf::from("/usr/libexec/namtor"),
             "alternate libexec dest followed from manifest"
         );
     }
@@ -1573,7 +1573,7 @@ mod tests {
         let manifest = tmp.path().join("m.toml");
         fs::write(
             &manifest,
-            "[[files]]\ndest = \"/usr/lib/namtor/namtor-daemon\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n\n\
+            "[[files]]\ndest = \"/usr/bin/namtor\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n\n\
              [[files]]\ndest = \"/usr/bin/namtor-cli\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n",
         )
         .unwrap();
@@ -1585,10 +1585,7 @@ mod tests {
         );
         assert_eq!(cfg.device_path, PathBuf::from("/dev/video4"));
         assert_eq!(cfg.vid_pid, "1111:2222");
-        assert_eq!(
-            cfg.daemon_bin,
-            tmp.path().join("usr/lib/namtor/namtor-daemon")
-        );
+        assert_eq!(cfg.daemon_bin, tmp.path().join("usr/bin/namtor"));
         assert_eq!(cfg.cli_bin, tmp.path().join("usr/bin/namtor-cli"));
         assert_eq!(cfg.models_dir, tmp.path().join("var/lib/namtor/models"));
     }

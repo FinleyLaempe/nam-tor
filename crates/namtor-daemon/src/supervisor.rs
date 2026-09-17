@@ -1,12 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Worker supervisor: spawns `namtor-worker` as a child process, establishes
-//! the pipe + memfd frame channel, and forwards Load/Infer requests.
+//! Worker supervisor: re-execs this executable as `namtor worker` in a child
+//! process, establishes the pipe + memfd frame channel, and forwards
+//! Load/Infer requests.
 //!
 //! The daemon (non-root, user `namtor`) spawns the worker directly as a
 //! child process — the worker inherits the daemon's UID (`namtor`). The
 //! worker self-applies seccomp + landlock (`--apply-sandbox`); the sandbox
 //! is the privilege boundary, not a UID drop. In tests the worker runs
 //! with `--features mock-infer` and no sandbox.
+//!
+//! Daemon and worker are the *same file* (one shipped `namtor` executable)
+//! but remain *separate processes*: merging the worker into the daemon's
+//! address space would delete the isolation that keeps an inference-side
+//! compromise away from templates, keys and the PAM socket. The child is
+//! started from `/proc/self/exe` so a renamed, moved or still-unlinked
+//! executable re-execs itself correctly; `worker_bin` is the fallback when
+//! `/proc` is not mounted (e.g. a minimal container).
 
 use std::io::{Seek, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -83,10 +92,24 @@ pub struct ChildSupervisor {
 }
 
 impl ChildSupervisor {
-    /// Spawn the worker binary. `worker_bin` is the path to `namtor-worker`;
+    /// Spawn the worker child. The child is this same executable re-exec'd as
+    /// `namtor worker`, resolved through `/proc/self/exe`; `worker_bin` is the
+    /// configured fallback used only when `/proc/self/exe` cannot be read.
     /// `mock_infer` selects the `mock-infer` feature (for CI tests).
     pub fn spawn(
         worker_bin: &Path,
+        models: &[ModelSpec],
+        mock_infer: bool,
+        models_dir: &Path,
+    ) -> Result<Self, DaemonError> {
+        Self::spawn_with_exe(&self_exe(worker_bin), models, mock_infer, models_dir)
+    }
+
+    /// Spawn `<exe> worker ...` as the worker child. [`Self::spawn`] resolves
+    /// `exe` for the running daemon; tests pass the built `namtor` binary
+    /// directly, because their own `/proc/self/exe` is the test harness.
+    pub fn spawn_with_exe(
+        exe: &Path,
         models: &[ModelSpec],
         mock_infer: bool,
         models_dir: &Path,
@@ -127,8 +150,11 @@ impl ChildSupervisor {
         let rsp_w_raw = rsp_w.as_raw_fd();
         let rsp_r_raw = rsp_r.as_raw_fd();
 
-        // Spawn the worker, inheriting the fds.
-        let mut cmd = Command::new(worker_bin);
+        // Spawn the worker, inheriting the fds. `namtor worker` is this same
+        // executable re-exec'd with the `worker` subcommand — a separate
+        // process, not a thread.
+        let mut cmd = Command::new(exe);
+        cmd.arg("worker");
         cmd.arg("--read-fd")
             .arg(req_r_raw.to_string())
             .arg("--write-fd")
@@ -160,7 +186,7 @@ impl ChildSupervisor {
 
         let child = cmd
             .spawn()
-            .map_err(|e| DaemonError::Worker(format!("spawn {worker_bin:?}: {e}")))?;
+            .map_err(|e| DaemonError::Worker(format!("spawn {exe:?} worker: {e}")))?;
 
         // Drop the worker-side fds from the daemon (they're now in the child).
         drop(req_r);
@@ -269,6 +295,26 @@ impl WorkerSupervisor for ChildSupervisor {
     }
 }
 
+/// Resolve the executable to re-exec as the worker child.
+///
+/// `/proc/self/exe` is preferred so the daemon re-execs *itself* whatever the
+/// installed binary is called or wherever it was moved to. When `/proc` is not
+/// mounted the configured `fallback` (`NAMTOR_WORKER_BIN`, else the install
+/// manifest's binary path) is used instead.
+fn self_exe(fallback: &Path) -> std::path::PathBuf {
+    match std::fs::read_link("/proc/self/exe") {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                fallback = %fallback.display(),
+                "/proc/self/exe unreadable; using configured worker binary"
+            );
+            fallback.to_path_buf()
+        }
+    }
+}
+
 impl Drop for ChildSupervisor {
     fn drop(&mut self) {
         let _ = self.shutdown();
@@ -279,50 +325,6 @@ impl Drop for ChildSupervisor {
 mod tests {
     use super::*;
     use namtor_proto::worker::Quant;
-
-    #[test]
-    #[ignore = "requires namtor-worker built with --no-default-features --features mock-infer; run with NAMTOR_E2E_TEST=1"]
-    fn spawn_load_infer_shutdown_with_mock_worker() {
-        let worker_bin = std::env::var("CARGO_BIN_EXE_namtor-worker").unwrap_or_else(|_| {
-            let target = std::env::current_dir()
-                .expect("cwd")
-                .join("target/debug/namtor-worker");
-            target.to_string_lossy().into_owned()
-        });
-
-        let models = vec![ModelSpec {
-            id: "test".into(),
-            quant: Quant::Fp32,
-            sha256: [0; 32],
-        }];
-
-        let mut sup = ChildSupervisor::spawn(
-            std::path::Path::new(&worker_bin),
-            &models,
-            true,
-            std::path::Path::new("."),
-        )
-        .expect("spawn");
-
-        let loaded = sup.load_all(&models).expect("load_all");
-        assert_eq!(loaded.len(), 1);
-
-        let frame = vec![0x42u8; 64];
-        let frame_ref = FrameRef {
-            offset: 0,
-            len: 64,
-            emitter: namtor_capture::frame::EmitterState::On,
-            spectrum: namtor_capture::source::Spectrum::Ir,
-            pix_fmt: namtor_capture::frame::PixFmt::Grey8,
-            w: 8,
-            h: 8,
-            ts_us: 0,
-        };
-        let vec = sup.infer(0, &frame_ref, &frame).expect("infer");
-        assert!(!vec.is_empty(), "inference should return a vector");
-
-        sup.shutdown().expect("shutdown");
-    }
 
     #[test]
     fn mock_supervisor_load_all() {

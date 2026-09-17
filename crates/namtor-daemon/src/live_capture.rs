@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::daemon::CaptureFactory;
+use crate::DaemonError;
 use namtor_camera::always_on::ProtectionLevel;
 use namtor_camera::emitter_ctrl::{ApplyOutcome, EmitterController, EnvConsent};
 use namtor_camera::hotplug::{DeviceEvent, HotplugState};
@@ -12,8 +14,6 @@ use namtor_camera::inventory::{
 use namtor_camera::resume::{ReconcileOutcome, Reconciler, SleepEvent};
 use namtor_camera::watchdog::force_off_lib;
 use namtor_capture::source::CaptureSource;
-use namtor_daemon::daemon::CaptureFactory;
-use namtor_daemon::DaemonError;
 use namtor_hwdb::quirks::EmitterCfg;
 
 pub fn factory_with_configured(configured: Option<String>) -> CaptureFactory {
@@ -26,15 +26,11 @@ pub fn factory_with_inventory(
     enrolled: Option<String>,
 ) -> CaptureFactory {
     Box::new(move || {
-        let cameras = inventory
-            .enumerate()
-            .map_err(namtor_daemon::DaemonError::Capture)?;
+        let cameras = inventory.enumerate().map_err(crate::DaemonError::Capture)?;
         let selected =
             select_camera_from_inventory(&cameras, configured.as_deref(), enrolled.as_deref())
                 .ok_or_else(|| {
-                    namtor_daemon::DaemonError::Capture(
-                        "no IR camera found via topology selection".into(),
-                    )
+                    crate::DaemonError::Capture("no IR camera found via topology selection".into())
                 })?;
         open_selected_camera(&selected.camera)
     })
@@ -42,7 +38,7 @@ pub fn factory_with_inventory(
 
 fn open_selected_camera(
     cam: &DiscoveredCamera,
-) -> Result<Box<dyn CaptureSource>, namtor_daemon::DaemonError> {
+) -> Result<Box<dyn CaptureSource>, crate::DaemonError> {
     let dev = &cam.ir_node.dev_path;
     let meta_dev = cam.metadata_node.as_ref().map(|n| &n.dev_path);
 
@@ -59,7 +55,7 @@ fn open_selected_camera(
         cam.width,
         cam.height,
     )
-    .map_err(|e| namtor_daemon::DaemonError::Capture(e.to_string()))?;
+    .map_err(|e| crate::DaemonError::Capture(e.to_string()))?;
     let caps = namtor_capture::source::SourceCaps {
         spectrum: namtor_capture::source::Spectrum::Ir,
         format: namtor_capture::frame::PixFmt::Grey8,
@@ -72,7 +68,7 @@ fn open_selected_camera(
         namtor_capture::ir_uvc::IrUvc::new(streamer, namtor_capture::ir_uvc::ParityPolicy, caps);
     source
         .start()
-        .map_err(|e| namtor_daemon::DaemonError::Capture(e.to_string()))?;
+        .map_err(|e| crate::DaemonError::Capture(e.to_string()))?;
     Ok(Box::new(EmitterSource {
         source,
         _emitter: emitter,

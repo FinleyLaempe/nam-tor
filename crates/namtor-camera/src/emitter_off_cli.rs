@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `namtor-camera-emitter-off`: best-effort force-off invoked by systemd's
+//! `namtor emitter-off <device>`: best-effort force-off invoked by systemd's
 //! `ExecStopPost=` on unexpected teardown. Thin wrapper over
-//! [`namtor_camera::watchdog::force_off_on_device`].
+//! [`crate::watchdog::force_off_on_device`].
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use namtor_camera::watchdog::force_off_on_device;
+use crate::watchdog::force_off_on_device;
 
-const USAGE: &str = "\
-Usage: namtor-camera-emitter-off <device>
+pub const USAGE: &str = "\
+Usage: namtor emitter-off <device>
 
 Best-effort IR emitter force-off, invoked by systemd's ExecStopPost= on
 unexpected teardown.
@@ -18,19 +18,20 @@ Options:
   -h, --help       Print this help and exit
   -V, --version    Print the version and exit";
 
-fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+/// Entry point for `namtor emitter-off`. `args` are the arguments *after* the
+/// subcommand name.
+pub fn main(args: &[String]) -> ExitCode {
     // `handle_known` leaves the <device> positional alone.
     if let Some(code) = namtor_layout::cli_preamble::handle_known(
-        "namtor-camera-emitter-off",
+        "namtor emitter-off",
         env!("CARGO_PKG_VERSION"),
         USAGE,
-        &args,
+        args,
     ) {
         return ExitCode::from(code);
     }
     if args.len() != 1 {
-        eprintln!("usage: namtor-camera-emitter-off <device>");
+        eprintln!("usage: namtor emitter-off <device>");
         return ExitCode::from(2);
     }
     let device = PathBuf::from(&args[0]);

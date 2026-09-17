@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Seccomp escape tests (Task 6): spawn `namtor-worker --seccomp-self-test
+//! Seccomp escape tests (Task 6): spawn `namtor worker --seccomp-self-test
 //! <kind>` and assert the filter denies `open`/`socket` and allows `write`.
+//!
+//! The worker is a subcommand of the single shipped `namtor` executable, so
+//! the suite drives that binary — the same file the daemon re-execs.
 
 use std::process::Command;
 
-fn worker_bin() -> String {
-    env!("CARGO_BIN_EXE_namtor-worker").to_string()
+fn namtor_bin() -> String {
+    env!("CARGO_BIN_EXE_namtor").to_string()
 }
 
 fn run_self_test(kind: &str) -> (std::process::ExitStatus, String) {
-    let out = Command::new(worker_bin())
+    let out = Command::new(namtor_bin())
+        .arg("worker")
         .arg("--seccomp-self-test")
         .arg(kind)
         .output()
-        .expect("spawn namtor-worker");
+        .expect("spawn namtor worker");
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     (out.status, stdout)
 }

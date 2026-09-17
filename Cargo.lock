@@ -1526,6 +1526,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "namtor"
+version = "0.2.0"
+dependencies = [
+ "namtor-camera",
+ "namtor-capture",
+ "namtor-cli",
+ "namtor-daemon",
+ "namtor-layout",
+ "namtor-proto",
+ "namtor-worker",
+]
+
+[[package]]
 name = "namtor-camera"
 version = "0.2.0"
 dependencies = [

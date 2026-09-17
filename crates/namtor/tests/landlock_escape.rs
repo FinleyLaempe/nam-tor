@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Landlock escape tests (Task 7): spawn `namtor-worker --landlock-self-test
+//! Landlock escape tests (Task 7): spawn `namtor worker --landlock-self-test
 //! <kind>` and assert landlock denies `open`/`mkdir` and allows `read` on an
 //! inherited pre-opened fd.
 
 use std::process::Command;
 
-fn worker_bin() -> String {
-    env!("CARGO_BIN_EXE_namtor-worker").to_string()
+fn namtor_bin() -> String {
+    env!("CARGO_BIN_EXE_namtor").to_string()
 }
 
 fn run_self_test(kind: &str) -> (std::process::ExitStatus, String) {
-    let out = Command::new(worker_bin())
+    let out = Command::new(namtor_bin())
+        .arg("worker")
         .arg("--landlock-self-test")
         .arg(kind)
         .output()
-        .expect("spawn namtor-worker");
+        .expect("spawn namtor worker");
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     (out.status, stdout)
 }

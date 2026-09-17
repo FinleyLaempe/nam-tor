@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/namtor",
     "crates/namtor-camera",
     "crates/namtor-capture",
     "crates/namtor-cli",

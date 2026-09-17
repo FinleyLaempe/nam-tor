@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `namtor-daemon` binary entry point.
+//! `namtor daemon` subcommand: the daemon entry point.
 //!
 //! Wires the full authentication pipeline: spawns the sandboxed worker,
 //! opens the template store + recognition models, binds the PAM socket,
@@ -20,34 +20,32 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use namtor_daemon::acl::resolve_namtor_auth_gid;
-use namtor_daemon::backoff::{BackoffConfig, BackoffStore};
-use namtor_daemon::daemon::Daemon;
-use namtor_daemon::dbus::{ManagerService, SystemPolkit};
-use namtor_daemon::dispatch::DaemonDispatcher;
-use namtor_daemon::lifecycle::SystemClock;
-use namtor_daemon::manager::bus::ManagerBusService;
-use namtor_daemon::manager::dbus::{Manager2Service, Manager3EmbedFactory, Manager3Service};
-use namtor_daemon::manager::embed::PipelineEmbedSource;
-use namtor_daemon::manager::store::{ProfileStore, TemplateProfileStore};
-use namtor_daemon::models::{
+use crate::acl::resolve_namtor_auth_gid;
+use crate::backoff::{BackoffConfig, BackoffStore};
+use crate::daemon::Daemon;
+use crate::dbus::{ManagerService, SystemPolkit};
+use crate::dispatch::DaemonDispatcher;
+use crate::lifecycle::SystemClock;
+use crate::live_capture;
+use crate::manager::bus::ManagerBusService;
+use crate::manager::dbus::{Manager2Service, Manager3EmbedFactory, Manager3Service};
+use crate::manager::embed::PipelineEmbedSource;
+use crate::manager::store::{ProfileStore, TemplateProfileStore};
+use crate::models::{
     hex, resolve_required_specs, ManifestGate, ModelFetcher, ModelManifest, NoFetch,
 };
-use namtor_daemon::startup;
-use namtor_daemon::supervisor::ChildSupervisor;
-use namtor_daemon::verify::VerifyEngine;
+use crate::startup;
+use crate::supervisor::ChildSupervisor;
+use crate::verify::VerifyEngine;
 use namtor_layout::{InstallRoot, LayoutPaths};
 use namtor_store::TemplateStore;
 use namtor_worker::learned_pad::LearnedPadBackend;
 use tracing_subscriber::EnvFilter;
 
-#[path = "namtor-daemon/live_capture.rs"]
-mod live_capture;
-
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
-const USAGE: &str = "\
-Usage: namtor-daemon
+pub const USAGE: &str = "\
+Usage: namtor daemon
 
 Nam-tor authentication daemon. Started by systemd with no arguments.
 
@@ -55,14 +53,17 @@ Options:
   -h, --help       Print this help and exit
   -V, --version    Print the version and exit";
 
-fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(code) = namtor_layout::cli_preamble::handle(
-        "namtor-daemon",
-        env!("CARGO_PKG_VERSION"),
-        USAGE,
-        &args,
-    ) {
+/// Entry point for `namtor daemon`. `args` are the arguments *after* the
+/// subcommand name.
+///
+/// `cli_preamble::handle` runs before any tracing, model loading or socket
+/// binding: `namtor daemon --version` must exit 0 without starting anything
+/// (the release smoke test calls it, and a daemon boot there hung the
+/// pipeline — runs 34802156299, 34804866795, 34807137454).
+pub fn main(args: &[String]) -> ExitCode {
+    if let Some(code) =
+        namtor_layout::cli_preamble::handle("namtor daemon", env!("CARGO_PKG_VERSION"), USAGE, args)
+    {
         return ExitCode::from(code);
     }
     init_tracing();
@@ -110,7 +111,7 @@ extern "C" fn handle_signal(_sig: nix::libc::c_int) {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
-        "namtor-daemon starting"
+        "namtor daemon starting"
     );
 
     let layout = LayoutPaths::resolve(
@@ -131,9 +132,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let key_path = std::env::var("NAMTOR_KEY_PATH")
         .map(PathBuf::from)
         .unwrap_or(layout.key_path);
+    // Fallback only: `ChildSupervisor` re-execs `/proc/self/exe` so the
+    // worker is this same executable. This path is used when /proc is not
+    // mounted.
     let worker_bin = std::env::var("NAMTOR_WORKER_BIN")
         .map(PathBuf::from)
-        .unwrap_or(layout.worker_bin);
+        .unwrap_or(layout.namtor_bin);
     let backoff_path = std::env::var("NAMTOR_BACKOFF_PATH")
         .map(PathBuf::from)
         .unwrap_or(layout.backoff_path);
@@ -254,7 +258,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let sface = sface_path.clone();
         let embed_factory: Manager3EmbedFactory = Box::new(move || {
             Ok(Box::new(PipelineEmbedSource::load(&yunet, &sface)?)
-                as Box<dyn namtor_daemon::manager::session::EmbedSource>)
+                as Box<dyn crate::manager::session::EmbedSource>)
         });
         Some((
             live_capture::factory_with_configured(configured),
@@ -323,7 +327,7 @@ type ManagerBusHandle = (
 fn start_manager_bus(
     store_dir: &std::path::Path,
     key_path: &std::path::Path,
-    enroll_sources: Option<(namtor_daemon::daemon::CaptureFactory, Manager3EmbedFactory)>,
+    enroll_sources: Option<(crate::daemon::CaptureFactory, Manager3EmbedFactory)>,
 ) -> Option<ManagerBusHandle> {
     let store = match TemplateStore::open(store_dir, key_path) {
         Ok(s) => Arc::new(s),

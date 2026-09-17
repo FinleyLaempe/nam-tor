@@ -25,9 +25,14 @@ pub enum InstallRoot {
 /// `packaging/tmpfiles.d/namtor.conf`).
 #[derive(Debug, Clone)]
 pub struct LayoutPaths {
-    pub daemon_bin: PathBuf,
-    pub cli_bin: PathBuf,
-    pub worker_bin: PathBuf,
+    /// The single multi-call executable: `namtor daemon`, `namtor worker`,
+    /// `namtor cli ...`, `namtor emitter-off <device>`. Four separate
+    /// binaries were merged into this one file; the worker is still spawned
+    /// as a separate process (the daemon re-execs it), and the PAM cdylib
+    /// and the GTK wizard are deliberately still separate artifacts.
+    pub namtor_bin: PathBuf,
+    /// The `namtor-cli` compatibility symlink to [`Self::namtor_bin`].
+    pub cli_symlink: PathBuf,
     pub enroll_wizard_bin: PathBuf,
     pub models_dir: PathBuf,
     pub templates_dir: PathBuf,
@@ -333,25 +338,23 @@ impl LayoutPaths {
     pub fn resolve(root: &Path, manifest_path: &Path, kind: InstallRoot) -> Self {
         let dests = Self::parse_dests(manifest_path);
 
-        let (daemon_bin, cli_bin, worker_bin, enroll_wizard_bin) = match kind {
+        let (namtor_bin, cli_symlink, enroll_wizard_bin) = match kind {
             InstallRoot::Source => {
-                let daemon = source_binary(&dests.daemon, "namtor-daemon");
-                let cli = source_binary(&dests.cli, "namtor-cli");
-                let worker = source_binary(&dests.worker, "namtor-worker");
+                // A source checkout has no symlink: `target/release/namtor` is
+                // what `cargo build --release` produced, and the CLI is
+                // reached through it as `namtor cli ...`.
+                let namtor = source_binary(&dests.namtor, "namtor");
                 let wizard = source_binary(&dests.enroll_wizard, "namtor-enroll-wizard");
-                (daemon, cli, worker, wizard)
+                (namtor.clone(), namtor, wizard)
             }
-            InstallRoot::Staged => {
-                let daemon = rebase_abs(root, &dests.daemon);
-                let cli = rebase_abs(root, &dests.cli);
-                let worker = rebase_abs(root, &dests.worker);
-                let wizard = rebase_abs(root, &dests.enroll_wizard);
-                (daemon, cli, worker, wizard)
-            }
+            InstallRoot::Staged => (
+                rebase_abs(root, &dests.namtor),
+                rebase_abs(root, &dests.cli_symlink),
+                rebase_abs(root, &dests.enroll_wizard),
+            ),
             InstallRoot::Installed => (
-                dests.daemon.clone(),
-                dests.cli.clone(),
-                dests.worker.clone(),
+                dests.namtor.clone(),
+                dests.cli_symlink.clone(),
                 dests.enroll_wizard.clone(),
             ),
         };
@@ -370,9 +373,8 @@ impl LayoutPaths {
         let quirks_dirs = vec![installed_quirks, source_quirks];
 
         Self {
-            daemon_bin,
-            cli_bin,
-            worker_bin,
+            namtor_bin,
+            cli_symlink,
             enroll_wizard_bin,
             models_dir,
             templates_dir,
@@ -397,20 +399,17 @@ impl LayoutPaths {
     fn parse_dests(manifest_path: &Path) -> DestPaths {
         match Self::parse_manifest(manifest_path) {
             Some(m) => DestPaths {
-                daemon: find_dest(&m.files, "namtor-daemon")
-                    .unwrap_or_else(|| PathBuf::from("/usr/lib/namtor/namtor-daemon")),
-                cli: find_dest(&m.files, "/namtor-cli")
-                    .unwrap_or_else(|| PathBuf::from("/usr/bin/namtor-cli")),
-                worker: find_dest(&m.files, "namtor-worker")
-                    .unwrap_or_else(|| PathBuf::from("/usr/lib/namtor/namtor-worker")),
+                namtor: find_dest(&m.files, "/namtor")
+                    .unwrap_or_else(|| PathBuf::from(DEFAULT_NAMTOR_BIN)),
+                cli_symlink: find_dest(&m.files, "/namtor-cli")
+                    .unwrap_or_else(|| PathBuf::from(DEFAULT_CLI_SYMLINK)),
                 enroll_wizard: find_dest(&m.files, "namtor-enroll-wizard")
-                    .unwrap_or_else(|| PathBuf::from("/usr/bin/namtor-enroll-wizard")),
+                    .unwrap_or_else(|| PathBuf::from(DEFAULT_ENROLL_WIZARD_BIN)),
             },
             None => DestPaths {
-                daemon: PathBuf::from("/usr/lib/namtor/namtor-daemon"),
-                cli: PathBuf::from("/usr/bin/namtor-cli"),
-                worker: PathBuf::from("/usr/lib/namtor/namtor-worker"),
-                enroll_wizard: PathBuf::from("/usr/bin/namtor-enroll-wizard"),
+                namtor: PathBuf::from(DEFAULT_NAMTOR_BIN),
+                cli_symlink: PathBuf::from(DEFAULT_CLI_SYMLINK),
+                enroll_wizard: PathBuf::from(DEFAULT_ENROLL_WIZARD_BIN),
             },
         }
     }
@@ -447,11 +446,16 @@ impl LayoutPaths {
 }
 
 struct DestPaths {
-    daemon: PathBuf,
-    cli: PathBuf,
-    worker: PathBuf,
+    namtor: PathBuf,
+    cli_symlink: PathBuf,
     enroll_wizard: PathBuf,
 }
+
+/// Fallbacks used when the installed manifest is unreadable, so callers still
+/// report *a* path (and an actionable error) instead of panicking.
+const DEFAULT_NAMTOR_BIN: &str = "/usr/bin/namtor";
+const DEFAULT_CLI_SYMLINK: &str = "/usr/bin/namtor-cli";
+const DEFAULT_ENROLL_WIZARD_BIN: &str = "/usr/bin/namtor-enroll-wizard";
 
 /// Find the first file `dest` ending with `suffix`.
 fn find_dest(files: &[ManifestFile], suffix: &str) -> Option<PathBuf> {
@@ -508,20 +512,21 @@ mod tests {
         // Binary paths must come from the manifest's [[files]] entries.
         let layout = LayoutPaths::resolve(Path::new("/"), &manifest, InstallRoot::Installed);
 
-        assert_eq!(
-            layout.daemon_bin,
-            PathBuf::from("/usr/lib/namtor/namtor-daemon"),
-        );
-        assert!(dests.has_file("/usr/lib/namtor/namtor-daemon"));
+        assert_eq!(layout.namtor_bin, PathBuf::from("/usr/bin/namtor"));
+        assert!(dests.has_file("/usr/bin/namtor"));
 
-        assert_eq!(layout.cli_bin, PathBuf::from("/usr/bin/namtor-cli"),);
+        assert_eq!(layout.cli_symlink, PathBuf::from("/usr/bin/namtor-cli"));
         assert!(dests.has_file("/usr/bin/namtor-cli"));
 
-        assert_eq!(
-            layout.worker_bin,
-            PathBuf::from("/usr/lib/namtor/namtor-worker"),
-        );
-        assert!(dests.has_file("/usr/lib/namtor/namtor-worker"));
+        // The merged binary replaced four separate ones; nothing may be left
+        // behind at the old paths, or uninstall.sh would strand them.
+        for gone in [
+            "/usr/lib/namtor/namtor-daemon",
+            "/usr/lib/namtor/namtor-worker",
+            "/usr/lib/namtor/namtor-camera-emitter-off",
+        ] {
+            assert!(!dests.has_file(gone), "{gone} still declared");
+        }
 
         assert_eq!(
             layout.enroll_wizard_bin,
@@ -560,12 +565,18 @@ mod tests {
         let dests =
             LayoutPaths::parse_all_dests(&manifest).expect("repo install-manifest.toml must parse");
 
-        // Binaries
-        assert!(dests.has_file("/usr/lib/namtor/namtor-daemon"));
-        assert!(dests.has_file("/usr/lib/namtor/namtor-worker"));
-        assert!(dests.has_file("/usr/lib/namtor/namtor-camera-emitter-off"));
+        // Binaries. The daemon, worker, CLI and emitter-off helper are one
+        // multi-call executable; `namtor-cli` survives as a compat symlink.
+        assert!(dests.has_file("/usr/bin/namtor"));
         assert!(dests.has_file("/usr/bin/namtor-cli"));
         assert!(dests.has_file("/usr/bin/namtor-enroll-wizard"));
+        for gone in [
+            "/usr/lib/namtor/namtor-daemon",
+            "/usr/lib/namtor/namtor-worker",
+            "/usr/lib/namtor/namtor-camera-emitter-off",
+        ] {
+            assert!(!dests.has_file(gone), "{gone} still declared");
+        }
 
         // PAM module
         assert!(dests.has_file("/usr/lib/security/pam_namtor.so"));
@@ -642,10 +653,9 @@ mod tests {
             InstallRoot::Installed,
         );
         let layout_text = format!(
-            "{} {} {} {} {} {} {} {} {:?}",
-            layout.daemon_bin.display(),
-            layout.cli_bin.display(),
-            layout.worker_bin.display(),
+            "{} {} {} {} {} {} {} {:?}",
+            layout.namtor_bin.display(),
+            layout.cli_symlink.display(),
             layout.enroll_wizard_bin.display(),
             layout.models_dir.display(),
             layout.templates_dir.display(),
@@ -668,9 +678,10 @@ mod tests {
             &repo_manifest_path(),
             InstallRoot::Source,
         );
-        assert!(layout.daemon_bin.ends_with("target/release/namtor-daemon"));
-        assert!(layout.cli_bin.ends_with("target/release/namtor-cli"));
-        assert!(layout.worker_bin.ends_with("target/release/namtor-worker"));
+        assert!(layout.namtor_bin.ends_with("target/release/namtor"));
+        // A source checkout has no symlink; the CLI is `target/release/namtor
+        // cli ...`, so both point at the one built binary.
+        assert!(layout.cli_symlink.ends_with("target/release/namtor"));
         assert!(layout
             .enroll_wizard_bin
             .ends_with("target/release/namtor-enroll-wizard"));
@@ -685,15 +696,8 @@ mod tests {
         fs::copy(&manifest, &staged_manifest).unwrap();
 
         let layout = LayoutPaths::resolve(tmp.path(), &staged_manifest, InstallRoot::Staged);
-        assert_eq!(
-            layout.daemon_bin,
-            tmp.path().join("usr/lib/namtor/namtor-daemon"),
-        );
-        assert_eq!(layout.cli_bin, tmp.path().join("usr/bin/namtor-cli"));
-        assert_eq!(
-            layout.worker_bin,
-            tmp.path().join("usr/lib/namtor/namtor-worker"),
-        );
+        assert_eq!(layout.namtor_bin, tmp.path().join("usr/bin/namtor"));
+        assert_eq!(layout.cli_symlink, tmp.path().join("usr/bin/namtor-cli"));
         assert_eq!(layout.models_dir, tmp.path().join("var/lib/namtor/models"));
         assert_eq!(
             layout.daemon_socket,
@@ -715,22 +719,22 @@ mod tests {
         let alt_manifest = tmp.path().join("install-manifest.toml");
         fs::write(
             &alt_manifest,
-            "[[files]]\ndest = \"/usr/libexec/namtor-daemon\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n\n\
-             [[files]]\ndest = \"/usr/bin/namtor-cli\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n\n\
-             [[files]]\ndest = \"/usr/lib/namtor/namtor-worker\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n\n\
+            "[[files]]\ndest = \"/usr/libexec/namtor\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n\n\
+             [[files]]\ndest = \"/usr/libexec/namtor-cli\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n\n\
              [[files]]\ndest = \"/usr/bin/namtor-enroll-wizard\"\nsrc = \"x\"\nmode = \"0755\"\nowner = \"root\"\ngroup = \"root\"\n",
         )
         .unwrap();
 
         let layout = LayoutPaths::resolve(tmp.path(), &alt_manifest, InstallRoot::Installed);
         assert_eq!(
-            layout.daemon_bin,
-            PathBuf::from("/usr/libexec/namtor-daemon"),
+            layout.namtor_bin,
+            PathBuf::from("/usr/libexec/namtor"),
             "alternate libexec dest followed from manifest"
         );
         assert_eq!(
-            layout.worker_bin,
-            PathBuf::from("/usr/lib/namtor/namtor-worker"),
+            layout.cli_symlink,
+            PathBuf::from("/usr/libexec/namtor-cli"),
+            "compat symlink follows the manifest too"
         );
     }
 

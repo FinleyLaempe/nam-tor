@@ -16,7 +16,3 @@ zbus = { version = "5", features = ["blocking"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-
-[[bin]]
-name = "namtor-camera-emitter-off"
-path = "src/bin/namtor-camera-emitter-off.rs"

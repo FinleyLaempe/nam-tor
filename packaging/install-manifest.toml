@@ -37,7 +37,8 @@
 #                   declares which split package owns this file.
 #
 # Split packages:
-#   core  — namtor (daemon, worker, PAM, CLI, models, services, SBOM, notice)
+#   core  — namtor (the single multi-call binary + PAM module, models,
+#           services, SBOM, notice)
 #   ui    — namtor-ui (GTK4/libadwaita wizard + settings)
 #
 # Two historical spellings still appear in manifests on installed systems,
@@ -122,7 +123,7 @@ group = "root"
 package = "core"
 
 # Quirks database — runtime device quirks read by the daemon and
-# namtor-camera-emitter-off (e.g. /usr/share/namtor/quirks/devices/3277-0018.toml
+# `namtor emitter-off` (e.g. /usr/share/namtor/quirks/devices/3277-0018.toml
 # for the ASUS ROG Flow X16 reference camera). Apache-2.0.
 [[dirs]]
 path = "/usr/share/namtor/quirks"
@@ -245,40 +246,32 @@ package = "core"
 # ---------------------------------------------------------------------------
 # Binaries (built artifacts — src is relative to the repo root / SRCDIR)
 # ---------------------------------------------------------------------------
+# The single multi-call executable. `namtor daemon`, `namtor worker`,
+# `namtor cli ...` and `namtor emitter-off <device>` are one file: the daemon,
+# the worker and the CLI all link ONNX Runtime and the recognition stack, so
+# four binaries shipped three copies of it. The worker is still a separate
+# PROCESS — the daemon re-execs /proc/self/exe with the `worker` subcommand
+# and the child self-applies seccomp + Landlock. The PAM cdylib and the GTK
+# wizard are deliberately NOT part of this file (see below).
 [[files]]
-dest = "/usr/lib/namtor/namtor-daemon"
-src = "target/release/namtor-daemon"
+dest = "/usr/bin/namtor"
+src = "target/release/namtor"
 mode = "0755"
 owner = "root"
 group = "root"
 symlink = false
 package = "core"
 
-[[files]]
-dest = "/usr/lib/namtor/namtor-worker"
-src = "target/release/namtor-worker"
-mode = "0755"
-owner = "root"
-group = "root"
-symlink = false
-package = "core"
-
-[[files]]
-dest = "/usr/lib/namtor/namtor-camera-emitter-off"
-src = "target/release/namtor-camera-emitter-off"
-mode = "0755"
-owner = "root"
-group = "root"
-symlink = false
-package = "core"
-
+# Compatibility symlink. `namtor-cli` is the documented user-facing spelling
+# (man page namtor-cli(1), the HIL scripts, the release smoke test), and the
+# executable dispatches on argv[0], so the old command keeps working verbatim.
 [[files]]
 dest = "/usr/bin/namtor-cli"
-src = "target/release/namtor-cli"
+src = "namtor"
 mode = "0755"
 owner = "root"
 group = "root"
-symlink = false
+symlink = true
 package = "core"
 
 # Management UI binary (GTK4 + libadwaita enrollment wizard).
@@ -450,7 +443,7 @@ package = "ui"
 
 # ---------------------------------------------------------------------------
 # Quirks database — per-device quirks TOML files read by the daemon and
-# namtor-camera-emitter-off at runtime. Apache-2.0 (quirks/ is Apache-2.0,
+# `namtor emitter-off` at runtime. Apache-2.0 (quirks/ is Apache-2.0,
 # separate from the GPL-3.0 core).
 # ---------------------------------------------------------------------------
 [[files]]
