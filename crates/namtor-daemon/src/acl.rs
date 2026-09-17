@@ -35,14 +35,24 @@ pub fn authorise(creds: &PeerCreds, namtor_auth_gid: u32) -> bool {
     creds.uid == 0 || creds.gid == namtor_auth_gid
 }
 
-/// Resolve the `namtor-auth` group's GID by parsing the system group file.
+/// Resolve the `namtor-auth` group's GID from `/etc/group`.
 ///
-/// Honours `NAMTOR_GROUP_FILE` (env override, for tests); defaults to
-/// `/etc/group`. Returns an error if the group is not found.
+/// Returns an error if the group is not found.
 pub fn resolve_namtor_auth_gid() -> Result<u32, DaemonError> {
-    let path = std::env::var("NAMTOR_GROUP_FILE").unwrap_or_else(|_| "/etc/group".into());
-    let contents = std::fs::read_to_string(&path)
-        .map_err(|e| DaemonError::Acl(format!("read {path}: {e}")))?;
+    resolve_namtor_auth_gid_in(std::path::Path::new("/etc/group"))
+}
+
+/// Resolve the `namtor-auth` group's GID from an arbitrary group file.
+///
+/// Tests pass their own fixture here. This used to be an `NAMTOR_GROUP_FILE`
+/// env override, which was wrong twice over: the env var is process-global,
+/// so the two tests that set it raced and whichever ran second read the
+/// other's fixture or the live `/etc/group`; and it let anything that could
+/// set the daemon's environment redirect the group membership check that
+/// decides who may authenticate.
+pub fn resolve_namtor_auth_gid_in(path: &std::path::Path) -> Result<u32, DaemonError> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| DaemonError::Acl(format!("read {}: {e}", path.display())))?;
     for line in contents.lines() {
         let fields: Vec<&str> = line.split(':').collect();
         if fields.len() >= 3 && fields[0] == "namtor-auth" {
@@ -133,19 +143,22 @@ mod tests {
     fn resolve_gid_from_temp_group_file() {
         let tmp = tempfile::NamedTempFile::new().expect("tmpfile");
         std::fs::write(tmp.path(), "root:x:0:\nnamtor-auth:x:998:gdm\n").expect("write");
-        std::env::set_var("NAMTOR_GROUP_FILE", tmp.path());
-        let gid = resolve_namtor_auth_gid().expect("resolve");
+        let gid = resolve_namtor_auth_gid_in(tmp.path()).expect("resolve");
         assert_eq!(gid, 998);
-        std::env::remove_var("NAMTOR_GROUP_FILE");
     }
 
     #[test]
     fn resolve_gid_missing_group_errors() {
         let tmp = tempfile::NamedTempFile::new().expect("tmpfile");
         std::fs::write(tmp.path(), "root:x:0:\nother:x:1:\n").expect("write");
-        std::env::set_var("NAMTOR_GROUP_FILE", tmp.path());
-        let err = resolve_namtor_auth_gid().unwrap_err();
+        let err = resolve_namtor_auth_gid_in(tmp.path()).unwrap_err();
         assert!(matches!(err, DaemonError::Acl(_)));
-        std::env::remove_var("NAMTOR_GROUP_FILE");
+    }
+
+    #[test]
+    fn resolve_gid_unreadable_group_file_errors() {
+        let err = resolve_namtor_auth_gid_in(std::path::Path::new("/nonexistent/namtor/group"))
+            .unwrap_err();
+        assert!(matches!(err, DaemonError::Acl(_)));
     }
 }
