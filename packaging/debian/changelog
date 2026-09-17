@@ -1,3 +1,21 @@
+namtor (0.3.8-1) unstable; urgency=medium
+
+  * Rendered every page of the settings app and looked at it. Four defects the
+    design contract, the test suite and the accessibility scans had all passed:
+    a success-green silhouette over "Adjust your pose"; "Enrolled Profiles" as
+    a heading twice on one page; an error reduced to one red line with its
+    recovery steps discarded; and a review screen telling a finished scan to
+    keep going.
+  * "IR Camera — Not detected" also meant "the device database is missing",
+    which sent the reader to check their hardware. The four conditions now read
+    differently, and the fixable one says how.
+  * The setup page's Cancel rendered as a full-width list row welded under the
+    name field; it is a centred pill like every other page's.
+  * A daemon too old to export org.namtor.Manager3 reported "could not be
+    reached" rather than a version mismatch.
+
+ -- finley <finley.laempe@math.uni-freiburg.de>  Thu, 17 Sep 2026 15:56:24 +0200
+
 namtor (0.3.7-1) unstable; urgency=medium
 
   * A camera held by another program now says so, and what to close, on every

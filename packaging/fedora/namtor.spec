@@ -56,7 +56,7 @@
 %global debug_package %{nil}
 
 Name:           namtor
-Version:        0.3.7
+Version:        0.3.8
 Release:        1%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
@@ -341,6 +341,33 @@ fi
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.8-1
+- Every page of the settings app was rendered and looked at, which is not
+  something the test suite can do for you. Four defects that the design
+  contract, the behavioural tests and the accessibility and privacy scans had
+  all passed: the capture page showed "Adjust your pose" under a success-green
+  silhouette, the same green as "Enrollment complete", because the silhouette
+  was coloured from image quality alone; the Profiles page carried the heading
+  "Enrolled Profiles" twice, over the list and over the button that adds to it;
+  an error on that page was one red line with the title and detail glued
+  together and the recovery steps thrown away; and the review screen's detail
+  was the daemon's capture-time guidance, so "Ready to save" sat above "keep
+  going — Keep turning your head slowly".
+- The System page reported "IR Camera — Not detected" for a missing device
+  database and for unreadable sysfs as well as for an absent camera. Only the
+  last is about the hardware; the first sends someone with a broken install to
+  check their webcam. Each condition now reads differently and the fixable one
+  says to reinstall.
+- The setup page's Cancel was added straight to a PreferencesGroup, which
+  renders a bare button as a full-width row, so the one control that leaves the
+  page looked like another field in the form.
+- A daemon too old to export org.namtor.Manager3 came back as a transport
+  failure — "the daemon could not be reached", about a daemon that was running
+  and answering — rather than as a version mismatch with a remedy.
+- The adaptive layout was checked at 360 px rather than assumed: the view
+  switcher moves to a bottom bar with all three labels untruncated and every
+  page still fits.
+
 * Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.7-1
 - A camera held by another program reaches every surface as "camera is busy"
   with a remedy, instead of "ioctl failed: VIDIOC_S_FMT: EBUSY". EBUSY is
