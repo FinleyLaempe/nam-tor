@@ -862,3 +862,63 @@ fn a_dim_view_keeps_its_warning() {
         }
     });
 }
+
+// ===========================================================================
+// The review screen is not the capture screen
+// ===========================================================================
+
+fn review_texts(ready: bool, guidance: &str) -> Vec<String> {
+    let view = ReviewViewV3 {
+        ready_to_save: ready,
+        quality_percent: if ready { 88 } else { 41 },
+        diversity_percent: if ready { 100 } else { 30 },
+        frames_accepted: if ready { 260 } else { 22 },
+        guidance: GuidanceView::from_wire(guidance),
+    };
+    let mut comp = ReviewViewComponent::new();
+    let page = comp.render(&view, || {}, || {}, || {}, false);
+    common::collect_widget_text(page.upcast_ref::<gtk4::Widget>())
+}
+
+/// The daemon's guidance is written for a live scan. Capture has stopped by
+/// the time the review screen exists, so putting "Looking good — keep going —
+/// Keep turning your head slowly so the scan sees every angle" under a
+/// "Ready to save" headline told the user to carry on scanning a scan that
+/// was finished. Found by rendering the page and reading it.
+#[test]
+fn a_finished_scan_is_not_told_to_keep_going() {
+    common::run_gtk_test(|| {
+        let texts = review_texts(true, "looking_good").join(" ");
+        assert!(texts.contains("Ready to save"), "{texts}");
+        assert!(
+            !texts.to_lowercase().contains("keep going"),
+            "the review screen told a finished scan to keep going: {texts}"
+        );
+        assert!(
+            !texts.to_lowercase().contains("keep turning"),
+            "the review screen told a finished scan to keep turning: {texts}"
+        );
+        assert!(
+            texts.contains("resume the scan"),
+            "it should say what the two buttons below it do: {texts}"
+        );
+    });
+}
+
+/// On a scan that is not ready, the same guidance is exactly right — it names
+/// what resuming would fix, and Resume is the button right below it.
+#[test]
+fn an_unfinished_scan_still_gets_its_guidance() {
+    common::run_gtk_test(|| {
+        let texts = review_texts(false, "insufficient_pose").join(" ");
+        assert!(texts.contains("Not ready to save yet"), "{texts}");
+        assert!(
+            texts.contains("Adjust your pose"),
+            "the review must say what is missing: {texts}"
+        );
+        assert!(
+            texts.contains("Turn your head"),
+            "and how to fix it: {texts}"
+        );
+    });
+}

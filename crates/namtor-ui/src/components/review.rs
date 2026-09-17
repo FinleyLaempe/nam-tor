@@ -54,9 +54,20 @@ impl ReviewViewComponent {
         // told different stories, and because the invented bucket was never 0
         // the review silhouette could not show the "Poor" tint at all.
         let verdict_bucket = crate::view_model::quality_bucket_from_percent(view.quality_percent);
-        let advice = match view.guidance.hint() {
-            Some(hint) => format!("{} — {}", view.guidance.label(), hint),
-            None => view.guidance.label(),
+        // The daemon's guidance is written for the capture screen, where it
+        // is telling a live scan what to do next: "Looking good — keep going
+        // — Keep turning your head slowly so the scan sees every angle."
+        // Capture has stopped by the time this screen exists, so under a
+        // "Ready to save" headline that read as instructions to carry on
+        // scanning a scan that is finished. It still belongs on the
+        // not-ready screen — it names exactly what resuming would fix.
+        let advice = if view.ready_to_save {
+            tr("Save it, or resume the scan to add more angles.")
+        } else {
+            match view.guidance.hint() {
+                Some(hint) => format!("{} — {}", view.guidance.label(), hint),
+                None => view.guidance.label(),
+            }
         };
         let headline = if view.ready_to_save {
             tr("Ready to save")

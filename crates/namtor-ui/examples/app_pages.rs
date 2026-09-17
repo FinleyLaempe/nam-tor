@@ -63,7 +63,18 @@ fn main() {
         let out = out.clone();
         let rc2 = std::rc::Rc::clone(&rc);
         let app2 = app.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(700), move || {
+        // Wait for the window to actually paint before walking the pages;
+        // how many frames that takes depends on the compositor.
+        let tries = std::cell::Cell::new(0u32);
+        glib::timeout_add_local(std::time::Duration::from_millis(150), move || {
+            tries.set(tries.get() + 1);
+            let ready = {
+                let w: &gtk4::Widget = window.upcast_ref();
+                w.width() > 0 && w.height() > 0 && w.is_mapped()
+            };
+            if !ready && tries.get() < 40 {
+                return glib::ControlFlow::Continue;
+            }
             for dest in Destination::all() {
                 rc2.borrow_mut().shell_for_test_mut().set_destination(dest);
                 // Let the stack settle on the new page before capturing.
@@ -75,6 +86,7 @@ fn main() {
                 }
             }
             app2.quit();
+            glib::ControlFlow::Break
         });
     });
     app.run_with_args::<&str>(&[]);

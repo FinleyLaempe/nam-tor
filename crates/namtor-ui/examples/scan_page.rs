@@ -7,7 +7,7 @@
 //! always talks to the real daemon; this borrows the same component with a
 //! fixed view so the page can be captured without a camera or a daemon.
 //!
-//! Run: cargo run -p namtor-ui --example scan_page -- [start|poor|angles|good]
+//! Run: cargo run -p namtor-ui --example scan_page -- [start|poor|angles|good|review-ok|review-thin]
 //!
 //! With a second argument it writes the rendered page to that PNG and exits
 //! instead of staying on screen:
@@ -25,7 +25,8 @@ use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use namtor_ui::components::enrollment::EnrollmentViewComponent;
-use namtor_ui::view_model::{EnrollmentViewV3, GuidanceView};
+use namtor_ui::components::ReviewViewComponent;
+use namtor_ui::view_model::{EnrollmentViewV3, GuidanceView, ReviewViewV3};
 
 fn view(which: &str) -> EnrollmentViewV3 {
     let (q, bucket, div, seen, acc, g) = match which {
@@ -68,6 +69,26 @@ fn capture(window: &adw::ApplicationWindow, path: &str) -> Result<(), String> {
         .map_err(|e| format!("write {path}: {e}"))
 }
 
+fn review(which: &str) -> ReviewViewV3 {
+    if which == "review-thin" {
+        ReviewViewV3 {
+            ready_to_save: false,
+            quality_percent: 41,
+            diversity_percent: 30,
+            frames_accepted: 22,
+            guidance: GuidanceView::from_wire("insufficient_pose"),
+        }
+    } else {
+        ReviewViewV3 {
+            ready_to_save: true,
+            quality_percent: 88,
+            diversity_percent: 100,
+            frames_accepted: 260,
+            guidance: GuidanceView::from_wire("looking_good"),
+        }
+    }
+}
+
 fn main() {
     let which = std::env::args().nth(1).unwrap_or_else(|| "angles".into());
     let png = std::env::args().nth(2);
@@ -76,7 +97,12 @@ fn main() {
         .build();
     app.connect_activate(move |app| {
         let mut comp = EnrollmentViewComponent::new();
-        let page = comp.render(Some(&view(&which)), true, |_| {}, || {}, || {});
+        let mut rev = ReviewViewComponent::new();
+        let page: &adw::PreferencesPage = if which.starts_with("review") {
+            rev.render(&review(&which), || {}, || {}, || {}, false)
+        } else {
+            comp.render(Some(&view(&which)), true, |_| {}, || {}, || {})
+        };
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .default_width(480)
@@ -94,12 +120,29 @@ fn main() {
         if let Some(path) = png.clone() {
             let win = window.clone();
             let app = app.clone();
-            glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || {
+            // Retry rather than fail: how many frames the window needs before
+            // it paints depends on the compositor, so a fixed delay is a
+            // race. Losing it produced "the page rendered to nothing" for one
+            // state out of six, intermittently.
+            let tries = std::cell::Cell::new(0u32);
+            glib::timeout_add_local(std::time::Duration::from_millis(150), move || {
+                tries.set(tries.get() + 1);
                 match capture(&win, &path) {
-                    Ok(()) => println!("wrote {path}"),
-                    Err(e) => eprintln!("capture failed: {e}"),
+                    Ok(()) => {
+                        println!("wrote {path}");
+                        app.quit();
+                        glib::ControlFlow::Break
+                    }
+                    Err(e) if tries.get() < 40 => {
+                        let _ = e;
+                        glib::ControlFlow::Continue
+                    }
+                    Err(e) => {
+                        eprintln!("capture failed after {} tries: {e}", tries.get());
+                        app.quit();
+                        glib::ControlFlow::Break
+                    }
                 }
-                app.quit();
             });
         }
     });
