@@ -73,7 +73,23 @@ pub struct AppController {
     offline: bool,
 }
 
+thread_local! {
+    /// True while the controller is popping a page itself.
+    ///
+    /// `popped` is emitted synchronously from `pop()`, so without this the
+    /// handler re-enters a `RefCell` the popping code already holds.
+    static PROGRAMMATIC_POP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl AppController {
+    /// Pop a sub-page we pushed, without the `popped` handler treating it as
+    /// the user navigating back.
+    fn pop_subpage_quietly(&mut self) {
+        PROGRAMMATIC_POP.with(|f| f.set(true));
+        self.shell.pop_subpage();
+        PROGRAMMATIC_POP.with(|f| f.set(false));
+    }
+
     pub fn build(app: &adw::Application) -> ControllerRc {
         let mut shell = Shell::new(app);
 
@@ -133,19 +149,61 @@ impl AppController {
         // daemon session stayed open with the camera and IR emitter running,
         // and the progress poll kept firing because the state was still
         // Capturing.
-        {
-            let rc = Rc::clone(&controller);
-            let nav = controller.borrow().shell.navigation_view().clone();
-            nav.connect_popped(move |_, page| {
-                let mut c = rc.borrow_mut();
-                c.on_subpage_popped(page);
-                drop(c);
-                let rc2 = Rc::clone(&rc);
-                rc2.borrow_mut().render_profiles(&rc2);
-            });
-        }
+        Self::install_pop_handler(&controller);
 
         controller
+    }
+
+    /// Wire the `popped` handler that reconciles a user-driven back.
+    ///
+    /// Split out of `build` so tests can install it: every test constructs the
+    /// controller with `new_offline_for_test`, which does not call `build`, so
+    /// the handler — and the re-entrancy hazard it carries — had no coverage
+    /// at all until this existed.
+    pub fn install_pop_handler(controller: &ControllerRc) {
+        {
+            let rc = Rc::clone(controller);
+            let nav = controller.borrow().shell.navigation_view().clone();
+            nav.connect_popped(move |_, page| {
+                // A pop WE performed is already accounted for by the code that
+                // performed it. Returning early here is not an optimisation:
+                // `adw_navigation_view_pop()` emits `popped` SYNCHRONOUSLY, so
+                // this handler runs inside `pop_subpage()`, which runs inside
+                // `render_enrollment`, which the caller invoked as
+                // `rc.borrow_mut().render_enrollment(&rc)`. Taking the borrow
+                // here would be a second mutable borrow of a live RefCell —
+                // and the release profile is `panic = "abort"`, so the app
+                // would die. Pressing Save reached exactly that.
+                if PROGRAMMATIC_POP.with(|f| f.get()) {
+                    return;
+                }
+                // A user-driven pop (back button, Escape, swipe) is handled on
+                // the next main-loop turn, so the handler can never run inside
+                // someone else's borrow either.
+                let rc2 = Rc::clone(&rc);
+                let page = page.clone();
+                glib::idle_add_local_once(move || {
+                    {
+                        let mut c = rc2.borrow_mut();
+                        c.on_subpage_popped(&page);
+                    }
+                    rc2.borrow_mut().render_profiles(&rc2);
+                });
+            });
+        }
+    }
+
+    /// Test-only accessor for the shell, so a test can push a sub-page.
+    #[doc(hidden)]
+    pub fn shell_for_test(&self) -> &Shell {
+        &self.shell
+    }
+
+    /// Test-only: perform a programmatic pop exactly as the render arms do,
+    /// i.e. while the controller is mutably borrowed.
+    #[doc(hidden)]
+    pub fn pop_subpage_for_test(&mut self) {
+        self.pop_subpage_quietly();
     }
 
     /// Reconcile our state with a page the user popped themselves.
@@ -464,7 +522,18 @@ impl AppController {
                 // headline. The page is rebuilt on every poll, and the
                 // headline carries AccessibleRole::Status, so without this
                 // every redraw interrupts the screen reader.
-                let announce = self.announcer.should_announce(std::time::Instant::now());
+                // Keyed on the guidance text: the page re-renders every
+                // 500 ms and the throttle interval is 250 ms, so a purely
+                // time-based gate was always open and never suppressed
+                // anything. Re-announcing unchanged guidance on every redraw
+                // is the flood.
+                let headline = view
+                    .as_ref()
+                    .map(|v| v.guidance.label())
+                    .unwrap_or_default();
+                let announce = self
+                    .announcer
+                    .should_announce_text(&headline, std::time::Instant::now());
                 self.enrollment_view.render(
                     view.as_ref(),
                     announce,
@@ -612,7 +681,7 @@ impl AppController {
                 // Pop review sub-page if present, show saving state on
                 // the enrollment page.
                 if self.review_nav_page.is_some() {
-                    self.shell.pop_subpage();
+                    self.pop_subpage_quietly();
                     self.review_nav_page = None;
                 }
                 self.enrollment_view.render_saving();
@@ -675,11 +744,11 @@ impl AppController {
         if setup {
             // Pop any enrollment/review sub-pages and return to profiles.
             if self.review_nav_page.is_some() {
-                self.shell.pop_subpage();
+                self.pop_subpage_quietly();
                 self.review_nav_page = None;
             }
             if self.enrollment_nav_page.is_some() {
-                self.shell.pop_subpage();
+                self.pop_subpage_quietly();
                 self.enrollment_nav_page = None;
             }
             self.render_profiles(rc);
@@ -691,7 +760,7 @@ impl AppController {
             // why the save failed. Pop the review page first so whatever
             // render_enrollment draws is the page actually on screen.
             if self.review_nav_page.is_some() {
-                self.shell.pop_subpage();
+                self.pop_subpage_quietly();
                 self.review_nav_page = None;
             }
             self.render_enrollment(rc);

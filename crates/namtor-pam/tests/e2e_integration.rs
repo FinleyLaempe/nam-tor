@@ -53,6 +53,7 @@ impl LifecycleDispatch for MockVerifyDispatcher {
                 verdict: Verdict::Unavailable,
                 score: 0.0,
                 reason: Some("prepare ack".into()),
+                failure: None,
             }),
             AuthPhase::Verify => {
                 let phase_count = seq + 1;
@@ -61,6 +62,7 @@ impl LifecycleDispatch for MockVerifyDispatcher {
                     verdict: self.verdict,
                     score: self.score,
                     reason: Some(format!("verify done (phase {phase_count})")),
+                    failure: None,
                 })
             }
             AuthPhase::Release => Ok(AuthReply {
@@ -68,6 +70,7 @@ impl LifecycleDispatch for MockVerifyDispatcher {
                 verdict: Verdict::Unavailable,
                 score: 0.0,
                 reason: Some("released".into()),
+                failure: None,
             }),
         }
     }

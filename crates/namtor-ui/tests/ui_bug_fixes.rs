@@ -831,3 +831,48 @@ fn the_error_state_shows_the_message_and_two_buttons() {
         assert!(dismissed.get(), "Try Again must invoke its callback");
     });
 }
+
+// ===========================================================================
+// A programmatic pop must not re-enter the controller's RefCell
+// ===========================================================================
+
+/// `AdwNavigationView::pop()` emits `popped` SYNCHRONOUSLY, so the handler
+/// runs inside `pop_subpage()` — which runs inside `render_enrollment`, which
+/// the caller invoked as `rc.borrow_mut().render_enrollment(&rc)`. Without a
+/// guard the handler takes a second mutable borrow of a live `RefCell`, and
+/// the release profile is `panic = "abort"`, so the app dies. Pressing Save
+/// reached exactly that: the `Saving` arm pops the review page.
+///
+/// This had no coverage because every other test builds the controller with
+/// `new_offline_for_test`, which never installs the handler.
+#[test]
+fn a_programmatic_pop_while_borrowed_does_not_re_enter() {
+    use gtk4::prelude::*;
+    use namtor_ui::app::AppController;
+
+    common::run_gtk_test(move || {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.popguard")
+            .build();
+        let _guard = app.hold();
+
+        let rc = AppController::new_offline_for_test(&app);
+        AppController::install_pop_handler(&rc);
+
+        // Push a sub-page, as the enrollment arms do.
+        {
+            let c = rc.borrow();
+            let page = libadwaita::NavigationPage::builder()
+                .title("probe")
+                .child(&gtk4::Box::new(gtk4::Orientation::Vertical, 0))
+                .build();
+            c.shell_for_test().push_subpage(&page);
+        }
+
+        // Pop it while the controller is mutably borrowed — the shape of
+        // `rc.borrow_mut().render_enrollment(&rc)` reaching the Saving arm.
+        // A BorrowMutError here aborts the process, so reaching the assert at
+        // all is the result.
+        rc.borrow_mut().pop_subpage_for_test();
+    });
+}

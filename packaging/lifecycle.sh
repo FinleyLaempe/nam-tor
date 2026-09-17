@@ -61,6 +61,16 @@
 
 set -uo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` reports the WRITER's status when grep
+# exits early and the writer dies of SIGPIPE, so a match can be read as a miss.
+# Here that meant a machine WITH models could be reported as having none once
+# `find`'s output outgrew the pipe buffer. Without -q grep never exits early,
+# so nothing upstream is signalled; the exit status is unchanged.
+grep_all() { grep "$@" >/dev/null; }
+
+
 PHASE=""
 ROOT="/"
 MANIFEST=""
@@ -283,7 +293,7 @@ validate_models() {
         done < <(parse_manifest_variants "$manifest")
     else
         # Presence-only: at least one .onnx under models_dir.
-        if find "$models_dir" -name '*.onnx' -type f 2>/dev/null | grep -q .; then
+        if find "$models_dir" -name '*.onnx' -type f 2>/dev/null | grep_all .; then
             record_pass
             validated+=("presence-only")
         else

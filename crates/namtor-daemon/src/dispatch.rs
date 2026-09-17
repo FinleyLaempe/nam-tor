@@ -138,6 +138,8 @@ impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> LifecycleDisp
                     verdict: Verdict::Unavailable,
                     score: 0.0,
                     reason: Some("prepare ack".into()),
+                    // A phase ack, not a failure.
+                    failure: None,
                 })
             }
             AuthPhase::Verify => {
@@ -159,6 +161,7 @@ impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> LifecycleDisp
                         verdict: Verdict::RateLimited,
                         score: 0.0,
                         reason: Some("backoff active".into()),
+                        failure: Some(namtor_proto::pam::FailureReason::RateLimited),
                     });
                 }
 
@@ -218,6 +221,7 @@ impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> LifecycleDisp
                     verdict: outcome.verdict,
                     score: outcome.score,
                     reason: external_reason(&outcome),
+                    failure: crate::verify::failure_of(&outcome),
                 })
             }
             AuthPhase::Release => {
@@ -227,6 +231,8 @@ impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> LifecycleDisp
                     verdict: Verdict::Unavailable,
                     score: 0.0,
                     reason: Some("released".into()),
+                    // A phase ack, not a failure.
+                    failure: None,
                 })
             }
         }

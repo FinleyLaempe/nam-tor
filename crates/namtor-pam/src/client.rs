@@ -222,6 +222,7 @@ mod tests {
                     verdict,
                     score: 0.0,
                     reason: None,
+                    failure: None,
                 };
                 encode(&reply, &mut conn).map_err(|e| std::io::Error::other(e.to_string()))?;
             }
@@ -258,6 +259,7 @@ mod tests {
                     verdict,
                     score: 0.0,
                     reason: None,
+                    failure: None,
                 };
                 encode(&reply, &mut conn).map_err(|e| std::io::Error::other(e.to_string()))?;
                 if body.phase == AuthPhase::Release {
@@ -400,6 +402,7 @@ mod tests {
             verdict: Verdict::Match,
             score: 0.0,
             reason: None,
+            failure: None,
         };
         let err = classify(&reply, &[0xaa; 16]).unwrap_err();
         assert!(matches!(err, ClientError::NonceMismatch));
@@ -437,6 +440,7 @@ mod tests {
                     },
                     score: 0.0,
                     reason: None,
+                    failure: None,
                 };
                 encode(&reply, &mut conn).map_err(|e| std::io::Error::other(e.to_string()))?;
                 if body.phase == AuthPhase::Verify {

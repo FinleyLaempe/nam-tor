@@ -48,6 +48,9 @@ pub struct ProfilePresenter<C: ManagerClient> {
     pending_task: Option<glib::JoinHandle<()>>,
     /// Consecutive failed progress polls. Reset by any successful poll.
     poll_failures: u8,
+    /// The session a `begin_save_v3` is currently committing, if any. Lets
+    /// `finish_save_v3` discard a result whose session has since gone away.
+    saving_session: Option<String>,
 }
 
 impl<C: ManagerClient> ProfilePresenter<C> {
@@ -60,6 +63,7 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             uid,
             pending_task: None,
             poll_failures: 0,
+            saving_session: None,
         }
     }
 
@@ -74,6 +78,7 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             uid,
             pending_task: None,
             poll_failures: 0,
+            saving_session: None,
         }
     }
 
@@ -631,6 +636,9 @@ impl<C: ManagerClient> ProfilePresenter<C> {
     /// one already in flight).
     pub fn begin_save_v3(&mut self) -> Option<(String, Arc<C>)> {
         let session = self.model.enrollment_session_v3.clone()?;
+        // Remembered so `finish_save_v3` can tell whether the result it is
+        // holding still belongs to the session the model is on.
+        self.saving_session = Some(session.clone());
         if self.model.enrollment_state != EnrollmentState::Reviewing
             && self.model.enrollment_state != EnrollmentState::Stopped
         {
@@ -647,7 +655,27 @@ impl<C: ManagerClient> ProfilePresenter<C> {
         &mut self,
         result: Result<crate::client::ProfileId, ManagerError>,
     ) -> &PresenterModel {
+        let expected = self.saving_session.take();
         self.model.is_loading = false;
+
+        // Drop a result for a save that is no longer the one in progress.
+        //
+        // The commit runs on a worker thread, and the user can press Back
+        // while it is in flight — which cancels the enrollment and returns the
+        // model to Setup with no session. Applying the result anyway dragged
+        // the presenter back out of Setup into Stopped with no session, where
+        // Review and Save are both no-ops and only Cancel escapes; or, on a
+        // late success, announced "Enrollment complete" for an enrollment the
+        // user had cancelled.
+        if expected.is_none() || expected != self.model.enrollment_session_v3 {
+            if !matches!(self.model.enrollment_state, EnrollmentState::Saving) {
+                return &self.model;
+            }
+            // Still Saving but for a different session: leave the state
+            // machine to whoever owns it now.
+            self.model.enrollment_state = EnrollmentState::Stopped;
+            return &self.model;
+        }
         match result {
             Ok(profile_id) => {
                 self.model.enrollment_state = EnrollmentState::Setup;

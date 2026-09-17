@@ -302,10 +302,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if event == namtor_camera::resume::SleepEvent::Suspend {
                             dispatcher.release_for_suspend();
                             if let Some(svc3) = &svc3 {
-                                let n = svc3.cancel_all_sessions();
-                                if n > 0 {
+                                let (cancelled, stuck) = svc3.cancel_all_sessions();
+                                if stuck > 0 {
+                                    // Say so loudly. A worker that would not
+                                    // stop still owns its capture, so the IR
+                                    // emitter it armed has nothing left to
+                                    // darken it before the machine sleeps.
+                                    tracing::error!(
+                                        sessions = cancelled,
+                                        stuck,
+                                        "enrollment workers did not stop before suspend; \
+                                         the IR emitter may remain armed"
+                                    );
+                                } else if cancelled > 0 {
                                     tracing::info!(
-                                        sessions = n,
+                                        sessions = cancelled,
                                         "enrollment sessions cancelled for suspend"
                                     );
                                 }
@@ -314,8 +325,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             tracing::info!("resumed; captures reopen on demand");
                         }
                     });
-                if let Err(e) = result {
-                    tracing::warn!(error = %e, "sleep monitor stopped");
+                // Log either way. A clean return means the signal stream
+                // ended — the bus connection dropped — which silently disarms
+                // suspend handling for the life of the process, and only the
+                // `Err` arm used to say anything at all.
+                match result {
+                    Ok(()) => tracing::warn!(
+                        "sleep monitor stopped: the system bus connection ended. \
+                         Suspend will no longer darken the IR emitter until the \
+                         daemon restarts."
+                    ),
+                    Err(e) => tracing::warn!(error = %e, "sleep monitor stopped"),
                 }
             });
         if let Err(e) = spawned {

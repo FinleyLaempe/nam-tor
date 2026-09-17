@@ -90,6 +90,7 @@ mod tests {
                 verdict: Verdict::Unavailable,
                 score: 0.0,
                 reason: None,
+                failure: None,
             })
         }
         fn snapshot(&self) -> StatusReply {
@@ -216,6 +217,7 @@ mod tests {
             verdict: Verdict::Match,
             score: 0.8734,
             reason: None,
+            failure: None,
         };
         log_auth_outcome(1000, 1000, &reply);
 

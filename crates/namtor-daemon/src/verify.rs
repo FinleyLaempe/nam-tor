@@ -86,6 +86,55 @@ pub fn external_reason(outcome: &VerifyOutcome) -> Option<String> {
     }
 }
 
+/// Classify a verify outcome into the closed §8.3 failure set.
+///
+/// The mapping reads the daemon's OWN internal reason strings, in one place,
+/// inside the process that produced them — not across the wire. The client
+/// gets [`FailureReason`] and never matches on prose, so rewording a reason
+/// cannot change which message a user sees.
+///
+/// Conditions the daemon cannot observe are not guessed here:
+/// `DaemonUnreachable` is something only the client can know (its connection
+/// failed), and `NotEnrolled` is deliberately silent.
+pub fn failure_of(outcome: &VerifyOutcome) -> Option<namtor_proto::pam::FailureReason> {
+    use namtor_proto::pam::FailureReason as F;
+    let reason = outcome.reason.as_deref().unwrap_or("");
+    let lower = reason.to_ascii_lowercase();
+    match outcome.verdict {
+        Verdict::Match => None,
+        Verdict::RateLimited => Some(F::RateLimited),
+        // A PAD veto is reported as its own variant so the journal is honest,
+        // and renders the same text as a plain non-match so the user — and an
+        // attacker — cannot tell which signal caught them.
+        Verdict::NoMatch if lower.starts_with("pad veto") => Some(F::PadVeto),
+        // A plain non-match needs no failure variant: the verdict says it.
+        Verdict::NoMatch => None,
+        Verdict::Unavailable | Verdict::Refused => {
+            if lower.contains("shutter") {
+                Some(F::PrivacyShutter)
+            } else if lower.contains("busy") || lower.contains("ebusy") {
+                Some(F::CameraBusy)
+            } else if lower.contains("no camera")
+                || lower.contains("no capture source")
+                || lower.contains("no ir camera")
+            {
+                Some(F::NoCamera)
+            } else if lower.contains("timeout") || lower.contains("timed out") {
+                Some(F::Timeout)
+            } else if lower.contains("tpm")
+                || lower.contains("seal")
+                || lower.contains("store error")
+            {
+                Some(F::TemplatesSealed)
+            } else {
+                // Unknown: say nothing rather than assert a condition that was
+                // not observed. The client falls back to its verdict message.
+                None
+            }
+        }
+    }
+}
+
 impl VerifyOutcome {
     pub fn unavailable(reason: &str) -> Self {
         Self {
@@ -1261,5 +1310,113 @@ mod tests {
             assert!(!reason.contains("score"));
             assert!(!reason.contains("probability"));
         }
+    }
+}
+
+#[cfg(test)]
+mod failure_injection_matrix {
+    use super::*;
+    use namtor_proto::pam::FailureReason as F;
+
+    /// Gate G1.3 / G5.3 — the §8.3 fault-injection matrix.
+    ///
+    /// For every condition the spec names, inject the outcome the daemon
+    /// produces for it and assert two things: it **fails closed** (never
+    /// `Match`), and it carries the typed reason the client needs to render
+    /// the required message. Before this, the §8.3 messages existed only in
+    /// the spec — no code produced them and nothing asserted the mapping.
+    #[test]
+    fn every_8_3_condition_fails_closed_with_its_reason() {
+        let cases: &[(&str, VerifyOutcome, Option<F>)] = &[
+            (
+                "no camera present",
+                VerifyOutcome::unavailable("no capture source"),
+                Some(F::NoCamera),
+            ),
+            (
+                "camera held by another application",
+                VerifyOutcome::unavailable("open /dev/video2: EBUSY: Device or resource busy"),
+                Some(F::CameraBusy),
+            ),
+            (
+                "privacy shutter closed",
+                VerifyOutcome::unavailable("privacy shutter is closed"),
+                Some(F::PrivacyShutter),
+            ),
+            (
+                "templates sealed, TPM unavailable",
+                VerifyOutcome::unavailable("store error: tpm unavailable"),
+                Some(F::TemplatesSealed),
+            ),
+            (
+                "timeout",
+                VerifyOutcome::unavailable("timeout waiting for frames"),
+                Some(F::Timeout),
+            ),
+            (
+                "PAD veto",
+                VerifyOutcome::no_match("pad veto: radial (0.012)"),
+                Some(F::PadVeto),
+            ),
+        ];
+
+        for (name, outcome, expected) in cases {
+            assert_ne!(
+                outcome.verdict,
+                Verdict::Match,
+                "{name}: every §8.3 condition must fail closed"
+            );
+            assert_eq!(failure_of(outcome), *expected, "{name}");
+            if let Some(f) = expected {
+                assert!(
+                    f.user_message().is_some(),
+                    "{name}: §8.3 requires a user-visible message"
+                );
+            }
+        }
+    }
+
+    /// Rate limiting is decided before the camera is touched, so it is
+    /// asserted on the verdict rather than on a verify outcome.
+    #[test]
+    fn rate_limiting_maps_to_its_own_reason() {
+        let outcome = VerifyOutcome {
+            verdict: Verdict::RateLimited,
+            score: 0.0,
+            reason: Some("backoff active".into()),
+        };
+        assert_eq!(failure_of(&outcome), Some(F::RateLimited));
+    }
+
+    /// A plain non-match needs no typed reason: the verdict already says it,
+    /// and inventing one would make a non-match distinguishable from a PAD
+    /// veto in whatever the client renders.
+    #[test]
+    fn a_plain_non_match_carries_no_failure_reason() {
+        assert_eq!(
+            failure_of(&VerifyOutcome::no_match("below threshold")),
+            None
+        );
+    }
+
+    /// A success carries none either.
+    #[test]
+    fn a_match_carries_no_failure_reason() {
+        let ok = VerifyOutcome {
+            verdict: Verdict::Match,
+            score: 0.9,
+            reason: None,
+        };
+        assert_eq!(failure_of(&ok), None);
+    }
+
+    /// An unrecognised internal reason must NOT be guessed into a condition
+    /// that was never observed.
+    #[test]
+    fn an_unknown_unavailable_reason_is_not_invented() {
+        assert_eq!(
+            failure_of(&VerifyOutcome::unavailable("something new and unmapped")),
+            None
+        );
     }
 }

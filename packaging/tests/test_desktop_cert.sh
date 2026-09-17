@@ -222,7 +222,15 @@ echo "[d] UI presenter flow unit tests"
 # Single-threaded, as the `rust` CI job runs it: GTK must be driven from one
 # thread, and parallel widget tests are nondeterministic under a virtual display.
 UI_TEST_OUT="$(cargo test -p namtor-ui --no-fail-fast -- --test-threads=1 2>&1)"
-if printf '%s' "$UI_TEST_OUT" | grep_all -E 'test result: FAILED'; then
+UI_TEST_RC=$?
+if [[ $UI_TEST_RC -ne 0 ]] && ! printf '%s' "$UI_TEST_OUT" | grep_all -E 'test result: FAILED'; then
+    # Non-zero with no per-suite FAILED line means the run never got as far as
+    # running tests — a compile error or a harness abort. Without this the
+    # `else` branch below printed "test suite passes (0 passed)" for a build
+    # that did not compile: one PASS for the very thing that was broken.
+    not_ok "namtor-ui test run did not complete (exit $UI_TEST_RC; no test results)"
+    UI_PASSED=0
+elif printf '%s' "$UI_TEST_OUT" | grep_all -E 'test result: FAILED'; then
     not_ok "namtor-ui test suite has failures"
     UI_PASSED=0
 else

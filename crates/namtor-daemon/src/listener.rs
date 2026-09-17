@@ -229,6 +229,8 @@ impl Listener {
                             verdict: Verdict::Refused,
                             score: 0.0,
                             reason: Some("remote authentication refused".into()),
+                            // Spec §8.2, not one of the §8.3 conditions.
+                            failure: None,
                         };
                         let _ = encode(&reply, &mut writer);
                         let _ = writer.flush();
@@ -285,6 +287,7 @@ impl Listener {
                                 verdict: Verdict::Unavailable,
                                 score: 0.0,
                                 reason: Some(e.to_string()),
+                                failure: None,
                             };
                             let _ = encode(&reply, &mut writer);
                             let _ = writer.flush();
@@ -359,6 +362,7 @@ mod tests {
                 verdict: Verdict::Unavailable,
                 score: 0.0,
                 reason: Some("stub".into()),
+                failure: None,
             })
         }
 
@@ -614,6 +618,7 @@ mod tests {
                 verdict: Verdict::Unavailable,
                 score: 0.0,
                 reason: None,
+                failure: None,
             })
         }
         fn snapshot(&self) -> StatusReply {
@@ -675,6 +680,7 @@ mod tests {
                 },
                 score: 0.0,
                 reason: None,
+                failure: None,
             })
         }
         fn snapshot(&self) -> StatusReply {

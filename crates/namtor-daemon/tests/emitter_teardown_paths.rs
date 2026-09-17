@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 use namtor_camera::inventory::SysfsInventory;
 use namtor_daemon::daemon::Daemon;
 use namtor_daemon::lifecycle::SystemClock;
-use namtor_daemon::live_capture::factory_with_inventory;
+use namtor_daemon::live_capture::factory_with_inventory_at;
 use namtor_daemon::supervisor::MockSupervisor;
 use namtor_hwdb::quirks::EmitterCfg;
 use namtor_proto::pam::Requester;
@@ -122,10 +122,11 @@ fn assert_armed(cfg: &EmitterCfg, when: &str) {
     );
 }
 
-/// The daemon's own capture factory, over real sysfs and the repo quirks.
-fn daemon_factory() -> namtor_daemon::daemon::CaptureFactory {
+/// The daemon's own capture factory, over real sysfs and the repo quirks,
+/// writing its emitter record to `state_path`.
+fn daemon_factory(state_path: PathBuf) -> namtor_daemon::daemon::CaptureFactory {
     let inv = SysfsInventory::new(PathBuf::from("/sys"), vec![quirks_dir()]);
-    factory_with_inventory(Box::new(inv), None, None)
+    factory_with_inventory_at(Box::new(inv), None, None, state_path)
 }
 
 fn summarise(path: &str, samples: &[f64]) {
@@ -144,12 +145,12 @@ fn summarise(path: &str, samples: &[f64]) {
     );
 }
 
-/// Point the daemon's emitter-state record at a scratch file, so the factory
-/// does not try to write under /var/lib/namtor.
+/// A scratch emitter-state record, so the factory does not try to write under
+/// /var/lib/namtor. Passed to the factory explicitly; there is deliberately no
+/// environment override for this path in production.
 fn scratch_state() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("emitter-state.toml");
-    std::env::set_var("NAMTOR_EMITTER_STATE", &path);
     (dir, path)
 }
 
@@ -166,8 +167,8 @@ fn teardown_path_end_drop() {
         eprintln!("skipping: no quirks entry for the reference camera");
         return;
     };
-    let (_dir, _state) = scratch_state();
-    let mut factory = daemon_factory();
+    let (_dir, state) = scratch_state();
+    let mut factory = daemon_factory(state);
 
     let mut samples = Vec::new();
     for i in 0..SAMPLES {
@@ -191,8 +192,8 @@ fn teardown_path_stop() {
         eprintln!("skipping: no quirks entry for the reference camera");
         return;
     };
-    let (_dir, _state) = scratch_state();
-    let mut factory = daemon_factory();
+    let (_dir, state) = scratch_state();
+    let mut factory = daemon_factory(state);
 
     let mut samples = Vec::new();
     for i in 0..SAMPLES {
@@ -226,7 +227,7 @@ fn teardown_path_suspend() {
         eprintln!("skipping: no quirks entry for the reference camera");
         return;
     };
-    let (_dir, _state) = scratch_state();
+    let (_dir, state) = scratch_state();
 
     // A real Daemon with the real capture factory. `DaemonDispatcher::
     // release_for_suspend` locks the dispatcher and calls exactly
@@ -241,7 +242,7 @@ fn teardown_path_suspend() {
         &models,
         Duration::from_secs(30),
         SystemClock,
-        Some(daemon_factory()),
+        Some(daemon_factory(state)),
     )
     .expect("daemon boot");
 
@@ -272,7 +273,9 @@ fn sigkill_helper_holds_the_emitter() {
     if std::env::var("NAMTOR_TEARDOWN_HELPER").as_deref() != Ok("1") {
         return;
     }
-    let mut factory = daemon_factory();
+    let state = std::env::var("NAMTOR_EMITTER_STATE")
+        .expect("helper: the parent passes NAMTOR_EMITTER_STATE");
+    let mut factory = daemon_factory(PathBuf::from(state));
     let src = factory().expect("helper: open capture");
     println!("NAMTOR_ARMED");
     use std::io::Write;

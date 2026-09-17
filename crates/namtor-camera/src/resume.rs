@@ -218,6 +218,10 @@ impl ResumeMonitor {
             .receive_signal("PrepareForSleep")
             .map_err(|e| format!("subscribe PrepareForSleep: {e}"))?;
 
+        // The iterator ends when the bus connection drops. That is not an
+        // error value, so a caller that only logs `Err` would see the monitor
+        // disappear silently; the caller is expected to log the return either
+        // way.
         for msg in signals {
             let suspending: bool = msg
                 .body()
@@ -302,6 +306,13 @@ impl ResumeMonitor {
                 .deserialize::<bool>()
                 .map_err(|e| format!("PrepareForSleep payload not bool: {e}"))?;
             if suspending {
+                // Re-take the lock here too, not only on resume. If the very
+                // first Inhibit failed, retrying only on Resume meant the
+                // first suspend of the process — the one most likely to catch
+                // an armed emitter — ran with no delay inhibitor at all.
+                if lock.is_none() {
+                    lock = take_sleep_delay_lock(&proxy).ok();
+                }
                 on_event(SleepEvent::Suspend);
                 // Work done: let the suspend proceed.
                 drop(lock.take());

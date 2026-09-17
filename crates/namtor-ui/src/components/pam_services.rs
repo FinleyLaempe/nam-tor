@@ -212,11 +212,14 @@ fn handle_toggle<C: crate::client::ManagerClient + Send + Sync + 'static>(
     }
     let new_state = switch.is_active();
 
-    // USA-0/USA-16: Route the PAM toggle through dispatch_async so the
-    // GTK main thread never blocks on the D-Bus round-trip (which may
-    // trigger a polkit CheckAuthorization dialog). The staging logic
-    // (checking for confirmation, error handling) runs synchronously
-    // for immediate UI feedback, but the actual D-Bus call is async.
+    // The toggle is applied synchronously by `request_pam_toggle` below, so
+    // the GTK main loop is blocked for the length of the D-Bus round trip,
+    // including any polkit prompt. That was true before this code consumed
+    // the outcome and is not made worse by it — the previous comment here
+    // claimed `dispatch_async` kept the main thread free, which was never the
+    // case for this path because the staging call applies the change itself.
+    // Moving it off-thread is worth doing and is tracked separately; it needs
+    // the same begin/finish split the profile save uses.
     let service_id = service_id.to_string();
     let service_name = service_name.to_string();
 
@@ -242,21 +245,21 @@ fn handle_toggle<C: crate::client::ManagerClient + Send + Sync + 'static>(
         return;
     }
 
-    // Go through the presenter, which records the outcome.
+    // `request_pam_toggle` above ALREADY applied this toggle: it documents
+    // "Disabling any service applies immediately. Enabling a `Safe` service
+    // applies immediately", and only a high-impact enable is staged. So there
+    // is nothing left to call here — reaching for the client again fired the
+    // D-Bus call a second time, which means a second polkit prompt for the
+    // same switch, and let the second call's result overwrite the first, so a
+    // success followed by a denial recorded an error for a change that had in
+    // fact been applied.
     //
-    // This used to call the client directly and throw the result away with
-    // `let _ =`, then sleep 50 ms and refresh. A polkit denial — or a PAM edit
-    // that rolled back — showed the user nothing at all: the switch flipped,
-    // then quietly flipped back. The sleep was also a race, because a polkit
-    // prompt takes seconds, so the refresh read pre-call state and
-    // `mark_async_complete` cleared `is_loading` while the call was still in
-    // flight. `ProfilePresenter::set_pam_service_enabled` already maps every
-    // failure to an ErrorView with a recovery hint; nothing was consuming it.
-    {
-        let mut p = rc.borrow_mut();
-        p.set_pam_service_enabled(&service_id, new_state);
-        p.mark_async_complete();
-    }
+    // What was actually missing was consuming the outcome. The presenter has
+    // been mapping every failure to an ErrorView with a recovery hint all
+    // along; the view threw it away with `let _ =`, slept 50 ms, and
+    // refreshed — so a polkit denial showed the user nothing and the sleep
+    // raced a prompt that takes seconds.
+    rc.borrow_mut().mark_async_complete();
     report_toggle_outcome(rc, switch, &service_id);
 }
 
@@ -288,7 +291,7 @@ fn show_high_impact_dialog<C: crate::client::ManagerClient + Send + Sync + 'stat
         if response == "confirm" {
             // Dispatch the confirmation asynchronously (USA-0).
             // Get the staged toggle info before dispatching.
-            let (staged_id, staged_enabled) = {
+            let (staged_id, _staged_enabled) = {
                 let p = rc_dialog.borrow();
                 p.model()
                     .pending_pam_toggle
@@ -297,11 +300,13 @@ fn show_high_impact_dialog<C: crate::client::ManagerClient + Send + Sync + 'stat
                     .unwrap_or_else(|| (String::new(), false))
             };
             if !staged_id.is_empty() {
-                // Same as the non-risky path: through the presenter, so a
-                // denial on the high-impact confirmation is visible too.
+                // `confirm_pam_toggle` is the staged-toggle's own entry
+                // point; it applies the pending toggle and clears it. Calling
+                // `set_pam_service_enabled` directly here bypassed that and
+                // left `pending_pam_toggle` set.
                 {
                     let mut p = rc_dialog.borrow_mut();
-                    p.set_pam_service_enabled(&staged_id, staged_enabled);
+                    p.confirm_pam_toggle();
                     p.mark_async_complete();
                 }
                 // No set_active(true) here. report_toggle_outcome has already

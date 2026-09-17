@@ -53,6 +53,7 @@ impl LifecycleDispatch for E2eDispatcher {
                     verdict: Verdict::Unavailable,
                     score: 0.0,
                     reason: Some("prepare ack".into()),
+                    failure: None,
                 })
             }
             AuthPhase::Verify => {
@@ -64,6 +65,7 @@ impl LifecycleDispatch for E2eDispatcher {
                     verdict: Verdict::Match,
                     score: 0.87,
                     reason: None,
+                    failure: None,
                 })
             }
             AuthPhase::Release => {
@@ -73,6 +75,7 @@ impl LifecycleDispatch for E2eDispatcher {
                     verdict: Verdict::Unavailable,
                     score: 0.0,
                     reason: Some("released".into()),
+                    failure: None,
                 })
             }
         }

@@ -26,6 +26,30 @@ pub fn factory_with_inventory(
     configured: Option<String>,
     enrolled: Option<String>,
 ) -> CaptureFactory {
+    factory_with_inventory_at(
+        inventory,
+        configured,
+        enrolled,
+        PathBuf::from(namtor_camera::emitter_state::DEFAULT_PATH),
+    )
+}
+
+/// As [`factory_with_inventory`], with the emitter-state record written to an
+/// explicit path.
+///
+/// The path is a parameter rather than an environment variable on purpose.
+/// An env override would let anything able to set the daemon's environment
+/// redirect the record, so `ExecStopPost=/usr/bin/namtor emitter-off` would
+/// find nothing at the default path, take its "nothing was armed" branch and
+/// exit 0 — silently disarming the SIGKILL backstop. That is the same threat
+/// model that removed `NAMTOR_GROUP_FILE` from this daemon, and it gets the
+/// same answer.
+pub fn factory_with_inventory_at(
+    inventory: Box<dyn CameraInventory + Send>,
+    configured: Option<String>,
+    enrolled: Option<String>,
+    state_path: PathBuf,
+) -> CaptureFactory {
     Box::new(move || {
         let cameras = inventory.enumerate().map_err(crate::DaemonError::Capture)?;
         let selected =
@@ -33,18 +57,19 @@ pub fn factory_with_inventory(
                 .ok_or_else(|| {
                     crate::DaemonError::Capture("no IR camera found via topology selection".into())
                 })?;
-        open_selected_camera(&selected.camera)
+        open_selected_camera(&selected.camera, &state_path)
     })
 }
 
 fn open_selected_camera(
     cam: &DiscoveredCamera,
+    state_path: &Path,
 ) -> Result<Box<dyn CaptureSource>, crate::DaemonError> {
     let dev = &cam.ir_node.dev_path;
     let meta_dev = cam.metadata_node.as_ref().map(|n| &n.dev_path);
 
     let emitter_cfg = cam.quirks_entry.as_ref().map(|e| &e.emitter);
-    let emitter = activate_emitter(dev, emitter_cfg).unwrap_or_else(|e| {
+    let emitter = activate_emitter(dev, emitter_cfg, state_path).unwrap_or_else(|e| {
         tracing::warn!(error = %e, dev = %dev.display(), "emitter activation failed");
         EmitterGuard::failed(emitter_cfg.cloned())
     });
@@ -140,7 +165,17 @@ impl EmitterGuard {
             return;
         }
         if let (Some(xu), Some(cfg)) = (self.xu.as_mut(), self.cfg.as_ref()) {
-            let _ = force_off_lib(xu.as_mut(), cfg);
+            if let Err(e) = force_off_lib(xu.as_mut(), cfg) {
+                // The write failed, so the emitter is still lit. Do NOT clear
+                // `armed`: that is the flag `check_watchdog_and_force_off`
+                // tests first, so clearing it here would switch the watchdog
+                // off for the rest of this guard's life and leave `Drop` as
+                // the only thing that could ever darken the LED — and the
+                // Stop -> Review -> Resume flow deliberately does not drop.
+                // Staying armed keeps the watchdog trying.
+                tracing::warn!(error = %e, "emitter force-off failed; leaving the watchdog armed");
+                return;
+            }
         }
         self.armed = false;
         self.armed_at = None;
@@ -185,7 +220,7 @@ impl Drop for EmitterGuard {
 /// that owns this node, so the backstop can re-resolve the node after a
 /// renumber instead of trusting a `/dev/videoN` path that the kernel is free
 /// to reassign on the next boot.
-fn record_emitter_state(dev: &Path, cfg: &EmitterCfg) -> Result<(), String> {
+fn record_emitter_state(dev: &Path, cfg: &EmitterCfg, state_path: &Path) -> Result<(), String> {
     let unit = cfg.unit.ok_or("emitter config has no unit")?;
     let selector = cfg.selector.ok_or("emitter config has no selector")?;
     if cfg.payload_off.is_empty() {
@@ -205,9 +240,7 @@ fn record_emitter_state(dev: &Path, cfg: &EmitterCfg) -> Result<(), String> {
         selector,
         payload_off: cfg.payload_off.clone(),
     };
-    let path = std::env::var("NAMTOR_EMITTER_STATE")
-        .unwrap_or_else(|_| namtor_camera::emitter_state::DEFAULT_PATH.to_string());
-    state.write(Path::new(&path))
+    state.write(state_path)
 }
 
 /// Find the USB vendor/product and UVC interface number that own `node`.
@@ -224,7 +257,11 @@ fn usb_identity_of(sysfs_root: &Path, node: &Path) -> Option<(u16, u16, u8)> {
     None
 }
 
-fn activate_emitter(dev: &Path, emitter_cfg: Option<&EmitterCfg>) -> Result<EmitterGuard, String> {
+fn activate_emitter(
+    dev: &Path,
+    emitter_cfg: Option<&EmitterCfg>,
+    state_path: &Path,
+) -> Result<EmitterGuard, String> {
     use namtor_uvc::device::V4l2Device;
     use namtor_uvc::probe::SafeXu;
 
@@ -235,7 +272,7 @@ fn activate_emitter(dev: &Path, emitter_cfg: Option<&EmitterCfg>) -> Result<Emit
     // reads it after SIGKILL, when nothing can be asked of this process. A
     // failure to write is logged, not fatal: refusing to authenticate because
     // a backstop file could not be written would be the worse trade.
-    if let Err(e) = record_emitter_state(dev, cfg) {
+    if let Err(e) = record_emitter_state(dev, cfg, state_path) {
         tracing::warn!(
             error = %e,
             "could not record emitter state; the ExecStopPost backstop will have nothing to read"
@@ -286,10 +323,15 @@ impl<S: namtor_capture::ir_uvc::Streamer, P: namtor_capture::ir_uvc::EmitterPoli
     }
 
     fn start(&mut self) -> Result<(), namtor_capture::source::CaptureError> {
+        // Stream first, emitter second. `source.start()` can fail (REQBUFS,
+        // mmap, STREAMON); arming before it meant a failed start returned Err
+        // with the emitter lit and no stream, so `next_frame` — the only thing
+        // that runs the watchdog — would never be called.
+        self.source.start()?;
         // Resume after a Stop: `stop` darkened the emitter, so light it again
-        // before frames are wanted. A no-op on first start (still armed).
+        // now that frames are actually coming. A no-op on first start.
         self._emitter.rearm();
-        self.source.start()
+        Ok(())
     }
 
     fn next_frame(

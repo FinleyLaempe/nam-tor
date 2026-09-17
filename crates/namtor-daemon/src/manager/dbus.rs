@@ -493,7 +493,18 @@ impl<P: PolkitAuthority> Manager3Service<P> {
     /// Each session's worker owns a capture whose emitter guard darkens the
     /// IR emitter on drop, so shutting the workers down is what turns the
     /// emitter off. Same mechanism as a client disconnect, applied to all.
-    pub fn cancel_all_sessions(&self) -> usize {
+    /// Returns `(cancelled, stuck)`: how many sessions were ended, and how
+    /// many workers did NOT join within the timeout.
+    ///
+    /// `stuck` is not cosmetic. A worker that does not join still owns its
+    /// `EnrollmentCapture`, hence the capture source, hence the `EmitterGuard`
+    /// whose `Drop` is the thing that actually darkens the IR emitter. If a
+    /// worker is wedged in a blocking DQBUF against a camera that has stopped
+    /// delivering — exactly what the start of a suspend causes — the session
+    /// record is removed and the emitter stays lit. Reporting 0 cancelled and
+    /// logging success there would put a false statement in the journal at the
+    /// one moment it matters.
+    pub fn cancel_all_sessions(&self) -> (usize, usize) {
         let owners: Vec<String> = {
             let sessions = lock(&self.sessions);
             let mut names: Vec<String> = sessions.values().map(|s| s.bus_name.clone()).collect();
@@ -502,13 +513,22 @@ impl<P: PolkitAuthority> Manager3Service<P> {
             names
         };
         let before = lock(&self.sessions).len();
+        let mut stuck = 0;
         for name in owners {
-            self.handle_disconnect_by_bus_name(&name);
+            stuck += self.disconnect_bus_name(&name);
         }
-        before
+        (before, stuck)
     }
 
     pub fn handle_disconnect_by_bus_name(&self, bus_name: &str) {
+        let _ = self.disconnect_bus_name(bus_name);
+    }
+
+    /// End every session owned by `bus_name`. Returns how many workers failed
+    /// to join within the timeout — each one is still holding a capture, and
+    /// therefore an emitter that nothing has darkened.
+    fn disconnect_bus_name(&self, bus_name: &str) -> usize {
+        let mut stuck = 0;
         let to_remove: Vec<String> = {
             let sessions = lock(&self.sessions);
             sessions
@@ -526,11 +546,23 @@ impl<P: PolkitAuthority> Manager3Service<P> {
                 let mut workers = lock(&self.workers);
                 let _ = workers.send_command(uid, WorkerCommand::Cancel);
                 if let Some(mut h) = workers.remove(uid) {
-                    h.shutdown_and_join();
+                    if !h.shutdown_and_join() {
+                        // `join` already took the JoinHandle, so `Drop` will
+                        // not retry: this worker is gone from our books and
+                        // still running.
+                        stuck += 1;
+                        tracing::warn!(
+                            uid,
+                            session = %sid,
+                            "enrollment worker did not stop within the join timeout; \
+                             it still holds the capture, so the IR emitter may stay armed"
+                        );
+                    }
                 }
             }
             lock(&self.sessions).remove(&sid);
         }
+        stuck
     }
 
     pub fn start_enrollment(
@@ -1859,9 +1891,10 @@ mod tests {
         assert!(lock(&svc.sessions).contains_key(&a));
         assert!(lock(&svc.sessions).contains_key(&b));
 
-        let cancelled = svc.cancel_all_sessions();
+        let (cancelled, stuck) = svc.cancel_all_sessions();
 
         assert_eq!(cancelled, 2, "both sessions were open");
+        assert_eq!(stuck, 0, "no worker should outlive its join timeout here");
         assert!(
             lock(&svc.sessions).is_empty(),
             "no session may survive suspend"
@@ -1871,7 +1904,7 @@ mod tests {
     #[test]
     fn v3_cancel_all_sessions_with_none_open_is_a_noop() {
         let svc = new_svc3();
-        assert_eq!(svc.cancel_all_sessions(), 0);
+        assert_eq!(svc.cancel_all_sessions(), (0, 0));
         assert!(lock(&svc.sessions).is_empty());
     }
 

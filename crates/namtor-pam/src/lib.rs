@@ -137,20 +137,31 @@ fn run_auth(pamh: *mut ffi::PamHandle) -> c_int {
     };
 
     // 6. Map verdict → PAM code. Fail-closed: only Match → PAM_SUCCESS.
+    //
+    // The journal reason prefers the daemon's typed §8.3 condition when it
+    // sent one, so "unavailable" becomes the specific `no_camera`,
+    // `camera_busy`, `privacy_shutter`, `templates_sealed` or `timeout` that
+    // actually occurred. The verdict-level word remains the fallback for a
+    // daemon older than the field.
+    let code = reply
+        .failure
+        .map(|f| f.journal_code())
+        .unwrap_or(match reply.verdict {
+            Verdict::Match => "match",
+            Verdict::NoMatch => "no_match",
+            Verdict::Unavailable => "unavailable",
+            Verdict::RateLimited => "rate_limited",
+            Verdict::Refused => "refused",
+        });
+
     match reply.verdict {
         Verdict::Match => ffi::PAM_SUCCESS,
-        Verdict::NoMatch => log_fail("no_match", ffi::PAM_AUTH_ERR, ffi::PAM_AUTH_ERR),
-        Verdict::Unavailable => log_fail(
-            "unavailable",
-            ffi::PAM_AUTHINFO_UNAVAIL,
-            ffi::PAM_AUTHINFO_UNAVAIL,
-        ),
-        Verdict::RateLimited => log_fail("rate_limited", ffi::PAM_MAXTRIES, ffi::PAM_MAXTRIES),
-        Verdict::Refused => log_fail(
-            "refused",
-            ffi::PAM_AUTHINFO_UNAVAIL,
-            ffi::PAM_AUTHINFO_UNAVAIL,
-        ),
+        Verdict::NoMatch => log_fail(code, ffi::PAM_AUTH_ERR, ffi::PAM_AUTH_ERR),
+        Verdict::Unavailable => {
+            log_fail(code, ffi::PAM_AUTHINFO_UNAVAIL, ffi::PAM_AUTHINFO_UNAVAIL)
+        }
+        Verdict::RateLimited => log_fail(code, ffi::PAM_MAXTRIES, ffi::PAM_MAXTRIES),
+        Verdict::Refused => log_fail(code, ffi::PAM_AUTHINFO_UNAVAIL, ffi::PAM_AUTHINFO_UNAVAIL),
     }
 }
 

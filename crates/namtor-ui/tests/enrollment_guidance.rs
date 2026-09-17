@@ -604,3 +604,49 @@ fn the_guidance_headline_announces_only_when_the_announcer_allows() {
         );
     });
 }
+
+/// The announcement throttle must actually suppress something.
+///
+/// It was time-based only, at 250 ms, on a page that re-renders every 500 ms —
+/// so every render was "due" and nothing was ever throttled, while the module
+/// documented preventing exactly that flood. Unchanged guidance repeated on
+/// each redraw is what floods a screen reader.
+#[test]
+fn unchanged_guidance_is_not_re_announced() {
+    use namtor_ui::ProgressAnnouncer;
+    use std::time::{Duration, Instant};
+
+    let mut a = ProgressAnnouncer::new();
+    let t0 = Instant::now();
+    assert!(a.should_announce_text("Centre your face", t0), "first time");
+
+    // A later render, well past the interval, with the SAME guidance.
+    let t1 = t0 + Duration::from_secs(5);
+    assert!(
+        !a.should_announce_text("Centre your face", t1),
+        "repeating unchanged guidance must not interrupt the screen reader again"
+    );
+
+    // New guidance announces.
+    let t2 = t1 + Duration::from_secs(1);
+    assert!(a.should_announce_text("Hold still", t2), "changed guidance");
+
+    // And back again is announced, because it changed from the last one.
+    let t3 = t2 + Duration::from_secs(1);
+    assert!(a.should_announce_text("Centre your face", t3));
+}
+
+/// Rapid changes are still rate-limited, so a flapping signal cannot flood.
+#[test]
+fn rapidly_changing_guidance_is_still_rate_limited() {
+    use namtor_ui::ProgressAnnouncer;
+    use std::time::{Duration, Instant};
+
+    let mut a = ProgressAnnouncer::new();
+    let t0 = Instant::now();
+    assert!(a.should_announce_text("a", t0));
+    assert!(
+        !a.should_announce_text("b", t0 + Duration::from_millis(10)),
+        "a different string 10 ms later must still be throttled"
+    );
+}

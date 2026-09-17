@@ -69,6 +69,96 @@ pub struct AuthReply {
     pub score: f32,
     /// Optional human-readable reason; safe to surface (no biometric data).
     pub reason: Option<String>,
+    /// The failure mode, as a closed set, so the client can render the
+    /// message spec §8.3 requires without matching on `reason` text.
+    ///
+    /// `#[serde(default)]`: a daemon older than this field simply omits it and
+    /// the client falls back to its verdict-level message.
+    #[serde(default)]
+    pub failure: Option<FailureReason>,
+}
+
+/// The failure modes of spec §8.3, as a closed enum.
+///
+/// The spec fixes a user-visible message per condition. `reason` is a free
+/// string for the journal and cannot carry that mapping: deciding what to show
+/// a user by substring-matching prose is how the wrong message gets shown
+/// after an unrelated reword. This is the typed channel.
+///
+/// Note what is deliberately NOT distinguishable here at the *message* level:
+/// [`Self::PadVeto`] and a plain non-match both read "Face not recognised", so
+/// the system never tells an attacker which signal caught them. The variants
+/// stay distinct so the journal records the truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureReason {
+    /// No IR camera present on the system.
+    NoCamera,
+    /// A camera is present but another application holds it.
+    CameraBusy,
+    /// The camera's privacy shutter is closed.
+    PrivacyShutter,
+    /// This user has no enrolled face. Silent by design — announcing it would
+    /// tell anyone at the machine who is and is not enrolled.
+    NotEnrolled,
+    /// The client could not reach the daemon.
+    DaemonUnreachable,
+    /// Templates are sealed and the TPM is unavailable to unseal them.
+    TemplatesSealed,
+    /// The attempt ran out of time before a decision.
+    Timeout,
+    /// Presentation-attack detection vetoed the frame.
+    PadVeto,
+    /// Too many recent attempts for this user.
+    RateLimited,
+}
+
+impl FailureReason {
+    /// The message spec §8.3 requires for this condition.
+    ///
+    /// `None` means show nothing: the table marks "no enrollment for this
+    /// user" as a silent fall-through.
+    pub fn user_message(self) -> Option<&'static str> {
+        match self {
+            Self::NoCamera => Some("No infrared camera found"),
+            Self::CameraBusy => Some("Camera is busy"),
+            Self::PrivacyShutter => Some("Camera privacy shutter is closed"),
+            Self::NotEnrolled => None,
+            Self::DaemonUnreachable | Self::TemplatesSealed => Some("Face unlock unavailable"),
+            Self::Timeout | Self::PadVeto => Some("Face not recognised"),
+            Self::RateLimited => Some("Too many attempts"),
+        }
+    }
+
+    /// Stable token for the journal. Distinct per condition even where two
+    /// conditions share a user-visible message.
+    pub fn journal_code(self) -> &'static str {
+        match self {
+            Self::NoCamera => "no_camera",
+            Self::CameraBusy => "camera_busy",
+            Self::PrivacyShutter => "privacy_shutter",
+            Self::NotEnrolled => "not_enrolled",
+            Self::DaemonUnreachable => "daemon_unreachable",
+            Self::TemplatesSealed => "templates_sealed",
+            Self::Timeout => "timeout",
+            Self::PadVeto => "pad_veto",
+            Self::RateLimited => "rate_limited",
+        }
+    }
+
+    /// Every variant, so tests and the fault-injection matrix cannot silently
+    /// miss one added later.
+    pub const ALL: [Self; 9] = [
+        Self::NoCamera,
+        Self::CameraBusy,
+        Self::PrivacyShutter,
+        Self::NotEnrolled,
+        Self::DaemonUnreachable,
+        Self::TemplatesSealed,
+        Self::Timeout,
+        Self::PadVeto,
+        Self::RateLimited,
+    ];
 }
 
 /// Auth outcome. Distinct from `Option<Match>` because `Refused` and
@@ -189,6 +279,7 @@ mod tests {
             verdict: Verdict::Match,
             score: 0.83,
             reason: None,
+            failure: None,
         };
         let back = round_trip(&reply);
         assert_eq!(back, reply);
@@ -202,6 +293,7 @@ mod tests {
             verdict: Verdict::Refused,
             score: 0.0,
             reason: Some("rhost set".into()),
+            failure: None,
         };
         let back = round_trip(&reply);
         assert_eq!(back, reply);
@@ -253,5 +345,101 @@ mod tests {
             serde_json::to_string(&Verdict::RateLimited).unwrap(),
             r#""rate_limited""#
         );
+    }
+}
+
+#[cfg(test)]
+mod failure_reason_tests {
+    use super::*;
+
+    /// Spec §8.3 fixes a message per condition. This is that table, verbatim.
+    #[test]
+    fn every_condition_renders_the_message_the_spec_requires() {
+        let table = [
+            (FailureReason::NoCamera, Some("No infrared camera found")),
+            (FailureReason::CameraBusy, Some("Camera is busy")),
+            (
+                FailureReason::PrivacyShutter,
+                Some("Camera privacy shutter is closed"),
+            ),
+            (FailureReason::NotEnrolled, None),
+            (
+                FailureReason::DaemonUnreachable,
+                Some("Face unlock unavailable"),
+            ),
+            (
+                FailureReason::TemplatesSealed,
+                Some("Face unlock unavailable"),
+            ),
+            (FailureReason::Timeout, Some("Face not recognised")),
+            (FailureReason::PadVeto, Some("Face not recognised")),
+            (FailureReason::RateLimited, Some("Too many attempts")),
+        ];
+        assert_eq!(
+            table.len(),
+            FailureReason::ALL.len(),
+            "a variant was added without a §8.3 message"
+        );
+        for (reason, expected) in table {
+            assert_eq!(reason.user_message(), expected, "{reason:?}");
+        }
+    }
+
+    /// A PAD veto must be indistinguishable from any other non-recognition in
+    /// what the user sees, so the system never tells an attacker which signal
+    /// caught them — while staying distinct in the journal.
+    #[test]
+    fn a_pad_veto_looks_exactly_like_a_plain_non_match() {
+        assert_eq!(
+            FailureReason::PadVeto.user_message(),
+            FailureReason::Timeout.user_message(),
+            "a PAD veto must not be distinguishable by its message"
+        );
+        assert_ne!(
+            FailureReason::PadVeto.journal_code(),
+            FailureReason::Timeout.journal_code(),
+            "but the journal must record which it really was"
+        );
+    }
+
+    #[test]
+    fn journal_codes_are_unique_and_machine_readable() {
+        let mut codes: Vec<&str> = FailureReason::ALL
+            .iter()
+            .map(|r| r.journal_code())
+            .collect();
+        codes.sort_unstable();
+        let before = codes.len();
+        codes.dedup();
+        assert_eq!(before, codes.len(), "duplicate journal code: {codes:?}");
+        for c in codes {
+            assert!(
+                c.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_'),
+                "journal code {c:?} should be a snake_case token"
+            );
+        }
+    }
+
+    /// The field is optional so a daemon older than it can still be parsed.
+    #[test]
+    fn a_reply_without_the_field_still_parses() {
+        let json = r#"{"nonce":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                       "verdict":"unavailable","score":0.0,"reason":"old daemon"}"#;
+        let reply: AuthReply = serde_json::from_str(json).expect("parse");
+        assert_eq!(reply.failure, None);
+    }
+
+    #[test]
+    fn the_field_round_trips() {
+        let reply = AuthReply {
+            nonce: [7u8; 16],
+            verdict: Verdict::Unavailable,
+            score: 0.0,
+            reason: Some("camera busy".into()),
+            failure: Some(FailureReason::CameraBusy),
+        };
+        let back: AuthReply =
+            serde_json::from_str(&serde_json::to_string(&reply).unwrap()).unwrap();
+        assert_eq!(back.failure, Some(FailureReason::CameraBusy));
     }
 }

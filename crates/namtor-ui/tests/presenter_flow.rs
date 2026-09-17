@@ -1355,3 +1355,54 @@ fn a_failed_commit_returns_to_stopped_with_an_error() {
         "the session must survive a failed save so it can be retried"
     );
 }
+
+/// A save result must not be applied after the user cancelled the enrollment.
+///
+/// The commit runs on a worker thread and the user can press Back while it is
+/// in flight. Applying the result anyway dragged the presenter out of `Setup`
+/// into `Stopped` with no session — a page whose Review and Save buttons are
+/// both no-ops, so only Cancel escapes — or announced "Enrollment complete"
+/// for an enrollment that had been cancelled.
+#[test]
+fn a_save_result_is_discarded_if_the_session_was_cancelled_meanwhile() {
+    let mut p = reviewed_presenter("Sven V3");
+    let (_session, _client) = p.begin_save_v3().expect("save starts");
+
+    // The user presses Back: the sub-page handler cancels the enrollment.
+    p.cancel_enrollment_v3();
+    assert_eq!(p.model().enrollment_state, EnrollmentState::Setup);
+    assert!(p.model().enrollment_session_v3.is_none());
+
+    // The in-flight commit now returns — failure, because the daemon session
+    // was just cancelled.
+    p.finish_save_v3(Err(namtor_ui::client::ManagerError::State(
+        "session cancelled".into(),
+    )));
+
+    assert_eq!(
+        p.model().enrollment_state,
+        EnrollmentState::Setup,
+        "a cancelled enrollment must stay cancelled"
+    );
+    assert!(!p.model().is_loading, "the in-flight flag must still clear");
+}
+
+/// The same, for a commit that succeeds after the cancel.
+#[test]
+fn a_late_successful_save_does_not_announce_a_cancelled_enrollment() {
+    let mut p = reviewed_presenter("Tara V3");
+    let (_session, _client) = p.begin_save_v3().expect("save starts");
+    p.cancel_enrollment_v3();
+
+    p.finish_save_v3(Ok(namtor_ui::client::ProfileId("id-late".into())));
+
+    assert_eq!(p.model().enrollment_state, EnrollmentState::Setup);
+    assert!(
+        p.model()
+            .message
+            .as_deref()
+            .is_none_or(|m| !m.contains("complete")),
+        "must not announce completion for a cancelled enrollment: {:?}",
+        p.model().message
+    );
+}

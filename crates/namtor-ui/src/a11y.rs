@@ -21,6 +21,8 @@ pub const PROGRESS_ANNOUNCE_INTERVAL: Duration = Duration::from_millis(250);
 pub struct ProgressAnnouncer {
     last: Option<Instant>,
     interval: Duration,
+    /// The text last announced, so an unchanged headline is not repeated.
+    last_text: Option<String>,
 }
 
 impl ProgressAnnouncer {
@@ -34,7 +36,27 @@ impl ProgressAnnouncer {
         Self {
             last: None,
             interval,
+            last_text: None,
         }
+    }
+
+    /// Returns `true` if `text` should be announced at `now`.
+    ///
+    /// Suppresses a repeat of the text that was last announced, whatever the
+    /// interval. The time-based gate alone could not do the job here: the
+    /// capture page re-renders on a 500 ms poll and this interval is 250 ms,
+    /// so every render was "due" and nothing was ever throttled. What actually
+    /// floods a screen reader is re-announcing the *same* guidance on every
+    /// redraw, which is what this stops.
+    pub fn should_announce_text(&mut self, text: &str, now: Instant) -> bool {
+        if self.last_text.as_deref() == Some(text) {
+            return false;
+        }
+        if !self.should_announce(now) {
+            return false;
+        }
+        self.last_text = Some(text.to_string());
+        true
     }
 
     /// Returns `true` if an announcement should fire at `now`, and records

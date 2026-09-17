@@ -22,6 +22,16 @@
 
 set -euo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` reports the WRITER's status when grep
+# exits early and the writer dies of SIGPIPE, so a match can be read as a miss.
+# Here that meant a machine WITH models could be reported as having none once
+# `find`'s output outgrew the pipe buffer. Without -q grep never exits early,
+# so nothing upstream is signalled; the exit status is unchanged.
+grep_all() { grep "$@" >/dev/null; }
+
+
 DESTDIR="${DESTDIR:-}"
 PAM_FILE="${PAM_FILE:-/etc/pam.d/gdm-password}"
 PAM_MODULE="${PAM_MODULE:-/usr/lib/security/pam_namtor.so}"
@@ -93,7 +103,7 @@ fi
 
 # Password fallback = any auth line referencing a known password module or a
 # known distro include that itself provides password auth.
-if ! grep -E '^[[:space:]]*auth[[:space:]]' "$TARGET" | grep -qE \
+if ! grep -E '^[[:space:]]*auth[[:space:]]' "$TARGET" | grep_all -E \
     'pam_unix|pam_systemd_home|pam_env|common-auth|system-auth|password-auth'; then
     fatal "no password-fallback auth line found in $TARGET — installing pam_namtor with no password fallback would lock users out on daemon failure"
 fi
@@ -126,7 +136,7 @@ fi
 # ---------------------------------------------------------------------------
 if [[ -z "$DESTDIR" ]]; then
     if getent group "$NAMTOR_AUTH_GROUP" >/dev/null 2>&1; then
-        if ! getent group "$NAMTOR_AUTH_GROUP" | grep -qE "(^|,)$DM_USER(,|$)"; then
+        if ! getent group "$NAMTOR_AUTH_GROUP" | grep_all -E "(^|,)$DM_USER(,|$)"; then
             warn "user '$DM_USER' is not in group '$NAMTOR_AUTH_GROUP' — run 'gpasswd -a $DM_USER $NAMTOR_AUTH_GROUP'"
         else
             echo "pam-preflight: OK  '$DM_USER' is in '$NAMTOR_AUTH_GROUP'"
