@@ -158,7 +158,7 @@ impl DbusManagerClient {
                 "Get",
                 &(INTERFACE_V3, "ApiVersion"),
             )
-            .map_err(map_zbus_error)?;
+            .map_err(map_missing_v3)?;
         let value: zbus::zvariant::OwnedValue = msg
             .body()
             .deserialize()
@@ -194,6 +194,32 @@ impl DbusManagerClient {
         let _body: () = self.call::<(), _>(method, body)?;
         Ok(())
     }
+}
+
+/// A daemon that does not export `org.namtor.Manager3` at all is a version
+/// mismatch, not a transport failure.
+///
+/// The distinction is what the user is told: `IncompatibleVersion` carries a
+/// recovery hint that says to restart the daemon and, failing that, that the
+/// two packages are from different releases. `Transport` says the daemon
+/// could not be reached, which sends the reader to look for a daemon that is
+/// in fact running and answering.
+fn map_missing_v3(e: zbus::Error) -> ManagerError {
+    const MISSING: &[&str] = &[
+        "org.freedesktop.DBus.Error.UnknownInterface",
+        "org.freedesktop.DBus.Error.UnknownMethod",
+        "org.freedesktop.DBus.Error.UnknownProperty",
+        "org.freedesktop.DBus.Error.UnknownObject",
+    ];
+    if let zbus::Error::MethodError(name, _, _) = &e {
+        if MISSING.contains(&name.as_str()) {
+            return ManagerError::IncompatibleVersion(format!(
+                "the daemon does not export {INTERFACE_V3} (this build speaks v{})",
+                crate::types::API_VERSION_V3
+            ));
+        }
+    }
+    map_zbus_error(e)
 }
 
 fn map_zbus_error(e: zbus::Error) -> ManagerError {
