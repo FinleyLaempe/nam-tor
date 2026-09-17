@@ -124,6 +124,53 @@ impl EmitterGuard {
     }
 }
 
+impl EmitterGuard {
+    /// Darken the emitter without giving up the device, so a later
+    /// [`Self::rearm`] can turn it back on.
+    ///
+    /// Needed because a stopped capture is not always a dropped one. An
+    /// enrollment session keeps its source across Stop → Review → Resume, and
+    /// `EmitterSource::stop` used to stop only the stream. The per-frame
+    /// watchdog cannot help — it runs before a frame pull, and a stopped
+    /// source pulls none — so the IR emitter stayed lit for as long as the
+    /// user sat on the Review screen. Measured on the reference camera:
+    /// still `payload_on` 1500 ms after `stop()`.
+    fn disarm(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let (Some(xu), Some(cfg)) = (self.xu.as_mut(), self.cfg.as_ref()) {
+            let _ = force_off_lib(xu.as_mut(), cfg);
+        }
+        self.armed = false;
+        self.armed_at = None;
+    }
+
+    /// Turn the emitter back on after [`Self::disarm`], if it was on before.
+    ///
+    /// Only re-applies when the original activation succeeded; an emitter that
+    /// was skipped (always-on hardware, or a vendor XU without consent) stays
+    /// as it was. The watchdog budget restarts from now.
+    fn rearm(&mut self) {
+        if self.armed || self.outcome != ApplyOutcome::Activated {
+            return;
+        }
+        let (Some(xu), Some(cfg)) = (self.xu.as_mut(), self.cfg.as_ref()) else {
+            return;
+        };
+        let mut ctrl = EmitterController::new(xu.as_mut(), cfg);
+        match ctrl.apply_on_gated(&EnvConsent) {
+            Ok(ApplyOutcome::Activated) => {
+                ctrl.release_to_guard();
+                self.armed = true;
+                self.armed_at = Some(Instant::now());
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "emitter re-arm on resume failed"),
+        }
+    }
+}
+
 impl Drop for EmitterGuard {
     fn drop(&mut self) {
         if let (Some(mut xu), Some(cfg)) = (self.xu.take(), self.cfg.as_ref()) {
@@ -239,6 +286,9 @@ impl<S: namtor_capture::ir_uvc::Streamer, P: namtor_capture::ir_uvc::EmitterPoli
     }
 
     fn start(&mut self) -> Result<(), namtor_capture::source::CaptureError> {
+        // Resume after a Stop: `stop` darkened the emitter, so light it again
+        // before frames are wanted. A no-op on first start (still armed).
+        self._emitter.rearm();
         self.source.start()
     }
 
@@ -251,6 +301,9 @@ impl<S: namtor_capture::ir_uvc::Streamer, P: namtor_capture::ir_uvc::EmitterPoli
 
     fn stop(&mut self) {
         self.source.stop();
+        // A stop must darken the emitter, not only halt the stream: the source
+        // may be kept for a later Resume. See `EmitterGuard::disarm`.
+        self._emitter.disarm();
     }
 }
 

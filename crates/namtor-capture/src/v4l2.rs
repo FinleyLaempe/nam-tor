@@ -141,6 +141,32 @@ impl V4l2Stream {
     /// Requests `count` MMAP buffers from the driver. Returns the number
     /// actually allocated (which may be fewer).
     pub fn request_buffers(&mut self, count: u32) -> Result<u32, V4l2Error> {
+        // A second request on the same stream — Stop then Resume — must first
+        // give back the buffers from the first.
+        //
+        // This used to overwrite `self.buffers` with fresh `None`s, dropping
+        // the old `MmapBuffer`s on the floor. `MmapBuffer` has no Drop and the
+        // stream's Drop only unmaps what is in the vector at the time, so the
+        // first set of mappings was never unmapped. Those mappings keep the
+        // driver's vb2 queue busy after the stream itself is gone, so the next
+        // open of the node failed `VIDIOC_S_FMT` with EBUSY — for the rest of
+        // the process. In a long-lived daemon that meant one Stop -> Resume in
+        // enrollment broke every later capture, face unlock included, until a
+        // restart. Found by the G1.5 teardown test on the reference camera.
+        if !self.buffers.is_empty() {
+            let _ = self.streamoff();
+            self.unmap_all();
+            let mut free = V4l2Requestbuffers {
+                count: 0,
+                type_: self.buf_type,
+                memory: V4L2_MEMORY_MMAP,
+                ..Default::default()
+            };
+            // SAFETY: VIDIOC_REQBUFS with count 0 frees the queue's buffers;
+            // every mapping of them was just unmapped above.
+            let _ = unsafe { vidioc_reqbufs(self.file.as_raw_fd(), &mut free) };
+        }
+
         let mut rb = V4l2Requestbuffers {
             count,
             type_: self.buf_type,
@@ -278,18 +304,26 @@ impl V4l2Stream {
     }
 }
 
-impl Drop for V4l2Stream {
-    fn drop(&mut self) {
-        let _ = self.streamoff();
-        for mb in self.buffers.iter().flatten() {
+impl V4l2Stream {
+    /// Unmap every buffer this stream has mapped and forget them. Idempotent.
+    fn unmap_all(&mut self) {
+        for mb in self.buffers.drain(..).flatten() {
             // SAFETY: `mb.ptr`/`mb.len` describe the mapping obtained via
-            // mmap above; munmap with the same length unmaps it.
+            // mmap in `mmap_buffers`; munmap with the same length unmaps it,
+            // and `drain` guarantees it is never unmapped twice.
             unsafe {
                 if let Some(nn) = std::ptr::NonNull::new(mb.ptr as *mut c_void) {
                     let _ = nix::sys::mman::munmap(nn, mb.len);
                 }
             }
         }
+    }
+}
+
+impl Drop for V4l2Stream {
+    fn drop(&mut self) {
+        let _ = self.streamoff();
+        self.unmap_all();
     }
 }
 
