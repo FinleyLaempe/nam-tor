@@ -1965,3 +1965,20 @@ best detection confidence: 0.000
 **The attack class that would actually exercise PAD is a printed photo on paper.** Paper reflects IR broadly the way skin does, so YuNet frequently *does* detect a face on a print — which is exactly the case the analytic gates (differential energy, gradient consistency, specular highlight, radial falloff) were written to catch. A print held at working distance under the strobe should show near-zero differential energy and no 1/d² falloff, and be vetoed. **That test has not been run.**
 
 G4 (APCER/BPCER) stays WITHHELD. One attack presentation of one class is not an APCER, the sample size is 1, and the gate under redesign was not exercised. Recording this as a data point, not as evidence of spoof resistance.
+
+### G1.5 — the RGB sensor cannot substitute for a photodiode (tested, negative)
+
+G1.5's blocker is that the only witness to the IR emitter is the IR sensor, which goes blind for ~390 ms during the MSXU mode switch, so the true off-instant is bracketed only to [43, 435] ms. The recorded fix was "an observer that does not stall with the mode switch — a second camera, or a photodiode".
+
+This laptop HAS a second camera: `/dev/video0`, the RGB sensor, on a different VideoStreaming interface, and `quirks/devices/3277-0018.toml` records concurrent IR+RGB streaming as verified (R1 PASS). So the obvious question is whether the RGB sensor can watch the IR LED while the IR sensor is blinded.
+
+**Tested 2026-09-17: it cannot.** 150 YUYV frames (640x480, ~5 s) captured from `/dev/video0` while the G1.5 test armed the emitter in bounded windows on `/dev/video2`:
+
+```
+RGB Y-plane:  mean 113.48   min 103.65   max 113.69   std 0.93
+frames >3 sigma above median: 0
+```
+
+The only variation is the RGB sensor's own AE settling over the first few frames (103.7 -> 113.6). The emitter was genuinely lit during the capture — the IR sensor recorded `lit 235.14/255` in the same run — so this is not a failed arm.
+
+The RGB sensor's IR-cut filter blocks the emitter's wavelength. Conclusion: **the second camera is not a usable observer**, and G1.5 still needs a photodiode or an IR-sensitive camera without a cut filter. Recording the negative result so nobody re-treads it.
