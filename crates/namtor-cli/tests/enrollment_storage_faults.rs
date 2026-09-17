@@ -51,6 +51,20 @@ fn current_euid() -> u32 {
     nix::unistd::geteuid().as_raw()
 }
 
+/// Root bypasses file permission bits, so a fault induced with `chmod` does
+/// not happen, and root self-enrollment correctly requires the `namtor`
+/// system user. Both are true of production and false of the assumptions
+/// these tests make — which only showed once the Debian and Fedora package
+/// builds ran the suite as root. Skipping says so; passing silently would
+/// claim a fault was checked when it could not be induced.
+fn skip_as_root(test: &str) -> bool {
+    if current_euid() == 0 {
+        eprintln!("SKIP {test}: running as root, which bypasses the condition under test");
+        return true;
+    }
+    false
+}
+
 fn set_mode(path: &Path, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
@@ -80,6 +94,9 @@ fn open_test_store(dir: &Path, key_path: &Path, owner_uid: u32) -> TemplateStore
 /// the store owner (no root, no `namtor` system user needed).
 #[test]
 fn self_enrollment_identity_uses_current_euid() {
+    if skip_as_root("self_enrollment_identity_uses_current_euid") {
+        return;
+    }
     let id = resolve_identity(None).unwrap();
     assert_eq!(id.uid, current_euid());
     assert_eq!(id.store_owner_uid, current_euid());
@@ -145,6 +162,9 @@ fn re_enrollment_overwrites_and_daemon_reads() {
 /// "preserve old enrollment and clean temps on failure" acceptance.
 #[test]
 fn write_failure_preserves_old_enrollment_and_cleans_temps() {
+    if skip_as_root("write_failure_preserves_old_enrollment_and_cleans_temps") {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let key_path = dir.path().join("key");
     let id = EnrollmentIdentity {

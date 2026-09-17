@@ -55,6 +55,13 @@ fn set_mode(path: &Path, mode: u32) {
 
 #[test]
 fn write_failure_preserves_old_record() {
+    // Root ignores the read-only bit this uses to make the write fail, so the
+    // fault never happens and `update` succeeds. The rpm and deb builds run
+    // the suite as root; skip loudly rather than pass having checked nothing.
+    if current_euid() == 0 {
+        eprintln!("SKIP write_failure_preserves_old_record: root bypasses 0o500");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(dir.path());
 

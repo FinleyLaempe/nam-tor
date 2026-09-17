@@ -251,6 +251,14 @@ fn e2e_rhost_set_returns_refused() {
 
 #[test]
 fn e2e_unauthorised_uid_connection_closed() {
+    // The ACL admits uid 0 unconditionally, by design: root is always
+    // authorised. A test process running as root therefore cannot play the
+    // unauthorised peer — its connection is correctly accepted. The rpm and
+    // deb package builds run the suite as root.
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("SKIP e2e_unauthorised_uid_connection_closed: root is always authorised");
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let dispatcher = Arc::new(E2eDispatcher::new());
     let path = dir.path().join("auth.sock");
