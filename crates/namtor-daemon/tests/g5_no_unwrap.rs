@@ -91,8 +91,22 @@ fn scan_file(path: &Path) -> Vec<Violation> {
             continue;
         }
 
-        // Check for violations on non-test lines.
-        let lower = trimmed.to_lowercase();
+        // A comment is not code. Without this the gate forbids its own
+        // rationale from being written down: a line explaining *why* a call
+        // avoids `.expect(` is flagged as using it, which is the same defect
+        // as a doc-audit that greps prose. A `//` line cannot contain
+        // executable code, so skipping it cannot hide a real violation.
+        if trimmed.starts_with("//") {
+            continue;
+        }
+
+        // Check for violations on non-test lines. A trailing comment cannot
+        // launder a violation either, so only the code before `//` is scanned.
+        let code_only = match trimmed.find("//") {
+            Some(i) => &trimmed[..i],
+            None => trimmed,
+        };
+        let lower = code_only.to_lowercase();
         if lower.contains(".unwrap()") || lower.contains(".expect(") {
             // Allow unwrap_or_else, unwrap_or, unwrap_or_default — these handle
             // the error case and are not panic-inducing.

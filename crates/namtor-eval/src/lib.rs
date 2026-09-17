@@ -3,3 +3,4 @@
 
 pub mod protocol;
 pub mod score;
+pub mod session;
