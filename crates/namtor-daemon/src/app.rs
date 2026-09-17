@@ -190,7 +190,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mock_infer = std::env::var("NAMTOR_MOCK_INFER").is_ok();
-    tracing::info!(worker = %worker_bin.display(), mock_infer, "spawning worker");
+    // Report the executable that will ACTUALLY run. `ChildSupervisor` re-execs
+    // `/proc/self/exe`, so logging `worker_bin` announced a path that is
+    // normally not used — on a dev run it named /usr/bin/namtor while the
+    // worker was the binary in target/release, which sends anyone diagnosing a
+    // worker problem to the wrong file.
+    let resolved_worker =
+        std::fs::read_link("/proc/self/exe").unwrap_or_else(|_| worker_bin.clone());
+    tracing::info!(
+        worker = %resolved_worker.display(),
+        fallback = %worker_bin.display(),
+        mock_infer,
+        "spawning worker"
+    );
     let supervisor = ChildSupervisor::spawn(&worker_bin, &model_specs, mock_infer, &models_dir)?;
 
     tracing::info!(store = %store_dir.display(), "opening template store");

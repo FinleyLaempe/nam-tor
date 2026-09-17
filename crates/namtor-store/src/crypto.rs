@@ -622,10 +622,25 @@ struct RootSecret {
     bytes: [u8; ROOT_SECRET_LEN],
 }
 
+/// Attach the path and the operation to an I/O error, preserving its kind.
+///
+/// A daemon that refuses to start is the worst place to lose this. The root
+/// secret lives at a fixed path and every access here used a bare `?`, so a
+/// permission problem surfaced as "store: i/o error: Permission denied (os
+/// error 13)" — no path, no operation, nothing for an operator to act on. The
+/// project holds its PAM failures to a specific, actionable message in spec
+/// §8.3; a startup failure deserves the same.
+fn io_context(op: &str, path: &Path, e: std::io::Error) -> StoreError {
+    StoreError::Io(std::io::Error::new(
+        e.kind(),
+        format!("{op} {}: {e}", path.display()),
+    ))
+}
+
 impl RootSecret {
     fn load_or_create(path: &Path) -> Result<Self, StoreError> {
         if path.exists() {
-            let raw = std::fs::read(path)?;
+            let raw = std::fs::read(path).map_err(|e| io_context("read root secret", path, e))?;
             if raw.len() != ROOT_SECRET_LEN {
                 return Err(StoreError::Crypto(format!(
                     "root secret at {} is {} bytes, expected {ROOT_SECRET_LEN}",
@@ -642,9 +657,11 @@ impl RootSecret {
         let mut bytes = [0u8; ROOT_SECRET_LEN];
         rand::thread_rng().fill_bytes(&mut bytes);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                io_context("create the state directory for the root secret", parent, e)
+            })?;
         }
-        std::fs::write(path, bytes)?;
+        std::fs::write(path, bytes).map_err(|e| io_context("write root secret", path, e))?;
         set_root_only(path)?;
         let mut s = Self { bytes };
         s.lock_memory();
