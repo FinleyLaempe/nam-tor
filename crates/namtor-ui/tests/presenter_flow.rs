@@ -1078,3 +1078,150 @@ fn restart_after_error() {
     );
     assert!(model.error.is_none(), "no error on restart");
 }
+
+// --- storage protection: the no-TPM software fallback ------------------------
+//
+// Acceptance criterion (j). These were the only assertions in the desktop
+// certification that pointed at genuinely absent coverage rather than at a
+// renamed test: `FakeManagerClient::set_protection_status` existed with zero
+// callers, every `is_software_fallback` in the test tree was a hard-coded
+// `false` in a structural privacy assertion, and no test anywhere drove
+// `ProtectionKeyKind::Software` through the presenter. The machine without a
+// TPM — the one that most needs to be told its templates are less protected —
+// was the untested path.
+
+fn software_fallback_status() -> namtor_ui::ProtectionStatus {
+    namtor_ui::ProtectionStatus {
+        sealing: namtor_ui::ProtectionKeyKind::Software,
+        has_tpm: false,
+        warning: "Profiles are sealed with a software key".into(),
+    }
+}
+
+#[test]
+fn software_fallback_protection_surfaced() {
+    let client = Arc::new(FakeManagerClient::new());
+    client.set_protection_status(software_fallback_status());
+    let mut p = namtor_ui::ProfilePresenter::from_arc(client, TEST_UID);
+
+    p.refresh_system_status();
+    let system = p.model().system.clone().expect("system view");
+
+    assert!(
+        system.protection.is_software_fallback,
+        "ProtectionKeyKind::Software must set is_software_fallback"
+    );
+    assert!(
+        !system.protection.warning.is_empty(),
+        "software fallback must carry a warning for the user"
+    );
+    assert!(
+        system.protection.label.contains("Software"),
+        "label should name the software fallback, got {:?}",
+        system.protection.label
+    );
+}
+
+#[test]
+fn tpm_backed_protection_raises_no_fallback_warning() {
+    // The negative half: without it, a view_model that hard-coded
+    // `is_software_fallback = true` would pass the test above.
+    let client = Arc::new(FakeManagerClient::new());
+    client.set_protection_status(namtor_ui::ProtectionStatus {
+        sealing: namtor_ui::ProtectionKeyKind::Tpm2,
+        has_tpm: true,
+        warning: String::new(),
+    });
+    let mut p = namtor_ui::ProfilePresenter::from_arc(client, TEST_UID);
+
+    p.refresh_system_status();
+    let system = p.model().system.clone().expect("system view");
+
+    assert!(!system.protection.is_software_fallback);
+    assert!(system.protection.warning.is_empty());
+    assert!(
+        system.protection.label.contains("TPM2"),
+        "got {:?}",
+        system.protection.label
+    );
+}
+
+#[test]
+fn protection_status_survives_a_reconnect() {
+    // The third of the old `reconnect_restores_state` that no current test
+    // owned: a presenter rebuilt over the same daemon must re-read protection,
+    // not fall back to ProtectionView::default() (which reports TPM2 and no
+    // warning — the reassuring answer, on a machine that has no TPM).
+    let client = Arc::new(FakeManagerClient::new());
+    client.set_protection_status(software_fallback_status());
+
+    let mut first = namtor_ui::ProfilePresenter::from_arc(Arc::clone(&client), TEST_UID);
+    first.refresh_system_status();
+    assert!(
+        first
+            .model()
+            .system
+            .as_ref()
+            .unwrap()
+            .protection
+            .is_software_fallback
+    );
+
+    let mut second = namtor_ui::ProfilePresenter::from_arc(client, TEST_UID);
+    second.refresh_system_status();
+    let prot = &second.model().system.as_ref().unwrap().protection;
+    assert!(
+        prot.is_software_fallback,
+        "a reconnected presenter must re-read protection, not default to TPM2"
+    );
+    assert!(!prot.warning.is_empty());
+}
+
+// --- error recovery hints ----------------------------------------------------
+
+#[test]
+fn daemon_down_error_carries_actionable_recovery_steps() {
+    // `set_error` calls `RecoveryHint::for_error` for every error it builds,
+    // but nothing asserted the result reached the model: the `usa_12_*` tests
+    // render a RecoveryHint they construct themselves, so the presenter's own
+    // wiring was unowned. An error with no recovery hint still shows a title,
+    // which is exactly the regression that would go unnoticed.
+    let client = Arc::new(FakeManagerClient::new());
+    client.set_mode(Mode::DaemonDown("daemon stopped".into()));
+    let mut p = namtor_ui::ProfilePresenter::from_arc(client, TEST_UID);
+
+    after(&mut p, |p| {
+        p.start_enrollment_v3("Ida V3");
+    });
+
+    let err = p.model().error.as_ref().expect("daemon-down sets an error");
+    let recovery = err
+        .recovery
+        .as_ref()
+        .expect("a daemon-down error must carry a recovery hint");
+    assert!(
+        !recovery.steps.is_empty(),
+        "recovery hint must tell the user what to do"
+    );
+}
+
+#[test]
+fn quality_view_shows_guidance_only_when_low() {
+    // `QualityLabel::Low => show_guidance: true` was the mapping the old
+    // low_diversity test owned. Afterwards every `show_guidance` in the test
+    // tree was a hard-coded `false`, so nothing asserted it is ever true and
+    // the view would simply have stopped prompting.
+    use namtor_ui::QualityLabel;
+    let low = namtor_ui::QualityView::from_label(QualityLabel::Low);
+    assert_eq!(low.label, "low");
+    assert!(low.show_guidance, "low quality must prompt the user");
+
+    for (label, name) in [
+        (QualityLabel::Medium, "medium"),
+        (QualityLabel::High, "high"),
+    ] {
+        let v = namtor_ui::QualityView::from_label(label);
+        assert_eq!(v.label, name);
+        assert!(!v.show_guidance, "{name} quality must not prompt");
+    }
+}

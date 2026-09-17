@@ -637,6 +637,22 @@ fn mutation_test_forbidden_fields_in_authentication_view() {
 /// mutation tests operate on this registry. Keeping it in the test file
 /// makes the scan deterministic and CI-safe (no GTK init needed).
 const UI_STRING_REGISTRY: &[(&str, &str)] = &[
+    // scan_feedback.rs — the shared scan widgets extracted during the GTK4
+    // consolidation. These were absent from the registry entirely, so the
+    // privacy scan never checked the guidance text the enrollment screen
+    // actually shows. Caught by ui_string_registry_covers_all_ui_sources
+    // once it started deriving its expectations from the source tree.
+    ("scan_feedback.rs", "Every signal is good enough right now"),
+    ("scan_feedback.rs", "Face position indicator"),
+    ("scan_feedback.rs", "Needs attention"),
+    ("scan_feedback.rs", "Nothing"),
+    ("scan_feedback.rs", "Scan guidance"),
+    ("scan_feedback.rs", "Signal needing attention"),
+    ("scan_feedback.rs", "Views kept"),
+    ("scan_feedback.rs", "Waiting for the first view"),
+    ("scan_feedback.rs", "What the scan is waiting on"),
+    ("scan_feedback.rs", "What to do right now to improve the scan"),
+    ("scan_feedback.rs", "—"),
     ("shell.rs", "Nam-tor"),
     ("shell.rs", "Nam-tor settings"),
     ("shell.rs", "Loading…"),
@@ -649,45 +665,6 @@ const UI_STRING_REGISTRY: &[(&str, &str)] = &[
     ("shell.rs", "Profiles"),
     ("shell.rs", "Authentication"),
     ("shell.rs", "System"),
-    ("navigation.rs", "Enter profile name…"),
-    ("navigation.rs", "Profile name"),
-    ("navigation.rs", "Enter a descriptive name for this profile"),
-    ("navigation.rs", "Profile Name"),
-    (
-        "navigation.rs",
-        "Continuous capture mode\nFrames are analyzed locally and no raw images are stored.\nOnly the encrypted face model is saved on this device.",
-    ),
-    ("navigation.rs", "Start"),
-    ("navigation.rs", "Start enrollment"),
-    ("navigation.rs", "Begin face enrollment capture"),
-    ("navigation.rs", "Begin the face enrollment capture process"),
-    ("navigation.rs", "Enroll Face"),
-    ("navigation.rs", "Capture in progress"),
-    ("navigation.rs", "Frames: 0 · Quality: 0% · Diversity: 0%"),
-    ("navigation.rs", "Enrollment capture progress"),
-    ("navigation.rs", "Looking good…"),
-    ("navigation.rs", "Live capture guidance"),
-    ("navigation.rs", "Stop"),
-    ("navigation.rs", "Stop capture"),
-    ("navigation.rs", "Stop capturing and review the enrolled profile"),
-    ("navigation.rs", "Capturing"),
-    (
-        "navigation.rs",
-        "Frames accepted: 0\nQuality: 0%\nDiversity: 0%\nReady to save",
-    ),
-    ("navigation.rs", "Enrollment review summary"),
-    ("navigation.rs", "Save"),
-    ("navigation.rs", "Save profile"),
-    ("navigation.rs", "Commit the captured profile to storage"),
-    ("navigation.rs", "Resume"),
-    ("navigation.rs", "Resume capture"),
-    ("navigation.rs", "Return to capturing to add more frames"),
-    ("navigation.rs", "Discard"),
-    ("navigation.rs", "Discard profile"),
-    ("navigation.rs", "Throw away the captured profile without saving"),
-    ("navigation.rs", "Review"),
-    ("navigation.rs", "Ready to save"),
-    ("navigation.rs", "Consider re-enrolling"),
     ("enrollment.rs", "Add New Profile"),
     ("enrollment.rs", "Profile Name"),
     ("enrollment.rs", "Profile name"),
@@ -877,17 +854,47 @@ fn ui_string_registry_covers_all_ui_sources() {
     );
     let files: std::collections::BTreeSet<&str> =
         UI_STRING_REGISTRY.iter().map(|(f, _)| *f).collect();
-    let expected = [
-        "shell.rs",
-        "navigation.rs",
-        "enrollment.rs",
-        "review.rs",
-        "profile_list.rs",
-        "pam_services.rs",
-        "system_status.rs",
-        "recovery.rs",
-    ];
-    for f in expected {
-        assert!(files.contains(f), "registry missing source file {f}");
-    }
+
+    // Derive the expected set from the source tree, not from a literal list.
+    //
+    // The list was hardcoded, so it could only ever check that the registry
+    // still mentioned files someone had thought of once. It required
+    // "navigation.rs" — deleted in 196d4a4 when the two divergent enrollment
+    // UIs were consolidated — so the registry kept 31 strings belonging to
+    // code that no longer ships, and this test passed while asserting
+    // coverage of a file that does not exist. It equally could not notice a
+    // NEW component landing with no registry entries, which is the only
+    // regression it exists to catch.
+    let components = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/components");
+    let mut expected: Vec<String> = std::fs::read_dir(&components)
+        .expect("read src/components")
+        .filter_map(|e| {
+            let name = e.ok()?.file_name().to_string_lossy().into_owned();
+            // mod.rs only re-exports; it holds no user-facing strings.
+            (name.ends_with(".rs") && name != "mod.rs").then_some(name)
+        })
+        .collect();
+    expected.push("shell.rs".to_string());
+    expected.sort();
+
+    let missing: Vec<&String> = expected
+        .iter()
+        .filter(|f| !files.contains(f.as_str()))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "UI sources with no strings in the registry: {missing:?}\n\
+         Add their user-facing strings so the privacy scan covers them."
+    );
+
+    // And the converse: a registry key naming a file that no longer exists
+    // means the scan is guarding deleted code.
+    let stale: Vec<&&str> = files
+        .iter()
+        .filter(|f| !expected.iter().any(|e| e == *f))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "registry names UI sources that no longer exist: {stale:?}"
+    );
 }
