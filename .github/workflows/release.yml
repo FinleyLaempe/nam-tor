@@ -139,7 +139,7 @@ jobs:
             dnf -y update
             dnf -y install @development-tools rust cargo python3 \
                 systemd-rpm-macros rpmlint rpm-build onnxruntime openssl-devel pam-devel \
-                gtk4-devel libadwaita-devel
+                gtk4-devel libadwaita-devel libseccomp-devel libstdc++-devel
 
       - name: Install build toolchain (Debian)
         if: startsWith(matrix.distro, 'debian')
@@ -147,7 +147,7 @@ jobs:
             apt-get update
             apt-get install -y --no-install-recommends build-essential cargo rustc \
                 python3 debhelper-compat dh-cargo libpam0g-dev openssl devscripts \
-                libgtk-4-dev libadwaita-1-dev curl ca-certificates
+                libgtk-4-dev libadwaita-1-dev curl ca-certificates libseccomp-dev
             # onnxruntime is not in Debian 12 repos — it's a runtime dep
             # declared in the .deb control, not a build dep. Skip it here.
 

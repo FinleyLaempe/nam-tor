@@ -98,6 +98,11 @@ BuildRequires:  pam-devel
 BuildRequires:  openssl-devel
 BuildRequires:  gtk4-devel
 BuildRequires:  libadwaita-devel
+# namtor-worker seals itself with seccomp + landlock, and the ONNX runtime
+# needs the C++ runtime — both are link-time, and without them the build
+# stops at `cannot find -lseccomp` / `cannot find -lstdc++`.
+BuildRequires:  libseccomp-devel
+BuildRequires:  libstdc++-devel
 
 # Core runtime requirements — daemon/worker/CLI/PAM only. The GUI toolkit
 # deps (gtk4/libadwaita) live in the subpackage so a headless host is not

@@ -16,6 +16,7 @@ Build-Depends:
     libpam0g-dev,
     libgtk-4-dev,
     libadwaita-1-dev,
+    libseccomp-dev,
 Standards-Version: 4.7.0
 Homepage: https://github.com/namtor/nam-tor
 Rules-Requires-Root: binary-targets
