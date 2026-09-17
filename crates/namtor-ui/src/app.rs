@@ -370,11 +370,14 @@ impl AppController {
         };
         let model = presenter.borrow().model().clone();
 
+        // Not "Enrolled Profiles": `ProfileListView` already titles the list
+        // above this that way, so the page carried the same heading twice —
+        // once over the profiles and once over the button that adds one.
         let group = adw::PreferencesGroup::builder()
-            .title(tr("Enrolled Profiles"))
+            .title(tr("Add a profile"))
             .build();
         group.update_property(&[gtk4::accessible::Property::Label(&tr(
-            "Enrolled profiles group",
+            "Add a profile group",
         ))]);
 
         let enroll_btn = gtk4::Button::builder()
@@ -446,14 +449,9 @@ impl AppController {
         self.shell.add_profiles_group(&group);
 
         if let Some(err) = &model.error {
-            let err_group = adw::PreferencesGroup::new();
-            let err_row = adw::ActionRow::builder()
-                .title(crate::tr_args("{}: {}", &[&err.title, &err.detail]))
-                .css_classes(["error"])
-                .build();
-            err_row.set_accessible_role(gtk4::AccessibleRole::Alert);
-            err_group.add(&err_row);
-            self.shell.add_profiles_group(&err_group);
+            for g in profiles_error_groups(err) {
+                self.shell.add_profiles_group(&g);
+            }
         }
 
         self.shell.set_destination(Destination::Profiles);
@@ -850,6 +848,44 @@ fn show_replace_dialog(
 /// current profile name. On confirm, validates non-empty and calls
 /// presenter.rename_profile(). On cancel, closes with no mutation.
 /// Empty names show an inline error and do not close the dialog.
+/// Render an error on the Profiles page: the condition, what happened, and
+/// what to do about it.
+///
+/// The title and the detail used to be glued into one row title, so a failure
+/// read as a single red line of whatever the daemon said — "Connection error:
+/// dbus transport error: org.freedesktop.DBus.Error.UnknownInterface: ..." —
+/// and the recovery steps the presenter had already worked out were thrown
+/// away. The enrollment error page has shown all three all along; this is the
+/// page a user reaches first.
+pub fn profiles_error_groups(err: &crate::view_model::ErrorView) -> Vec<adw::PreferencesGroup> {
+    let err_group = adw::PreferencesGroup::new();
+    let err_row = adw::ActionRow::builder()
+        .title(&err.title)
+        .subtitle(&err.detail)
+        .subtitle_lines(0)
+        .css_classes(["error"])
+        .build();
+    err_row.set_accessible_role(gtk4::AccessibleRole::Alert);
+    err_row.update_property(&[gtk4::accessible::Property::Description(&err.detail)]);
+    err_group.add(&err_row);
+
+    let Some(hint) = &err.recovery else {
+        return vec![err_group];
+    };
+    let steps = adw::PreferencesGroup::builder()
+        .title(tr(&hint.title))
+        .build();
+    for (i, step) in hint.steps.iter().enumerate() {
+        let row = adw::ActionRow::builder()
+            .title(format!("{}. {}", i + 1, tr(step)))
+            .subtitle_lines(0)
+            .build();
+        row.add_css_class("property");
+        steps.add(&row);
+    }
+    vec![err_group, steps]
+}
+
 fn show_rename_dialog(
     presenter: &PresenterRc,
     rc: &ControllerRc,

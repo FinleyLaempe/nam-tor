@@ -1396,3 +1396,83 @@ fn showing_the_offline_page_twice_leaves_the_second_retry_wired() {
         );
     });
 }
+
+/// An error on the Profiles page is the one a user meets first, and it used
+/// to be a single red line: title and detail glued together, and the recovery
+/// steps the presenter had already worked out discarded. Rendering the page
+/// and looking at it showed "Connection error: dbus transport error:
+/// org.freedesktop.DBus.Error.UnknownInterface: Unknown interface
+/// 'org.namtor.Manager2'" as one line of red text with nothing to do about
+/// it.
+#[test]
+fn a_profiles_page_error_shows_the_condition_the_detail_and_the_steps() {
+    use gtk4::prelude::*;
+    use namtor_ui::app::profiles_error_groups;
+    use namtor_ui::view_model::{ErrorView, RecoveryHint};
+
+    common::run_gtk_test(move || {
+        let err = ErrorView {
+            title: "Camera is busy".into(),
+            detail: "Another program has the camera open.".into(),
+            recovery: Some(RecoveryHint {
+                title: "Another program is using the camera".into(),
+                steps: vec![
+                    "Close any video call, camera app, or recorder".into(),
+                    "Find what is holding it: fuser -v /dev/video*".into(),
+                ],
+            }),
+        };
+        let groups = profiles_error_groups(&err);
+        assert_eq!(groups.len(), 2, "condition and steps are separate groups");
+
+        let mut texts = Vec::new();
+        for g in &groups {
+            texts.extend(common::collect_widget_text(g.upcast_ref::<gtk4::Widget>()));
+        }
+        // The condition is its own line, not prefixed onto the detail.
+        assert!(
+            texts.iter().any(|t| t == "Camera is busy"),
+            "the condition must stand alone: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == "Another program has the camera open."),
+            "the detail must be its own line: {texts:?}"
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|t| t.starts_with("Camera is busy: Another program")),
+            "the two must not be glued back together: {texts:?}"
+        );
+        // And the steps are numbered and present.
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("1. Close any video call")),
+            "the first step must be shown: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("fuser")),
+            "the user needs the command that names the holder: {texts:?}"
+        );
+    });
+}
+
+/// An error with no recovery hint renders the condition and the detail, and
+/// no empty steps group.
+#[test]
+fn a_profiles_page_error_without_steps_renders_one_group() {
+    use namtor_ui::app::profiles_error_groups;
+    use namtor_ui::view_model::ErrorView;
+
+    common::run_gtk_test(move || {
+        let err = ErrorView {
+            title: "Operation failed".into(),
+            detail: "state: something went wrong".into(),
+            recovery: None,
+        };
+        assert_eq!(profiles_error_groups(&err).len(), 1);
+    });
+}

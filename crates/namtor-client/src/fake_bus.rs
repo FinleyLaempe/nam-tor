@@ -17,6 +17,11 @@ struct FakeState {
     profiles: Vec<ProfileInfo>,
     daemon_unavailable: bool,
     next_session: u32,
+    /// Session id to the name it was started with. The real daemon carries
+    /// the name from `StartEnrollment` through to the committed profile; a
+    /// fake that named every profile the same made every rendered list and
+    /// every rename assertion weaker than it looked.
+    session_names: std::collections::HashMap<String, String>,
 }
 
 /// The error names the real daemon raises, so the client's `map_zbus_error`
@@ -54,19 +59,25 @@ impl FakeManagerV1 {
     fn start_enrollment(&self, _uid: u32, name: &str) -> zbus::fdo::Result<String> {
         let mut s = self.state.lock().expect("fake state poisoned");
         s.next_session = s.next_session.wrapping_add(1);
-        Ok(format!("sess-{name}-{}", s.next_session))
+        let session = format!("sess-{name}-{}", s.next_session);
+        s.session_names.insert(session.clone(), name.to_string());
+        Ok(session)
     }
 
     fn cancel_enrollment(&self, _session: &str) -> zbus::fdo::Result<()> {
         Ok(())
     }
 
-    fn commit_profile(&self, _session: &str) -> zbus::fdo::Result<String> {
+    fn commit_profile(&self, session: &str) -> zbus::fdo::Result<String> {
         let mut s = self.state.lock().expect("fake state poisoned");
         let id = format!("p{}", s.profiles.len() + 1);
+        let name = s
+            .session_names
+            .remove(session)
+            .unwrap_or_else(|| "Alice".to_string());
         s.profiles.push(ProfileInfo {
             id: id.clone(),
-            name: "Alice".to_string(),
+            name,
             enabled: true,
             created: 1,
             last_used: 0,
