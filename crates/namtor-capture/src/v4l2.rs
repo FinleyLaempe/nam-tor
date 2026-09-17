@@ -187,6 +187,24 @@ impl V4l2Stream {
         if self.buffers.is_empty() {
             return Err(V4l2Error::NoBuffers);
         }
+        // Unmap anything already mapped before mapping again. The assignment
+        // below overwrites the slot, and `MmapBuffer` has no `Drop`, so a
+        // second call would orphan the first mapping — the same shape as the
+        // leak fixed in `request_buffers`, which kept the driver's queue busy
+        // and made every later open of the node fail with EBUSY. Every current
+        // caller pairs this with `request_buffers`, so this is latent rather
+        // than live; the entry point is hardened anyway.
+        for mb in self.buffers.iter_mut() {
+            if let Some(b) = mb.take() {
+                // SAFETY: `b.ptr`/`b.len` describe a mapping obtained below;
+                // `take` guarantees it is unmapped at most once.
+                unsafe {
+                    if let Some(nn) = std::ptr::NonNull::new(b.ptr as *mut c_void) {
+                        let _ = nix::sys::mman::munmap(nn, b.len);
+                    }
+                }
+            }
+        }
         for idx in 0..self.buffers.len() as u32 {
             let mut buf = V4l2Buffer::zeroed();
             buf.index = idx;
@@ -313,7 +331,16 @@ impl V4l2Stream {
             // and `drain` guarantees it is never unmapped twice.
             unsafe {
                 if let Some(nn) = std::ptr::NonNull::new(mb.ptr as *mut c_void) {
-                    let _ = nix::sys::mman::munmap(nn, mb.len);
+                    if let Err(e) = nix::sys::mman::munmap(nn, mb.len) {
+                        // The entry is already drained, so the stream has also
+                        // forgotten the mapping exists: say so rather than
+                        // lose it silently. This crate carries no logging
+                        // dependency, so stderr is the channel available.
+                        eprintln!(
+                            "namtor: munmap of a {} byte V4L2 buffer failed: {e}",
+                            mb.len
+                        );
+                    }
                 }
             }
         }
