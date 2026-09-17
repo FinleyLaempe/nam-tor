@@ -34,21 +34,31 @@ pub unsafe extern "C" fn pam_sm_authenticate(
     argc: c_int,
     argv: *const *const std::ffi::c_char,
 ) -> c_int {
-    let socket = unsafe { socket_from_args(argc, argv) };
-    run_auth(pamh, socket)
+    let (socket, timeout) = unsafe { config_from_args(argc, argv) };
+    run_auth(pamh, socket, timeout)
 }
 
-/// Read `socket=<path>` from the module's arguments, i.e. the `pam_namtor.so`
-/// line in `/etc/pam.d`. Falls back to the compiled-in default.
+/// Read the module's own arguments — the `pam_namtor.so` line in
+/// `/etc/pam.d` — for `socket=<path>` and `timeout_ms=<n>`.
+///
+/// This is the configuration channel PAM provides, and it lives in a
+/// root-owned file. The socket deliberately does NOT come from the
+/// environment; see `AuthConfig::from_pam`.
+///
+/// `timeout_ms` bounds both the daemon round trip and the §8.4 keypress
+/// window, so an operator can trade how long a face attempt may hold the
+/// prompt before falling through to the password.
 ///
 /// # Safety
 /// `argv` must be `argc` valid NUL-terminated pointers, per the PAM ABI.
-unsafe fn socket_from_args(
+unsafe fn config_from_args(
     argc: c_int,
     argv: *const *const std::ffi::c_char,
-) -> std::path::PathBuf {
+) -> (std::path::PathBuf, Option<std::time::Duration>) {
+    let mut socket = std::path::PathBuf::from(client::DEFAULT_SOCKET);
+    let mut timeout = None;
     if argv.is_null() || argc <= 0 {
-        return std::path::PathBuf::from(client::DEFAULT_SOCKET);
+        return (socket, timeout);
     }
     for i in 0..argc as isize {
         let p = unsafe { *argv.offset(i) };
@@ -58,13 +68,20 @@ unsafe fn socket_from_args(
         let Ok(arg) = (unsafe { std::ffi::CStr::from_ptr(p) }).to_str() else {
             continue;
         };
-        if let Some(path) = arg.strip_prefix("socket=") {
-            if !path.is_empty() {
-                return std::path::PathBuf::from(path);
+        if let Some(v) = arg.strip_prefix("socket=") {
+            if !v.is_empty() {
+                socket = std::path::PathBuf::from(v);
+            }
+        } else if let Some(v) = arg.strip_prefix("timeout_ms=") {
+            // Ignore a nonsense value rather than failing the auth over it.
+            if let Ok(ms) = v.parse::<u64>() {
+                if ms > 0 {
+                    timeout = Some(std::time::Duration::from_millis(ms));
+                }
             }
         }
     }
-    std::path::PathBuf::from(client::DEFAULT_SOCKET)
+    (socket, timeout)
 }
 
 /// PAM `setcred` — we manage no credentials. Always succeed.
@@ -89,7 +106,11 @@ pub unsafe extern "C" fn pam_sm_acct_mgmt(
     ffi::PAM_SUCCESS
 }
 
-fn run_auth(pamh: *mut ffi::PamHandle, socket: std::path::PathBuf) -> c_int {
+fn run_auth(
+    pamh: *mut ffi::PamHandle,
+    socket: std::path::PathBuf,
+    timeout: Option<std::time::Duration>,
+) -> c_int {
     // 1. Resolve target username → uid. Missing/unknown user → fall through.
     let username = match unsafe { ffi::get_user(pamh) } {
         Ok(u) => u,
@@ -108,7 +129,12 @@ fn run_auth(pamh: *mut ffi::PamHandle, socket: std::path::PathBuf) -> c_int {
 
     // 2. Build config (also reads PAM_RHOST for the wire + remote check).
     let cfg = match unsafe { client::AuthConfig::from_pam(pamh, uid, socket) } {
-        Ok(c) => c,
+        Ok(mut c) => {
+            if let Some(t) = timeout {
+                c.timeout = t;
+            }
+            c
+        }
         Err(code) => return log_fail("config", code, ffi::PAM_AUTHINFO_UNAVAIL),
     };
 

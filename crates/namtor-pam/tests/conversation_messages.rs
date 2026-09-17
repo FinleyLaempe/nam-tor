@@ -176,15 +176,52 @@ fn build_reply(body: &AuthBody, verdict: Verdict, failure: Option<FailureReason>
 
 // --- harness ---------------------------------------------------------------
 
-fn module_path() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+/// Locate `libnamtor_pam.so`, building it if it is not there.
+///
+/// `cargo test` does NOT emit a cdylib — only `cargo build` does — and Cargo
+/// exposes no `CARGO_CDYLIB_FILE_*` for a package's own integration tests. So
+/// this test cannot assume the artifact exists just because its own build
+/// succeeded: it did not, and CI failed on exactly that while the same test
+/// passed locally, where an earlier `cargo build` had left one behind.
+///
+/// Building it here keeps the test self-sufficient for `cargo test` anywhere,
+/// rather than depending on a particular workflow step running first. The
+/// nested invocation is safe: by the time a test runs, the outer cargo has
+/// released the package lock.
+fn module_path() -> PathBuf {
+    let target = std::env::var("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"));
+
     for profile in ["debug", "release"] {
-        let p = root.join(profile).join("libnamtor_pam.so");
+        let p = target.join(profile).join("libnamtor_pam.so");
         if p.is_file() {
-            return Some(p);
+            return p;
         }
     }
-    None
+
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let out = std::process::Command::new(cargo)
+        .args(["build", "-p", "namtor-pam"])
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .output()
+        .expect("run cargo build -p namtor-pam");
+    assert!(
+        out.status.success(),
+        "could not build libnamtor_pam.so:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    for profile in ["debug", "release"] {
+        let p = target.join(profile).join("libnamtor_pam.so");
+        if p.is_file() {
+            return p;
+        }
+    }
+    panic!(
+        "libnamtor_pam.so still missing after a successful build; looked under {}",
+        target.display()
+    );
 }
 
 /// Run one authentication against the real module and return what it said.
@@ -192,7 +229,7 @@ fn authenticate_with(
     verdict: Verdict,
     failure: Option<FailureReason>,
 ) -> (c_int, Vec<(c_int, String)>) {
-    let module = module_path().expect("libnamtor_pam.so must be built");
+    let module = module_path();
     let dir = tempfile::tempdir().expect("tempdir");
     let sock = dir.path().join("auth.sock");
     spawn_fake_daemon(sock.clone(), verdict, failure);
@@ -204,7 +241,9 @@ fn authenticate_with(
     std::fs::write(
         confdir.join("namtor-test"),
         format!(
-            "auth required {} socket={}\naccount required {}\n",
+            // timeout_ms keeps the §8.4 keypress window short: the default
+            // is seconds, and this suite authenticates nine times.
+            "auth required {} socket={} timeout_ms=300\naccount required {}\n",
             module.display(),
             sock.display(),
             module.display()
