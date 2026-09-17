@@ -1088,9 +1088,20 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             ManagerError::Conflict(_) => "Conflict".into(),
             ManagerError::Transport(_) => "Connection error".into(),
         };
+        let detail = match err {
+            // The generic detail is the error's own Display, which for a busy
+            // camera restates the title and then names an ioctl:
+            // "camera is busy: in use by another program (V4L2 VIDIOC_S_FMT
+            // returned EBUSY)". Under a row already titled "Camera is busy"
+            // that is a repetition and a tensor of jargon. The ioctl stays in
+            // the recovery hint's "Technical detail" line, where a reader who
+            // wants it can find it.
+            ManagerError::CameraBusy(_) => "Another program has the camera open.".to_string(),
+            other => other.to_string(),
+        };
         self.model.error = Some(ErrorView {
             title,
-            detail: err.to_string(),
+            detail,
             recovery,
         });
     }

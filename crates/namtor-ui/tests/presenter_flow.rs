@@ -1250,6 +1250,20 @@ fn a_busy_camera_is_named_and_carries_recovery_steps() {
         "an ioctl name is not a title: {}",
         err.title
     );
+    assert!(
+        !err.detail.contains("VIDIOC"),
+        "the row subtitle is not the place for an ioctl name: {}",
+        err.detail
+    );
+    assert!(
+        !err.detail.to_lowercase().contains("camera is busy"),
+        "the subtitle must not restate the title: {}",
+        err.detail
+    );
+    assert!(
+        steps.contains("VIDIOC"),
+        "the technical detail must still be reachable: {steps}"
+    );
 }
 
 #[test]
