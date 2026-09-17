@@ -1,3 +1,19 @@
+namtor (0.3.4-1) unstable; urgency=medium
+
+  * Fix the settings app aborting when Save Profile is pressed.
+  * Fix PAM toggles applying twice (two polkit prompts per switch).
+  * Report enrollment workers that do not stop before suspend, which would
+    otherwise leave the IR emitter armed while the journal claims otherwise.
+  * Discard a save result for an enrollment the user already cancelled.
+  * Keep the emitter watchdog armed when a force-off write fails; start the
+    stream before lighting the emitter.
+  * Take the emitter-state path as a parameter, not from the environment.
+  * Make the screen-reader announcement throttle actually throttle.
+  * Fix lifecycle.sh misreporting installed ONNX models.
+  * Typed spec 8.3 failure conditions with a fault-injection matrix.
+
+ -- finley <finley.laempe@math.uni-freiburg.de>  Thu, 17 Sep 2026 10:18:08 +0200
+
 namtor (0.3.3-1) unstable; urgency=medium
 
   * Stopping an enrollment scan no longer leaves the IR emitter lit on the

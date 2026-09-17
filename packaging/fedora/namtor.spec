@@ -56,7 +56,7 @@
 %global debug_package %{nil}
 
 Name:           namtor
-Version:        0.3.3
+Version:        0.3.4
 Release:        1%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
@@ -338,6 +338,29 @@ fi
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.4-1
+- Pressing "Save Profile" aborted the settings app. AdwNavigationView emits
+  `popped` synchronously, so the back-navigation handler added in 0.3.2 ran
+  inside a render that already held the controller's RefCell borrow; with
+  panic=abort the process died. Anyone who reached the review screen and
+  pressed Save in 0.3.3 lost the app.
+- Every PAM service toggle applied twice, producing two polkit prompts for one
+  switch, and let the second result overwrite the first.
+- A stuck enrollment worker kept the IR emitter armed through suspend while
+  the journal reported the session cancelled.
+- A profile save completing after the user pressed Back was applied anyway,
+  stranding the UI on a page whose buttons did nothing.
+- A failed emitter force-off silently disabled the watchdog; the emitter was
+  lit before the stream started rather than after.
+- The emitter-state record path came from the environment, which could
+  silently disarm the SIGKILL backstop.
+- The screen-reader throttle never throttled (250 ms interval against a 500 ms
+  render loop); it now suppresses repeats of unchanged guidance.
+- lifecycle.sh could report "no ONNX models" on a machine that has them.
+- Spec 8.3 failure conditions are now a typed set on the wire with a
+  fault-injection matrix; PAM logs the specific condition rather than a
+  verdict word.
+
 * Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.3-1
 - Stopping an enrollment scan left the IR emitter lit for as long as the
   Review screen stayed open. The capture source is kept across Stop so Resume
