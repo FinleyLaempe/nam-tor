@@ -111,18 +111,7 @@ impl AppController {
             presenter.borrow_mut().refresh();
         }
 
-        let controller = Rc::new(RefCell::new(Self {
-            shell,
-            presenter,
-            profile_list: ProfileListView::new(),
-            enrollment_view: EnrollmentViewComponent::new(),
-            review_view: ReviewViewComponent::new(),
-            enrollment_nav_page: None,
-            review_nav_page: None,
-            announcer: crate::a11y::ProgressAnnouncer::new(),
-            poll_source: None,
-            offline,
-        }));
+        let controller = Self::assemble(shell, presenter, offline);
 
         // USA-2: wire the offline retry button to retry_connection. The
         // connect error detail is re-rendered so the user keeps seeing why
@@ -293,10 +282,19 @@ impl AppController {
     ///
     /// **This is for tests only** — production code must use `build()`.
     pub fn new_offline_for_test(app: &adw::Application) -> ControllerRc {
-        let shell = Shell::new(app);
+        Self::assemble(Shell::new(app), None, true)
+    }
+
+    /// Put the controller together around a shell and an optional presenter.
+    ///
+    /// Shared by `build` and the two test constructors so a field added here
+    /// reaches all three. They diverged once already — the test constructors
+    /// are the only way most of this code is ever run, and a constructor
+    /// that has drifted from `build` tests something the app does not do.
+    fn assemble(shell: Shell, presenter: Option<PresenterRc>, offline: bool) -> ControllerRc {
         Rc::new(RefCell::new(Self {
             shell,
-            presenter: None,
+            presenter,
             profile_list: ProfileListView::new(),
             enrollment_view: EnrollmentViewComponent::new(),
             review_view: ReviewViewComponent::new(),
@@ -304,7 +302,7 @@ impl AppController {
             review_nav_page: None,
             announcer: crate::a11y::ProgressAnnouncer::new(),
             poll_source: None,
-            offline: true,
+            offline,
         }))
     }
 
@@ -325,22 +323,10 @@ impl AppController {
     ///
     /// **This is for tests only** — production code must use `build()`.
     pub fn new_online_for_test(app: &adw::Application, client: DbusManagerClient) -> ControllerRc {
-        let shell = Shell::new(app);
         let uid = current_uid();
         let presenter = Rc::new(RefCell::new(ProfilePresenter::new(client, uid)));
         presenter.borrow_mut().refresh();
-        let controller = Rc::new(RefCell::new(Self {
-            shell,
-            presenter: Some(presenter),
-            profile_list: ProfileListView::new(),
-            enrollment_view: EnrollmentViewComponent::new(),
-            review_view: ReviewViewComponent::new(),
-            enrollment_nav_page: None,
-            review_nav_page: None,
-            announcer: crate::a11y::ProgressAnnouncer::new(),
-            poll_source: None,
-            offline: false,
-        }));
+        let controller = Self::assemble(Shell::new(app), Some(presenter), false);
         let rc = Rc::clone(&controller);
         controller.borrow_mut().render_all(&rc);
         Self::install_pop_handler(&controller);
