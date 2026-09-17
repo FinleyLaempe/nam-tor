@@ -1205,6 +1205,30 @@ fn daemon_down_error_carries_actionable_recovery_steps() {
     );
 }
 
+/// A Settings app talking to a daemon on a different contract is what a
+/// half-applied package update looks like. `DbusManagerClient::connect` now
+/// negotiates the v3 version, so the condition arrives as one honest error
+/// instead of a v3 session failing one method at a time — but it only helps
+/// if the error carries a remedy, and `RecoveryHint::for_error` had no case
+/// for it.
+#[test]
+fn a_version_mismatch_says_how_to_fix_it() {
+    use namtor_ui::client::ManagerError;
+    let hint = namtor_ui::RecoveryHint::for_error(&ManagerError::IncompatibleVersion(
+        "requested 3, daemon speaks 2".into(),
+    ))
+    .expect("a version mismatch must carry a recovery hint");
+    let steps = hint.steps.join(" ");
+    assert!(
+        steps.contains("systemctl restart namtor-daemon"),
+        "restarting the daemon is the first thing to try: {steps}"
+    );
+    assert!(
+        steps.contains("requested 3, daemon speaks 2"),
+        "the versions involved must survive to the screen: {steps}"
+    );
+}
+
 /// A camera held by another program is the most common way enrollment fails
 /// on a working machine. Before this it reached the screen as
 /// "Operation failed" over a nested chain ending in an ioctl name, and

@@ -104,6 +104,17 @@ impl RecoveryHint {
                     format!("Polkit detail: {detail}"),
                 ],
             }),
+            crate::client::ManagerError::IncompatibleVersion(detail) => Some(Self {
+                title: "Settings and the daemon are different versions".into(),
+                steps: vec![
+                    "The namtor packages were updated without restarting the daemon".into(),
+                    "Restart it: sudo systemctl restart namtor-daemon".into(),
+                    "If that does not help, the two packages are from different \
+                     releases — reinstall namtor and namtor-ui together"
+                        .into(),
+                    format!("Technical detail: {detail}"),
+                ],
+            }),
             crate::client::ManagerError::CameraBusy(detail) => Some(Self {
                 title: "Another program is using the camera".into(),
                 steps: vec![

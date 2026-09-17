@@ -32,6 +32,21 @@ const INTERFACE_V2: &str = "org.namtor.Manager2";
 /// v3 interface name.
 const INTERFACE_V3: &str = "org.namtor.Manager3";
 /// Well-known bus name (same for v1, v2, and v3).
+/// The v3 handshake rule, kept beside the client that applies it and
+/// mirroring `namtor_daemon::manager::contract::negotiate_version_v3`: the v3
+/// interface is a new surface, not backward-compatible with v1 or v2, so a
+/// client gets v3 only on an exact match and otherwise fails safely rather
+/// than silently speaking a contract it did not ask for.
+fn decide_v3_version(daemon: u32, requested: u32) -> ManagerResult<u32> {
+    if daemon == requested {
+        Ok(daemon)
+    } else {
+        Err(ManagerError::IncompatibleVersion(format!(
+            "requested {requested}, daemon speaks {daemon}"
+        )))
+    }
+}
+
 const BUS_NAME: &str = "org.namtor.Manager";
 /// Object path (same for v1, v2, and v3).
 const OBJECT_PATH: &str = "/org/namtor/Manager";
@@ -69,10 +84,17 @@ impl DbusManagerClient {
         if !registered {
             return Err(ManagerError::ServiceNotRegistered);
         }
-        Ok(Self {
+        let client = Self {
             conn,
             progress_cache: Mutex::new(HashMap::new()),
-        })
+        };
+        // The name being on the bus says a daemon is there, not that it
+        // speaks the contract this build was compiled against. A v3 session
+        // driven against a daemon that does not export v3 fails one method at
+        // a time, as a string in an error banner; negotiating here turns that
+        // into one honest "version mismatch" with a Retry button.
+        client.negotiate_v3(crate::types::API_VERSION_V3)?;
+        Ok(client)
     }
 
     /// Build a client from an existing connection (used by hermetic tests
@@ -122,6 +144,27 @@ impl DbusManagerClient {
         msg.body()
             .deserialize::<R>()
             .map_err(|e| ManagerError::Transport(format!("{method} body: {e}")))
+    }
+
+    /// Read the `ApiVersion` property of `org.namtor.Manager3` through the
+    /// standard `org.freedesktop.DBus.Properties` interface.
+    fn v3_api_version(&self) -> ManagerResult<u32> {
+        let msg = self
+            .conn
+            .call_method(
+                Some(BUS_NAME),
+                OBJECT_PATH,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(INTERFACE_V3, "ApiVersion"),
+            )
+            .map_err(map_zbus_error)?;
+        let value: zbus::zvariant::OwnedValue = msg
+            .body()
+            .deserialize()
+            .map_err(|e| ManagerError::Transport(format!("ApiVersion body: {e}")))?;
+        u32::try_from(&value)
+            .map_err(|e| ManagerError::Transport(format!("ApiVersion is not a u32: {e}")))
     }
 
     fn call_v3<R, B>(&self, method: &str, body: &B) -> ManagerResult<R>
@@ -294,6 +337,55 @@ impl ManagerClient for DbusManagerClient {
     }
 
     fn negotiate_v3(&self, version: u32) -> ManagerResult<u32> {
-        self.call_v3::<u32, _>("NegotiateVersion", &version)
+        // `org.namtor.Manager3` has no `NegotiateVersion` method and never
+        // has: the frozen contract
+        // (`namtor_daemon::manager::contract::INTROSPECTION_XML_V3`) declares
+        // seven methods and a read-only `ApiVersion` property, and the
+        // property is the handshake. Calling the method returned
+        // `UnknownMethod` against any real daemon; nothing in the app called
+        // it, so the suite stayed green against a fake that answered it.
+        let daemon = self.v3_api_version()?;
+        decide_v3_version(daemon, version)
+    }
+}
+
+#[cfg(test)]
+mod version_handshake_tests {
+    use super::decide_v3_version;
+    use crate::types::{ManagerError, API_VERSION_V3};
+
+    /// The only version this build speaks.
+    #[test]
+    fn an_exact_match_agrees() {
+        assert_eq!(
+            decide_v3_version(API_VERSION_V3, API_VERSION_V3).unwrap(),
+            3
+        );
+    }
+
+    /// v3 is a new surface, not a superset of v1 or v2. A daemon on an older
+    /// contract must be refused, not spoken to as if it were v3 — the
+    /// alternative is a session that fails one method at a time.
+    #[test]
+    fn an_older_daemon_is_refused_rather_than_guessed_at() {
+        for daemon in [1, 2] {
+            let err = decide_v3_version(daemon, API_VERSION_V3).unwrap_err();
+            let msg = match err {
+                ManagerError::IncompatibleVersion(m) => m,
+                other => panic!("expected IncompatibleVersion, got {other:?}"),
+            };
+            assert!(msg.contains("3"), "{msg}");
+            assert!(msg.contains(&daemon.to_string()), "{msg}");
+        }
+    }
+
+    /// A newer daemon is equally refused: it may have changed the contract
+    /// under the same method names.
+    #[test]
+    fn a_newer_daemon_is_refused_too() {
+        assert!(matches!(
+            decide_v3_version(4, API_VERSION_V3),
+            Err(ManagerError::IncompatibleVersion(_))
+        ));
     }
 }
