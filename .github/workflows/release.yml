@@ -110,9 +110,10 @@ jobs:
           # --- Debian 12 (bookworm) ---
           # Debian 13 (trixie), not 12 (bookworm): bookworm ships rustc 1.63
           # and a cargo that cannot parse a v4 Cargo.lock at all — "failed to
-          # parse lock file". The lock is v4 and needs cargo 1.78 or newer, so
-          # a distro-native bookworm build is not possible without bringing a
-          # toolchain along, which is not what a Debian maintainer would do.
+          # parse lock file". Trixie gets far enough to resolve dependencies
+          # and then refuses too: its rustc is 1.85.1 and `ort` needs 1.88.
+          # No Debian stable can build this tree with distro rust today, so
+          # the cell brings a current toolchain — see the toolchain step.
           - distro: debian13
             arch: amd64
             runner: ubuntu-latest
@@ -153,6 +154,13 @@ jobs:
             apt-get install -y --no-install-recommends build-essential cargo rustc \
                 python3 debhelper-compat dh-cargo libpam0g-dev openssl devscripts \
                 libgtk-4-dev libadwaita-1-dev curl ca-certificates libseccomp-dev
+            # Debian's own cargo/rustc stay installed so dpkg-checkbuilddeps
+            # is satisfied and dh-cargo finds what it expects, but they are
+            # too old to build this: trixie is 1.85.1 and `ort` requires
+            # 1.88. A current toolchain goes ahead of them on PATH.
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
             # onnxruntime is not in Debian 12 repos — it's a runtime dep
             # declared in the .deb control, not a build dep. Skip it here.
 

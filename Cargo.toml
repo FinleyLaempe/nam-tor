@@ -24,7 +24,14 @@ members = [
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.75"
+# Not 1.75, which this declared while being unbuildable on anything below
+# 1.88. Cargo's own resolver settles it: on Debian 13's rustc 1.85.1 the
+# build stops with "rustc 1.85.1 is not supported by the following packages:
+# ort@2.0.0-rc.13 requires rustc 1.88 … zbus@5.18.0 requires rustc 1.87".
+# The tree's own code agrees — `is_multiple_of` on integers is 1.87. A
+# declared MSRV that is too low is a promise that breaks at the first
+# `cargo build`, which is exactly how this was found.
+rust-version = "1.88"
 license = "GPL-3.0-only"
 
 [workspace.dependencies]
