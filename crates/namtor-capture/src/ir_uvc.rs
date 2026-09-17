@@ -332,6 +332,68 @@ fn v4l2_err_to_capture(e: crate::v4l2::V4l2Error) -> CaptureError {
 }
 
 #[cfg(test)]
+mod dropped_frame_plumbing {
+    use super::{IrUvc, ParityPolicy, RawFrame, Streamer};
+    use crate::frame::PixFmt;
+    use crate::source::{CaptureError, CaptureSource, SourceCaps, Spectrum};
+
+    /// A streamer that claims to have lost frames. Only the plumbing is
+    /// under test — that the count reaches a caller holding a
+    /// `dyn CaptureSource`, which is how the daemon holds it.
+    struct LossyStreamer(u64);
+
+    impl Streamer for LossyStreamer {
+        fn dropped_frames(&self) -> u64 {
+            self.0
+        }
+        fn next_raw(&mut self) -> Result<RawFrame, CaptureError> {
+            Err(CaptureError::NotStarted)
+        }
+        fn stop(&mut self) {}
+    }
+
+    fn caps() -> SourceCaps {
+        SourceCaps {
+            spectrum: Spectrum::Ir,
+            format: PixFmt::Grey8,
+            width: 640,
+            height: 360,
+            fps: 30,
+            has_metadata: false,
+        }
+    }
+
+    /// The daemon logs this number at stop to explain an empty template set.
+    /// A forwarding chain that silently returned 0 would put the explanation
+    /// back out of reach.
+    #[test]
+    fn the_drop_count_reaches_a_dyn_capture_source() {
+        let src: Box<dyn CaptureSource> =
+            Box::new(IrUvc::new(LossyStreamer(17), ParityPolicy, caps()));
+        assert_eq!(src.dropped_frames(), 17);
+    }
+
+    /// A streamer that does not implement the method takes the trait's
+    /// default, so replay, synthetic and mock sources report no loss rather
+    /// than each having to say so.
+    struct SilentStreamer;
+
+    impl Streamer for SilentStreamer {
+        fn next_raw(&mut self) -> Result<RawFrame, CaptureError> {
+            Err(CaptureError::NotStarted)
+        }
+        fn stop(&mut self) {}
+    }
+
+    #[test]
+    fn a_source_that_cannot_drop_reports_none() {
+        let src: Box<dyn CaptureSource> =
+            Box::new(IrUvc::new(SilentStreamer, ParityPolicy, caps()));
+        assert_eq!(src.dropped_frames(), 0);
+    }
+}
+
+#[cfg(test)]
 mod phase_tests {
     use super::{EmitterPolicy, ParityPolicy, PhaseTracker};
     use crate::frame::EmitterState;
