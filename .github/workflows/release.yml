@@ -286,8 +286,8 @@ jobs:
             # hang above, but triggered as a side effect of the install
             # itself. Bound the whole install command too.
             timeout -k 10 120 pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
-            timeout -k 10 10 /usr/lib/namtor/namtor-daemon --version || \
-              timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
+            timeout -k 10 10 /usr/bin/namtor daemon --version || \
+              timeout -k 10 10 /usr/bin/namtor daemon --help || true
             timeout -k 10 10 namtor-cli status || true
             if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
@@ -299,8 +299,8 @@ jobs:
         if: startsWith(matrix.distro, 'fedora')
         run: |
             timeout -k 10 120 dnf install -y /tmp/namtor-*.rpm
-            timeout -k 10 10 /usr/lib/namtor/namtor-daemon --version || \
-              timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
+            timeout -k 10 10 /usr/bin/namtor daemon --version || \
+              timeout -k 10 10 /usr/bin/namtor daemon --help || true
             timeout -k 10 10 namtor-cli status || true
             if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
@@ -313,8 +313,8 @@ jobs:
         run: |
             timeout -k 10 120 dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb || \
               timeout -k 10 120 apt-get install -y -f --no-install-recommends
-            timeout -k 10 10 /usr/lib/namtor/namtor-daemon --version || \
-              timeout -k 10 10 /usr/lib/namtor/namtor-daemon --help || true
+            timeout -k 10 10 /usr/bin/namtor daemon --version || \
+              timeout -k 10 10 /usr/bin/namtor daemon --help || true
             timeout -k 10 10 namtor-cli status || true
             if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
@@ -364,7 +364,7 @@ jobs:
                 ;;
             esac
             # Verify everything is gone.
-            for f in /usr/lib/namtor/namtor-daemon /usr/bin/namtor-cli \
+            for f in /usr/bin/namtor /usr/bin/namtor-cli \
                      /usr/lib/security/pam_namtor.so; do
                 if [ -e "$f" ]; then
                   echo "::error::uninstall left $f behind"; exit 1

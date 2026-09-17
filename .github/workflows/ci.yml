@@ -27,21 +27,28 @@ jobs:
       - name: cargo build --release (all shippable crates)
         run: |
             cargo build --release --locked \
-                -p namtor-daemon \
-                -p namtor-worker \
-                -p namtor-cli \
-                -p namtor-camera \
+                -p namtor \
                 -p namtor-pam \
                 -p namtor-ui
       - name: Verify shippable binaries exist
         run: |
-            for bin in namtor-daemon namtor-worker namtor-cli \
-                       namtor-camera-emitter-off namtor-enroll-wizard; do
+            # One multi-call binary (daemon/worker/cli/emitter-off), plus the
+            # two artifacts that are deliberately NOT merged into it: the GTK
+            # wizard (headless-safe core) and the PAM cdylib (G5.1).
+            for bin in namtor namtor-enroll-wizard; do
               test -x "target/release/$bin" || {
                 echo "::error::missing $bin"; exit 1; }
             done
             test -f target/release/libnamtor_pam.so || {
               echo "::error::missing libnamtor_pam.so"; exit 1; }
+            # Every subcommand must answer --version with exit 0 and no
+            # side effects (a daemon boot here hung the release pipeline).
+            for sub in daemon worker cli emitter-off; do
+              timeout -k 5 10 ./target/release/namtor "$sub" --version || {
+                echo "::error::namtor $sub --version failed"; exit 1; }
+            done
+            timeout -k 5 10 ./target/release/namtor --version || {
+              echo "::error::namtor --version failed"; exit 1; }
 
       # Lifecycle certification. Existed in packaging/tests/ but no workflow
       # ran it, so its assertions were enforced nowhere (F18). It belongs in

@@ -198,13 +198,12 @@ for f in "$STAGE" "$UNINSTALL" "$MANIFEST" "$LIFECYCLE_SRC"; do
     fi
 done
 
-DAEMON_BIN="$REPO_ROOT/target/release/namtor-daemon"
-WORKER_BIN="$REPO_ROOT/target/release/namtor-worker"
-EMITTER_OFF_BIN="$REPO_ROOT/target/release/namtor-camera-emitter-off"
-CLI_BIN="$REPO_ROOT/target/release/namtor-cli"
+# One multi-call binary (daemon/worker/cli/emitter-off) plus the two
+# artifacts deliberately kept separate: the PAM cdylib and the GTK wizard.
+NAMTOR_BIN="$REPO_ROOT/target/release/namtor"
 PAM_SO="$REPO_ROOT/target/release/libnamtor_pam.so"
 UI_BIN="$REPO_ROOT/target/release/namtor-enroll-wizard"
-for f in "$DAEMON_BIN" "$WORKER_BIN" "$EMITTER_OFF_BIN" "$CLI_BIN" "$PAM_SO" "$UI_BIN"; do
+for f in "$NAMTOR_BIN" "$PAM_SO" "$UI_BIN"; do
     if [[ -f "$f" ]]; then
         ok "built artifact present: $(basename "$f")"
     else
@@ -253,8 +252,7 @@ else
 fi
 
 for rel in \
-    usr/lib/namtor/namtor-daemon \
-    usr/lib/namtor/namtor-worker \
+    usr/bin/namtor \
     usr/bin/namtor-cli \
     usr/lib/security/pam_namtor.so \
     usr/lib/systemd/system/namtor-daemon.socket \
@@ -289,7 +287,7 @@ TPL_SHA_BEFORE="$(sha256_of "$SEED_TPL")"
 TPLKEY_SHA_BEFORE="$(sha256_of "$SEED_TPL_KEY")"
 BACKOFF_SHA_BEFORE="$(sha256_of "$SEED_BACKOFF")"
 MODEL_SHA_BEFORE="$(sha256_of "$SEED_MODEL")"
-DAEMON_SHA_BEFORE="$(sha256_of "$ROOT_A/usr/lib/namtor/namtor-daemon")"
+DAEMON_SHA_BEFORE="$(sha256_of "$ROOT_A/usr/bin/namtor")"
 
 if bash "$STAGE" "$ROOT_A" "$REPO_ROOT" --package core >/tmp/lc_stage_core_b.log 2>&1; then
     ok "upgrade: re-stage core over existing succeeds"
@@ -338,7 +336,7 @@ else
     not_ok "upgrade: install-manifest.toml missing after upgrade"
 fi
 
-DAEMON_SHA_AFTER="$(sha256_of "$ROOT_A/usr/lib/namtor/namtor-daemon")"
+DAEMON_SHA_AFTER="$(sha256_of "$ROOT_A/usr/bin/namtor")"
 if [[ "$DAEMON_SHA_BEFORE" == "$DAEMON_SHA_AFTER" && -n "$DAEMON_SHA_AFTER" ]]; then
     ok "upgrade: daemon binary sha256 stable (same source, idempotent re-copy)"
 else
@@ -749,7 +747,7 @@ if printf '%s' "$uninstall_out" | grep -qiE 'FATAL|install-manifest.*not found';
 else
     not_ok "F4: uninstall does not report a clear missing-manifest message"
 fi
-if path_exists "$ROOT_F4/usr/lib/namtor/namtor-daemon"; then
+if path_exists "$ROOT_F4/usr/bin/namtor"; then
     ok "F4: uninstall with missing manifest did not remove files (clean early exit)"
 else
     not_ok "F4: uninstall with missing manifest removed files (should exit before removal)"

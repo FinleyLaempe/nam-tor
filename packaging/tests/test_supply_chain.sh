@@ -240,7 +240,9 @@ assert "modelProvenance fields complete (incl. PAD card/recipe)" \
 # ---------------------------------------------------------------------------
 # Gate 13: Release binaries in SBOM
 # ---------------------------------------------------------------------------
-expected_bins="namtor-daemon namtor-worker namtor-cli pam_namtor.so"
+# `namtor` is the single multi-call binary (daemon, worker, cli,
+# emitter-off); pam_namtor.so is deliberately still its own artifact.
+expected_bins="namtor pam_namtor.so namtor-enroll-wizard"
 for bname in $expected_bins; do
     found=$(python3 -c "
 import json

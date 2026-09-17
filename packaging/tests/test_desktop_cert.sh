@@ -626,8 +626,7 @@ mkdir -p "$mutation_root/target/release"
 mkdir -p "$mutation_root/packaging"
 cp "$MANIFEST" "$mutation_root/packaging/install-manifest.toml"
 cp "$STAGE_SH" "$mutation_root/packaging/stage.sh"
-for bin in namtor-daemon namtor-worker namtor-camera-emitter-off \
-           namtor-cli namtor-enroll-wizard; do
+for bin in namtor namtor-enroll-wizard; do
     printf 'placeholder' > "$mutation_root/target/release/$bin"
 done
 printf 'placeholder' > "$mutation_root/target/release/libnamtor_pam.so"

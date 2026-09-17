@@ -76,10 +76,10 @@ SYSUSERS_SRC="$PACKAGING_DIR/sysusers.d/namtor.conf"
 TMPFILES_SRC="$PACKAGING_DIR/tmpfiles.d/namtor.conf"
 DBUS_SRC="$PACKAGING_DIR/dbus-1/org.namtor.Manager.service"
 POLKIT_SRC="$PACKAGING_DIR/polkit-1/actions/org.namtor.policy"
-DAEMON_BIN="$REPO_ROOT/target/release/namtor-daemon"
-WORKER_BIN="$REPO_ROOT/target/release/namtor-worker"
-EMITTER_OFF_BIN="$REPO_ROOT/target/release/namtor-camera-emitter-off"
-CLI_BIN="$REPO_ROOT/target/release/namtor-cli"
+# One multi-call binary: `namtor daemon`, `namtor worker`, `namtor cli ...`,
+# `namtor emitter-off <device>`. The PAM cdylib and the GTK wizard stay
+# separate artifacts and are checked separately.
+NAMTOR_BIN="$REPO_ROOT/target/release/namtor"
 PAM_SO="$REPO_ROOT/target/release/libnamtor_pam.so"
 SBOM_SPDX="$REPO_ROOT/docs/evidence/packaging/namtor.spdx.json"
 SBOM_CYCLONE="$REPO_ROOT/docs/evidence/packaging/namtor.cyclonedx.json"
@@ -102,7 +102,7 @@ echo "== Task 29: core installation + daemon readiness certification =="
 
 echo "--- prerequisites: built artifacts ---"
 
-for f in "$DAEMON_BIN" "$WORKER_BIN" "$EMITTER_OFF_BIN" "$CLI_BIN" "$PAM_SO"; do
+for f in "$NAMTOR_BIN" "$PAM_SO"; do
     if [[ -f "$f" ]]; then
         ok "built artifact present: $(basename "$f")"
     else
@@ -251,7 +251,7 @@ fi
 
 echo "--- (c) model validation call path ---"
 
-daemon_staged="$DESTDIR/usr/lib/namtor/namtor-daemon"
+daemon_staged="$DESTDIR/usr/bin/namtor"
 model_manifest_staged="$DESTDIR/usr/share/namtor/model-manifest.toml"
 models_dir="$DESTDIR/var/lib/namtor/models"
 
@@ -401,7 +401,7 @@ if [[ -f "$dbus_staged" ]]; then
     else
         not_ok "D-Bus Name not org.namtor.Manager"
     fi
-    if grep -qE '^Exec=/usr/lib/namtor/namtor-daemon' "$dbus_staged"; then
+    if grep -qE '^Exec=/usr/bin/namtor daemon' "$dbus_staged"; then
         ok "D-Bus Exec points to daemon binary"
     else
         not_ok "D-Bus Exec does not point to daemon binary"
@@ -520,11 +520,29 @@ fi
 
 echo "--- (i) sandboxed ONNX inference path ---"
 
-worker_staged="$DESTDIR/usr/lib/namtor/namtor-worker"
+# The worker is a subcommand of the one staged binary — same file, still a
+# separate PROCESS (the daemon re-execs /proc/self/exe with `worker`).
+worker_staged="$DESTDIR/usr/bin/namtor"
 if [[ -f "$worker_staged" ]]; then
     ok "worker binary staged"
 else
     not_ok "worker binary not staged"
+fi
+
+if [[ -x "$NAMTOR_BIN" ]]; then
+    if "$NAMTOR_BIN" worker --help 2>&1 | grep -qE 'apply-sandbox'; then
+        ok "namtor worker subcommand exposes --apply-sandbox"
+    else
+        not_ok "namtor worker subcommand missing --apply-sandbox"
+    fi
+else
+    not_ok "namtor binary not built (cannot check worker subcommand)"
+fi
+
+if grep -qE 'proc/self/exe' "$REPO_ROOT/crates/namtor-daemon/src/supervisor.rs"; then
+    ok "daemon re-execs /proc/self/exe as a separate worker process"
+else
+    not_ok "daemon does not re-exec /proc/self/exe for the worker"
 fi
 
 # Worker sandbox modules present in source tree.
@@ -562,23 +580,25 @@ fi
 
 echo "--- (j) diagnostics run unprivileged ---"
 
+# `namtor-cli` is a compat symlink to the merged binary, so test -f follows
+# it; -e/-L catches a dangling link.
 cli_staged="$DESTDIR/usr/bin/namtor-cli"
-if [[ -f "$cli_staged" ]]; then
-    ok "namtor-cli staged"
+if [[ -L "$cli_staged" && -e "$cli_staged" ]]; then
+    ok "namtor-cli compat symlink staged and resolves"
 else
-    not_ok "namtor-cli not staged"
+    not_ok "namtor-cli compat symlink not staged or dangling"
 fi
 
 # The CLI must have a diagnostics subcommand. We check the binary's --help
 # output (unprivileged, no daemon needed) and the source module.
-if [[ -x "$CLI_BIN" ]]; then
-    if "$CLI_BIN" --help 2>&1 | grep -qE 'diagnostics'; then
-        ok "namtor-cli has diagnostics subcommand"
+if [[ -x "$NAMTOR_BIN" ]]; then
+    if "$NAMTOR_BIN" cli --help 2>&1 | grep -qE 'diagnostics'; then
+        ok "namtor cli has diagnostics subcommand"
     else
-        not_ok "namtor-cli missing diagnostics subcommand"
+        not_ok "namtor cli missing diagnostics subcommand"
     fi
 else
-    not_ok "namtor-cli binary not built (cannot check diagnostics)"
+    not_ok "namtor binary not built (cannot check diagnostics)"
 fi
 
 if [[ -f "$CLI_DIAG_SRC" ]]; then
@@ -693,12 +713,19 @@ for script in pam-install.sh pam-uninstall.sh pam-preflight.sh; do
     fi
 done
 
-# camera-emitter-off binary (ExecStopPost fallback).
-emitter_off_staged="$DESTDIR/usr/lib/namtor/namtor-camera-emitter-off"
+# emitter-off (ExecStopPost fallback) is a subcommand of the one binary.
+emitter_off_staged="$DESTDIR/usr/bin/namtor"
 if [[ -f "$emitter_off_staged" ]]; then
-    ok "namtor-camera-emitter-off staged"
+    ok "namtor emitter-off staged (as a subcommand of namtor)"
 else
-    not_ok "namtor-camera-emitter-off not staged"
+    not_ok "namtor emitter-off not staged"
+fi
+if [[ -x "$NAMTOR_BIN" ]]; then
+    if "$NAMTOR_BIN" emitter-off --help 2>&1 | grep -qE '<device>'; then
+        ok "namtor emitter-off subcommand present"
+    else
+        not_ok "namtor emitter-off subcommand missing"
+    fi
 fi
 
 # ===========================================================================
@@ -723,10 +750,8 @@ check_missing() {
     fi
 }
 
-check_missing "usr/lib/namtor/namtor-daemon"          "daemon binary"
-check_missing "usr/lib/namtor/namtor-worker"          "worker binary"
-check_missing "usr/lib/namtor/namtor-camera-emitter-off" "camera-emitter-off"
-check_missing "usr/bin/namtor-cli"                    "CLI binary"
+check_missing "usr/bin/namtor"                        "namtor binary"
+check_missing "usr/bin/namtor-cli"                    "namtor-cli compat symlink"
 check_missing "usr/lib/security/pam_namtor.so"        "PAM module"
 check_missing "usr/lib/systemd/system/namtor-daemon.socket"  "socket unit"
 check_missing "usr/lib/systemd/system/namtor-daemon.service" "service unit"

@@ -422,7 +422,7 @@ cp "$MANIFEST" "$stage_root/packaging/install-manifest.toml"
 cp "$STAGE_SH" "$stage_root/packaging/stage.sh"
 cp "$LIFECYCLE_SH" "$stage_root/packaging/lifecycle.sh"
 # Create placeholder binaries.
-for bin in namtor-daemon namtor-worker namtor-camera-emitter-off namtor-cli namtor-enroll-wizard; do
+for bin in namtor namtor-enroll-wizard; do
     printf 'placeholder' > "$stage_root/target/release/$bin"
 done
 printf 'placeholder' > "$stage_root/target/release/libnamtor_pam.so"
@@ -513,7 +513,8 @@ fi
 # Verify core dest has the daemon + PAM module + lifecycle helper.
 if [[ -n "$paths_core" ]]; then
     for required in \
-        usr/lib/namtor/namtor-daemon \
+        usr/bin/namtor \
+        usr/bin/namtor-cli \
         usr/lib/security/pam_namtor.so \
         usr/share/namtor/lifecycle.sh \
         usr/lib/systemd/system/namtor-daemon.socket \

@@ -182,14 +182,14 @@ UI_FILES="$(files_body ui)"
 contains() { printf '%s\n' "$1" | grep -qE -- "$2"; }
 
 # ---------------------------------------------------------------------------
-# 3. Core %files — daemon, worker, CLI, PAM, systemd, sysusers, tmpfiles,
+# 3. Core %files — the single namtor binary + namtor-cli symlink, PAM,
+#    systemd, sysusers, tmpfiles,
 #    D-Bus, polkit, manifests, lifecycle, models, licences, SBOM
 # ---------------------------------------------------------------------------
 echo "--- (3) core %files payload ---"
 
 core_expect=(
-    '/usr/lib/namtor/namtor-daemon'
-    '/usr/lib/namtor/namtor-worker'
+    '/usr/bin/namtor'
     '/usr/bin/namtor-cli'
     '/usr/lib/security/pam_namtor\.so'
     'namtor-daemon\.service'
@@ -256,8 +256,7 @@ done
 
 # The UI subpackage must NOT contain KDE files or core daemon files.
 ui_exclude=(
-    'namtor-daemon'
-    'namtor-worker'
+    '/usr/bin/namtor$'
     'pam_namtor\.so'
     'org\.namtor\.kcm'
     'qt6/qml/org/namtor'
