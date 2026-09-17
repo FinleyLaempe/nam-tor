@@ -69,6 +69,20 @@ impl SystemPolkit {
     pub fn for_testing() -> Self {
         Self { conn: None }
     }
+
+    /// Point the authority at an arbitrary connection.
+    ///
+    /// Without this the only constructors are the real system bus and
+    /// `for_testing`, whose `None` returns before the D-Bus call — so the
+    /// subject that goes out and the result that comes back were serialised
+    /// and deserialised by no test. A mismatch there denies every privileged
+    /// operation with no prompt, which is indistinguishable from a polkit
+    /// rule saying no.
+    ///
+    /// **This is for tests only** — production uses [`Self::default`].
+    pub fn with_connection(conn: zbus::blocking::Connection) -> Self {
+        Self { conn: Some(conn) }
+    }
 }
 
 impl Default for SystemPolkit {

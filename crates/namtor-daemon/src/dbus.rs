@@ -216,7 +216,11 @@ impl PeerIdentity {
     /// reply and the message header's sender. The `bus_name` is the unique
     /// connection name (e.g. `:1.42`) — set by the bus daemon, not forgeable
     /// by the peer, and required as the polkit subject.
-    pub(crate) fn from_bus(uid: u32, pid: i32, cmdline: String, bus_name: String) -> Self {
+    ///
+    /// `pub` so integration tests can build the peer the polkit exchange is
+    /// about; constructing one outside the daemon grants nothing, because
+    /// only the daemon's own dispatch feeds it to an authority.
+    pub fn from_bus(uid: u32, pid: i32, cmdline: String, bus_name: String) -> Self {
         Self {
             uid,
             pid,
