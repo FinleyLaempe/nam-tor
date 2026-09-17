@@ -41,7 +41,9 @@
 # `target_arch = "both"` for YuNet/SFace/MiniFASNet).
 #
 # Runtime deps (per package):
-#   namtor       — onnxruntime (CPU EP), systemd, pam, gcc-libs
+#   namtor       — systemd, pam, gcc-libs. No onnxruntime: ONNX Runtime is
+#                  linked into the binary (ort download-binaries), and nothing
+#                  loads a system libonnxruntime.
 #   namtor-ui    — namtor=$pkgver (exact), gtk4, libadwaita
 #
 # Models are bundled: YuNet (MIT, redistributable), SFace (Apache-2.0,
@@ -179,7 +181,6 @@ package_namtor() {
     pkgdesc="IR face authentication — single namtor binary (daemon/worker/CLI), PAM module, models (headless-safe)"
     arch=('x86_64' 'aarch64')
     depends=(
-        'onnxruntime'
         'pam'
         'systemd'
         'gcc-libs'

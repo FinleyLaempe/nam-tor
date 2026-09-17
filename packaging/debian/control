@@ -37,7 +37,6 @@ Architecture: amd64 arm64
 Depends:
     ${misc:Depends},
     ${shlibs:Depends},
-    onnxruntime,
     libpam0g,
     systemd,
 # Optional: without tpm2-tools, namtor_store::Tpm2Backend cannot run the

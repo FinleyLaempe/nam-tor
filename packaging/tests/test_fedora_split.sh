@@ -350,8 +350,9 @@ if printf '%s\n' "$core_requires" | grep_all -iE 'qt6|kf6|kirigami|kcoreaddons';
 else
     ok "core has no Qt6/KF6 Requires"
 fi
-# Core must pull onnxruntime + pam + systemd.
-if printf '%s\n' "$core_requires" | grep_all -i 'onnxruntime'; then ok "core Requires onnxruntime"; else not_ok "core Requires onnxruntime"; fi
+# Core must pull pam + systemd — and not onnxruntime, which is linked into the
+# binary and would only install an unused library.
+if printf '%s\n' "$core_requires" | grep_all -i 'onnxruntime'; then not_ok "core Requires onnxruntime (it is bundled; must not)"; else ok "core does not Require onnxruntime"; fi
 if printf '%s\n' "$core_requires" | grep_all -i 'pam'; then ok "core Requires pam"; else not_ok "core Requires pam"; fi
 if printf '%s\n' "$core_requires" | grep_all -i 'systemd'; then ok "core Requires systemd"; else not_ok "core Requires systemd"; fi
 

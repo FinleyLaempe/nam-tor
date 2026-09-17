@@ -8,7 +8,7 @@
 #   (b) makepkg builds two packages from one PKGBUILD.
 #   (c) Core package owns: daemon, worker, CLI, PAM module, systemd units,
 #       sysusers, tmpfiles, D-Bus, polkit, manifests, models, licences,
-#       lifecycle helper, SBOM. Depends on onnxruntime/pam/systemd/gcc-libs
+#       lifecycle helper, SBOM. Depends on pam/systemd/gcc-libs
 #       only — NO gtk4/libadwaita/qt6/kde runtime deps.
 #   (d) Desktop package owns: enroll-wizard binary, .desktop, .metainfo.xml,
 #       .svg. Depends on namtor=$pkgver (exact) + gtk4 + libadwaita. NO
@@ -197,8 +197,9 @@ echo "--- (c) core package deps + content ---"
 
 core_body="$(extract_func 'package_namtor' "$PKGBUILD")"
 
-# Core deps: onnxruntime, pam, systemd, gcc-libs (no gtk4/libadwaita/qt6/kde).
-for dep in onnxruntime pam systemd gcc-libs; do
+# Core deps: pam, systemd, gcc-libs (no gtk4/libadwaita/qt6/kde, and no
+# onnxruntime — ONNX Runtime is linked into the binary).
+for dep in pam systemd gcc-libs; do
     # Check the depends array inside package_namtor.
     if printf '%s\n' "$core_body" | grep_all -E "['\"]${dep}['\"]|['\"]${dep}[=<>]| ${dep}['\" ]" ; then
         ok "core depends on $dep"
@@ -206,6 +207,15 @@ for dep in onnxruntime pam systemd gcc-libs; do
         not_ok "core missing dependency: $dep"
     fi
 done
+
+# Core must NOT depend on onnxruntime: it is linked into the binary, so the
+# dependency only installed an unused library. Same matcher as the positive
+# checks above, which reads the multi-line depends array.
+if printf '%s\n' "$core_body" | grep_all -E "['\"]onnxruntime['\"]|['\"]onnxruntime[=<>]| onnxruntime['\" ]" ; then
+    not_ok "core depends on onnxruntime (it is bundled; must not)"
+else
+    ok "core does not depend on onnxruntime"
+fi
 
 # Core must NOT depend on desktop libs.
 for nodep in gtk4 libadwaita qt6-base kirigami kcoreaddons; do

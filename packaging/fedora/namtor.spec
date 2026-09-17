@@ -37,8 +37,10 @@
 # Supported architectures: x86_64, aarch64 (model-manifest target_arch=both).
 #
 # Runtime requires (core):
-#   - onnxruntime        (CPU EP for model inference; the daemon refuses to
-#                         start without a working onnxruntime in the worker)
+#   - (no onnxruntime)   ONNX Runtime is linked into the binary by ort's
+#                         download-binaries feature; nothing loads a system
+#                         libonnxruntime, so requiring the package only
+#                         installed an unused ~100 MB library.
 #   - pam                (libpam for the auth module)
 #   - systemd            (socket activation, sysusers, tmpfiles)
 #
@@ -114,7 +116,6 @@ BuildRequires:  systemd-devel
 # Core runtime requirements — daemon/worker/CLI/PAM only. The GUI toolkit
 # deps (gtk4/libadwaita) live in the subpackage so a headless host is not
 # forced to pull GTK.
-Requires:       onnxruntime
 Requires:       pam
 Requires:       systemd
 # `libgcc`, not `%{_lib}gcc`: `%{_lib}` expands to `lib64` on x86_64, so that
@@ -214,6 +215,11 @@ cargo build --release --frozen \
 # --test-threads=1 serialises tests that mutate process-global env vars
 # (the licence tests set/remove NAMTOR_ACCEPT_LICENCE); without it those
 # races produce spurious failures.
+# No debug info for the test build. %build has already produced a release
+# tree, and a second full workspace with debuginfo filled the builder's disk:
+# "ld: final link failed: No space left on device". Tests need neither.
+export CARGO_PROFILE_DEV_DEBUG=0
+export CARGO_PROFILE_TEST_DEBUG=0
 cargo test --workspace -- --test-threads=1
 
 %install

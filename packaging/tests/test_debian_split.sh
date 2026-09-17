@@ -4,7 +4,7 @@
 #
 # Acceptance criteria (from the task spec):
 #   (a) control has exactly 2 Package: stanzas: namtor, namtor-ui.
-#   (b) Core Depends: onnxruntime, libpam0g, systemd only — NO
+#   (b) Core Depends: libpam0g, systemd only (no onnxruntime) — NO
 #       libgtk-4-1, libadwaita-1-0, libqt6, kirigami, kcoreaddons.
 #   (c) Desktop Depends: namtor (= 0.2.0-1), libgtk-4-1, libadwaita-1-0
 #       and NO qt6/kirigami/kcoreaddons.
@@ -138,7 +138,7 @@ UI_DEPS="$(depends_block "$UI_BODY")"
 # ---------------------------------------------------------------------------
 echo "--- (b) core Depends (no desktop deps) ---"
 
-for dep in onnxruntime libpam0g systemd; do
+for dep in libpam0g systemd; do
     if printf '%s\n' "$CORE_DEPS" | grep_all -E "^${dep}(,|[[:space:]]|$)"; then
         ok "core Depends on $dep"
     else
@@ -146,7 +146,10 @@ for dep in onnxruntime libpam0g systemd; do
     fi
 done
 
-for nodep in libgtk-4-1 libadwaita-1-0 libqt6 kirigami kcoreaddons; do
+# onnxruntime is linked into the binary; Debian packages none, so a Depends
+# on it made the .deb uninstallable — and the smoke test's `apt-get -f`
+# "fixed" that by removing namtor again.
+for nodep in onnxruntime libgtk-4-1 libadwaita-1-0 libqt6 kirigami kcoreaddons; do
     if printf '%s\n' "$CORE_DEPS" | grep_all -iE "$nodep"; then
         not_ok "core Depends on $nodep (should not — desktop dep in core)"
     else

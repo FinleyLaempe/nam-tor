@@ -20,7 +20,7 @@ Nam-tor ships as two split packages on Arch, Fedora, and Debian:
 
 | Package | Contents | Depends on |
 |---|---|---|
-| `namtor` | Daemon, worker, PAM module, CLI, bundled models, systemd units, D-Bus service, polkit policy, lifecycle helper, SBOM | `onnxruntime`, `pam`, `systemd` |
+| `namtor` | Daemon, worker, PAM module, CLI, bundled models, systemd units, D-Bus service, polkit policy, lifecycle helper, SBOM | `pam`, `systemd` (ONNX Runtime is built in) |
 | `namtor-ui` | Enrollment wizard and settings app (GTK4/libadwaita). Desktop-neutral — it is the only UI. | `namtor` (exact version), `gtk4`, `libadwaita` |
 
 The core package is headless-safe: it has no desktop-library dependencies, so a server can install `namtor` alone for daemon + PAM + CLI without pulling GTK.

@@ -54,8 +54,8 @@
 # Hard blockers (release aborts if any cell fails):
 #   - lint, build, install, smoke, upgrade, or uninstall fails
 #   - missing architecture support (model-manifest target_arch mismatch)
-#   - onnxruntime not installable in the target distro (model runtime
-#     check — the daemon refuses to start without it)
+#   - the shipped ONNX weights do not load and infer through the bundled
+#     runtime (see "Verify the shipped model weights infer")
 #   - bad signature on a previously-signed artifact
 #
 # The workflow does NOT push to a remote package registry. It builds,
@@ -136,7 +136,7 @@ jobs:
         run: |
             pacman -Syu --noconfirm
             pacman -S --noconfirm --needed base-devel rust cargo python namcap \
-                onnxruntime openssl gtk4 libadwaita systemd xorg-server-xvfb \
+                openssl gtk4 libadwaita systemd xorg-server-xvfb \
                 github-cli man-db
 
       - name: Install build toolchain (Fedora)
@@ -144,7 +144,7 @@ jobs:
         run: |
             dnf -y update
             dnf -y install @development-tools rust cargo python3 \
-                systemd-rpm-macros rpmlint rpm-build onnxruntime openssl-devel pam-devel \
+                systemd-rpm-macros rpmlint rpm-build openssl-devel pam-devel \
                 gtk4-devel libadwaita-devel libseccomp-devel gcc-c++ systemd-devel
 
       - name: Install build toolchain (Debian)
@@ -162,8 +162,6 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --profile minimal --default-toolchain stable
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-            # onnxruntime is not in Debian 12 repos — it's a runtime dep
-            # declared in the .deb control, not a build dep. Skip it here.
 
       # --- Lint the package definition (per-distro linter) ---
       - name: Lint PKGBUILD (namcap)
@@ -185,36 +183,6 @@ jobs:
             mkdir -p /tmp/namtor-debian
             cp -r packaging/debian /tmp/namtor-debian/debian
             dpkg-checkbuilddeps /tmp/namtor-debian/debian/control
-
-      # --- Model runtime check (BLOCKER if onnxruntime is not installable) ---
-      # Debian 12 doesn't ship onnxruntime in apt — skip the runtime gate
-      # there; the .deb declares it as a Depends so apt will pull it from
-      # a third-party source at install time on the user's machine.
-      - name: Verify onnxruntime is installable (model runtime gate)
-        if: matrix.distro != 'debian13'
-        run: |
-            case "${{ matrix.distro }}" in
-              arch)
-                pacman -S --noconfirm --needed onnxruntime || \
-                  { echo "::error::onnxruntime not installable on Arch — release blocked"; exit 1; }
-                ;;
-              fedora*)
-                dnf install -y onnxruntime || \
-                  { echo "::error::onnxruntime not installable on Fedora — release blocked"; exit 1; }
-                ;;
-            esac
-            # Verify it actually loads — without assuming a soname. This
-            # hardcoded `libonnxruntime.so.1`, which is what Arch ships;
-            # Fedora 41 installs onnxruntime 1.17.3 and has no such file, so
-            # the gate failed on a distro where the library was present and
-            # fine. Ask the linker cache what is actually there.
-            lib="$(ldconfig -p | awk '/libonnxruntime\.so/ {print $NF; exit}')"
-            [ -n "$lib" ] || {
-              echo "::error::onnxruntime is installed but no libonnxruntime.so* is in the linker cache — release blocked"
-              exit 1; }
-            python3 -c "import ctypes, sys; ctypes.CDLL(sys.argv[1])" "$lib" || \
-              { echo "::error::$lib is not loadable — release blocked"; exit 1; }
-            echo "::notice::onnxruntime loadable: $lib"
 
       # --- Create source tarball + model archive (needed by all distro builds) ---
       - name: Create source tarball, fetch model archive
@@ -278,16 +246,26 @@ jobs:
             sha256sum "namtor-$PKGVER.tar.gz" "namtor-models-$MODELVER.tar.gz"
 
       # --- Do the weights we are about to ship actually infer? ---
-      # The gate above proves onnxruntime loads; it says nothing about the
-      # model files. A YuNet export whose input shape the runtime refuses
+      # This is the model-runtime gate. ONNX Runtime is compiled into the
+      # binary (ort's download-binaries feature links it statically — `ldd`
+      # shows no libonnxruntime and there is no dlopen of one), so the old
+      # gate, which installed the distro's onnxruntime package and loaded
+      # its .so, tested a library the product never uses; on Debian, which
+      # packages none, it was simply skipped. What has to work is the
+      # bundled runtime running the shipped weights, and this checks that.
+      # Before this, the model files themselves were unchecked. A YuNet export whose input shape the runtime refuses
       # would build, package, sign and install cleanly, and fail for the
       # first person who pressed "Scan my face". These tests load the real
       # weights out of the archive being shipped and run tensors through
       # them. They skip themselves when NAMTOR_MODELS_DIR is unset, so they
       # stay silent in CI, where the weights are absent by design.
-      # Skipped on Debian for the same reason as the runtime gate above.
+      #
+      # Runs in every cell now: its only reason to skip Debian was the
+      # missing onnxruntime package, which nothing needs. It deletes the
+      # debug `target/` it builds on the way out, because each cell then
+      # builds the whole workspace again for the package and the runner's
+      # disk does not hold both — the Fedora cell ran out mid-%check.
       - name: Verify the shipped model weights infer (release blocker)
-        if: matrix.distro != 'debian13'
         run: |
             set -e
             mkdir -p /tmp/modelcheck
@@ -299,6 +277,7 @@ jobs:
             NAMTOR_MODELS_DIR="$models" \
               cargo test -p namtor-recog --test real_models_infer -- --ignored --test-threads=1 || {
               echo "::error::the shipped ONNX weights do not infer — release blocked"; exit 1; }
+            rm -rf "$GITHUB_WORKSPACE/target"
 
       # --- Build the package from source ---
       - name: Build Arch package (makepkg)
@@ -388,8 +367,9 @@ jobs:
             # hang above, but triggered as a side effect of the install
             # itself. Bound the whole install command too.
             timeout -k 10 120 pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
-            timeout -k 10 10 /usr/bin/namtor daemon --version || \
-              timeout -k 10 10 /usr/bin/namtor daemon --help || true
+            # Not `|| true`: a package whose main binary does not run has
+            # failed its smoke test.
+            timeout -k 10 10 /usr/bin/namtor daemon --version
             timeout -k 10 10 namtor-cli status || true
             if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
@@ -401,8 +381,9 @@ jobs:
         if: startsWith(matrix.distro, 'fedora')
         run: |
             timeout -k 10 120 dnf install -y /tmp/namtor-*.rpm
-            timeout -k 10 10 /usr/bin/namtor daemon --version || \
-              timeout -k 10 10 /usr/bin/namtor daemon --help || true
+            # Not `|| true`: a package whose main binary does not run has
+            # failed its smoke test.
+            timeout -k 10 10 /usr/bin/namtor daemon --version
             timeout -k 10 10 namtor-cli status || true
             if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
@@ -413,10 +394,19 @@ jobs:
       - name: Install + smoke test (Debian)
         if: startsWith(matrix.distro, 'debian')
         run: |
-            timeout -k 10 120 dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb || \
-              timeout -k 10 120 apt-get install -y -f --no-install-recommends
-            timeout -k 10 10 /usr/bin/namtor daemon --version || \
-              timeout -k 10 10 /usr/bin/namtor daemon --help || true
+            # `apt-get install ./pkg.deb` resolves the package's own Depends
+            # from the archive. The previous `dpkg -i --ignore-depends=
+            # onnxruntime || apt-get install -f` could only ever end one way
+            # on Debian, which packages no onnxruntime: `-f` fixed the broken
+            # dependency by removing namtor again, and every check after it
+            # ran against a package that was no longer installed. Both
+            # packages are installed, so the UI's dependencies are checked
+            # too.
+            timeout -k 10 600 apt-get install -y --no-install-recommends \
+                /tmp/namtor_*.deb /tmp/namtor-ui_*.deb
+            # Not `|| true`: a package whose main binary does not run has
+            # failed its smoke test.
+            timeout -k 10 10 /usr/bin/namtor daemon --version
             timeout -k 10 10 namtor-cli status || true
             if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
@@ -435,7 +425,8 @@ jobs:
                 timeout -k 10 120 dnf reinstall -y /tmp/namtor-*.rpm
                 ;;
               debian*)
-                timeout -k 10 120 dpkg -i --ignore-depends=onnxruntime /tmp/namtor_*.deb
+                timeout -k 10 600 apt-get install -y --no-install-recommends --reinstall \
+                    /tmp/namtor_*.deb /tmp/namtor-ui_*.deb
                 ;;
             esac
             timeout -k 10 10 namtor-cli status || true
