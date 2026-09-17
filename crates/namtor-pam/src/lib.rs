@@ -31,10 +31,40 @@ use namtor_proto::pam::Verdict;
 pub unsafe extern "C" fn pam_sm_authenticate(
     pamh: *mut ffi::PamHandle,
     _flags: c_int,
-    _argc: c_int,
-    _argv: *const *const std::ffi::c_char,
+    argc: c_int,
+    argv: *const *const std::ffi::c_char,
 ) -> c_int {
-    run_auth(pamh)
+    let socket = unsafe { socket_from_args(argc, argv) };
+    run_auth(pamh, socket)
+}
+
+/// Read `socket=<path>` from the module's arguments, i.e. the `pam_namtor.so`
+/// line in `/etc/pam.d`. Falls back to the compiled-in default.
+///
+/// # Safety
+/// `argv` must be `argc` valid NUL-terminated pointers, per the PAM ABI.
+unsafe fn socket_from_args(
+    argc: c_int,
+    argv: *const *const std::ffi::c_char,
+) -> std::path::PathBuf {
+    if argv.is_null() || argc <= 0 {
+        return std::path::PathBuf::from(client::DEFAULT_SOCKET);
+    }
+    for i in 0..argc as isize {
+        let p = unsafe { *argv.offset(i) };
+        if p.is_null() {
+            continue;
+        }
+        let Ok(arg) = (unsafe { std::ffi::CStr::from_ptr(p) }).to_str() else {
+            continue;
+        };
+        if let Some(path) = arg.strip_prefix("socket=") {
+            if !path.is_empty() {
+                return std::path::PathBuf::from(path);
+            }
+        }
+    }
+    std::path::PathBuf::from(client::DEFAULT_SOCKET)
 }
 
 /// PAM `setcred` — we manage no credentials. Always succeed.
@@ -59,7 +89,7 @@ pub unsafe extern "C" fn pam_sm_acct_mgmt(
     ffi::PAM_SUCCESS
 }
 
-fn run_auth(pamh: *mut ffi::PamHandle) -> c_int {
+fn run_auth(pamh: *mut ffi::PamHandle, socket: std::path::PathBuf) -> c_int {
     // 1. Resolve target username → uid. Missing/unknown user → fall through.
     let username = match unsafe { ffi::get_user(pamh) } {
         Ok(u) => u,
@@ -77,7 +107,7 @@ fn run_auth(pamh: *mut ffi::PamHandle) -> c_int {
     };
 
     // 2. Build config (also reads PAM_RHOST for the wire + remote check).
-    let cfg = match unsafe { client::AuthConfig::from_pam(pamh, uid) } {
+    let cfg = match unsafe { client::AuthConfig::from_pam(pamh, uid, socket) } {
         Ok(c) => c,
         Err(code) => return log_fail("config", code, ffi::PAM_AUTHINFO_UNAVAIL),
     };
@@ -105,7 +135,10 @@ fn run_auth(pamh: *mut ffi::PamHandle) -> c_int {
     // 5. Drive the auth lifecycle. Spec §8.4: poll stdin for a keypress in
     // parallel; any keypress aborts face auth and falls through to password.
     let auth_timeout = cfg.timeout;
-    let auth_handle = std::thread::spawn(move || client::authenticate(&cfg));
+    // , not : the latter turns Unavailable,
+    // RateLimited and Refused into errors and discards the reply, which is
+    // where the typed §8.3 condition lives.
+    let auth_handle = std::thread::spawn(move || client::authenticate_reply(&cfg));
     if stdin_poll::stdin_has_input(auth_timeout) {
         // Keypress received: abandon face auth and fall through.
         // We do not join `auth_handle` — the daemon will time out the
@@ -153,6 +186,24 @@ fn run_auth(pamh: *mut ffi::PamHandle) -> c_int {
             Verdict::RateLimited => "rate_limited",
             Verdict::Refused => "refused",
         });
+
+    // Spec §8.3: show the user the message for the condition that occurred.
+    //
+    // A PAD veto and a plain non-match deliberately render the same text, so
+    // the system never tells an attacker which signal caught them; the journal
+    // above keeps them distinct. "No enrollment for this user" is silent by
+    // design — announcing it would tell anyone at the machine who is enrolled.
+    let user_msg = reply
+        .failure
+        .and_then(|f| f.user_message())
+        .or(match reply.verdict {
+            Verdict::NoMatch => Some("Face not recognised"),
+            _ => None,
+        });
+    if let Some(text) = user_msg {
+        // Best-effort; see `send_user_message`. Never affects the verdict.
+        unsafe { ffi::send_user_message(pamh, ffi::PAM_ERROR_MSG, text) };
+    }
 
     match reply.verdict {
         Verdict::Match => ffi::PAM_SUCCESS,

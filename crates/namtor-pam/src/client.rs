@@ -81,14 +81,23 @@ impl AuthConfig {
     /// # Safety
     /// `pamh` must be a valid PAM handle from the framework, valid for the
     /// duration of this call.
+    /// Build the config from the PAM handle and the module's own arguments.
+    ///
+    /// `socket` comes from the module line in `/etc/pam.d`, never from the
+    /// environment. It used to be `std::env::var("NAMTOR_SOCKET")`, which is
+    /// an authentication bypass wherever a caller controls the environment of
+    /// a PAM-using process: point it at a socket you own, answer `Match`, and
+    /// the module returns `PAM_SUCCESS`. `sudo` resets the environment by
+    /// default, but `su` inherits the invoking user's. Module arguments come
+    /// from a root-owned config file, which is what PAM provides them for.
     pub unsafe fn from_pam(
         pamh: *mut ffi::PamHandle,
         target_uid: u32,
+        socket: PathBuf,
     ) -> Result<Self, std::ffi::c_int> {
         let rhost = ffi::get_item_string(pamh, ffi::PAM_RHOST).ok().flatten();
-        let socket = std::env::var("NAMTOR_SOCKET").unwrap_or_else(|_| DEFAULT_SOCKET.into());
         Ok(Self {
-            socket: PathBuf::from(socket),
+            socket,
             timeout: DEFAULT_TIMEOUT,
             target_uid,
             rhost,
@@ -100,6 +109,19 @@ impl AuthConfig {
 /// daemon. Returns the `AuthReply` from the Verify phase, or a
 /// [`ClientError`] on any failure.
 pub fn authenticate(cfg: &AuthConfig) -> Result<AuthReply, ClientError> {
+    let reply = authenticate_reply(cfg)?;
+    classify(&reply, &reply.nonce.clone())?;
+    Ok(reply)
+}
+
+/// As [`authenticate`], but returns the daemon's reply for EVERY verdict.
+///
+/// `authenticate` turns `Unavailable`, `RateLimited` and `Refused` into
+/// errors, which throws the reply away — and with it the typed §8.3 failure
+/// the module needs to tell the user what went wrong. Those are precisely the
+/// verdicts that carry a condition worth reporting, so the PAM module uses
+/// this and classifies for itself.
+pub fn authenticate_reply(cfg: &AuthConfig) -> Result<AuthReply, ClientError> {
     let mut stream = UnixStream::connect(&cfg.socket)?;
     stream.set_read_timeout(Some(cfg.timeout))?;
     stream.set_write_timeout(Some(cfg.timeout))?;
@@ -155,7 +177,10 @@ pub fn authenticate(cfg: &AuthConfig) -> Result<AuthReply, ClientError> {
         let _ = decode(&mut stream);
     }
 
-    verdict?;
+    // Nonce validity is still enforced here; the VERDICT is the caller's to
+    // interpret.
+    check_nonce(&verify_reply, &nonce)?;
+    let _ = verdict;
     Ok(verify_reply)
 }
 

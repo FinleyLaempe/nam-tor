@@ -113,6 +113,98 @@ pub fn pam_code_name(code: c_int) -> &'static str {
     }
 }
 
+// --- PAM conversation -------------------------------------------------------
+
+/// `PAM_CONV` item: the application's conversation callback.
+pub const PAM_CONV: c_int = 5;
+/// Message styles we use. `PAM_ERROR_MSG` is rendered as an error by the
+/// application; `PAM_TEXT_INFO` as ordinary text.
+pub const PAM_ERROR_MSG: c_int = 3;
+pub const PAM_TEXT_INFO: c_int = 4;
+
+#[repr(C)]
+pub struct PamMessage {
+    pub msg_style: c_int,
+    pub msg: *const std::ffi::c_char,
+}
+
+#[repr(C)]
+pub struct PamResponse {
+    pub resp: *mut std::ffi::c_char,
+    pub resp_retcode: c_int,
+}
+
+#[repr(C)]
+pub struct PamConv {
+    pub conv: Option<
+        unsafe extern "C" fn(
+            num_msg: c_int,
+            msg: *mut *const PamMessage,
+            resp: *mut *mut PamResponse,
+            appdata_ptr: *mut c_void,
+        ) -> c_int,
+    >,
+    pub appdata_ptr: *mut c_void,
+}
+
+extern "C" {
+    fn free(p: *mut c_void);
+}
+
+/// Show `text` to the user through the application's conversation function.
+///
+/// Best-effort and deliberately infallible: this runs on the authentication
+/// path of `sudo` and the display manager, so every way it can go wrong —
+/// no conversation item, a null callback, a string with an interior NUL, a
+/// conversation that returns an error — results in showing nothing rather
+/// than disturbing the result. The caller's verdict is never affected.
+///
+/// # Safety
+/// `pamh` must be the live handle PAM passed to the module.
+pub unsafe fn send_user_message(pamh: *mut PamHandle, style: c_int, text: &str) {
+    if pamh.is_null() {
+        return;
+    }
+    let Ok(c_text) = std::ffi::CString::new(text) else {
+        return;
+    };
+
+    let mut raw: *const c_void = std::ptr::null();
+    // SAFETY: `pamh` is live; PAM_CONV yields a `struct pam_conv *`.
+    let rc = unsafe { pam_get_item(pamh, PAM_CONV, &mut raw) };
+    if rc != PAM_SUCCESS || raw.is_null() {
+        return;
+    }
+    let conv = unsafe { &*(raw as *const PamConv) };
+    let Some(callback) = conv.conv else {
+        return;
+    };
+
+    let message = PamMessage {
+        msg_style: style,
+        msg: c_text.as_ptr(),
+    };
+    let mut msg_ptr: *const PamMessage = &message;
+    let mut resp: *mut PamResponse = std::ptr::null_mut();
+
+    // SAFETY: one message, pointed to by `msg_ptr`, valid for this call;
+    // `resp` is an out-parameter the application allocates.
+    let _ = unsafe { callback(1, &mut msg_ptr, &mut resp, conv.appdata_ptr) };
+
+    // The application allocates the response array even for a message that
+    // needs no reply; freeing it is the module's job.
+    if !resp.is_null() {
+        // SAFETY: `resp` is the single-element array the callback allocated.
+        unsafe {
+            let r = &mut *resp;
+            if !r.resp.is_null() {
+                free(r.resp as *mut c_void);
+            }
+            free(resp as *mut c_void);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
