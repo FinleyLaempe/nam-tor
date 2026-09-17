@@ -37,6 +37,8 @@ Commands:
   cli <SUBCOMMAND>       User-facing CLI: status, enroll, verify, list,
                          remove, diagnostics
   emitter-off <DEVICE>   Best-effort IR emitter force-off (ExecStopPost)
+  pam-edit <ACTION>      Transactional /etc/pam.d editor used by the install
+                         and lifecycle scripts
 
 Options:
   -h, --help       Print this help and exit
@@ -51,6 +53,11 @@ enum Role {
     Worker,
     Cli,
     EmitterOff,
+    /// The transactional PAM editor. It lives here because the shipped
+    /// install scripts need it at runtime and the manifest never shipped a
+    /// separate `namtor-pam-edit`; `namtor-daemon` already links the crate,
+    /// so this costs no additional bytes.
+    PamEdit,
 }
 
 /// Map a subcommand word to a role.
@@ -60,6 +67,7 @@ fn role_from_subcommand(word: &str) -> Option<Role> {
         "worker" => Some(Role::Worker),
         "cli" => Some(Role::Cli),
         "emitter-off" => Some(Role::EmitterOff),
+        "pam-edit" => Some(Role::PamEdit),
         _ => None,
     }
 }
@@ -78,6 +86,7 @@ fn role_from_argv0(argv0: &str) -> Option<Role> {
         "namtor-worker" => Some(Role::Worker),
         "namtor-cli" => Some(Role::Cli),
         "namtor-camera-emitter-off" => Some(Role::EmitterOff),
+        "namtor-pam-edit" => Some(Role::PamEdit),
         _ => None,
     }
 }
@@ -88,6 +97,13 @@ fn run(role: Role, args: &[String]) -> ExitCode {
         Role::Daemon => namtor_daemon::app::main(args),
         Role::Worker => namtor_worker::app::main(args),
         Role::EmitterOff => namtor_camera::emitter_off_cli::main(args),
+        Role::PamEdit => {
+            // Its parser expects argv[0] at index 0 and the action at index 1.
+            let mut argv = Vec::with_capacity(args.len() + 1);
+            argv.push("namtor pam-edit".to_string());
+            argv.extend_from_slice(args);
+            namtor_pam_config::app::main(argv)
+        }
         Role::Cli => {
             // clap wants argv[0]; give it the spelling that should appear in
             // its usage output rather than the real program path.
@@ -141,12 +157,45 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    /// The subcommand word for a role. Written as an exhaustive `match` on
+    /// purpose: adding a `Role` variant without a subcommand word stops
+    /// compiling here, which a list of `assert_eq!`s could never catch.
+    fn word_for(role: Role) -> &'static str {
+        match role {
+            Role::Daemon => "daemon",
+            Role::Worker => "worker",
+            Role::Cli => "cli",
+            Role::EmitterOff => "emitter-off",
+            Role::PamEdit => "pam-edit",
+        }
+    }
+
+    const ALL_ROLES: [Role; 5] = [
+        Role::Daemon,
+        Role::Worker,
+        Role::Cli,
+        Role::EmitterOff,
+        Role::PamEdit,
+    ];
+
     #[test]
     fn every_shipped_role_has_a_subcommand() {
-        assert_eq!(role_from_subcommand("daemon"), Some(Role::Daemon));
-        assert_eq!(role_from_subcommand("worker"), Some(Role::Worker));
-        assert_eq!(role_from_subcommand("cli"), Some(Role::Cli));
-        assert_eq!(role_from_subcommand("emitter-off"), Some(Role::EmitterOff));
+        for role in ALL_ROLES {
+            let word = word_for(role);
+            assert_eq!(
+                role_from_subcommand(word),
+                Some(role),
+                "subcommand {word} does not select {role:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_shipped_role_is_listed_in_usage() {
+        for role in ALL_ROLES {
+            let word = word_for(role);
+            assert!(USAGE.contains(word), "usage omits {word}");
+        }
     }
 
     #[test]
@@ -167,6 +216,10 @@ mod tests {
             role_from_argv0("namtor-camera-emitter-off"),
             Some(Role::EmitterOff)
         );
+        assert_eq!(
+            role_from_argv0("/usr/lib/namtor/namtor-pam-edit"),
+            Some(Role::PamEdit)
+        );
     }
 
     #[test]
@@ -177,7 +230,7 @@ mod tests {
 
     #[test]
     fn usage_lists_every_subcommand() {
-        for word in ["daemon", "worker", "cli", "emitter-off"] {
+        for word in ["daemon", "worker", "cli", "emitter-off", "pam-edit"] {
             assert!(USAGE.contains(word), "usage omits {word}");
         }
     }

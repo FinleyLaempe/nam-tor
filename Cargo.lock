@@ -1534,6 +1534,7 @@ dependencies = [
  "namtor-cli",
  "namtor-daemon",
  "namtor-layout",
+ "namtor-pam-config",
  "namtor-proto",
  "namtor-worker",
 ]

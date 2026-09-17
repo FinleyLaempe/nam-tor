@@ -28,6 +28,7 @@
 //! ever read. The editor uses `flock` for concurrency, atomic `rename(2)`
 //! for writes, and fsynced backups with SHA-256 checksums.
 
+pub mod app;
 mod candidate;
 mod classify;
 pub mod desktop_lockscreen;

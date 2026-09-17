@@ -36,7 +36,8 @@
 #   --manifest    path to model-manifest.toml. Default: resolved from
 #                 <root>/usr/share/namtor/model-manifest.toml, falling back
 #                 to the repo's packaging/model-manifest.toml.
-#   --pam-edit    path to the namtor-pam-edit binary. Default:
+#   --pam-edit    path to the PAM editor. Default: `<root>/usr/bin/namtor
+#                 pam-edit`, falling back to a standalone
 #                 <root>/usr/lib/namtor/namtor-pam-edit. Missing binary =
 #                 best-effort skip (the phase still validates non-PAM state).
 #   --receipt-dir directory for receipt files. Default:
@@ -118,7 +119,22 @@ if [[ "$ROOT" != "/" ]]; then
 fi
 
 # Defaults that depend on ROOT.
-[[ -z "$PAM_EDIT" ]]    && PAM_EDIT="$ROOT/usr/lib/namtor/namtor-pam-edit"
+#
+# The PAM editor ships as a subcommand of the multi-call binary. This used to
+# default to <root>/usr/lib/namtor/namtor-pam-edit, which the install manifest
+# has never shipped, so on every real system call_pam_edit took its
+# warn-and-skip branch: `pre-remove disable-all` and `post-remove purge` never
+# ran, and removing the package left pam_namtor.so entries in /etc/pam.d
+# pointing at a module that had just been deleted.
+#
+# PAM_EDIT_ARGV is an array because the default is two words.
+if [[ -n "$PAM_EDIT" ]]; then
+    PAM_EDIT_ARGV=("$PAM_EDIT")
+elif [[ -x "$ROOT/usr/bin/namtor" ]]; then
+    PAM_EDIT_ARGV=("$ROOT/usr/bin/namtor" pam-edit)
+else
+    PAM_EDIT_ARGV=("$ROOT/usr/lib/namtor/namtor-pam-edit")
+fi
 [[ -z "$RECEIPT_DIR" ]] && RECEIPT_DIR="$ROOT/var/lib/namtor/lifecycle"
 
 # Manifest resolution: explicit > staged under --root. On a real root only,
@@ -332,15 +348,15 @@ update_desktop_caches() {
 # not be configured yet on a fresh system).
 call_pam_edit() {
     local action="$1"
-    if [[ ! -x "$PAM_EDIT" ]]; then
-        log_warn "namtor-pam-edit not found at $PAM_EDIT — skipping $action"
+    if [[ ! -x "${PAM_EDIT_ARGV[0]}" ]]; then
+        log_warn "PAM editor not found at ${PAM_EDIT_ARGV[0]} — skipping $action"
         return 0
     fi
     PAM_EDITED=true
     local pamd_root="$ROOT/etc/pam.d"
     local reg_root="$ROOT/var/lib/namtor"
-    if ! "$PAM_EDIT" "$action" --pamd-root "$pamd_root" --registry-root "$reg_root"; then
-        log_warn "namtor-pam-edit $action failed"
+    if ! "${PAM_EDIT_ARGV[@]}" "$action" --pamd-root "$pamd_root" --registry-root "$reg_root"; then
+        log_warn "PAM editor $action failed"
         return 1
     fi
     return 0

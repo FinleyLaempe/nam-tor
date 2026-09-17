@@ -42,21 +42,52 @@ done
 DESTDIR="${DESTDIR:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Resolve the binary: prefer release, fall back to debug, then repo root.
-PAM_EDIT=""
+# Resolve the PAM editor. `namtor pam-edit` is the shipped path: the install
+# manifest ships /usr/bin/namtor and has never shipped a standalone
+# namtor-pam-edit, so looking only for that name failed on every real system.
+#
+# The repo build tree comes FIRST so running this from a checkout exercises the
+# binary just built rather than whatever older namtor happens to be installed.
+# A shipped copy lives in /usr/share/namtor/, where ../target does not exist,
+# so it falls through to /usr/bin/namtor.
+PAM_EDIT=()
 for candidate in \
-    "/usr/lib/namtor/namtor-pam-edit" \
-    "$SCRIPT_DIR/../target/release/namtor-pam-edit" \
-    "$SCRIPT_DIR/../target/debug/namtor-pam-edit"; do
+    "$SCRIPT_DIR/../target/release/namtor" \
+    "$SCRIPT_DIR/../target/debug/namtor" \
+    "/usr/bin/namtor"; do
     if [[ -x "$candidate" ]]; then
-        PAM_EDIT="$candidate"
+        PAM_EDIT=("$candidate" pam-edit)
         break
     fi
 done
+# Development fallback: the standalone binary, if someone built only that.
+if [[ ${#PAM_EDIT[@]} -eq 0 ]]; then
+    for candidate in \
+        "$SCRIPT_DIR/../target/release/namtor-pam-edit" \
+        "$SCRIPT_DIR/../target/debug/namtor-pam-edit" \
+        "/usr/lib/namtor/namtor-pam-edit"; do
+        if [[ -x "$candidate" ]]; then
+            PAM_EDIT=("$candidate")
+            break
+        fi
+    done
+fi
 
-if [[ -z "$PAM_EDIT" ]]; then
-    echo "pam-install: ERROR: namtor-pam-edit binary not found. Build it with:" >&2
-    echo "  cargo build -p namtor-pam-config" >&2
+if [[ ${#PAM_EDIT[@]} -eq 0 ]]; then
+    for candidate in \
+        "/usr/lib/namtor/namtor-pam-edit" \
+        "$SCRIPT_DIR/../target/release/namtor-pam-edit" \
+        "$SCRIPT_DIR/../target/debug/namtor-pam-edit"; do
+        if [[ -x "$candidate" ]]; then
+            PAM_EDIT=("$candidate")
+            break
+        fi
+    done
+fi
+
+if [[ ${#PAM_EDIT[@]} -eq 0 ]]; then
+    echo "pam-install: ERROR: no PAM editor found (tried 'namtor pam-edit')." >&2
+    echo "  Build it with: cargo build -p namtor" >&2
     exit 1
 fi
 
@@ -90,7 +121,7 @@ if [[ -n "$DESTDIR" ]]; then
 fi
 
 echo "pam-install: enabling pam_namtor.so for service '$SERVICE_ID'"
-if "$PAM_EDIT" enable \
+if "${PAM_EDIT[@]}" enable \
     --service "$SERVICE_ID" \
     --pamd-root "$PAMD_ROOT" \
     --registry-root "$REGISTRY_ROOT" \
