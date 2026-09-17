@@ -97,8 +97,16 @@ impl EnrollmentViewComponent {
             let name = name_row_for_start.text().to_string();
             on_start(&name);
         });
+        // `pill` + centred, as on the review and error pages. Added straight
+        // to the group it rendered as a full-width list row welded under the
+        // name field, so the one button that leaves this page looked like
+        // another entry in the form.
         let cancel_btn = gtk4::Button::builder()
-            .label(tr("Cancel"))
+            .label(tr("_Cancel"))
+            .css_classes(["pill"])
+            .halign(gtk4::Align::Center)
+            .use_underline(true)
+            .margin_top(12)
             .tooltip_text(tr("Cancel profile creation"))
             .build();
         cancel_btn.update_property(&[

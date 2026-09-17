@@ -1476,3 +1476,38 @@ fn a_profiles_page_error_without_steps_renders_one_group() {
         assert_eq!(profiles_error_groups(&err).len(), 1);
     });
 }
+
+/// Every page in the enrollment flow ends in centred pill buttons — review,
+/// error, saving. The setup page added its Cancel straight to the
+/// `PreferencesGroup`, which renders a bare button as a full-width list row,
+/// so the one control that leaves the page looked like another field in the
+/// form welded under the name entry. Found by rendering the page.
+#[test]
+fn the_setup_pages_cancel_is_a_button_not_a_row() {
+    use gtk4::prelude::*;
+    use namtor_ui::components::EnrollmentViewComponent;
+
+    common::run_gtk_test(|| {
+        let mut comp = EnrollmentViewComponent::new();
+        let page = comp.render(None, true, |_| {}, || {}, || {});
+        let root: gtk4::Widget = page.clone().upcast();
+
+        let mut cancel: Option<gtk4::Button> = None;
+        common::for_each_button(&root, &mut |b| {
+            if b.label().is_some_and(|l| l.contains("Cancel")) {
+                cancel = Some(b.clone());
+            }
+        });
+        let cancel = cancel.expect("the setup page offers a way out");
+        assert!(
+            cancel.has_css_class("pill"),
+            "classes: {:?}",
+            cancel.css_classes()
+        );
+        assert_eq!(
+            cancel.halign(),
+            gtk4::Align::Center,
+            "a full-width cancel reads as another row in the form"
+        );
+    });
+}

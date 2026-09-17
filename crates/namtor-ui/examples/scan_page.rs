@@ -7,7 +7,7 @@
 //! always talks to the real daemon; this borrows the same component with a
 //! fixed view so the page can be captured without a camera or a daemon.
 //!
-//! Run: cargo run -p namtor-ui --example scan_page -- [start|poor|angles|good|review-ok|review-thin]
+//! Run: cargo run -p namtor-ui --example scan_page -- [start|poor|angles|good|review-ok|review-thin|setup|saving|error]
 //!
 //! With a second argument it writes the rendered page to that PNG and exits
 //! instead of staying on screen:
@@ -26,7 +26,9 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 use namtor_ui::components::enrollment::EnrollmentViewComponent;
 use namtor_ui::components::ReviewViewComponent;
-use namtor_ui::view_model::{EnrollmentViewV3, GuidanceView, ReviewViewV3};
+use namtor_ui::view_model::{
+    EnrollmentViewV3, ErrorView, GuidanceView, RecoveryHint, ReviewViewV3,
+};
 
 fn view(which: &str) -> EnrollmentViewV3 {
     let (q, bucket, div, seen, acc, g) = match which {
@@ -98,10 +100,30 @@ fn main() {
     app.connect_activate(move |app| {
         let mut comp = EnrollmentViewComponent::new();
         let mut rev = ReviewViewComponent::new();
-        let page: &adw::PreferencesPage = if which.starts_with("review") {
-            rev.render(&review(&which), || {}, || {}, || {}, false)
-        } else {
-            comp.render(Some(&view(&which)), true, |_| {}, || {}, || {})
+        let page: &adw::PreferencesPage = match which.as_str() {
+            w if w.starts_with("review") => rev.render(&review(w), || {}, || {}, || {}, false),
+            "setup" => comp.render(None, true, |_| {}, || {}, || {}),
+            "saving" => comp.render_saving(),
+            "error" => comp.render_error(
+                "camera is busy: in use by another program",
+                Some(&ErrorView {
+                    title: "Camera is busy".into(),
+                    detail: "Another program has the camera open.".into(),
+                    recovery: Some(RecoveryHint {
+                        title: "Another program is using the camera".into(),
+                        steps: vec![
+                            "Close any video call, camera app, or recorder that has the \
+                             camera open"
+                                .into(),
+                            "Find what is holding it: fuser -v /dev/video*".into(),
+                            "Then press Try Again".into(),
+                        ],
+                    }),
+                }),
+                || {},
+                || {},
+            ),
+            w => comp.render(Some(&view(w)), true, |_| {}, || {}, || {}),
         };
         let window = adw::ApplicationWindow::builder()
             .application(app)
