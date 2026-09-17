@@ -438,3 +438,133 @@ fn f16_neutral_meters_keep_the_default_fill() {
         );
     }
 }
+
+// --- honest numbers ---------------------------------------------------------
+
+/// Before the first frame there is no measurement, and the view must say so.
+///
+/// `start_enrollment_v3` seeds the view with literal zeros and
+/// `quality_bucket: 0` so the page has something to draw. Bucket 0 is "Poor",
+/// so the scan used to open by announcing "0% — Poor" and tinting the
+/// silhouette amber before the camera had returned anything at all.
+#[test]
+fn quality_and_diversity_are_unmeasured_until_a_frame_is_seen() {
+    let fresh = view_with_quality(0, 0, "capturing");
+    let fresh = namtor_ui::view_model::EnrollmentViewV3 {
+        frames_seen: 0,
+        frames_accepted: 0,
+        frames_rejected: 0,
+        ..fresh
+    };
+    assert!(!fresh.has_observation());
+    assert_eq!(fresh.measured_quality(), None, "no quality before a frame");
+    assert_eq!(
+        fresh.measured_diversity_percent(),
+        None,
+        "no diversity before a frame"
+    );
+    assert_eq!(fresh.accept_rate_percent(), None);
+
+    let seen = view_with_quality(34, 0, "better_lighting");
+    assert!(seen.has_observation(), "frames_seen is 50 in the fixture");
+    assert_eq!(seen.measured_quality(), Some((34, 0)));
+    assert_eq!(seen.measured_diversity_percent(), Some(18));
+}
+
+/// The capture page must report the daemon's bucket, not one re-derived from
+/// the percentage. The daemon computes the bucket from the underlying
+/// observation, so the two can legitimately disagree at a boundary, and the
+/// daemon's is the measurement.
+#[test]
+fn the_capture_page_keeps_the_daemons_bucket() {
+    // 34% is one point above the LOW boundary, so a re-derivation would say
+    // bucket 1 while the daemon said 0.
+    let view = view_with_quality(34, 0, "better_lighting");
+    assert_eq!(view.measured_quality(), Some((34, 0)));
+    assert_ne!(
+        namtor_ui::view_model::quality_bucket_from_percent(34),
+        0,
+        "this test is only meaningful while 34% re-derives to a different bucket"
+    );
+}
+
+/// The client's bucket boundaries must match the daemon's, or the word beside
+/// a percentage means different things on the two sides of the wire. The
+/// review page has no bucket on the wire and derives one with these.
+#[test]
+fn client_quality_boundaries_match_the_daemon() {
+    use namtor_ui::view_model::{quality_bucket_from_percent, QUALITY_LOW_MAX, QUALITY_MEDIUM_MAX};
+    assert_eq!(QUALITY_LOW_MAX, 33, "daemon observation::QUALITY_LOW_MAX");
+    assert_eq!(
+        QUALITY_MEDIUM_MAX, 66,
+        "daemon observation::QUALITY_MEDIUM_MAX"
+    );
+    assert_eq!(quality_bucket_from_percent(0), 0);
+    assert_eq!(quality_bucket_from_percent(33), 0);
+    assert_eq!(quality_bucket_from_percent(34), 1);
+    assert_eq!(quality_bucket_from_percent(66), 1);
+    assert_eq!(quality_bucket_from_percent(67), 2);
+    assert_eq!(quality_bucket_from_percent(100), 2);
+}
+
+/// The review verdict must follow the quality number, not readiness.
+///
+/// It was `if ready_to_save { 2 } else { 1 }` — a different measurement — so a
+/// barely-usable scan with enough angles announced "12% — Good", and a sharp
+/// scan short on angles announced "88% — Fair".
+#[test]
+fn the_review_verdict_follows_quality_not_readiness() {
+    use namtor_ui::view_model::quality_bucket_from_percent;
+    // Ready to save, but the image quality is poor: must not read "Good".
+    assert_eq!(quality_bucket_from_percent(12), 0, "12% is Poor");
+    // Not ready to save (angles missing), but the image quality is high.
+    assert_eq!(quality_bucket_from_percent(88), 2, "88% is Good");
+}
+
+/// A guidance word this build does not know must not be printed verbatim.
+///
+/// `Raw(s) => tr(s)` put raw snake_case on screen as the largest text on the
+/// page — a headline reading `move_way_back`. And because `Raw` has no signal,
+/// the attention row fell through to its "nothing is wrong" branch and
+/// announced "Nothing — every signal is good enough right now" directly
+/// underneath advice the client had just failed to interpret.
+#[test]
+fn an_unrecognised_guidance_token_is_never_shown_raw() {
+    let g = GuidanceView::from_wire("move_way_back");
+    assert!(g.is_unrecognised(), "the token is not one of the nine");
+    let label = g.label();
+    assert!(
+        !label.contains('_'),
+        "a raw snake_case token reached the headline: {label:?}"
+    );
+    assert!(!label.is_empty(), "the headline must still say something");
+    assert_eq!(
+        g.signal(),
+        None,
+        "an unknown token maps to no signal — the attention row must not read \
+         that as 'nothing is wrong'"
+    );
+}
+
+/// The nine known variants must not be caught by the unrecognised path.
+#[test]
+fn known_guidance_is_not_flagged_unrecognised() {
+    for token in [
+        "centering",
+        "move_closer",
+        "move_back",
+        "better_lighting",
+        "hold_still",
+        "face_front",
+        "looking_good",
+        "capturing",
+        "insufficient_pose",
+    ] {
+        let g = GuidanceView::from_wire(token);
+        assert!(!g.is_unrecognised(), "{token} should be Known");
+    }
+    assert!(
+        !GuidanceView::from_wire("").is_unrecognised(),
+        "an empty token is Silent, not unrecognised"
+    );
+}

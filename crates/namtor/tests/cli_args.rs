@@ -107,7 +107,50 @@ fn emitter_off_version_and_help_exit_zero() {
     assert!(run(&["emitter-off", "--help"]).status.success());
 }
 
+/// No device is the SHIPPED form, not a usage error.
+///
+/// `ExecStopPost=/usr/bin/namtor emitter-off` passes no argument: the device
+/// is re-resolved from the record the daemon writes before arming the
+/// emitter, because a `/dev/videoN` literal is not stable across boots. With
+/// no record there is nothing to turn off, and exiting non-zero on every
+/// ordinary stop of a machine that never armed the emitter would train
+/// operators to ignore the backstop.
 #[test]
-fn emitter_off_without_device_exits_two() {
-    assert_eq!(run(&["emitter-off"]).status.code(), Some(2));
+fn emitter_off_without_a_device_reads_the_record_and_exits_zero_when_absent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let absent = dir.path().join("no-such-record.toml");
+    let out = run(&["emitter-off", "--state", absent.to_str().unwrap()]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "an absent record must be quiet: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A record that exists but cannot be read IS a failure: something armed the
+/// emitter, and we could not find out how to turn it off.
+#[test]
+fn emitter_off_reports_a_corrupt_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("emitter-state.toml");
+    std::fs::write(
+        &path,
+        "vid = 1
+this is not toml",
+    )
+    .expect("write");
+    let out = run(&["emitter-off", "--state", path.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1), "a corrupt record must be loud");
+}
+
+/// More than one positional is still a usage error.
+#[test]
+fn emitter_off_with_two_devices_exits_two() {
+    assert_eq!(
+        run(&["emitter-off", "/dev/video0", "/dev/video1"])
+            .status
+            .code(),
+        Some(2)
+    );
 }

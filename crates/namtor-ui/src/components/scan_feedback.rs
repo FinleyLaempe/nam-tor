@@ -297,6 +297,15 @@ pub fn attention_row(guidance: &GuidanceView) -> adw::ActionRow {
             "warning",
             tr("What the scan is waiting on"),
         ),
+        // An unrecognised token has no signal, but that is ignorance, not
+        // good news. Falling through to the `None` arm printed "Nothing —
+        // every signal is good enough right now" directly underneath advice
+        // this build could not interpret.
+        None if guidance.is_unrecognised() => (
+            tr("Unknown"),
+            "warning",
+            tr("This version cannot interpret the scanner's advice"),
+        ),
         None => (
             tr("Nothing"),
             "success",
@@ -322,6 +331,61 @@ pub fn attention_row(guidance: &GuidanceView) -> adw::ActionRow {
         gtk4::accessible::Property::Description(&value_text),
     ]);
     row
+}
+
+/// A meter that has nothing to show yet: an em dash, no tint, no verdict.
+///
+/// The same treatment `kept_rate_row` already used for zero frames. Quality
+/// and diversity now share it instead of rendering a seeded `0` that read as
+/// a measurement — "0% — Poor" before the camera had returned a single frame.
+fn unmeasured_row(title: &str, subtitle: &str, accessible_name: &str) -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title(tr(title))
+        .subtitle(tr(subtitle))
+        .subtitle_lines(0)
+        .build();
+    let placeholder = gtk4::Label::builder()
+        .label(tr("—"))
+        .valign(gtk4::Align::Center)
+        .css_classes(["numeric", "dim-label"])
+        .build();
+    row.add_suffix(&placeholder);
+    row.update_property(&[
+        gtk4::accessible::Property::Label(&tr(accessible_name)),
+        gtk4::accessible::Property::Description(&tr("Not measured yet")),
+    ]);
+    row
+}
+
+/// The "Image quality" meter when the measurement may not exist yet.
+///
+/// Takes the percentage AND the bucket together, because on the capture page
+/// the daemon supplies both and its bucket is the authoritative one — it is
+/// computed from the underlying observation, not re-derived from the
+/// projected percentage, and the two may legitimately disagree at a boundary.
+/// The review page has no bucket on the wire and derives one; that is stated
+/// where it happens rather than hidden in here.
+pub fn image_quality_row_opt(measured: Option<(u32, u8)>) -> adw::ActionRow {
+    match measured {
+        Some((percent, bucket)) => image_quality_row(percent, bucket),
+        None => unmeasured_row(
+            "Image quality",
+            "Waiting for the first view",
+            "Image quality",
+        ),
+    }
+}
+
+/// The "Angle variety" meter when the value may not exist yet.
+pub fn angle_variety_row_opt(diversity_percent: Option<u32>) -> adw::ActionRow {
+    match diversity_percent {
+        Some(p) => angle_variety_row(p),
+        None => unmeasured_row(
+            "Angle variety",
+            "Waiting for the first view",
+            "Head angle variety",
+        ),
+    }
 }
 
 /// The "Image quality" meter, tinted by the daemon's own quality bucket.

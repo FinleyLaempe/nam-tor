@@ -6,7 +6,7 @@
 //! toggle, descriptions as subtitles, and compatibility warnings. High-impact
 //! (risky) services require an explicit confirmation dialog before enabling.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk4::prelude::*;
@@ -27,6 +27,79 @@ pub const HIGH_IMPACT_WARNING: &str =
      security-sensitive use.";
 
 type PresenterRc<C> = Rc<RefCell<ProfilePresenter<C>>>;
+
+thread_local! {
+    /// True while we are setting a switch ourselves.
+    ///
+    /// `connect_active_notify` fires for programmatic changes too, so every
+    /// `set_active` used to re-enter `handle_toggle` and start a second
+    /// toggle for the state we were only trying to display. The UI is
+    /// single-threaded, so a thread-local flag is the whole mechanism.
+    static APPLYING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Set a switch without the change being read back as a user action.
+fn set_switch_silently(switch: &adw::SwitchRow, active: bool) {
+    if switch.is_active() == active {
+        return;
+    }
+    APPLYING.with(|f| f.set(true));
+    switch.set_active(active);
+    APPLYING.with(|f| f.set(false));
+}
+
+/// Show the outcome of a toggle and put the switch back on the truth.
+///
+/// The authoritative state is whatever the daemon reports after the call, not
+/// what the user clicked, so a refusal is visible rather than being silently
+/// undone half a second later.
+fn report_toggle_outcome<C: crate::client::ManagerClient + Send + Sync + 'static>(
+    rc: &PresenterRc<C>,
+    switch: &adw::SwitchRow,
+    service_id: &str,
+) {
+    let (error, authoritative) = {
+        let p = rc.borrow();
+        let m = p.model();
+        let actual = m
+            .pam_services
+            .iter()
+            .find(|s| s.id == service_id)
+            .map(|s| s.enabled);
+        (m.error.clone(), actual)
+    };
+
+    if let Some(actual) = authoritative {
+        set_switch_silently(switch, actual);
+    }
+
+    let Some(err) = error else { return };
+    show_error_dialog(switch, &err);
+    rc.borrow_mut().dismiss_error();
+}
+
+/// A privileged action that was refused deserves a modal, not a silent
+/// revert. This is the only surface the services list owns.
+fn show_error_dialog(switch: &adw::SwitchRow, err: &crate::view_model::ErrorView) {
+    let mut body = err.detail.clone();
+    if let Some(hint) = &err.recovery {
+        body.push_str("\n\n");
+        body.push_str(&tr(&hint.title));
+        for (i, step) in hint.steps.iter().enumerate() {
+            body.push_str(&format!("\n{}. {}", i + 1, step));
+        }
+    }
+    let dialog = adw::MessageDialog::builder()
+        .heading(tr(&err.title))
+        .body(&body)
+        .build();
+    if let Some(win) = switch.root().and_downcast_ref::<adw::ApplicationWindow>() {
+        dialog.set_transient_for(Some(win));
+    }
+    dialog.add_response("ok", &tr("_Close"));
+    dialog.set_default_response(Some("ok"));
+    dialog.present();
+}
 
 /// Render the PAM services inventory as a `PreferencesGroup` and return it.
 /// The caller adds the group to the Authentication `PreferencesPage`.
@@ -133,6 +206,10 @@ fn handle_toggle<C: crate::client::ManagerClient + Send + Sync + 'static>(
     service_id: &str,
     service_name: &str,
 ) {
+    // Ignore the notify we caused ourselves while displaying a state.
+    if APPLYING.with(|f| f.get()) {
+        return;
+    }
     let new_state = switch.is_active();
 
     // USA-0/USA-16: Route the PAM toggle through dispatch_async so the
@@ -154,7 +231,8 @@ fn handle_toggle<C: crate::client::ManagerClient + Send + Sync + 'static>(
     let has_error = rc.borrow().model().error.is_some();
 
     if has_error {
-        switch.set_active(!new_state);
+        set_switch_silently(switch, !new_state);
+        report_toggle_outcome(rc, switch, &service_id);
         return;
     }
 
@@ -164,21 +242,22 @@ fn handle_toggle<C: crate::client::ManagerClient + Send + Sync + 'static>(
         return;
     }
 
-    // For non-risky toggles (and disables), dispatch the D-Bus call asynchronously.
-    let rc_dispatch = Rc::clone(rc);
-    let mut p = rc.borrow_mut();
-    p.dispatch_async(move |client| {
-        let _ = client.set_pam_service_enabled(&service_id, new_state);
-    });
-    drop(p);
-    // After dispatching, schedule a refresh on the main thread.
-    glib::MainContext::default().spawn_local(async move {
-        // Give the D-Bus call time to complete.
-        glib::timeout_future(std::time::Duration::from_millis(50)).await;
-        let mut p = rc_dispatch.borrow_mut();
-        p.refresh();
+    // Go through the presenter, which records the outcome.
+    //
+    // This used to call the client directly and throw the result away with
+    // `let _ =`, then sleep 50 ms and refresh. A polkit denial — or a PAM edit
+    // that rolled back — showed the user nothing at all: the switch flipped,
+    // then quietly flipped back. The sleep was also a race, because a polkit
+    // prompt takes seconds, so the refresh read pre-call state and
+    // `mark_async_complete` cleared `is_loading` while the call was still in
+    // flight. `ProfilePresenter::set_pam_service_enabled` already maps every
+    // failure to an ErrorView with a recovery hint; nothing was consuming it.
+    {
+        let mut p = rc.borrow_mut();
+        p.set_pam_service_enabled(&service_id, new_state);
         p.mark_async_complete();
-    });
+    }
+    report_toggle_outcome(rc, switch, &service_id);
 }
 
 fn show_high_impact_dialog<C: crate::client::ManagerClient + Send + Sync + 'static>(
@@ -218,26 +297,24 @@ fn show_high_impact_dialog<C: crate::client::ManagerClient + Send + Sync + 'stat
                     .unwrap_or_else(|| (String::new(), false))
             };
             if !staged_id.is_empty() {
-                let rc_confirm = Rc::clone(&rc_dialog);
-                let mut p = rc_dialog.borrow_mut();
-                p.dispatch_async(move |client| {
-                    let _ = client.set_pam_service_enabled(&staged_id, staged_enabled);
-                });
-                drop(p);
-                // Schedule refresh on the main thread after the D-Bus call completes.
-                glib::MainContext::default().spawn_local(async move {
-                    glib::timeout_future(std::time::Duration::from_millis(50)).await;
-                    let mut p = rc_confirm.borrow_mut();
-                    p.refresh();
+                // Same as the non-risky path: through the presenter, so a
+                // denial on the high-impact confirmation is visible too.
+                {
+                    let mut p = rc_dialog.borrow_mut();
+                    p.set_pam_service_enabled(&staged_id, staged_enabled);
                     p.mark_async_complete();
-                });
+                }
+                // No set_active(true) here. report_toggle_outcome has already
+                // put the switch on whatever the daemon reports; forcing it
+                // true afterwards showed a denied high-impact enable as
+                // enabled.
+                report_toggle_outcome(&rc_dialog, &switch_dialog, &staged_id);
             }
-            switch_dialog.set_active(true);
         } else {
             let mut p = rc_dialog.borrow_mut();
             p.cancel_pam_toggle();
             drop(p);
-            switch_dialog.set_active(false);
+            set_switch_silently(&switch_dialog, false);
         }
         dlg.close();
     });

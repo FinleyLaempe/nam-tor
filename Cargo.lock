@@ -1537,6 +1537,7 @@ dependencies = [
  "namtor-pam-config",
  "namtor-proto",
  "namtor-worker",
+ "tempfile",
 ]
 
 [[package]]

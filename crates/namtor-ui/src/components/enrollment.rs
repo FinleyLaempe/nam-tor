@@ -11,7 +11,7 @@ use crate::tr;
 use crate::view_model::EnrollmentViewV3;
 use gtk4::prelude::*;
 use libadwaita as adw;
-use libadwaita::prelude::{EntryRowExt, PreferencesGroupExt, PreferencesPageExt};
+use libadwaita::prelude::{ActionRowExt, EntryRowExt, PreferencesGroupExt, PreferencesPageExt};
 
 pub struct EnrollmentViewComponent {
     page: adw::PreferencesPage,
@@ -148,11 +148,14 @@ impl EnrollmentViewComponent {
         signals_group.update_property(&[gtk4::accessible::Property::Label(&tr(
             "Scan quality signals",
         ))]);
-        signals_group.add(&scan_feedback::image_quality_row(
-            view.quality_percent,
-            view.quality_bucket,
+        // `_opt`: before the first frame there is no measurement, and these
+        // render an em dash rather than the seeded zeros.
+        signals_group.add(&scan_feedback::image_quality_row_opt(
+            view.measured_quality(),
         ));
-        signals_group.add(&scan_feedback::angle_variety_row(view.diversity_percent));
+        signals_group.add(&scan_feedback::angle_variety_row_opt(
+            view.measured_diversity_percent(),
+        ));
         signals_group.add(&scan_feedback::kept_rate_row(view.accept_rate_percent()));
         signals_group.add(&scan_feedback::attention_row(&view.guidance));
 
@@ -230,6 +233,109 @@ impl EnrollmentViewComponent {
         self.groups = vec![hero_group, signals_group, counts_group, actions_group];
     }
 
+    /// Render a failed enrollment: what went wrong, what to do about it, and
+    /// two buttons that work.
+    ///
+    /// The `Error` arm used to call `render` with `move |_| {}` for all three
+    /// callbacks and throw the detail away with `let _ = detail;`. It built a
+    /// Dismiss button, wired it, and never added it to a container, so the
+    /// button was dropped at the end of the scope. The user was left on the
+    /// capture page with Stop and Cancel doing nothing and no statement of
+    /// what had failed — the destination for a missing camera, a polkit
+    /// denial, a busy session and a review timeout alike.
+    pub fn render_error(
+        &mut self,
+        detail: &str,
+        error: Option<&crate::view_model::ErrorView>,
+        on_dismiss: impl Fn() + 'static,
+        on_cancel: impl Fn() + 'static,
+    ) -> &adw::PreferencesPage {
+        self.clear();
+
+        let group = adw::PreferencesGroup::builder()
+            .title(tr("Enrollment failed"))
+            .build();
+        group.update_property(&[gtk4::accessible::Property::Label(&tr("Enrollment failed"))]);
+
+        // Prefer the structured error; fall back to the state's own detail so
+        // there is always something to read.
+        let (title, body) = match error {
+            Some(e) => (e.title.clone(), e.detail.clone()),
+            None => (tr("Enrollment failed"), detail.to_string()),
+        };
+        let err_row = adw::ActionRow::builder()
+            .title(&title)
+            .subtitle(&body)
+            .css_classes(["error"])
+            .build();
+        err_row.set_subtitle_lines(0);
+        err_row.set_accessible_role(gtk4::AccessibleRole::Alert);
+        err_row.update_property(&[gtk4::accessible::Property::Label(&format!(
+            "{title}. {body}"
+        ))]);
+        group.add(&err_row);
+
+        // The recovery hint the presenter attached, when there is one.
+        let recovery_group = error.and_then(|e| e.recovery.as_ref()).map(|hint| {
+            let g = adw::PreferencesGroup::builder()
+                .title(tr(&hint.title))
+                .build();
+            g.update_property(&[gtk4::accessible::Property::Label(&tr("How to fix this"))]);
+            for (i, step) in hint.steps.iter().enumerate() {
+                let row = adw::ActionRow::builder()
+                    .title(tr(&format!("{}. {}", i + 1, step)))
+                    .build();
+                row.set_title_lines(0);
+                g.add(&row);
+            }
+            g
+        });
+
+        let actions = adw::PreferencesGroup::new();
+        let dismiss_btn = gtk4::Button::builder()
+            .label(tr("_Try Again"))
+            .use_underline(true)
+            .css_classes(["suggested-action", "pill"])
+            .halign(gtk4::Align::Center)
+            .build();
+        dismiss_btn.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Dismiss the error and try again",
+        ))]);
+        dismiss_btn.connect_clicked(move |_| on_dismiss());
+
+        let cancel_btn = gtk4::Button::builder()
+            .label(tr("_Cancel"))
+            .use_underline(true)
+            .css_classes(["pill"])
+            .halign(gtk4::Align::Center)
+            .build();
+        cancel_btn.update_property(&[gtk4::accessible::Property::Label(&tr(
+            "Cancel enrollment and go back",
+        ))]);
+        cancel_btn.connect_clicked(move |_| on_cancel());
+
+        let button_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Horizontal)
+            .spacing(12)
+            .halign(gtk4::Align::Center)
+            .build();
+        button_box.append(&dismiss_btn);
+        button_box.append(&cancel_btn);
+        actions.add(&button_box);
+
+        self.page.add(&group);
+        let mut groups = vec![group];
+        if let Some(g) = recovery_group {
+            self.page.add(&g);
+            groups.push(g);
+        }
+        self.page.add(&actions);
+        groups.push(actions);
+        self.groups = groups;
+
+        &self.page
+    }
+
     /// Render the stopped state with a summary, optional error (USA-5),
     /// and Review + Cancel buttons.
     pub fn render_stopped(
@@ -266,11 +372,10 @@ impl EnrollmentViewComponent {
             summary.update_property(&[gtk4::accessible::Property::Label(&tr(
                 "Scan quality signals",
             ))]);
-            summary.add(&scan_feedback::image_quality_row(
-                v.quality_percent,
-                v.quality_bucket,
+            summary.add(&scan_feedback::image_quality_row_opt(v.measured_quality()));
+            summary.add(&scan_feedback::angle_variety_row_opt(
+                v.measured_diversity_percent(),
             ));
-            summary.add(&scan_feedback::angle_variety_row(v.diversity_percent));
             summary.add(&scan_feedback::kept_rate_row(v.accept_rate_percent()));
             summary.add(&scan_feedback::count_row(
                 "Accepted",

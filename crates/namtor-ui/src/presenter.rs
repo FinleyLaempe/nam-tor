@@ -46,6 +46,8 @@ pub struct ProfilePresenter<C: ManagerClient> {
     /// Pending async task handle. When `Some`, an operation is in flight;
     /// [`Self::cancel_pending`] aborts it.
     pending_task: Option<glib::JoinHandle<()>>,
+    /// Consecutive failed progress polls. Reset by any successful poll.
+    poll_failures: u8,
 }
 
 impl<C: ManagerClient> ProfilePresenter<C> {
@@ -57,6 +59,7 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             name_index: std::collections::HashMap::new(),
             uid,
             pending_task: None,
+            poll_failures: 0,
         }
     }
 
@@ -70,6 +73,7 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             name_index: std::collections::HashMap::new(),
             uid,
             pending_task: None,
+            poll_failures: 0,
         }
     }
 
@@ -460,6 +464,12 @@ impl<C: ManagerClient> ProfilePresenter<C> {
         &self.model
     }
 
+    /// Consecutive failed polls tolerated before the scan is failed. At the
+    /// 500 ms poll interval this is about a second and a half of silence —
+    /// long enough to ride out a dropped D-Bus call, short enough that a dead
+    /// daemon is reported while the user is still looking at the screen.
+    const MAX_POLL_FAILURES: u8 = 3;
+
     pub fn poll_progress_v3(&mut self) -> bool {
         let Some(ref session) = self.model.enrollment_session_v3 else {
             return false;
@@ -469,11 +479,33 @@ impl<C: ManagerClient> ProfilePresenter<C> {
         }
         match self.client.poll_progress_v3(session) {
             Ok(Some(progress)) => {
+                self.poll_failures = 0;
                 self.model.enrollment_view_v3 = Some(EnrollmentViewV3::from_progress(&progress));
                 true
             }
-            Ok(None) => false,
-            Err(_) => true,
+            // A successful call with nothing new is still a live daemon.
+            Ok(None) => {
+                self.poll_failures = 0;
+                false
+            }
+            // A failed poll is not progress. `Err(_) => true` discarded the
+            // error and reported "re-render", so the page redrew the last
+            // frozen numbers forever: a daemon that died mid-scan looked
+            // exactly like a scan that had stopped improving, with no error,
+            // no state change and nothing to act on.
+            //
+            // One transient failure is not fatal — D-Bus can drop a call
+            // while the daemon is busy — so a short run is tolerated before
+            // the scan is failed.
+            Err(err) => {
+                self.poll_failures = self.poll_failures.saturating_add(1);
+                if self.poll_failures >= Self::MAX_POLL_FAILURES {
+                    self.model.enrollment_state = EnrollmentState::Error(err.to_string());
+                    self.set_error(&err);
+                    return true;
+                }
+                false
+            }
         }
     }
 
@@ -880,7 +912,14 @@ impl<C: ManagerClient> ProfilePresenter<C> {
                 }
                 self.refresh();
             }
-            Err(err) => self.set_error(&err),
+            Err(err) => {
+                self.set_error(&err);
+                // Re-read the service list so the switch snaps back to what is
+                // actually configured. `refresh_pam_services`, not `refresh`:
+                // the latter opens with `self.model.error = None` and would
+                // erase the error we just recorded.
+                self.refresh_pam_services();
+            }
         }
         &self.model
     }

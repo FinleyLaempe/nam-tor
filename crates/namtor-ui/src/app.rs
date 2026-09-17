@@ -51,6 +51,17 @@ pub struct AppController {
     /// The review sub-page (NavigationPage wrapping the review
     /// PreferencesPage). `Some` while the review is visible.
     review_nav_page: Option<adw::NavigationPage>,
+    /// The 500 ms progress poll, while one is running.
+    ///
+    /// Holding the id is what stops the timer multiplying. The poll used to
+    /// be registered at the tail of the `Capturing` arm of `render_enrollment`
+    /// with its id discarded, and its own callback calls `render_enrollment`,
+    /// which re-enters that arm and registers another — while the original
+    /// returns `ControlFlow::Continue` and survives. The count doubled every
+    /// tick that produced progress: 2 after half a second, 1024 after five,
+    /// each one issuing its own blocking D-Bus round trip on the GTK main
+    /// thread. The scan page froze the app within seconds of a real scan.
+    poll_source: Option<glib::SourceId>,
     offline: bool,
 }
 
@@ -84,6 +95,7 @@ impl AppController {
             review_view: ReviewViewComponent::new(),
             enrollment_nav_page: None,
             review_nav_page: None,
+            poll_source: None,
             offline,
         }));
 
@@ -102,7 +114,63 @@ impl AppController {
             let rc = Rc::clone(&controller);
             controller.borrow_mut().render_all(&rc);
         }
+
+        // A user-driven back — the header-bar arrow, Escape, or the swipe-back
+        // gesture AdwNavigationView provides by default — pops the page
+        // without telling us. Nothing observed that, so the controller kept
+        // `enrollment_nav_page: Some(_)` for a page no longer on the stack:
+        // pressing "Enroll Face" again rendered into a detached page and
+        // appeared to do nothing for the rest of the process lifetime, the
+        // daemon session stayed open with the camera and IR emitter running,
+        // and the progress poll kept firing because the state was still
+        // Capturing.
+        {
+            let rc = Rc::clone(&controller);
+            let nav = controller.borrow().shell.navigation_view().clone();
+            nav.connect_popped(move |_, page| {
+                let mut c = rc.borrow_mut();
+                c.on_subpage_popped(page);
+                drop(c);
+                let rc2 = Rc::clone(&rc);
+                rc2.borrow_mut().render_profiles(&rc2);
+            });
+        }
+
         controller
+    }
+
+    /// Reconcile our state with a page the user popped themselves.
+    ///
+    /// Cancels the enrollment session behind the page so the camera and the IR
+    /// emitter stop, stops the progress poll, and forgets the page so the next
+    /// "Enroll Face" pushes a fresh one.
+    fn on_subpage_popped(&mut self, page: &adw::NavigationPage) {
+        let was_enrollment = self.enrollment_nav_page.as_ref().is_some_and(|p| p == page);
+        let was_review = self.review_nav_page.as_ref().is_some_and(|p| p == page);
+        if !was_enrollment && !was_review {
+            return;
+        }
+
+        self.stop_polling();
+        if let Some(presenter) = &self.presenter {
+            let mut p = presenter.borrow_mut();
+            if !matches!(p.model().enrollment_state, EnrollmentState::Setup) {
+                p.cancel_enrollment_v3();
+            }
+        }
+        if was_enrollment {
+            self.enrollment_nav_page = None;
+        }
+        if was_review {
+            self.review_nav_page = None;
+        }
+    }
+
+    /// Cancel the progress poll if one is running.
+    fn stop_polling(&mut self) {
+        if let Some(id) = self.poll_source.take() {
+            id.remove();
+        }
     }
 
     /// USA-2: re-run `DbusManagerClient::connect()` and rebuild the UI.
@@ -159,6 +227,7 @@ impl AppController {
             review_view: ReviewViewComponent::new(),
             enrollment_nav_page: None,
             review_nav_page: None,
+            poll_source: None,
             offline: true,
         }))
     }
@@ -383,14 +452,22 @@ impl AppController {
                     self.enrollment_nav_page = Some(nav);
                 }
 
-                let presenter_poll = Rc::clone(presenter);
-                let rc_poll = Rc::clone(rc);
-                let _source_id = glib::timeout_add_local(Duration::from_millis(500), move || {
-                    let still_capturing = {
-                        let p = presenter_poll.borrow();
-                        matches!(p.model().enrollment_state, EnrollmentState::Capturing)
-                    };
-                    if still_capturing {
+                // At most one poll. See the `poll_source` field.
+                if self.poll_source.is_none() {
+                    let presenter_poll = Rc::clone(presenter);
+                    let rc_poll = Rc::clone(rc);
+                    let id = glib::timeout_add_local(Duration::from_millis(500), move || {
+                        let still_capturing = {
+                            let p = presenter_poll.borrow();
+                            matches!(p.model().enrollment_state, EnrollmentState::Capturing)
+                        };
+                        if !still_capturing {
+                            // The id is consumed by returning Break, so clear
+                            // it here or the next scan would see a stale
+                            // `Some` and never start a poll at all.
+                            rc_poll.borrow_mut().poll_source = None;
+                            return ControlFlow::Break;
+                        }
                         let has_progress = {
                             let mut p = presenter_poll.borrow_mut();
                             p.poll_progress_v3()
@@ -399,10 +476,9 @@ impl AppController {
                             rc_poll.borrow_mut().render_enrollment(&rc_poll);
                         }
                         ControlFlow::Continue
-                    } else {
-                        ControlFlow::Break
-                    }
-                });
+                    });
+                    self.poll_source = Some(id);
+                }
             }
             EnrollmentState::Stopped => {
                 let presenter_review = Rc::clone(presenter);
@@ -492,30 +568,47 @@ impl AppController {
                     .render(view.as_ref(), move |_| {}, move || {}, move || {});
             }
             EnrollmentState::Error(detail) => {
+                // A failed scan must say what failed and offer a way out. The
+                // poll stops here too: nothing is capturing any more, and a
+                // live timer would keep re-rendering this page. Taken by hand
+                // rather than through `stop_polling`, because `presenter` is
+                // an outstanding immutable borrow of `self`.
+                if let Some(id) = self.poll_source.take() {
+                    id.remove();
+                }
+
                 let presenter_dismiss = Rc::clone(presenter);
                 let rc_dismiss = Rc::clone(rc);
-                let dismiss_btn = gtk4::Button::builder()
-                    .label(tr("_Dismiss"))
-                    .use_underline(true)
-                    .css_classes(["suggested-action"])
-                    .build();
-                dismiss_btn
-                    .update_property(&[gtk4::accessible::Property::Label(&tr("Dismiss error"))]);
-                dismiss_btn.connect_clicked(move |_| {
+                let on_dismiss = move || {
                     {
                         let mut p = presenter_dismiss.borrow_mut();
                         p.dismiss_v3_error();
                     }
                     rc_dismiss.borrow_mut().render_enrollment(&rc_dismiss);
-                });
+                };
 
-                let view = model.enrollment_view_v3.clone();
-                self.enrollment_view
-                    .render(view.as_ref(), move |_| {}, move || {}, move || {});
-                // The error detail is surfaced via the model.error field,
-                // which render_profiles shows. For the sub-page, we rely
-                // on the enrollment component's guidance row.
-                let _ = detail;
+                let presenter_cancel = Rc::clone(presenter);
+                let rc_cancel = Rc::clone(rc);
+                let on_cancel = move || {
+                    {
+                        let mut p = presenter_cancel.borrow_mut();
+                        p.cancel_enrollment_v3();
+                    }
+                    rc_cancel.borrow_mut().render_profiles(&rc_cancel);
+                };
+
+                self.enrollment_view.render_error(
+                    &detail,
+                    model.error.as_ref(),
+                    on_dismiss,
+                    on_cancel,
+                );
+
+                if self.enrollment_nav_page.is_none() {
+                    let nav = self.enrollment_view.navigation_page("Enroll Face");
+                    self.shell.push_subpage(&nav);
+                    self.enrollment_nav_page = Some(nav);
+                }
             }
         }
     }

@@ -458,8 +458,21 @@ impl GuidanceView {
         match self {
             Self::Silent => crate::tr("Starting the scan…"),
             Self::Known(g) => crate::tr(g.as_label()),
-            Self::Raw(s) => crate::tr(s),
+            // Never the token itself. `Raw` means a daemon newer than this UI
+            // sent a guidance word we have no text for; rendering it verbatim
+            // put raw snake_case — `move_way_back` — on screen as the largest
+            // text on the page. Say honestly that we cannot advise, which is
+            // what the user needs to know.
+            Self::Raw(_) => crate::tr("Keep your face in view"),
         }
+    }
+
+    /// True when the daemon sent guidance this build has no text for.
+    ///
+    /// Used to stop the page claiming everything is fine underneath advice it
+    /// could not interpret.
+    pub fn is_unrecognised(&self) -> bool {
+        matches!(self, Self::Raw(_))
     }
 
     /// A translated one-line "how" for the guidance — the concrete thing to
@@ -566,6 +579,50 @@ impl EnrollmentViewV3 {
             return None;
         }
         Some(((u64::from(self.frames_accepted) * 100) / u64::from(self.frames_seen)) as u32)
+    }
+
+    /// True once the daemon has actually looked at a frame.
+    ///
+    /// Before that there is no measurement, and the view must say so rather
+    /// than render the zeros it was seeded with. `start_enrollment_v3` fills
+    /// the view with literal `0`s and `quality_bucket: 0` so the page has
+    /// something to draw, and bucket 0 is "Poor" — so the scan opened by
+    /// announcing "0% — Poor" and tinting the silhouette amber before the
+    /// camera had returned anything. `accept_rate_percent` already had the
+    /// right shape for this; quality and diversity did not.
+    pub fn has_observation(&self) -> bool {
+        self.frames_seen > 0
+    }
+
+    /// The quality percentage and the daemon's bucket for it, or `None` when
+    /// nothing has been measured. The bucket travels with the percentage so
+    /// the tint and the number can never be taken from different frames.
+    pub fn measured_quality(&self) -> Option<(u32, u8)> {
+        self.has_observation()
+            .then_some((self.quality_percent, self.quality_bucket))
+    }
+
+    /// The diversity percentage, or `None` when nothing has been measured.
+    pub fn measured_diversity_percent(&self) -> Option<u32> {
+        self.has_observation().then_some(self.diversity_percent)
+    }
+}
+
+/// Bucket boundaries, mirrored from the daemon's `observation` module so the
+/// word beside a percentage means the same thing on both sides of the wire.
+/// A drift test in `enrollment_guidance.rs` pins them together.
+pub const QUALITY_LOW_MAX: u32 = 33;
+pub const QUALITY_MEDIUM_MAX: u32 = 66;
+
+/// Map a 0-100 quality percentage to the coarse bucket the UI tints and
+/// labels with. Same boundaries as the daemon's `QualityBucket::from_percent`.
+pub fn quality_bucket_from_percent(percent: u32) -> u8 {
+    if percent <= QUALITY_LOW_MAX {
+        0
+    } else if percent <= QUALITY_MEDIUM_MAX {
+        1
+    } else {
+        2
     }
 }
 

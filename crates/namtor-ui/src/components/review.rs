@@ -43,7 +43,17 @@ impl ReviewViewComponent {
         // Hero: the review screen answers "can I save this?", so the
         // headline is the verdict and the daemon's guidance is the detail
         // under it. The guidance used to be dropped here entirely.
-        let verdict_bucket = if view.ready_to_save { 2 } else { 1 };
+        // Derive the quality verdict from the quality number, using the same
+        // boundaries the daemon uses.
+        //
+        // This was `if view.ready_to_save { 2 } else { 1 }`. EnrollmentReviewV3
+        // carries no bucket, so the screen invented one from readiness — a
+        // different measurement entirely. A barely-usable scan that had
+        // collected enough angles announced "12% — Good"; a sharp scan short
+        // on angles announced "88% — Fair". The number and the word beside it
+        // told different stories, and because the invented bucket was never 0
+        // the review silhouette could not show the "Poor" tint at all.
+        let verdict_bucket = crate::view_model::quality_bucket_from_percent(view.quality_percent);
         let advice = match view.guidance.hint() {
             Some(hint) => format!("{} — {}", view.guidance.label(), hint),
             None => view.guidance.label(),
@@ -75,6 +85,7 @@ impl ReviewViewComponent {
             view.quality_percent,
             verdict_bucket,
         ));
+
         signals_group.add(&scan_feedback::angle_variety_row(view.diversity_percent));
         signals_group.add(&scan_feedback::attention_row(&view.guidance));
         signals_group.add(&scan_feedback::count_row(

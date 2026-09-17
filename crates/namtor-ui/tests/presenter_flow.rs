@@ -1225,3 +1225,68 @@ fn quality_view_shows_guidance_only_when_low() {
         assert!(!v.show_guidance, "{name} quality must not prompt");
     }
 }
+
+// --- a dead daemon must not look like a stalled scan -------------------------
+
+#[test]
+fn a_daemon_that_dies_mid_scan_fails_the_scan_instead_of_freezing() {
+    // `poll_progress_v3` used to answer `Err(_) => true` — "no error, but do
+    // re-render" — so the page redrew the last numbers forever. A daemon that
+    // died mid-scan was visually identical to a scan that had stopped
+    // improving: no error, no state change, nothing to act on.
+    let client = Arc::new(FakeManagerClient::new());
+    let mut p = namtor_ui::ProfilePresenter::from_arc(Arc::clone(&client), TEST_UID);
+    after(&mut p, |p| {
+        p.start_enrollment_v3("Nils V3");
+    });
+    assert!(matches!(
+        p.model().enrollment_state,
+        EnrollmentState::Capturing
+    ));
+
+    client.set_mode(Mode::DaemonDown("daemon vanished".into()));
+
+    // A single failure is tolerated: D-Bus can drop one call while the daemon
+    // is busy, and failing the scan on the first hiccup would be worse.
+    p.poll_progress_v3();
+    assert!(
+        matches!(p.model().enrollment_state, EnrollmentState::Capturing),
+        "one dropped poll must not fail the scan"
+    );
+
+    // A sustained run must not be silent.
+    for _ in 0..5 {
+        p.poll_progress_v3();
+    }
+    assert!(
+        matches!(p.model().enrollment_state, EnrollmentState::Error(_)),
+        "a daemon that stays gone must fail the scan, got {:?}",
+        p.model().enrollment_state
+    );
+    assert!(
+        p.model().error.is_some(),
+        "the failure must carry something the user can read"
+    );
+}
+
+#[test]
+fn a_recovered_poll_clears_the_failure_run() {
+    // The counter must reset, or a scan long enough to accumulate scattered
+    // transient failures would eventually fail for no reason.
+    let client = Arc::new(FakeManagerClient::new());
+    let mut p = namtor_ui::ProfilePresenter::from_arc(Arc::clone(&client), TEST_UID);
+    after(&mut p, |p| {
+        p.start_enrollment_v3("Olga V3");
+    });
+
+    for _ in 0..8 {
+        client.set_mode(Mode::DaemonDown("blip".into()));
+        p.poll_progress_v3();
+        client.set_mode(Mode::Normal);
+        p.poll_progress_v3();
+    }
+    assert!(
+        matches!(p.model().enrollment_state, EnrollmentState::Capturing),
+        "isolated failures that keep recovering must not fail the scan"
+    );
+}

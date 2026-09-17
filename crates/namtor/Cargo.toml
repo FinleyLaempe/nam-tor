@@ -14,6 +14,7 @@ namtor-pam-config = { path = "../namtor-pam-config" }
 namtor-worker = { path = "../namtor-worker", features = ["onnx"] }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 namtor-capture = { path = "../namtor-capture" }
 namtor-proto = { path = "../namtor-proto" }
 

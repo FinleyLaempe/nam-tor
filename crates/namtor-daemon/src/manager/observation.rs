@@ -348,6 +348,31 @@ pub fn project(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// These boundaries are mirrored in `namtor_ui::view_model` so the word
+    /// shown beside a quality percentage means the same thing on both sides
+    /// of the wire. The review screen has no bucket on the wire and derives
+    /// one from the percentage with that copy.
+    ///
+    /// Neither crate can import the other, so the pin is two-sided: change a
+    /// number here and this test fails naming the UI mirror;
+    /// `client_quality_boundaries_match_the_daemon` fails there naming this.
+    #[test]
+    fn quality_boundaries_are_mirrored_in_namtor_ui() {
+        assert_eq!(
+            QUALITY_LOW_MAX, 33,
+            "update namtor_ui::view_model::QUALITY_LOW_MAX to match"
+        );
+        assert_eq!(
+            QUALITY_MEDIUM_MAX, 66,
+            "update namtor_ui::view_model::QUALITY_MEDIUM_MAX to match"
+        );
+        assert_eq!(QualityBucket::from_percent(33), QualityBucket::LOW);
+        assert_eq!(QualityBucket::from_percent(34), QualityBucket::MEDIUM);
+        assert_eq!(QualityBucket::from_percent(66), QualityBucket::MEDIUM);
+        assert_eq!(QualityBucket::from_percent(67), QualityBucket::HIGH);
+    }
+
     use namtor_recog::FrameMetrics;
 
     /// Subset of [`crate::manager::contract::FORBIDDEN_TOKENS`] that is NOT a
