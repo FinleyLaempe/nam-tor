@@ -24,12 +24,13 @@ pub mod infer_onnx;
 #[cfg(feature = "onnx")]
 pub mod int8_eval;
 pub mod learned_pad;
+pub mod model_arg;
 pub mod pipe;
 pub mod sandbox;
 
 use std::os::fd::RawFd;
 
-use namtor_proto::worker::{WorkerReq, WorkerRsp};
+use namtor_proto::worker::{Loaded, ModelSpec, WorkerReq, WorkerRsp};
 use thiserror::Error;
 
 /// Worker-side error.
@@ -110,11 +111,29 @@ unsafe impl Sync for FrameChannel {}
 /// Run the worker request loop.
 ///
 /// `read_fd` / `write_fd` are the inherited pipe ends. `backend` is the
-/// inference backend (MockBackend for tests, OnnxCpu for production). If
-/// `apply_sbx` is true, landlock+seccomp are applied after the frame channel
-/// is mapped. `frame_memfd` / `frame_region_len` describe the shared frame
-/// region; pass `(0, 0)` and `None` if no frame channel is needed (unit tests
-/// that don't exercise Infer).
+/// inference backend (MockBackend for tests, OnnxCpu for production).
+/// `frame_memfd` / `frame_region_len` describe the shared frame region; pass
+/// `None` and `0` if no frame channel is needed (unit tests that don't
+/// exercise Infer).
+///
+/// # Startup order
+///
+/// The order below is the whole reason the sandbox can be switched on in
+/// production at all:
+///
+/// 1. map the frame `memfd` (seccomp later denies `mmap` on new files),
+/// 2. **preload every model in `preload`** — this is the last moment the
+///    worker can `open(2)` anything,
+/// 3. apply seccomp + Landlock if `apply_sbx`,
+/// 4. serve `Load`/`Infer`/`Shutdown` from what is already in memory.
+///
+/// Landlock denies *every* path (see [`sandbox::landlock`]), so a `Load`
+/// arriving over the pipe after step 3 cannot reach a `.onnx` file. `Load` is
+/// therefore answered from `preload` — it is a lookup, not a file open. A
+/// `Load` for a model that was not preloaded is refused with
+/// [`WorkerRsp::Error`] once the sandbox is sealed; when `apply_sbx` is false
+/// (unit tests, `mock-infer`) it falls back to loading on demand, which is
+/// what the pre-sandbox worker always did.
 pub fn run_main(
     read_fd: RawFd,
     write_fd: RawFd,
@@ -122,6 +141,7 @@ pub fn run_main(
     apply_sbx: bool,
     frame_memfd: Option<RawFd>,
     frame_region_len: u64,
+    preload: &[ModelSpec],
 ) -> Result<(), WorkerError> {
     let mut transport = pipe::PipeTransport::from_fds(read_fd, write_fd)?;
 
@@ -132,6 +152,20 @@ pub fn run_main(
         _ => None,
     };
 
+    // Step 2: open the weights while the filesystem is still reachable. A
+    // failure here is *not* fatal — it is remembered and replayed as a
+    // `WorkerRsp::Error` when the daemon asks for that model, which keeps the
+    // pre-existing "load failure is a protocol error, not a dead child"
+    // behaviour and gives the daemon a message instead of an EOF.
+    let mut preloaded: Vec<(ModelSpec, Result<Loaded, String>)> = Vec::with_capacity(preload.len());
+    for spec in preload {
+        let result = backend.load(spec).map_err(|e| e.to_string());
+        preloaded.push((spec.clone(), result));
+    }
+
+    // Step 3. `sealed` records that the filesystem is now unreachable, so the
+    // `Load` arm below can say *why* an unknown model cannot be served.
+    let sealed = apply_sbx;
     if apply_sbx {
         sandbox::apply_sandbox()?;
     }
@@ -141,17 +175,16 @@ pub fn run_main(
     loop {
         let req = transport.recv();
         match req {
-            Ok(WorkerReq::Load(spec)) => match backend.load(&spec) {
-                Ok(l) => {
-                    let rsp = WorkerRsp::Loaded(l.clone());
-                    loaded = Some(l);
-                    transport.send(&rsp)?;
-                }
-                Err(e) => {
-                    let rsp = WorkerRsp::Error { msg: e.to_string() };
-                    transport.send(&rsp)?;
-                }
-            },
+            Ok(WorkerReq::Load(spec)) => {
+                let rsp = match resolve_load(&preloaded, &spec, sealed, &mut backend) {
+                    Ok(l) => {
+                        loaded = Some(l.clone());
+                        WorkerRsp::Loaded(l)
+                    }
+                    Err(msg) => WorkerRsp::Error { msg },
+                };
+                transport.send(&rsp)?;
+            }
             Ok(WorkerReq::Infer(frame_ref)) => {
                 let Some(ref lc) = loaded else {
                     transport.send(&WorkerRsp::Error {
@@ -183,6 +216,31 @@ pub fn run_main(
     }
 
     Ok(())
+}
+
+/// Answer a `Load` request without touching the filesystem when the sandbox
+/// is sealed.
+///
+/// Resolution is by *exact* [`ModelSpec`] equality — id, quant and sha256 —
+/// so a request for different weights than the ones preloaded is refused
+/// rather than quietly answered with the preloaded session.
+fn resolve_load(
+    preloaded: &[(ModelSpec, Result<Loaded, String>)],
+    spec: &ModelSpec,
+    sealed: bool,
+    backend: &mut Box<dyn infer::InferenceBackend>,
+) -> Result<Loaded, String> {
+    if let Some((_, result)) = preloaded.iter().find(|(s, _)| s == spec) {
+        return result.clone();
+    }
+    if sealed {
+        return Err(format!(
+            "model {:?} ({:?}) was not preloaded; the sandbox is sealed and the worker \
+             cannot open model files. Pass it as `--model` at spawn time.",
+            spec.id, spec.quant
+        ));
+    }
+    backend.load(spec).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -264,7 +322,7 @@ mod tests {
 
         let backend = Box::new(MockBackend::new(8));
         let handle =
-            std::thread::spawn(move || run_main(read_fd, write_fd, backend, false, None, 0));
+            std::thread::spawn(move || run_main(read_fd, write_fd, backend, false, None, 0, &[]));
 
         daemon.send(&WorkerReq::Load(spec()));
         let rsp = daemon.recv();
@@ -290,7 +348,7 @@ mod tests {
 
         let backend = Box::new(MockBackend::new(8));
         let handle =
-            std::thread::spawn(move || run_main(read_fd, write_fd, backend, false, None, 0));
+            std::thread::spawn(move || run_main(read_fd, write_fd, backend, false, None, 0, &[]));
 
         daemon.send(&WorkerReq::Infer(frame_ref(3)));
         let rsp = daemon.recv();
@@ -309,7 +367,7 @@ mod tests {
 
         let backend = Box::new(MockBackend::new(8));
         let handle =
-            std::thread::spawn(move || run_main(read_fd, write_fd, backend, false, None, 0));
+            std::thread::spawn(move || run_main(read_fd, write_fd, backend, false, None, 0, &[]));
 
         drop(daemon);
         handle.join().unwrap().unwrap();
@@ -329,7 +387,7 @@ mod tests {
 
         let backend = Box::new(MockBackend::new(4));
         let handle = std::thread::spawn(move || {
-            run_main(read_fd, write_fd, backend, false, Some(memfd_raw), 64)
+            run_main(read_fd, write_fd, backend, false, Some(memfd_raw), 64, &[])
         });
 
         daemon.send(&WorkerReq::Load(spec()));

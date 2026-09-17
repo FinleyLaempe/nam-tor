@@ -5,9 +5,15 @@
 //!
 //! The daemon (non-root, user `namtor`) spawns the worker directly as a
 //! child process — the worker inherits the daemon's UID (`namtor`). The
-//! worker self-applies seccomp + landlock (`--apply-sandbox`); the sandbox
-//! is the privilege boundary, not a UID drop. In tests the worker runs
-//! with `--features mock-infer` and no sandbox.
+//! worker self-applies seccomp + landlock; the sandbox is the privilege
+//! boundary, not a UID drop.
+//!
+//! `--apply-sandbox` is passed *unconditionally* — there is no opt-out and no
+//! test-only bypass. Because Landlock denies every filesystem path, the worker
+//! cannot open a `.onnx` file once it has sealed itself, so the daemon also
+//! names every model on the command line (`--model <id>:<quant>:<sha256>`);
+//! the worker loads those weights first and only then applies the sandbox.
+//! The `Load` requests below are answered from that preloaded set.
 //!
 //! Daemon and worker are the *same file* (one shipped `namtor` executable)
 //! but remain *separate processes*: merging the worker into the daemon's
@@ -17,8 +23,9 @@
 //! executable re-execs itself correctly; `worker_bin` is the fallback when
 //! `/proc` is not mounted (e.g. a minimal container).
 
+use std::ffi::OsString;
 use std::io::{Seek, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
@@ -154,17 +161,14 @@ impl ChildSupervisor {
         // executable re-exec'd with the `worker` subcommand — a separate
         // process, not a thread.
         let mut cmd = Command::new(exe);
-        cmd.arg("worker");
-        cmd.arg("--read-fd")
-            .arg(req_r_raw.to_string())
-            .arg("--write-fd")
-            .arg(rsp_w_raw.to_string())
-            .arg("--frame-memfd")
-            .arg(frame_memfd_raw.to_string())
-            .arg("--frame-len")
-            .arg((64 * 1024 * 1024).to_string())
-            .arg("--models-dir")
-            .arg(models_dir);
+        cmd.args(worker_args(
+            req_r_raw,
+            rsp_w_raw,
+            frame_memfd_raw,
+            64 * 1024 * 1024,
+            models_dir,
+            models,
+        ));
         if mock_infer {
             cmd.env("NAMTOR_WORKER_FEATURES", "mock-infer");
         }
@@ -225,7 +229,56 @@ impl ChildSupervisor {
 
         Ok(supervisor)
     }
+}
 
+/// Build the full argument vector for the worker child.
+///
+/// Extracted from [`ChildSupervisor::spawn_with_exe`] so the security-critical
+/// parts of the command line are assertable without spawning a process — see
+/// `spawn_always_asks_the_worker_to_sandbox_itself`. `spawn_with_exe` builds
+/// its `Command` from *this* function and nothing else, so a flag that is
+/// missing here is missing in production.
+///
+/// Two of these arguments are the sandbox contract:
+///
+/// * `--apply-sandbox` — the worker self-applies seccomp + Landlock. Without
+///   it the process that runs ONNX inference on attacker-influenced image
+///   bytes runs unconfined, which is the boundary `AGENTS.md` and the systemd
+///   unit both claim exists.
+/// * `--model <spec>` (one per model) — Landlock denies *every* path, so the
+///   worker must open its weights before sealing itself. The daemon therefore
+///   names the models up front instead of relying on the `Load` requests that
+///   arrive after the seal.
+fn worker_args(
+    read_fd: RawFd,
+    write_fd: RawFd,
+    frame_memfd: RawFd,
+    frame_len: u64,
+    models_dir: &Path,
+    models: &[ModelSpec],
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec![
+        "worker".into(),
+        "--read-fd".into(),
+        read_fd.to_string().into(),
+        "--write-fd".into(),
+        write_fd.to_string().into(),
+        "--frame-memfd".into(),
+        frame_memfd.to_string().into(),
+        "--frame-len".into(),
+        frame_len.to_string().into(),
+        "--models-dir".into(),
+        models_dir.as_os_str().to_os_string(),
+    ];
+    for spec in models {
+        args.push("--model".into());
+        args.push(namtor_worker::model_arg::encode(spec).into());
+    }
+    args.push("--apply-sandbox".into());
+    args
+}
+
+impl ChildSupervisor {
     fn send_req(&mut self, req: &WorkerReq) -> Result<(), DaemonError> {
         let mut writer = std::io::BufWriter::new(&self.daemon_writer);
         encode(req, &mut writer)?;
@@ -325,6 +378,92 @@ impl Drop for ChildSupervisor {
 mod tests {
     use super::*;
     use namtor_proto::worker::Quant;
+
+    fn specs() -> Vec<ModelSpec> {
+        vec![
+            ModelSpec {
+                id: "yunet_2023mar".into(),
+                quant: Quant::Fp32,
+                sha256: [0x11; 32],
+            },
+            ModelSpec {
+                id: "sface_2021dec".into(),
+                quant: Quant::Int8,
+                sha256: [0x22; 32],
+            },
+        ]
+    }
+
+    fn args_for(models: &[ModelSpec]) -> Vec<String> {
+        worker_args(3, 4, 5, 64 * 1024 * 1024, Path::new("/models"), models)
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// The gap this test exists to keep closed: `--apply-sandbox` was absent
+    /// from the spawn command line for the whole life of the worker, so the
+    /// seccomp + Landlock boundary the docs and the systemd unit describe was
+    /// never actually applied in production. Nothing asserted the flag, so
+    /// nothing noticed.
+    #[test]
+    fn spawn_always_asks_the_worker_to_sandbox_itself() {
+        assert!(
+            args_for(&specs()).iter().any(|a| a == "--apply-sandbox"),
+            "the worker must be spawned with --apply-sandbox; without it the \
+             ONNX inference process runs unconfined"
+        );
+    }
+
+    /// There must be no way to spawn an unsandboxed worker: the flag does not
+    /// depend on the model set, so an empty or unusual configuration cannot
+    /// drop it.
+    #[test]
+    fn sandbox_flag_is_not_conditional_on_the_model_set() {
+        assert!(args_for(&[]).iter().any(|a| a == "--apply-sandbox"));
+    }
+
+    /// Under the sandbox the worker cannot open a model file, so every model
+    /// the daemon will later `Load` has to be named at spawn time — in the
+    /// exact encoding the worker parses.
+    #[test]
+    fn spawn_names_every_model_for_preloading() {
+        let models = specs();
+        let args = args_for(&models);
+        for spec in &models {
+            let encoded = namtor_worker::model_arg::encode(spec);
+            let at = args
+                .iter()
+                .position(|a| *a == encoded)
+                .unwrap_or_else(|| panic!("{encoded} not on the worker command line: {args:?}"));
+            assert_eq!(args[at - 1], "--model");
+            assert_eq!(
+                namtor_worker::model_arg::parse(&encoded).expect("worker parses it"),
+                *spec
+            );
+        }
+    }
+
+    /// The fds and the model root still have to reach the child; asserting the
+    /// sandbox flag must not come at the cost of the rest of the command line.
+    #[test]
+    fn worker_args_carry_the_channel_and_model_root() {
+        let args = args_for(&specs());
+        assert_eq!(args.first().map(String::as_str), Some("worker"));
+        for (flag, value) in [
+            ("--read-fd", "3"),
+            ("--write-fd", "4"),
+            ("--frame-memfd", "5"),
+            ("--frame-len", "67108864"),
+            ("--models-dir", "/models"),
+        ] {
+            let at = args
+                .iter()
+                .position(|a| a == flag)
+                .unwrap_or_else(|| panic!("{flag} missing from {args:?}"));
+            assert_eq!(args[at + 1], value, "{flag}");
+        }
+    }
 
     #[test]
     fn mock_supervisor_load_all() {

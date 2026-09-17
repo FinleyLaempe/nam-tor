@@ -24,6 +24,9 @@ Options:
       --frame-memfd F    Shared frame memfd
       --frame-len L      Shared frame length in bytes
       --models-dir DIR   Model root override
+      --model SPEC       Preload <id>:<quant>:<sha256hex> before sandboxing
+                         (repeatable; required under --apply-sandbox because
+                         the sandbox denies every filesystem path)
       --apply-sandbox    Apply seccomp + Landlock before serving
   -h, --help             Print this help and exit
   -V, --version          Print the version and exit";
@@ -71,6 +74,7 @@ pub fn main(args: &[String]) -> ExitCode {
     let mut frame_len: u64 = 0;
     let mut apply_sbx = false;
     let mut models_dir: Option<String> = None;
+    let mut preload: Vec<namtor_proto::worker::ModelSpec> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -98,6 +102,18 @@ pub fn main(args: &[String]) -> ExitCode {
                 models_dir = Some(args[i + 1].clone());
                 i += 2;
             }
+            // Repeatable. Every model named here is opened and loaded before
+            // the sandbox is applied — see `crate::run_main`'s startup order.
+            "--model" if i + 1 < args.len() => {
+                match crate::model_arg::parse(&args[i + 1]) {
+                    Ok(spec) => preload.push(spec),
+                    Err(msg) => {
+                        eprintln!("namtor worker: {msg}");
+                        return ExitCode::from(2);
+                    }
+                }
+                i += 2;
+            }
             other => {
                 eprintln!("namtor worker: unknown arg {other}");
                 return ExitCode::from(2);
@@ -108,27 +124,66 @@ pub fn main(args: &[String]) -> ExitCode {
     let (read_fd, write_fd) = match (read_fd, write_fd) {
         (Some(r), Some(w)) => (r, w),
         _ => {
-            eprintln!("usage: namtor worker --read-fd N --write-fd M [--frame-memfd F --frame-len L] [--apply-sandbox]");
+            eprintln!("usage: namtor worker --read-fd N --write-fd M [--frame-memfd F --frame-len L] [--model SPEC]... [--apply-sandbox]");
             return ExitCode::from(2);
         }
     };
 
     let backend = crate::infer::default_backend();
     let backend = with_models_dir(backend, models_dir.as_deref());
-    match crate::run_main(
+    let code = match crate::run_main(
         read_fd,
         write_fd,
         backend,
         apply_sbx,
         frame_memfd,
         frame_len,
+        &preload,
     ) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => 0,
         Err(e) => {
             eprintln!("namtor worker: {e}");
-            ExitCode::FAILURE
+            1
         }
-    }
+    };
+    exit_without_teardown(code)
+}
+
+/// Leave the process immediately, skipping libc `atexit` handlers and the Rust
+/// runtime's own cleanup.
+///
+/// Measured, not guessed: with the seccomp default action temporarily set to
+/// `SCMP_ACT_TRAP` the worker completes `Load`, `Infer` and the sealed-`Load`
+/// refusal without a single trap, and then dies with `SIGSYS` on syscall 131
+/// (`sigaltstack`) from `std::rt::cleanup` tearing down the stack-overflow
+/// guard handler. Under the shipped `SCMP_ACT_ERRNO(EPERM)` action that
+/// `sigaltstack` merely fails, and teardown runs on into ONNX Runtime's
+/// `CPUIDInfo` destructor → `cpuinfo_deinitialize` → `pthread_once`, whose
+/// glibc futex helper treats the `EPERM` from the denied `futex` as
+/// unrecoverable and calls `__libc_fatal`, aborting the process.
+///
+/// Both denials are in *teardown only* — the request loop itself needs nothing
+/// outside the allowlist. So the fix is to not run teardown rather than to
+/// admit `sigaltstack` and `futex` into the filter: widening it would buy a
+/// tidier exit status at the cost of the syscall surface, and `futex` in
+/// particular is a building block for the thread machinery the filter exists
+/// to keep out.
+///
+/// Nothing is lost by skipping it. Every reply is flushed by
+/// [`crate::pipe::PipeTransport::send`] as it is written, the worker holds no
+/// on-disk state, and the kernel closes the fds and unmaps the frame region on
+/// exit regardless. `stdout`/`stderr` are flushed here because those *are*
+/// buffered by the Rust runtime.
+///
+/// This runs on the sandboxed and unsandboxed paths alike, so the exit path
+/// that ships is the one the tests exercise.
+fn exit_without_teardown(code: i32) -> ExitCode {
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    // SAFETY: `_exit` is async-signal-safe and does not return. It issues
+    // `exit_group`, which the seccomp allowlist permits.
+    unsafe { libc::_exit(code) }
 }
 
 /// Point the real ONNX backend at `--models-dir` when one was given.
