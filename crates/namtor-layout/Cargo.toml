@@ -1,6 +1,6 @@
 [package]
 name = "namtor-layout"
-version = "0.3.6"
+version = "0.3.7"
 edition.workspace = true
 license = "GPL-3.0-only"
 description = "Install-layout contract: derives runtime paths from packaging/install-manifest.toml"

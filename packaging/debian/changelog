@@ -1,3 +1,21 @@
+namtor (0.3.7-1) unstable; urgency=medium
+
+  * A camera held by another program now says so, and what to close, on every
+    surface — the CLI, the daemon's wire error, and the Settings app — instead
+    of quoting an ioctl name.
+  * The Settings app called a D-Bus method no interface has ever exported;
+    version negotiation now reads the ApiVersion property, and runs at connect,
+    so a half-applied update says "different versions" once.
+  * `namtor cli diagnostics` treated a failed journalctl as an empty log.
+  * The daemon bound its three ONNX models by array position.
+  * `namtor cli enroll` silently ignored --models-dir/--templates-dir/
+    --key-path/--device unless --old was given.
+  * The busy-camera remedy named a systemd unit that does not exist.
+  * Strobe labelling now follows the driver's frame sequence, so a dropped
+    frame cannot invert it.
+
+ -- finley <finley.laempe@math.uni-freiburg.de>  Thu, 17 Sep 2026 14:32:52 +0200
+
 namtor (0.3.6-1) unstable; urgency=medium
 
   * Bound the suspend handler so it cannot burn logind's delay window on an

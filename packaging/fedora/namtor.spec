@@ -56,7 +56,7 @@
 %global debug_package %{nil}
 
 Name:           namtor
-Version:        0.3.6
+Version:        0.3.7
 Release:        1%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
@@ -341,6 +341,29 @@ fi
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.7-1
+- A camera held by another program reaches every surface as "camera is busy"
+  with a remedy, instead of "ioctl failed: VIDIOC_S_FMT: EBUSY". EBUSY is
+  typed from the ioctl outwards; nothing string-matches to recover it.
+- The Settings app called org.namtor.Manager3.NegotiateVersion, a method no
+  interface has ever exported, so version negotiation could not work against
+  a real daemon. It reads the ApiVersion property now, and connect negotiates,
+  so a half-applied package update says so once rather than failing one method
+  at a time.
+- The support bundle recorded an empty log section when journalctl exited
+  non-zero, which reads as "the daemon logged nothing".
+- The daemon bound yunet/sface/minifasnet by position in an array; bound by id
+  now, so reordering the required-model list cannot load the PAD network as the
+  face detector.
+- namtor cli enroll parsed --models-dir, --templates-dir, --key-path and
+  --device on the daemon-driven path and then discarded them.
+- The busy-camera remedy told the user to stop a systemd unit that is not
+  installed.
+- IR strobe labelling follows the driver's frame sequence, so a dropped frame
+  no longer inverts emitter-on/emitter-off for the rest of the stream.
+- The shipped ONNX weights are now loaded and run by the release pipeline
+  before packaging; weights that do not infer block the release.
+
 * Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.6-1
 - A suspend arriving during an authentication no longer waits out logind's
   delay window. The dispatcher mutex is held across the blocking verify, and a
