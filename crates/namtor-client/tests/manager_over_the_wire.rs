@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Every v1 method, driven through a real D-Bus connection.
+//! Every v1 and v2 method, driven through a real D-Bus connection.
 //!
 //! `DbusManagerClient` is the only implementation that speaks the wire, and
 //! almost nothing exercised it: the presenter and UI tests use
@@ -164,4 +164,87 @@ fn poll_progress_is_empty_before_any_signal() {
         .poll_progress(&SessionId("sess-1".into()))
         .expect("poll must not fail with an empty cache");
     assert!(progress.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// v2 — org.namtor.Manager2
+// ---------------------------------------------------------------------------
+
+/// `ListPamServices` returns `a(ssbss)`, which nests an enum rendered as a
+/// string. Only a real message proves the enum survives the round trip.
+#[test]
+fn the_pam_service_list_round_trips_with_its_enum() {
+    use namtor_client::types::PamServiceCompatibility;
+    let bus = FakeBus::spawn().expect("spawn");
+    let services = bus.client.list_pam_services().expect("list");
+    assert!(!services.is_empty());
+    let kinds: Vec<_> = services.iter().map(|s| s.compatibility).collect();
+    assert!(kinds.contains(&PamServiceCompatibility::Safe), "{kinds:?}");
+    assert!(kinds.contains(&PamServiceCompatibility::Risky), "{kinds:?}");
+    assert!(
+        kinds.contains(&PamServiceCompatibility::Unsupported),
+        "{kinds:?}"
+    );
+}
+
+/// `SetPamServiceEnabled(service_id, enabled)` — two arguments, and the
+/// change has to be visible to a later list.
+#[test]
+fn enabling_a_pam_service_round_trips() {
+    use namtor_client::types::PamServiceCompatibility;
+    let bus = FakeBus::spawn().expect("spawn");
+    let target = bus
+        .client
+        .list_pam_services()
+        .expect("list")
+        .into_iter()
+        .find(|s| s.compatibility == PamServiceCompatibility::Safe)
+        .expect("a safe service");
+    assert!(!target.enabled);
+
+    assert!(bus
+        .client
+        .set_pam_service_enabled(&target.id, true)
+        .expect("enable"));
+    let after = bus
+        .client
+        .list_pam_services()
+        .expect("list")
+        .into_iter()
+        .find(|s| s.id == target.id)
+        .expect("still listed");
+    assert!(after.enabled, "the toggle did not reach the daemon");
+}
+
+/// An incompatible service refuses with a typed error, not a transport
+/// failure — the UI shows the two very differently.
+#[test]
+fn an_unsupported_pam_service_refuses_with_a_typed_error() {
+    use namtor_client::types::{ManagerError, PamServiceCompatibility};
+    let bus = FakeBus::spawn().expect("spawn");
+    let target = bus
+        .client
+        .list_pam_services()
+        .expect("list")
+        .into_iter()
+        .find(|s| s.compatibility == PamServiceCompatibility::Unsupported)
+        .expect("an unsupported service");
+    let err = bus
+        .client
+        .set_pam_service_enabled(&target.id, true)
+        .unwrap_err();
+    assert!(
+        matches!(err, ManagerError::Unsupported(_)),
+        "expected Unsupported, got {err:?}"
+    );
+}
+
+/// `GetProtectionStatus` returns `(sbs)` with an enum in the first slot.
+#[test]
+fn the_protection_status_round_trips() {
+    use namtor_client::types::ProtectionKeyKind;
+    let bus = FakeBus::spawn().expect("spawn");
+    let status = bus.client.get_protection_status().expect("status");
+    assert_eq!(status.sealing, ProtectionKeyKind::Tpm2);
+    assert!(status.has_tpm);
 }
