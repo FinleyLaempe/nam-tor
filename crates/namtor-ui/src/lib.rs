@@ -75,6 +75,29 @@ pub fn tr(s: &str) -> String {
     }
 }
 
+/// Translate a message that has runtime parts, keeping the msgid stable.
+///
+/// `tr(&format!("Rename profile {name}"))` cannot work: the msgid handed to
+/// gettext contains the interpolated value, so it can never match a catalog
+/// entry. Translate the *pattern*, then substitute:
+///
+/// ```ignore
+/// tr_args("Rename profile {}", &[&row.name]);
+/// ```
+///
+/// `{}` placeholders are replaced left to right with the given values, after
+/// lookup, so a translation may not reorder them — adequate for the short
+/// labels here, and honest about it rather than silently untranslatable.
+pub fn tr_args(msgid: &str, args: &[&str]) -> String {
+    let mut out = tr(msgid);
+    for a in args {
+        if let Some(i) = out.find("{}") {
+            out.replace_range(i..i + 2, a);
+        }
+    }
+    out
+}
+
 static CATALOG: std::sync::OnceLock<Option<gettext::Catalog>> = std::sync::OnceLock::new();
 
 /// Load the message catalog for the current locale, once.

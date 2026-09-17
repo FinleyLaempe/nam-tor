@@ -85,10 +85,13 @@ impl ProfileListView {
 
                 let toggle = adw::SwitchRow::builder()
                     .active(row.enabled)
-                    .tooltip_text(tr(&format!("Toggle profile {} on or off", row.name)))
+                    .tooltip_text(crate::tr_args("Toggle profile {} on or off", &[&row.name]))
                     .build();
                 toggle.update_property(&[
-                    gtk4::accessible::Property::Label(&tr(&format!("Enable profile {}", row.name))),
+                    gtk4::accessible::Property::Label(&crate::tr_args(
+                        "Enable profile {}",
+                        &[&row.name],
+                    )),
                     gtk4::accessible::Property::Description(&tr("Toggle this profile on or off")),
                 ]);
 
@@ -105,11 +108,14 @@ impl ProfileListView {
                 // USA-10: rename button on each profile row.
                 let rename_btn = gtk4::Button::builder()
                     .icon_name("document-edit-symbolic")
-                    .tooltip_text(tr(&format!("Rename profile {}", row.name)))
+                    .tooltip_text(crate::tr_args("Rename profile {}", &[&row.name]))
                     .valign(gtk4::Align::Center)
                     .build();
                 rename_btn.update_property(&[
-                    gtk4::accessible::Property::Label(&tr(&format!("Rename profile {}", row.name))),
+                    gtk4::accessible::Property::Label(&crate::tr_args(
+                        "Rename profile {}",
+                        &[&row.name],
+                    )),
                     gtk4::accessible::Property::Description(&tr("Rename this profile")),
                 ]);
 

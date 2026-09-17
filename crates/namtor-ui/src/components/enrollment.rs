@@ -355,7 +355,7 @@ impl EnrollmentViewComponent {
             g.update_property(&[gtk4::accessible::Property::Label(&tr("How to fix this"))]);
             for (i, step) in hint.steps.iter().enumerate() {
                 let row = adw::ActionRow::builder()
-                    .title(tr(&format!("{}. {}", i + 1, step)))
+                    .title(crate::tr_args("{}. {}", &[&(i + 1).to_string(), step]))
                     .build();
                 row.set_title_lines(0);
                 g.add(&row);
@@ -430,7 +430,7 @@ impl EnrollmentViewComponent {
         // save errors are visible in the enrollment view.
         if let Some(err) = error {
             let err_row = adw::ActionRow::builder()
-                .title(tr(&format!("{}: {}", err.title, err.detail)))
+                .title(crate::tr_args("{}: {}", &[&err.title, &err.detail]))
                 .css_classes(["error"])
                 .build();
             err_row.set_accessible_role(gtk4::AccessibleRole::Alert);

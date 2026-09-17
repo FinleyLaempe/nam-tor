@@ -650,3 +650,28 @@ fn rapidly_changing_guidance_is_still_rate_limited() {
         "a different string 10 ms later must still be throttled"
     );
 }
+
+/// A message with runtime parts must keep a stable msgid.
+///
+/// `tr(&format!("Rename profile {name}"))` hands gettext a msgid containing
+/// the interpolated value, so it can never match a catalog entry — every such
+/// string was permanently untranslatable while a test asserting strings are
+/// "wrapped in tr()" still passed.
+#[test]
+fn tr_args_substitutes_without_destroying_the_msgid() {
+    use namtor_ui::tr_args;
+    assert_eq!(
+        tr_args("Rename profile {}", &["Alice"]),
+        "Rename profile Alice"
+    );
+    assert_eq!(
+        tr_args("{}: {}", &["Daemon unavailable", "not running"]),
+        "Daemon unavailable: not running"
+    );
+    // Extra placeholders with no argument are left alone rather than panicking.
+    assert_eq!(tr_args("{} and {}", &["one"]), "one and {}");
+    // Extra arguments are ignored, not appended.
+    assert_eq!(tr_args("just {}", &["a", "b"]), "just a");
+    // No placeholder: the msgid passes through.
+    assert_eq!(tr_args("no placeholder", &["x"]), "no placeholder");
+}

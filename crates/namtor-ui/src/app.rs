@@ -415,7 +415,7 @@ impl AppController {
         if let Some(err) = &model.error {
             let err_group = adw::PreferencesGroup::new();
             let err_row = adw::ActionRow::builder()
-                .title(tr(&format!("{}: {}", err.title, err.detail)))
+                .title(crate::tr_args("{}: {}", &[&err.title, &err.detail]))
                 .css_classes(["error"])
                 .build();
             err_row.set_accessible_role(gtk4::AccessibleRole::Alert);
