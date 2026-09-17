@@ -1938,3 +1938,30 @@ No latency samples were produced (N=0), so no median and no p95. The ledger's st
 The test (`authentication_latency_meets_the_median_and_p95_budgets`) is committed and `#[ignore]`d, with its timed region documented, so the next attempt does not have to re-derive any of this. With F24 fixed, blocker 1 is gone; what remains is a person sitting square to the lens at a distance where YuNet clears 0.6 — run 3's 0.769 shows that position exists.
 
 Incidental, not a gate number: full-pipeline cost was roughly **100-140 ms per illuminated frame** (YuNet + SFace, release build, CPU EP). That excludes store load, frame-pair wait, differential, PAD, matching and z-norm, so it is not a `verify()` latency and must not be quoted as one.
+
+---
+
+# Spoof probe, 2026-09-17: screen replay rejected, but NOT by PAD
+
+First deliberate attack presentation against the reference camera, with the owner holding a photo of their own face on a phone screen where their face would be.
+
+**Attempt 1 — phone at normal brightness, ~40 cm.** The sensor stayed pinned to the clipping rail; the 2000 ms emitter watchdog fired after 24 frames while the AE was still waiting to come down. Brightest illuminated frame 119.79/255. No usable frame, so nothing was assessed. A phone screen is strongly emissive/reflective in the IR band.
+
+**Attempt 2 — screen dimmed to minimum, ~50 cm.** Exposure settled normally (48-57/255) and 14 illuminated frames were examined. Result:
+
+```
+0 with no face even at the 0.3 detector threshold
+best detection confidence: 0.000
+```
+
+**YuNet detects no face at all on a phone screen under IR.** A visible-light photo on an emissive display does not reproduce the IR-band structure of a face; the sensor sees a bright rectangle, not features.
+
+## What this does and does not establish
+
+**Establishes:** a naive screen-replay attack does not authenticate. It fails at the detector, and it fails twice over — first by saturating the exposure, then by presenting nothing YuNet recognises as a face.
+
+**Does NOT establish anything about PAD**, including the radial redesign committed in `28b5756`. The analytic gates were never reached: PAD runs on the strobe differential *after* a face has been detected, and no detection occurred. So the caveat on that commit stands unchanged — the redesign's spoof-rejection rate remains unmeasured.
+
+**The attack class that would actually exercise PAD is a printed photo on paper.** Paper reflects IR broadly the way skin does, so YuNet frequently *does* detect a face on a print — which is exactly the case the analytic gates (differential energy, gradient consistency, specular highlight, radial falloff) were written to catch. A print held at working distance under the strobe should show near-zero differential energy and no 1/d² falloff, and be vetoed. **That test has not been run.**
+
+G4 (APCER/BPCER) stays WITHHELD. One attack presentation of one class is not an APCER, the sample size is 1, and the gate under redesign was not exercised. Recording this as a data point, not as evidence of spoof resistance.
