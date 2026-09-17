@@ -11,5 +11,5 @@
 
 [D-BUS Service]
 Name=org.namtor.Manager
-Exec=/usr/lib/namtor/namtor-daemon
+Exec=/usr/bin/namtor daemon
 User=namtor

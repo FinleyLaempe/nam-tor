@@ -10,19 +10,23 @@ Type=simple
 User=namtor
 Group=namtor
 SupplementaryGroups=video tss
-Environment=NAMTOR_WORKER_BIN=/usr/lib/namtor/namtor-worker
-ExecStart=/usr/lib/namtor/namtor-daemon
+# The worker is the same executable re-exec'd as `namtor worker`; the daemon
+# resolves it through /proc/self/exe. NAMTOR_WORKER_BIN is only the fallback
+# for a /proc-less environment.
+Environment=NAMTOR_WORKER_BIN=/usr/bin/namtor
+ExecStart=/usr/bin/namtor daemon
 # SIGKILL backstop: after TimeoutStopSec, systemd sends SIGKILL; ExecStopPost
 # runs even then to force the emitter off (spec §4.10.2 G1.4).
-ExecStopPost=/usr/lib/namtor/namtor-camera-emitter-off /dev/video2
+ExecStopPost=/usr/bin/namtor emitter-off /dev/video2
 TimeoutStopSec=2
 
 # --- Privilege reduction ---------------------------------------------------
 # The daemon is not root. It has no capabilities (bounding set empty, no
 # ambient capabilities). NoNewPrivileges prevents any child from gaining
 # privileges via setuid binaries. The worker is spawned directly as a
-# child of the daemon (same user `namtor`) and self-applies seccomp +
-# landlock — the sandbox is the privilege boundary, not a UID drop.
+# child of the daemon (same user `namtor`, same executable re-exec'd as
+# `namtor worker`) and self-applies seccomp + landlock — the sandbox is
+# the privilege boundary, not a UID drop, and not a shared address space.
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=

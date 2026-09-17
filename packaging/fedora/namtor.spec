@@ -176,10 +176,7 @@ test -f "$archive" || { echo "error: model archive missing: $archive" >&2; exit 
 # Build every artifact the install manifest references. -p pins avoid
 # pulling unrelated workspace members (e.g. namtor-eval, namtor-probe).
 cargo build --release --frozen \
-    -p namtor-daemon \
-    -p namtor-worker \
-    -p namtor-cli \
-    -p namtor-camera \
+    -p namtor \
     -p namtor-pam \
     -p namtor-ui
 
@@ -228,9 +225,7 @@ echo '{"model_id":"sface_2021dec","licence_url":"https://www.apache.org/licenses
 %doc %{_defaultdocdir}/%{name}/COPYING.md
 %doc %{_defaultdocdir}/%{name}/namtor.spdx.json
 %doc %{_defaultdocdir}/%{name}/namtor.cyclonedx.json
-/usr/lib/namtor/namtor-daemon
-/usr/lib/namtor/namtor-worker
-/usr/lib/namtor/namtor-camera-emitter-off
+/usr/bin/namtor
 /usr/bin/namtor-cli
 /usr/lib/security/pam_namtor.so
 /usr/lib/systemd/system/namtor-daemon.service

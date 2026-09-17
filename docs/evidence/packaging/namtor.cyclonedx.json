@@ -3738,7 +3738,22 @@
       "version": "1.2.2"
     },
     {
-      "bom-ref": "namtor-camera@0.1.0",
+      "bom-ref": "namtor@0.2.0",
+      "externalRefs": [],
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only"
+          }
+        }
+      ],
+      "name": "namtor",
+      "purl": "pkg:generic/namtor@0.2.0",
+      "type": "library",
+      "version": "0.2.0"
+    },
+    {
+      "bom-ref": "namtor-camera@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3748,12 +3763,12 @@
         }
       ],
       "name": "namtor-camera",
-      "purl": "pkg:generic/namtor-camera@0.1.0",
+      "purl": "pkg:generic/namtor-camera@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-capture@0.1.0",
+      "bom-ref": "namtor-capture@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3763,12 +3778,12 @@
         }
       ],
       "name": "namtor-capture",
-      "purl": "pkg:generic/namtor-capture@0.1.0",
+      "purl": "pkg:generic/namtor-capture@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-cli@0.1.0",
+      "bom-ref": "namtor-cli@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3778,12 +3793,27 @@
         }
       ],
       "name": "namtor-cli",
-      "purl": "pkg:generic/namtor-cli@0.1.0",
+      "purl": "pkg:generic/namtor-cli@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-collect@0.1.0",
+      "bom-ref": "namtor-client@0.2.0",
+      "externalRefs": [],
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only"
+          }
+        }
+      ],
+      "name": "namtor-client",
+      "purl": "pkg:generic/namtor-client@0.2.0",
+      "type": "library",
+      "version": "0.2.0"
+    },
+    {
+      "bom-ref": "namtor-collect@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3793,12 +3823,12 @@
         }
       ],
       "name": "namtor-collect",
-      "purl": "pkg:generic/namtor-collect@0.1.0",
+      "purl": "pkg:generic/namtor-collect@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-daemon@0.1.0",
+      "bom-ref": "namtor-daemon@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3808,12 +3838,12 @@
         }
       ],
       "name": "namtor-daemon",
-      "purl": "pkg:generic/namtor-daemon@0.1.0",
+      "purl": "pkg:generic/namtor-daemon@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-eval@0.1.0",
+      "bom-ref": "namtor-eval@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3823,27 +3853,12 @@
         }
       ],
       "name": "namtor-eval",
-      "purl": "pkg:generic/namtor-eval@0.1.0",
+      "purl": "pkg:generic/namtor-eval@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-gnome@0.1.0",
-      "externalRefs": [],
-      "licenses": [
-        {
-          "license": {
-            "id": "GPL-3.0-only"
-          }
-        }
-      ],
-      "name": "namtor-gnome",
-      "purl": "pkg:generic/namtor-gnome@0.1.0",
-      "type": "library",
-      "version": "0.1.0"
-    },
-    {
-      "bom-ref": "namtor-hwdb@0.1.0",
+      "bom-ref": "namtor-hwdb@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3853,27 +3868,12 @@
         }
       ],
       "name": "namtor-hwdb",
-      "purl": "pkg:generic/namtor-hwdb@0.1.0",
+      "purl": "pkg:generic/namtor-hwdb@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-kde@0.1.0",
-      "externalRefs": [],
-      "licenses": [
-        {
-          "license": {
-            "id": "GPL-3.0-only"
-          }
-        }
-      ],
-      "name": "namtor-kde",
-      "purl": "pkg:generic/namtor-kde@0.1.0",
-      "type": "library",
-      "version": "0.1.0"
-    },
-    {
-      "bom-ref": "namtor-layout@0.1.0",
+      "bom-ref": "namtor-layout@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3883,12 +3883,12 @@
         }
       ],
       "name": "namtor-layout",
-      "purl": "pkg:generic/namtor-layout@0.1.0",
+      "purl": "pkg:generic/namtor-layout@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-pad@0.1.0",
+      "bom-ref": "namtor-pad@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3898,12 +3898,12 @@
         }
       ],
       "name": "namtor-pad",
-      "purl": "pkg:generic/namtor-pad@0.1.0",
+      "purl": "pkg:generic/namtor-pad@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-pam@0.1.0",
+      "bom-ref": "namtor-pam@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3913,12 +3913,12 @@
         }
       ],
       "name": "namtor-pam",
-      "purl": "pkg:generic/namtor-pam@0.1.0",
+      "purl": "pkg:generic/namtor-pam@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-pam-config@0.1.0",
+      "bom-ref": "namtor-pam-config@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3928,12 +3928,12 @@
         }
       ],
       "name": "namtor-pam-config",
-      "purl": "pkg:generic/namtor-pam-config@0.1.0",
+      "purl": "pkg:generic/namtor-pam-config@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-probe@0.1.0",
+      "bom-ref": "namtor-probe@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3943,12 +3943,12 @@
         }
       ],
       "name": "namtor-probe",
-      "purl": "pkg:generic/namtor-probe@0.1.0",
+      "purl": "pkg:generic/namtor-probe@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-proto@0.1.0",
+      "bom-ref": "namtor-proto@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3958,12 +3958,12 @@
         }
       ],
       "name": "namtor-proto",
-      "purl": "pkg:generic/namtor-proto@0.1.0",
+      "purl": "pkg:generic/namtor-proto@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-recog@0.1.0",
+      "bom-ref": "namtor-recog@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3973,12 +3973,12 @@
         }
       ],
       "name": "namtor-recog",
-      "purl": "pkg:generic/namtor-recog@0.1.0",
+      "purl": "pkg:generic/namtor-recog@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-store@0.1.0",
+      "bom-ref": "namtor-store@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -3988,12 +3988,27 @@
         }
       ],
       "name": "namtor-store",
-      "purl": "pkg:generic/namtor-store@0.1.0",
+      "purl": "pkg:generic/namtor-store@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-uvc@0.1.0",
+      "bom-ref": "namtor-ui@0.2.0",
+      "externalRefs": [],
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only"
+          }
+        }
+      ],
+      "name": "namtor-ui",
+      "purl": "pkg:generic/namtor-ui@0.2.0",
+      "type": "library",
+      "version": "0.2.0"
+    },
+    {
+      "bom-ref": "namtor-uvc@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -4003,12 +4018,12 @@
         }
       ],
       "name": "namtor-uvc",
-      "purl": "pkg:generic/namtor-uvc@0.1.0",
+      "purl": "pkg:generic/namtor-uvc@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
-      "bom-ref": "namtor-worker@0.1.0",
+      "bom-ref": "namtor-worker@0.2.0",
       "externalRefs": [],
       "licenses": [
         {
@@ -4018,9 +4033,9 @@
         }
       ],
       "name": "namtor-worker",
-      "purl": "pkg:generic/namtor-worker@0.1.0",
+      "purl": "pkg:generic/namtor-worker@0.2.0",
       "type": "library",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
       "bom-ref": "ndarray@0.17.2",
@@ -5191,17 +5206,17 @@
       "version": "1.1.4"
     },
     {
-      "bom-ref": "rustls@0.23.41",
+      "bom-ref": "rustls@0.23.45",
       "externalRefs": [
         {
           "type": "distribution",
-          "url": "https://crates.io/crates/rustls/0.23.41"
+          "url": "https://crates.io/crates/rustls/0.23.45"
         }
       ],
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "6b92b125634d9b795e7beca796cc790df15a7fb38323bf3196fda83292d06b1f"
+          "content": "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
         }
       ],
       "licenses": [
@@ -5212,9 +5227,9 @@
         }
       ],
       "name": "rustls",
-      "purl": "pkg:cargo/rustls@0.23.41",
+      "purl": "pkg:cargo/rustls@0.23.45",
       "type": "library",
-      "version": "0.23.41"
+      "version": "0.23.45"
     },
     {
       "bom-ref": "rustls-pki-types@1.15.0",
@@ -5243,17 +5258,17 @@
       "version": "1.15.0"
     },
     {
-      "bom-ref": "rustls-webpki@0.103.13",
+      "bom-ref": "rustls-webpki@0.103.15",
       "externalRefs": [
         {
           "type": "distribution",
-          "url": "https://crates.io/crates/rustls-webpki/0.103.13"
+          "url": "https://crates.io/crates/rustls-webpki/0.103.15"
         }
       ],
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+          "content": "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
         }
       ],
       "licenses": [
@@ -5264,9 +5279,9 @@
         }
       ],
       "name": "rustls-webpki",
-      "purl": "pkg:cargo/rustls-webpki@0.103.13",
+      "purl": "pkg:cargo/rustls-webpki@0.103.15",
       "type": "library",
-      "version": "0.103.13"
+      "version": "0.103.15"
     },
     {
       "bom-ref": "rustversion@1.0.23",
@@ -7451,32 +7466,6 @@
       "version": "0.52.0"
     },
     {
-      "bom-ref": "windows-sys@0.59.0",
-      "externalRefs": [
-        {
-          "type": "distribution",
-          "url": "https://crates.io/crates/windows-sys/0.59.0"
-        }
-      ],
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT OR Apache-2.0"
-          }
-        }
-      ],
-      "name": "windows-sys",
-      "purl": "pkg:cargo/windows-sys@0.59.0",
-      "type": "library",
-      "version": "0.59.0"
-    },
-    {
       "bom-ref": "windows-sys@0.61.2",
       "externalRefs": [
         {
@@ -8443,11 +8432,11 @@
       "version": "3.5.0"
     },
     {
-      "bom-ref": "binary-libnamtorqml.so@0.1.0",
+      "bom-ref": "binary-namtor@0.1.0",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "06197f56f7433126b7d5256bfeccc6cdcafd77477d4d9c8bd8aae7102c2a1580"
+          "content": "08810859dd14b003dc71d9b1f236579ccc502048d46d7cba6ebac251831fb80c"
         }
       ],
       "licenses": [
@@ -8457,64 +8446,7 @@
           }
         }
       ],
-      "name": "libnamtorqml.so",
-      "type": "application",
-      "version": "0.1.0"
-    },
-    {
-      "bom-ref": "binary-namtor-camera-emitter-off@0.1.0",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "909a6d590d19be9dff78599c997adc5bb51ccc7ebd01c985395d75f501e37293"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "GPL-3.0-only"
-          }
-        }
-      ],
-      "name": "namtor-camera-emitter-off",
-      "type": "application",
-      "version": "0.1.0"
-    },
-    {
-      "bom-ref": "binary-namtor-cli@0.1.0",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "79587b4c24eaaf3484aab7c9459bff1a6c85ffa6d813c7b1d4e054dfc5a1aab9"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "GPL-3.0-only"
-          }
-        }
-      ],
-      "name": "namtor-cli",
-      "type": "application",
-      "version": "0.1.0"
-    },
-    {
-      "bom-ref": "binary-namtor-daemon@0.1.0",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "c61dfafc2bc66c8175b014ab9fb4dc7f37a09fa4096c3adafb73329ad369c47e"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "GPL-3.0-only"
-          }
-        }
-      ],
-      "name": "namtor-daemon",
+      "name": "namtor",
       "type": "application",
       "version": "0.1.0"
     },
@@ -8523,7 +8455,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "1c73aea57937f4d5a77d7d9e297e3fa272108e36c5650ce1675c5b22260cd1c7"
+          "content": "60ab1d9b9e0347b44cd0e6156980ce24c58fae7d12fc8634f9d08d4b28a83ffc"
         }
       ],
       "licenses": [
@@ -8538,30 +8470,11 @@
       "version": "0.1.0"
     },
     {
-      "bom-ref": "binary-namtor-worker@0.1.0",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "9876729bb42dff0fcb306cbe0cb6635ce6eb154f193e26f69ea56d5094804d0b"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "id": "GPL-3.0-only"
-          }
-        }
-      ],
-      "name": "namtor-worker",
-      "type": "application",
-      "version": "0.1.0"
-    },
-    {
       "bom-ref": "binary-pam_namtor.so@0.1.0",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "108ea742e06384b01075c8bdda0e0ad5d64fcb0afc2b65d1585f6722371859c2"
+          "content": "9cfbf5271ff497efbb29805aacf7aaa6a36f3a57c0f2f024173fc08e374536f0"
         }
       ],
       "licenses": [
@@ -8595,7 +8508,7 @@
       "properties": [
         {
           "name": "namtor:builtFromCommit",
-          "value": "9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef"
+          "value": "3fd056c2b004943260d0684b539866a3b473293c"
         },
         {
           "name": "namtor:licenceSha256",
@@ -8634,7 +8547,7 @@
       "properties": [
         {
           "name": "namtor:builtFromCommit",
-          "value": "9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef"
+          "value": "3fd056c2b004943260d0684b539866a3b473293c"
         },
         {
           "name": "namtor:licenceSha256",
@@ -8669,7 +8582,7 @@
       "properties": [
         {
           "name": "namtor:builtFromCommit",
-          "value": "9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef"
+          "value": "3fd056c2b004943260d0684b539866a3b473293c"
         },
         {
           "name": "namtor:licenceSha256",
@@ -9331,7 +9244,7 @@
         "gobject-sys@0.20.10",
         "libc@0.2.189",
         "system-deps@7.0.8",
-        "windows-sys@0.59.0"
+        "windows-sys@0.52.0"
       ],
       "ref": "gio-sys@0.20.10"
     },
@@ -9543,7 +9456,7 @@
         "http@1.5.0",
         "hyper@1.11.0",
         "hyper-util@0.1.20",
-        "rustls@0.23.41",
+        "rustls@0.23.45",
         "tokio@1.53.1",
         "tokio-rustls@0.26.4",
         "tower-service@0.3.3",
@@ -9804,16 +9717,29 @@
     },
     {
       "dependsOn": [
-        "namtor-capture@0.1.0",
-        "namtor-hwdb@0.1.0",
-        "namtor-uvc@0.1.0",
+        "namtor-camera@0.2.0",
+        "namtor-capture@0.2.0",
+        "namtor-cli@0.2.0",
+        "namtor-daemon@0.2.0",
+        "namtor-layout@0.2.0",
+        "namtor-proto@0.2.0",
+        "namtor-worker@0.2.0"
+      ],
+      "ref": "namtor@0.2.0"
+    },
+    {
+      "dependsOn": [
+        "namtor-capture@0.2.0",
+        "namtor-hwdb@0.2.0",
+        "namtor-layout@0.2.0",
+        "namtor-uvc@0.2.0",
         "tempfile@3.27.0",
         "thiserror@2.0.19",
         "toml@0.8.23",
         "udev@0.9.3",
         "zbus@5.18.0"
       ],
-      "ref": "namtor-camera@0.1.0"
+      "ref": "namtor-camera@0.2.0"
     },
     {
       "dependsOn": [
@@ -9823,20 +9749,20 @@
         "tempfile@3.27.0",
         "thiserror@2.0.19"
       ],
-      "ref": "namtor-capture@0.1.0"
+      "ref": "namtor-capture@0.2.0"
     },
     {
       "dependsOn": [
         "clap@4.6.5",
-        "namtor-camera@0.1.0",
-        "namtor-capture@0.1.0",
-        "namtor-hwdb@0.1.0",
-        "namtor-layout@0.1.0",
-        "namtor-pam@0.1.0",
-        "namtor-proto@0.1.0",
-        "namtor-recog@0.1.0",
-        "namtor-store@0.1.0",
-        "namtor-uvc@0.1.0",
+        "namtor-camera@0.2.0",
+        "namtor-capture@0.2.0",
+        "namtor-hwdb@0.2.0",
+        "namtor-layout@0.2.0",
+        "namtor-pam@0.2.0",
+        "namtor-proto@0.2.0",
+        "namtor-recog@0.2.0",
+        "namtor-store@0.2.0",
+        "namtor-uvc@0.2.0",
         "nix@0.29.0",
         "serde@1.0.229",
         "serde_json@1.0.151",
@@ -9848,34 +9774,46 @@
         "zeroize@1.9.0",
         "zvariant@5.13.1"
       ],
-      "ref": "namtor-cli@0.1.0"
+      "ref": "namtor-cli@0.2.0"
     },
     {
       "dependsOn": [
-        "namtor-capture@0.1.0",
-        "namtor-pad@0.1.0",
+        "namtor-proto@0.2.0",
+        "serde@1.0.229",
+        "serde_json@1.0.151",
+        "tempfile@3.27.0",
+        "thiserror@2.0.19",
+        "zbus@5.18.0"
+      ],
+      "ref": "namtor-client@0.2.0"
+    },
+    {
+      "dependsOn": [
+        "namtor-capture@0.2.0",
+        "namtor-pad@0.2.0",
         "serde@1.0.229",
         "serde_json@1.0.151",
         "tempfile@3.27.0",
         "thiserror@2.0.19"
       ],
-      "ref": "namtor-collect@0.1.0"
+      "ref": "namtor-collect@0.2.0"
     },
     {
       "dependsOn": [
         "libc@0.2.189",
-        "namtor-camera@0.1.0",
-        "namtor-capture@0.1.0",
-        "namtor-eval@0.1.0",
-        "namtor-hwdb@0.1.0",
-        "namtor-layout@0.1.0",
-        "namtor-pad@0.1.0",
-        "namtor-pam-config@0.1.0",
-        "namtor-proto@0.1.0",
-        "namtor-recog@0.1.0",
-        "namtor-store@0.1.0",
-        "namtor-uvc@0.1.0",
-        "namtor-worker@0.1.0",
+        "namtor-camera@0.2.0",
+        "namtor-capture@0.2.0",
+        "namtor-client@0.2.0",
+        "namtor-eval@0.2.0",
+        "namtor-hwdb@0.2.0",
+        "namtor-layout@0.2.0",
+        "namtor-pad@0.2.0",
+        "namtor-pam-config@0.2.0",
+        "namtor-proto@0.2.0",
+        "namtor-recog@0.2.0",
+        "namtor-store@0.2.0",
+        "namtor-uvc@0.2.0",
+        "namtor-worker@0.2.0",
         "nix@0.29.0",
         "rand@0.8.7",
         "reqwest@0.12.28",
@@ -9890,7 +9828,7 @@
         "zbus@5.18.0",
         "zeroize@1.9.0"
       ],
-      "ref": "namtor-daemon@0.1.0"
+      "ref": "namtor-daemon@0.2.0"
     },
     {
       "dependsOn": [
@@ -9899,44 +9837,17 @@
         "tempfile@3.27.0",
         "thiserror@2.0.19"
       ],
-      "ref": "namtor-eval@0.1.0"
+      "ref": "namtor-eval@0.2.0"
     },
     {
       "dependsOn": [
-        "gettext@0.4.0",
-        "gio@0.20.12",
-        "glib@0.20.12",
-        "gtk4@0.9.7",
-        "libadwaita@0.7.2",
-        "namtor-proto@0.1.0",
-        "nix@0.29.0",
-        "serde@1.0.229",
-        "serde_json@1.0.151",
-        "tempfile@3.27.0",
-        "thiserror@2.0.19",
-        "zbus@5.18.0"
-      ],
-      "ref": "namtor-gnome@0.1.0"
-    },
-    {
-      "dependsOn": [
-        "namtor-uvc@0.1.0",
+        "namtor-uvc@0.2.0",
         "serde@1.0.229",
         "tempfile@3.27.0",
         "thiserror@2.0.19",
         "toml@0.8.23"
       ],
-      "ref": "namtor-hwdb@0.1.0"
-    },
-    {
-      "dependsOn": [
-        "futures-util@0.3.33",
-        "serde@1.0.229",
-        "serde_json@1.0.151",
-        "tracing@0.1.44",
-        "zbus@5.18.0"
-      ],
-      "ref": "namtor-kde@0.1.0"
+      "ref": "namtor-hwdb@0.2.0"
     },
     {
       "dependsOn": [
@@ -9944,7 +9855,7 @@
         "tempfile@3.27.0",
         "toml@0.8.23"
       ],
-      "ref": "namtor-layout@0.1.0"
+      "ref": "namtor-layout@0.2.0"
     },
     {
       "dependsOn": [
@@ -9953,19 +9864,19 @@
         "tempfile@3.27.0",
         "thiserror@2.0.19"
       ],
-      "ref": "namtor-pad@0.1.0"
+      "ref": "namtor-pad@0.2.0"
     },
     {
       "dependsOn": [
         "libc@0.2.189",
-        "namtor-daemon@0.1.0",
-        "namtor-layout@0.1.0",
-        "namtor-proto@0.1.0",
+        "namtor-daemon@0.2.0",
+        "namtor-layout@0.2.0",
+        "namtor-proto@0.2.0",
         "nix@0.29.0",
         "serde_json@1.0.151",
         "tempfile@3.27.0"
       ],
-      "ref": "namtor-pam@0.1.0"
+      "ref": "namtor-pam@0.2.0"
     },
     {
       "dependsOn": [
@@ -9975,42 +9886,42 @@
         "sha2@0.10.9",
         "tempfile@3.27.0"
       ],
-      "ref": "namtor-pam-config@0.1.0"
+      "ref": "namtor-pam-config@0.2.0"
     },
     {
       "dependsOn": [
         "clap@4.6.5",
-        "namtor-capture@0.1.0",
-        "namtor-hwdb@0.1.0",
-        "namtor-uvc@0.1.0",
+        "namtor-capture@0.2.0",
+        "namtor-hwdb@0.2.0",
+        "namtor-uvc@0.2.0",
         "serde@1.0.229",
         "serde_json@1.0.151",
         "tempfile@3.27.0",
         "toml@0.8.23"
       ],
-      "ref": "namtor-probe@0.1.0"
+      "ref": "namtor-probe@0.2.0"
     },
     {
       "dependsOn": [
-        "namtor-capture@0.1.0",
+        "namtor-capture@0.2.0",
         "serde@1.0.229",
         "serde_json@1.0.151",
         "thiserror@2.0.19"
       ],
-      "ref": "namtor-proto@0.1.0"
+      "ref": "namtor-proto@0.2.0"
     },
     {
       "dependsOn": [
-        "namtor-capture@0.1.0",
-        "namtor-proto@0.1.0",
-        "namtor-worker@0.1.0",
+        "namtor-capture@0.2.0",
+        "namtor-proto@0.2.0",
+        "namtor-worker@0.2.0",
         "serde@1.0.229",
         "serde_json@1.0.151",
         "sha2@0.10.9",
         "tempfile@3.27.0",
         "thiserror@2.0.19"
       ],
-      "ref": "namtor-recog@0.1.0"
+      "ref": "namtor-recog@0.2.0"
     },
     {
       "dependsOn": [
@@ -10018,7 +9929,7 @@
         "argon2@0.5.3",
         "hmac@0.12.1",
         "libc@0.2.189",
-        "namtor-proto@0.1.0",
+        "namtor-proto@0.2.0",
         "rand@0.8.7",
         "serde@1.0.229",
         "serde_json@1.0.151",
@@ -10027,25 +9938,45 @@
         "thiserror@2.0.19",
         "zeroize@1.9.0"
       ],
-      "ref": "namtor-store@0.1.0"
+      "ref": "namtor-store@0.2.0"
     },
     {
       "dependsOn": [
-        "namtor-capture@0.1.0",
+        "gettext@0.4.0",
+        "gio@0.20.12",
+        "glib@0.20.12",
+        "gtk4@0.9.7",
+        "libadwaita@0.7.2",
+        "namtor-client@0.2.0",
+        "namtor-layout@0.2.0",
+        "namtor-proto@0.2.0",
+        "nix@0.29.0",
+        "serde@1.0.229",
+        "serde_json@1.0.151",
+        "tempfile@3.27.0",
+        "thiserror@2.0.19",
+        "zbus@5.18.0"
+      ],
+      "ref": "namtor-ui@0.2.0"
+    },
+    {
+      "dependsOn": [
+        "namtor-capture@0.2.0",
         "nix@0.29.0",
         "serde@1.0.229",
         "tempfile@3.27.0",
         "thiserror@2.0.19"
       ],
-      "ref": "namtor-uvc@0.1.0"
+      "ref": "namtor-uvc@0.2.0"
     },
     {
       "dependsOn": [
         "landlock@0.4.7",
         "libc@0.2.189",
         "libseccomp@0.4.0",
-        "namtor-capture@0.1.0",
-        "namtor-proto@0.1.0",
+        "namtor-capture@0.2.0",
+        "namtor-layout@0.2.0",
+        "namtor-proto@0.2.0",
         "nix@0.29.0",
         "ort@2.0.0-rc.13",
         "serde@1.0.229",
@@ -10053,7 +9984,7 @@
         "tempfile@3.27.0",
         "thiserror@2.0.19"
       ],
-      "ref": "namtor-worker@0.1.0"
+      "ref": "namtor-worker@0.2.0"
     },
     {
       "dependsOn": [
@@ -10250,7 +10181,7 @@
         "quinn-proto@0.11.16",
         "quinn-udp@0.5.15",
         "rustc-hash@2.1.3",
-        "rustls@0.23.41",
+        "rustls@0.23.45",
         "socket2@0.6.5",
         "thiserror@2.0.19",
         "tokio@1.53.1",
@@ -10268,7 +10199,7 @@
         "rand_pcg@0.10.2",
         "ring@0.17.14",
         "rustc-hash@2.1.3",
-        "rustls@0.23.41",
+        "rustls@0.23.45",
         "rustls-pki-types@1.15.0",
         "slab@0.4.12",
         "thiserror@2.0.19",
@@ -10372,7 +10303,7 @@
         "percent-encoding@2.3.2",
         "pin-project-lite@0.2.17",
         "quinn@0.11.11",
-        "rustls@0.23.41",
+        "rustls@0.23.45",
         "rustls-pki-types@1.15.0",
         "serde@1.0.229",
         "serde_json@1.0.151",
@@ -10428,11 +10359,11 @@
         "once_cell@1.21.4",
         "ring@0.17.14",
         "rustls-pki-types@1.15.0",
-        "rustls-webpki@0.103.13",
+        "rustls-webpki@0.103.15",
         "subtle@2.6.1",
         "zeroize@1.9.0"
       ],
-      "ref": "rustls@0.23.41"
+      "ref": "rustls@0.23.45"
     },
     {
       "dependsOn": [
@@ -10447,7 +10378,7 @@
         "rustls-pki-types@1.15.0",
         "untrusted@0.9.0"
       ],
-      "ref": "rustls-webpki@0.103.13"
+      "ref": "rustls-webpki@0.103.15"
     },
     {
       "dependsOn": [],
@@ -10692,7 +10623,7 @@
     },
     {
       "dependsOn": [
-        "rustls@0.23.41",
+        "rustls@0.23.45",
         "tokio@1.53.1"
       ],
       "ref": "tokio-rustls@0.26.4"
@@ -10890,7 +10821,7 @@
         "base64@0.22.1",
         "log@0.4.33",
         "percent-encoding@2.3.2",
-        "rustls@0.23.41",
+        "rustls@0.23.45",
         "rustls-pki-types@1.15.0",
         "socks@0.3.4",
         "ureq-proto@0.6.0",
@@ -11050,12 +10981,6 @@
         "windows-targets@0.52.6"
       ],
       "ref": "windows-sys@0.52.0"
-    },
-    {
-      "dependsOn": [
-        "windows-targets@0.52.6"
-      ],
-      "ref": "windows-sys@0.59.0"
     },
     {
       "dependsOn": [
@@ -11338,27 +11263,11 @@
     },
     {
       "dependsOn": [],
-      "ref": "binary-libnamtorqml.so@0.1.0"
-    },
-    {
-      "dependsOn": [],
-      "ref": "binary-namtor-camera-emitter-off@0.1.0"
-    },
-    {
-      "dependsOn": [],
-      "ref": "binary-namtor-cli@0.1.0"
-    },
-    {
-      "dependsOn": [],
-      "ref": "binary-namtor-daemon@0.1.0"
+      "ref": "binary-namtor@0.1.0"
     },
     {
       "dependsOn": [],
       "ref": "binary-namtor-enroll-wizard@0.1.0"
-    },
-    {
-      "dependsOn": [],
-      "ref": "binary-namtor-worker@0.1.0"
     },
     {
       "dependsOn": [],
@@ -11527,25 +11436,26 @@
         "memchr@2.8.3",
         "memoffset@0.9.1",
         "mio@1.2.2",
-        "namtor-camera@0.1.0",
-        "namtor-capture@0.1.0",
-        "namtor-cli@0.1.0",
-        "namtor-collect@0.1.0",
-        "namtor-daemon@0.1.0",
-        "namtor-eval@0.1.0",
-        "namtor-gnome@0.1.0",
-        "namtor-hwdb@0.1.0",
-        "namtor-kde@0.1.0",
-        "namtor-layout@0.1.0",
-        "namtor-pad@0.1.0",
-        "namtor-pam@0.1.0",
-        "namtor-pam-config@0.1.0",
-        "namtor-probe@0.1.0",
-        "namtor-proto@0.1.0",
-        "namtor-recog@0.1.0",
-        "namtor-store@0.1.0",
-        "namtor-uvc@0.1.0",
-        "namtor-worker@0.1.0",
+        "namtor@0.2.0",
+        "namtor-camera@0.2.0",
+        "namtor-capture@0.2.0",
+        "namtor-cli@0.2.0",
+        "namtor-client@0.2.0",
+        "namtor-collect@0.2.0",
+        "namtor-daemon@0.2.0",
+        "namtor-eval@0.2.0",
+        "namtor-hwdb@0.2.0",
+        "namtor-layout@0.2.0",
+        "namtor-pad@0.2.0",
+        "namtor-pam@0.2.0",
+        "namtor-pam-config@0.2.0",
+        "namtor-probe@0.2.0",
+        "namtor-proto@0.2.0",
+        "namtor-recog@0.2.0",
+        "namtor-store@0.2.0",
+        "namtor-ui@0.2.0",
+        "namtor-uvc@0.2.0",
+        "namtor-worker@0.2.0",
         "ndarray@0.17.2",
         "nix@0.29.0",
         "nu-ansi-term@0.50.3",
@@ -11593,9 +11503,9 @@
         "rustc-hash@2.1.3",
         "rustc_version@0.4.1",
         "rustix@1.1.4",
-        "rustls@0.23.41",
+        "rustls@0.23.45",
         "rustls-pki-types@1.15.0",
-        "rustls-webpki@0.103.13",
+        "rustls-webpki@0.103.15",
         "rustversion@1.0.23",
         "ryu@1.0.23",
         "semver@1.0.28",
@@ -11685,7 +11595,6 @@
         "windows-link@0.2.1",
         "windows-sys@0.48.0",
         "windows-sys@0.52.0",
-        "windows-sys@0.59.0",
         "windows-sys@0.61.2",
         "windows-targets@0.48.5",
         "windows-targets@0.52.6",
@@ -11725,12 +11634,8 @@
         "zvariant@5.13.1",
         "zvariant_derive@5.13.1",
         "zvariant_utils@3.5.0",
-        "binary-libnamtorqml.so@0.1.0",
-        "binary-namtor-camera-emitter-off@0.1.0",
-        "binary-namtor-cli@0.1.0",
-        "binary-namtor-daemon@0.1.0",
+        "binary-namtor@0.1.0",
         "binary-namtor-enroll-wizard@0.1.0",
-        "binary-namtor-worker@0.1.0",
         "binary-pam_namtor.so@0.1.0",
         "model-minifasnet_pad@0.1.0",
         "model-sface_2021dec@0.1.0",

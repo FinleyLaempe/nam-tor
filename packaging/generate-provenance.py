@@ -100,9 +100,10 @@ def _subjects(srcdir: str, model_archive: str | None) -> list[dict]:
     release = os.path.join(srcdir, "target", "release")
     subjects = []
     if os.path.isdir(release):
+        # `namtor` is the single multi-call binary (daemon, worker, cli,
+        # emitter-off); the wizard and the PAM cdylib stay separate.
         names = [
-            "namtor-daemon", "namtor-worker",
-            "namtor-camera-emitter-off", "namtor-cli", "namtor-enroll-wizard",
+            "namtor", "namtor-enroll-wizard",
             "libnamtor_pam.so",
         ]
         for name in names:

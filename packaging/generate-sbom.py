@@ -15,8 +15,8 @@ generation proceeds (the SBOM is still complete in every other field).
 
 In addition to Cargo dependencies, the SBOM includes:
 
-- **Release binaries** — namtor-daemon, namtor-worker, namtor-cli,
-  namtor-camera-emitter-off, pam_namtor.so (libnamtor_pam.so),
+- **Release binaries** — namtor (the single multi-call binary: daemon,
+  worker, cli, emitter-off), pam_namtor.so (libnamtor_pam.so),
   and namtor-enroll-wizard when
   built. Each is a component with a sha256 hash.
 - **ONNX models** — yunet_2023mar, sface_2021dec, minifasnet_pad, read
@@ -92,10 +92,7 @@ def _binary_components(srcdir: str) -> list[dict]:
     """sha256 of each release binary the manifest installs."""
     release = os.path.join(srcdir, "target", "release")
     names = [
-        ("namtor-daemon", "namtor-daemon"),
-        ("namtor-worker", "namtor-worker"),
-        ("namtor-cli", "namtor-cli"),
-        ("namtor-camera-emitter-off", "namtor-camera-emitter-off"),
+        ("namtor", "namtor"),
         ("libnamtor_pam.so", "pam_namtor.so"),
         ("namtor-enroll-wizard", "namtor-enroll-wizard"),
     ]

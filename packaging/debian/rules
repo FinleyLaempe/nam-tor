@@ -60,10 +60,7 @@ override_dh_auto_configure:
 # ---------------------------------------------------------------------------
 override_dh_auto_build:
 	cargo build --release --frozen \
-	    -p namtor-daemon \
-	    -p namtor-worker \
-	    -p namtor-cli \
-	    -p namtor-camera \
+	    -p namtor \
 	    -p namtor-pam \
 	    -p namtor-ui
 

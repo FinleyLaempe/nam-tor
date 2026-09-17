@@ -150,8 +150,7 @@ fi
 # Default file set (only when not in release-dir mode and no explicit files).
 if [[ ${#files[@]} -eq 0 && -z "$release_dir" ]]; then
     repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    for b in namtor-daemon namtor-worker \
-             namtor-camera-emitter-off namtor-cli namtor-enroll-wizard \
+    for b in namtor namtor-enroll-wizard \
              libnamtor_pam.so; do
         f="$repo_root/target/release/$b"
         [[ -f "$f" ]] && files+=("$f")

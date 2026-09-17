@@ -148,10 +148,7 @@ build() {
     # Build every artifact the install manifest references. -p pins avoid
     # pulling unrelated workspace members (e.g. namtor-eval, namtor-probe).
     cargo build --release --locked --offline \
-        -p namtor-daemon \
-        -p namtor-worker \
-        -p namtor-cli \
-        -p namtor-camera \
+        -p namtor \
         -p namtor-pam \
         -p namtor-ui
 }
@@ -167,11 +164,12 @@ check() {
 }
 
 # ---------------------------------------------------------------------------
-# package_namtor: core package — daemon, worker, CLI, PAM, systemd, models,
-# licences, lifecycle helper, SBOM. Headless-safe (no desktop deps).
+# package_namtor: core package — the single `namtor` multi-call binary
+# (daemon, worker, CLI, emitter-off), PAM module, systemd, models, licences,
+# lifecycle helper, SBOM. Headless-safe (no desktop deps).
 # ---------------------------------------------------------------------------
 package_namtor() {
-    pkgdesc="IR face authentication — daemon, PAM module, CLI, models (headless-safe)"
+    pkgdesc="IR face authentication — single namtor binary (daemon/worker/CLI), PAM module, models (headless-safe)"
     arch=('x86_64' 'aarch64')
     depends=(
         'onnxruntime'
@@ -187,7 +185,7 @@ package_namtor() {
     cd "$srcdir/nam-tor-$pkgver"
 
     # Deterministic staging from packaging/install-manifest.toml — core
-    # entries only (daemon, worker, CLI, PAM, systemd, sysusers, tmpfiles,
+    # entries only (namtor binary + namtor-cli symlink, PAM, systemd, sysusers, tmpfiles,
     # D-Bus, polkit, manifests, man pages, PAM scripts, README, COPYING,
     # SBOM, lifecycle helper).
     ./packaging/stage.sh "$pkgdir" "$srcdir/nam-tor-$pkgver" --package core

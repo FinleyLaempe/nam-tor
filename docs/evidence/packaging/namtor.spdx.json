@@ -1650,194 +1650,204 @@
       "versionInfo": "1.2.2"
     },
     {
-      "SPDXID": "SPDXRef-namtor-camera-0-1-0",
+      "SPDXID": "SPDXRef-namtor-0-2-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0-only",
+      "name": "namtor",
+      "versionInfo": "0.2.0"
+    },
+    {
+      "SPDXID": "SPDXRef-namtor-camera-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-camera",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-capture-0-1-0",
+      "SPDXID": "SPDXRef-namtor-capture-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-capture",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-cli-0-1-0",
+      "SPDXID": "SPDXRef-namtor-cli-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-cli",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-collect-0-1-0",
+      "SPDXID": "SPDXRef-namtor-client-0-2-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0-only",
+      "name": "namtor-client",
+      "versionInfo": "0.2.0"
+    },
+    {
+      "SPDXID": "SPDXRef-namtor-collect-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-collect",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-daemon-0-1-0",
+      "SPDXID": "SPDXRef-namtor-daemon-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-daemon",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-eval-0-1-0",
+      "SPDXID": "SPDXRef-namtor-eval-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-eval",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-gnome-0-1-0",
-      "copyrightText": "NOASSERTION",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "licenseConcluded": "GPL-3.0-only",
-      "licenseDeclared": "GPL-3.0-only",
-      "name": "namtor-gnome",
-      "versionInfo": "0.1.0"
-    },
-    {
-      "SPDXID": "SPDXRef-namtor-hwdb-0-1-0",
+      "SPDXID": "SPDXRef-namtor-hwdb-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
       "licenseDeclared": "Apache-2.0",
       "name": "namtor-hwdb",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-kde-0-1-0",
-      "copyrightText": "NOASSERTION",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "licenseConcluded": "GPL-3.0-only",
-      "licenseDeclared": "GPL-3.0-only",
-      "name": "namtor-kde",
-      "versionInfo": "0.1.0"
-    },
-    {
-      "SPDXID": "SPDXRef-namtor-layout-0-1-0",
+      "SPDXID": "SPDXRef-namtor-layout-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-layout",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-pad-0-1-0",
+      "SPDXID": "SPDXRef-namtor-pad-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-pad",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-pam-0-1-0",
+      "SPDXID": "SPDXRef-namtor-pam-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-pam",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-pam-config-0-1-0",
+      "SPDXID": "SPDXRef-namtor-pam-config-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-pam-config",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-probe-0-1-0",
+      "SPDXID": "SPDXRef-namtor-probe-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
       "licenseDeclared": "Apache-2.0",
       "name": "namtor-probe",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-proto-0-1-0",
+      "SPDXID": "SPDXRef-namtor-proto-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-proto",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-recog-0-1-0",
+      "SPDXID": "SPDXRef-namtor-recog-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-recog",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-store-0-1-0",
+      "SPDXID": "SPDXRef-namtor-store-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-store",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-uvc-0-1-0",
+      "SPDXID": "SPDXRef-namtor-ui-0-2-0",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0-only",
+      "name": "namtor-ui",
+      "versionInfo": "0.2.0"
+    },
+    {
+      "SPDXID": "SPDXRef-namtor-uvc-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
       "licenseDeclared": "Apache-2.0",
       "name": "namtor-uvc",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-namtor-worker-0-1-0",
+      "SPDXID": "SPDXRef-namtor-worker-0-2-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-worker",
-      "versionInfo": "0.1.0"
+      "versionInfo": "0.2.0"
     },
     {
       "SPDXID": "SPDXRef-ndarray-0-17-2",
@@ -2357,15 +2367,15 @@
       "versionInfo": "1.1.4"
     },
     {
-      "SPDXID": "SPDXRef-rustls-0-23-41",
+      "SPDXID": "SPDXRef-rustls-0-23-45",
       "copyrightText": "NOASSERTION",
-      "downloadLocation": "https://crates.io/crates/rustls/0.23.41",
+      "downloadLocation": "https://crates.io/crates/rustls/0.23.45",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0 OR ISC OR MIT",
       "licenseDeclared": "Apache-2.0 OR ISC OR MIT",
       "name": "rustls",
-      "packageVerificationCode": "6b92b125634d9b795e7beca796cc790df15a7fb38323bf3196fda83292d06b1f",
-      "versionInfo": "0.23.41"
+      "packageVerificationCode": "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634",
+      "versionInfo": "0.23.45"
     },
     {
       "SPDXID": "SPDXRef-rustls-pki-types-1-15-0",
@@ -2379,15 +2389,15 @@
       "versionInfo": "1.15.0"
     },
     {
-      "SPDXID": "SPDXRef-rustls-webpki-0-103-13",
+      "SPDXID": "SPDXRef-rustls-webpki-0-103-15",
       "copyrightText": "NOASSERTION",
-      "downloadLocation": "https://crates.io/crates/rustls-webpki/0.103.13",
+      "downloadLocation": "https://crates.io/crates/rustls-webpki/0.103.15",
       "filesAnalyzed": false,
       "licenseConcluded": "ISC",
       "licenseDeclared": "ISC",
       "name": "rustls-webpki",
-      "packageVerificationCode": "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e",
-      "versionInfo": "0.103.13"
+      "packageVerificationCode": "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2",
+      "versionInfo": "0.103.15"
     },
     {
       "SPDXID": "SPDXRef-rustversion-1-0-23",
@@ -3369,17 +3379,6 @@
       "versionInfo": "0.52.0"
     },
     {
-      "SPDXID": "SPDXRef-windows-sys-0-59-0",
-      "copyrightText": "NOASSERTION",
-      "downloadLocation": "https://crates.io/crates/windows-sys/0.59.0",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "windows-sys",
-      "packageVerificationCode": "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b",
-      "versionInfo": "0.59.0"
-    },
-    {
       "SPDXID": "SPDXRef-windows-sys-0-61-2",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "https://crates.io/crates/windows-sys/0.61.2",
@@ -3809,50 +3808,14 @@
       "versionInfo": "3.5.0"
     },
     {
-      "SPDXID": "SPDXRef-binary-libnamtorqml-so-0-1-0",
+      "SPDXID": "SPDXRef-binary-namtor-0-1-0",
       "copyrightText": "NOASSERTION",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
-      "name": "libnamtorqml.so",
-      "packageVerificationCode": "06197f56f7433126b7d5256bfeccc6cdcafd77477d4d9c8bd8aae7102c2a1580",
-      "sourceInfo": "Built from Nam-tor source (cargo build --release)",
-      "versionInfo": "0.1.0"
-    },
-    {
-      "SPDXID": "SPDXRef-binary-namtor-camera-emitter-off-0-1-0",
-      "copyrightText": "NOASSERTION",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "licenseConcluded": "GPL-3.0-only",
-      "licenseDeclared": "GPL-3.0-only",
-      "name": "namtor-camera-emitter-off",
-      "packageVerificationCode": "909a6d590d19be9dff78599c997adc5bb51ccc7ebd01c985395d75f501e37293",
-      "sourceInfo": "Built from Nam-tor source (cargo build --release)",
-      "versionInfo": "0.1.0"
-    },
-    {
-      "SPDXID": "SPDXRef-binary-namtor-cli-0-1-0",
-      "copyrightText": "NOASSERTION",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "licenseConcluded": "GPL-3.0-only",
-      "licenseDeclared": "GPL-3.0-only",
-      "name": "namtor-cli",
-      "packageVerificationCode": "79587b4c24eaaf3484aab7c9459bff1a6c85ffa6d813c7b1d4e054dfc5a1aab9",
-      "sourceInfo": "Built from Nam-tor source (cargo build --release)",
-      "versionInfo": "0.1.0"
-    },
-    {
-      "SPDXID": "SPDXRef-binary-namtor-daemon-0-1-0",
-      "copyrightText": "NOASSERTION",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "licenseConcluded": "GPL-3.0-only",
-      "licenseDeclared": "GPL-3.0-only",
-      "name": "namtor-daemon",
-      "packageVerificationCode": "c61dfafc2bc66c8175b014ab9fb4dc7f37a09fa4096c3adafb73329ad369c47e",
+      "name": "namtor",
+      "packageVerificationCode": "08810859dd14b003dc71d9b1f236579ccc502048d46d7cba6ebac251831fb80c",
       "sourceInfo": "Built from Nam-tor source (cargo build --release)",
       "versionInfo": "0.1.0"
     },
@@ -3864,19 +3827,7 @@
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "namtor-enroll-wizard",
-      "packageVerificationCode": "1c73aea57937f4d5a77d7d9e297e3fa272108e36c5650ce1675c5b22260cd1c7",
-      "sourceInfo": "Built from Nam-tor source (cargo build --release)",
-      "versionInfo": "0.1.0"
-    },
-    {
-      "SPDXID": "SPDXRef-binary-namtor-worker-0-1-0",
-      "copyrightText": "NOASSERTION",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "licenseConcluded": "GPL-3.0-only",
-      "licenseDeclared": "GPL-3.0-only",
-      "name": "namtor-worker",
-      "packageVerificationCode": "9876729bb42dff0fcb306cbe0cb6635ce6eb154f193e26f69ea56d5094804d0b",
+      "packageVerificationCode": "60ab1d9b9e0347b44cd0e6156980ce24c58fae7d12fc8634f9d08d4b28a83ffc",
       "sourceInfo": "Built from Nam-tor source (cargo build --release)",
       "versionInfo": "0.1.0"
     },
@@ -3888,7 +3839,7 @@
       "licenseConcluded": "GPL-3.0-only",
       "licenseDeclared": "GPL-3.0-only",
       "name": "pam_namtor.so",
-      "packageVerificationCode": "108ea742e06384b01075c8bdda0e0ad5d64fcb0afc2b65d1585f6722371859c2",
+      "packageVerificationCode": "9cfbf5271ff497efbb29805aacf7aaa6a36f3a57c0f2f024173fc08e374536f0",
       "sourceInfo": "Built from Nam-tor source (cargo build --release)",
       "versionInfo": "0.1.0"
     },
@@ -3901,7 +3852,7 @@
       "licenseDeclared": "Apache-2.0",
       "name": "minifasnet_pad",
       "packageVerificationCode": "686b6671578a1f6b7b8e018bf12136dfb4fd41671f5a377b96ce15c650306cf6",
-      "sourceInfo": "Built from Nam-tor commit 9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef; licence_sha256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30; model_card=ml/reports/learned-pad.md",
+      "sourceInfo": "Built from Nam-tor commit 3fd056c2b004943260d0684b539866a3b473293c; licence_sha256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30; model_card=ml/reports/learned-pad.md",
       "versionInfo": "0.1.0"
     },
     {
@@ -3913,7 +3864,7 @@
       "licenseDeclared": "Apache-2.0",
       "name": "sface_2021dec",
       "packageVerificationCode": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
-      "sourceInfo": "Built from Nam-tor commit 9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef; licence_sha256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "sourceInfo": "Built from Nam-tor commit 3fd056c2b004943260d0684b539866a3b473293c; licence_sha256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
       "versionInfo": "0.1.0"
     },
     {
@@ -3925,7 +3876,7 @@
       "licenseDeclared": "MIT",
       "name": "yunet_2023mar",
       "packageVerificationCode": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
-      "sourceInfo": "Built from Nam-tor commit 9a2dec7f3b230e573cb487cfab9ef60c69cdb7ef; licence_sha256=c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958",
+      "sourceInfo": "Built from Nam-tor commit 3fd056c2b004943260d0684b539866a3b473293c; licence_sha256=c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958",
       "versionInfo": "0.1.0"
     }
   ],
@@ -5066,7 +5017,7 @@
       "spdxElementId": "SPDXRef-gio-sys-0-20-10"
     },
     {
-      "relatedSpdxElement": "SPDXRef-windows-sys-0-59-0",
+      "relatedSpdxElement": "SPDXRef-windows-sys-0-52-0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-gio-sys-0-20-10"
     },
@@ -5561,7 +5512,7 @@
       "spdxElementId": "SPDXRef-hyper-rustls-0-27-9"
     },
     {
-      "relatedSpdxElement": "SPDXRef-rustls-0-23-41",
+      "relatedSpdxElement": "SPDXRef-rustls-0-23-45",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-hyper-rustls-0-27-9"
     },
@@ -6036,794 +5987,859 @@
       "spdxElementId": "SPDXRef-mio-1-2-2"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-capture-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-camera-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-camera-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-hwdb-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-capture-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-camera-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-uvc-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-cli-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-camera-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-daemon-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-layout-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-proto-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-worker-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-capture-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-camera-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-hwdb-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-camera-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-layout-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-camera-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-uvc-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-camera-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-camera-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-camera-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-camera-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-camera-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-toml-0-8-23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-camera-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-camera-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-udev-0-9-3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-camera-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-camera-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-zbus-5-18-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-camera-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-camera-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-nix-0-29-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-capture-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-capture-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-capture-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-capture-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-capture-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-capture-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-capture-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-capture-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-capture-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-capture-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-clap-4-6-5",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-camera-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-camera-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-capture-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-capture-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-hwdb-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-hwdb-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-layout-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-layout-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-pam-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-pam-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-proto-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-proto-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-recog-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-recog-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-store-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-store-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-uvc-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-uvc-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-nix-0-29-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-sha2-0-10-9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-signal-hook-0-3-18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-toml-0-8-23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-zbus-5-18-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-zeroize-1-9-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-zvariant-5-13-1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-cli-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-cli-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-capture-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-proto-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-collect-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-namtor-pad-0-1-0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-collect-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-client-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-collect-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-client-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-collect-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-client-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-collect-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-client-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-collect-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-client-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-zbus-5-18-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-client-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-capture-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-collect-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-pad-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-collect-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-serde-1-0-229",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-collect-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-collect-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-collect-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-collect-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-libc-0-2-189",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-camera-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-camera-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-capture-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-capture-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-eval-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-client-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-hwdb-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-eval-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-layout-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-hwdb-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-pad-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-layout-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-pam-config-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-pad-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-proto-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-pam-config-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-recog-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-proto-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-store-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-recog-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-uvc-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-store-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-worker-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-uvc-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-worker-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-nix-0-29-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-rand-0-8-7",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-reqwest-0-12-28",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-sha2-0-10-9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-toml-0-8-23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tracing-0-1-44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tracing-subscriber-0-3-23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-zbus-5-18-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-zeroize-1-9-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-daemon-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-daemon-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-eval-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-eval-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-eval-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-eval-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-eval-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-eval-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-eval-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-eval-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-gettext-0-4-0",
+      "relatedSpdxElement": "SPDXRef-namtor-uvc-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-gio-0-20-12",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-glib-0-20-12",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-gtk4-0-9-7",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-libadwaita-0-7-2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-namtor-proto-0-1-0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-nix-0-29-0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-hwdb-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-hwdb-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-hwdb-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-zbus-5-18-0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-gnome-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-namtor-uvc-0-1-0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-hwdb-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-serde-1-0-229",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-hwdb-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-hwdb-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-hwdb-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-hwdb-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-toml-0-8-23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-hwdb-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-futures-util-0-3-33",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-kde-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-hwdb-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-kde-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-kde-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-tracing-0-1-44",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-kde-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-zbus-5-18-0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-kde-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-serde-1-0-229",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-layout-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-layout-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-layout-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-layout-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-toml-0-8-23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-layout-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-layout-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pad-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pad-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pad-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pad-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pad-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pad-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pad-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pad-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-libc-0-2-189",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-daemon-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-daemon-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-layout-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-layout-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-proto-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-proto-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-nix-0-29-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-libc-0-2-189",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-config-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-config-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-config-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-config-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-config-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-config-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-sha2-0-10-9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-config-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-config-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-pam-config-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-pam-config-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-clap-4-6-5",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-probe-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-probe-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-capture-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-capture-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-probe-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-probe-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-hwdb-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-hwdb-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-probe-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-probe-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-uvc-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-uvc-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-probe-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-probe-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-probe-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-probe-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-probe-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-probe-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-probe-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-probe-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-toml-0-8-23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-probe-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-probe-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-capture-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-capture-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-proto-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-proto-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-proto-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-proto-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-proto-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-proto-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-proto-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-proto-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-capture-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-capture-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-recog-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-recog-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-proto-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-proto-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-recog-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-recog-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-worker-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-worker-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-recog-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-recog-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-recog-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-recog-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-recog-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-recog-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-sha2-0-10-9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-recog-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-recog-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-recog-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-recog-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-recog-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-recog-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-aes-gcm-0-10-3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-argon2-0-5-3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-hmac-0-12-1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-libc-0-2-189",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-proto-0-1-0",
+      "relatedSpdxElement": "SPDXRef-namtor-proto-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-rand-0-8-7",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-sha2-0-10-9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-zeroize-1-9-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-store-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-store-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-namtor-capture-0-1-0",
+      "relatedSpdxElement": "SPDXRef-gettext-0-4-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-uvc-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-nix-0-29-0",
+      "relatedSpdxElement": "SPDXRef-gio-0-20-12",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-uvc-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-serde-1-0-229",
+      "relatedSpdxElement": "SPDXRef-glib-0-20-12",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-uvc-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
+      "relatedSpdxElement": "SPDXRef-gtk4-0-9-7",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-uvc-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
+      "relatedSpdxElement": "SPDXRef-libadwaita-0-7-2",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-uvc-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-landlock-0-4-7",
+      "relatedSpdxElement": "SPDXRef-namtor-client-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-libc-0-2-189",
+      "relatedSpdxElement": "SPDXRef-namtor-layout-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-libseccomp-0-4-0",
+      "relatedSpdxElement": "SPDXRef-namtor-proto-0-2-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-namtor-capture-0-1-0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-namtor-proto-0-1-0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-nix-0-29-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-ort-2-0-0-rc-13",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-1-0-229",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-namtor-worker-0-1-0"
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-zbus-5-18-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-ui-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-capture-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-uvc-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-nix-0-29-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-uvc-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-serde-1-0-229",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-uvc-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-uvc-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-uvc-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-landlock-0-4-7",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-libc-0-2-189",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-libseccomp-0-4-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-capture-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-layout-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-namtor-proto-0-2-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-nix-0-29-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-ort-2-0-0-rc-13",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-serde-1-0-229",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-serde-json-1-0-151",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-tempfile-3-27-0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-thiserror-2-0-19",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-namtor-worker-0-2-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-matrixmultiply-0-3-11",
@@ -7131,7 +7147,7 @@
       "spdxElementId": "SPDXRef-quinn-0-11-11"
     },
     {
-      "relatedSpdxElement": "SPDXRef-rustls-0-23-41",
+      "relatedSpdxElement": "SPDXRef-rustls-0-23-45",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-quinn-0-11-11"
     },
@@ -7196,7 +7212,7 @@
       "spdxElementId": "SPDXRef-quinn-proto-0-11-16"
     },
     {
-      "relatedSpdxElement": "SPDXRef-rustls-0-23-41",
+      "relatedSpdxElement": "SPDXRef-rustls-0-23-45",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-quinn-proto-0-11-16"
     },
@@ -7411,7 +7427,7 @@
       "spdxElementId": "SPDXRef-reqwest-0-12-28"
     },
     {
-      "relatedSpdxElement": "SPDXRef-rustls-0-23-41",
+      "relatedSpdxElement": "SPDXRef-rustls-0-23-45",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-reqwest-0-12-28"
     },
@@ -7553,37 +7569,37 @@
     {
       "relatedSpdxElement": "SPDXRef-log-0-4-33",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-rustls-0-23-41"
+      "spdxElementId": "SPDXRef-rustls-0-23-45"
     },
     {
       "relatedSpdxElement": "SPDXRef-once-cell-1-21-4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-rustls-0-23-41"
+      "spdxElementId": "SPDXRef-rustls-0-23-45"
     },
     {
       "relatedSpdxElement": "SPDXRef-ring-0-17-14",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-rustls-0-23-41"
+      "spdxElementId": "SPDXRef-rustls-0-23-45"
     },
     {
       "relatedSpdxElement": "SPDXRef-rustls-pki-types-1-15-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-rustls-0-23-41"
+      "spdxElementId": "SPDXRef-rustls-0-23-45"
     },
     {
-      "relatedSpdxElement": "SPDXRef-rustls-webpki-0-103-13",
+      "relatedSpdxElement": "SPDXRef-rustls-webpki-0-103-15",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-rustls-0-23-41"
+      "spdxElementId": "SPDXRef-rustls-0-23-45"
     },
     {
       "relatedSpdxElement": "SPDXRef-subtle-2-6-1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-rustls-0-23-41"
+      "spdxElementId": "SPDXRef-rustls-0-23-45"
     },
     {
       "relatedSpdxElement": "SPDXRef-zeroize-1-9-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-rustls-0-23-41"
+      "spdxElementId": "SPDXRef-rustls-0-23-45"
     },
     {
       "relatedSpdxElement": "SPDXRef-web-time-1-1-0",
@@ -7598,17 +7614,17 @@
     {
       "relatedSpdxElement": "SPDXRef-ring-0-17-14",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-rustls-webpki-0-103-13"
+      "spdxElementId": "SPDXRef-rustls-webpki-0-103-15"
     },
     {
       "relatedSpdxElement": "SPDXRef-rustls-pki-types-1-15-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-rustls-webpki-0-103-13"
+      "spdxElementId": "SPDXRef-rustls-webpki-0-103-15"
     },
     {
       "relatedSpdxElement": "SPDXRef-untrusted-0-9-0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-rustls-webpki-0-103-13"
+      "spdxElementId": "SPDXRef-rustls-webpki-0-103-15"
     },
     {
       "relatedSpdxElement": "SPDXRef-serde-core-1-0-229",
@@ -7946,7 +7962,7 @@
       "spdxElementId": "SPDXRef-tokio-1-53-1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-rustls-0-23-41",
+      "relatedSpdxElement": "SPDXRef-rustls-0-23-45",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-tokio-rustls-0-26-4"
     },
@@ -8326,7 +8342,7 @@
       "spdxElementId": "SPDXRef-ureq-3-3-0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-rustls-0-23-41",
+      "relatedSpdxElement": "SPDXRef-rustls-0-23-45",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-ureq-3-3-0"
     },
@@ -8539,11 +8555,6 @@
       "relatedSpdxElement": "SPDXRef-windows-targets-0-52-6",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-windows-sys-0-52-0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-windows-targets-0-52-6",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-windows-sys-0-59-0"
     },
     {
       "relatedSpdxElement": "SPDXRef-windows-link-0-2-1",

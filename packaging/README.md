@@ -64,10 +64,29 @@ conflicts). See [`docs/evidence/public-release/20-arch-matrix.json`](../docs/evi
 and [`22-debian-matrix.json`](../docs/evidence/public-release/22-debian-matrix.json)
 for the per-distro structure evidence.
 
-The worker binary is `namtor-worker` (built from
-`crates/namtor-worker/src/bin/namtor-worker.rs`). It is spawned directly
-by the daemon as a child process (same user `namtor`) and self-applies
-seccomp + landlock — the sandbox is the privilege boundary, not a UID drop.
+Everything the core package executes is one file, `/usr/bin/namtor`, a
+multi-call binary: `namtor daemon`, `namtor worker`, `namtor cli ...` and
+`namtor emitter-off <device>`. `/usr/bin/namtor-cli` is a compatibility
+symlink to it (the binary dispatches on argv[0]). The daemon, the worker and
+the CLI all link ONNX Runtime and the recognition stack, so four executables
+shipped three copies of those bytes; one ships 25 MB where four shipped 74 MB.
+
+Two artifacts are deliberately **not** part of that file:
+
+- `pam_namtor.so` — a cdylib that `sudo`/`gdm` dlopen into their own address
+  space, with a 512000-byte budget and a CI gate proving it links no ML or
+  image code (G5.1).
+- `namtor-enroll-wizard` — merging it would link GTK4/libadwaita into the
+  core binary, so a server could no longer install `namtor` alone for
+  daemon + PAM + CLI without pulling GTK or Qt.
+
+The worker is also still a separate **process**. The daemon re-execs
+`/proc/self/exe` with the `worker` subcommand (falling back to
+`NAMTOR_WORKER_BIN` when `/proc` is unavailable); the child runs as the same
+user `namtor` and self-applies seccomp + landlock. Same file, separate
+address space — the sandbox is the privilege boundary, not a UID drop, and
+collapsing the worker into the daemon's process would delete the isolation
+that keeps Nam-tor out of Howdy's authentication-bypass CVE class.
 
 ## The two manifests
 
@@ -153,12 +172,10 @@ No CLI or root shell is needed for setup.
 ### Manual install from source (equivalent to the package)
 
 ```sh
-# 1. Build and install binaries
-cargo build --release -p namtor-daemon -p namtor-worker -p namtor-cli -p namtor-camera-emitter-off
-install -Dm755 target/release/namtor-daemon         /usr/lib/namtor/namtor-daemon
-install -Dm755 target/release/namtor-worker         /usr/lib/namtor/namtor-worker
-install -Dm755 target/release/namtor-cli            /usr/bin/namtor-cli
-install -Dm755 target/release/namtor-camera-emitter-off /usr/lib/namtor/namtor-camera-emitter-off
+# 1. Build and install the single multi-call binary
+cargo build --release -p namtor
+install -Dm755 target/release/namtor /usr/bin/namtor
+ln -sf namtor /usr/bin/namtor-cli    # compatibility spelling
 
 # 2. System units + drop-ins
 install -Dm644 packaging/systemd/namtor-daemon.service /usr/lib/systemd/system/namtor-daemon.service

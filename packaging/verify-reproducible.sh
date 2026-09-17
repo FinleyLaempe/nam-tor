@@ -49,8 +49,7 @@ while [[ $# -gt 0 ]]; do
 done
 srcdir="${srcdir:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 artifacts=(
-    namtor-daemon namtor-worker
-    namtor-camera-emitter-off namtor-cli namtor-enroll-wizard
+    namtor namtor-enroll-wizard
     libnamtor_pam.so
 )
 
