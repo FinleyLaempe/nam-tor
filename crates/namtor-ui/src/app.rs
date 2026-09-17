@@ -199,6 +199,14 @@ impl AppController {
         &self.shell
     }
 
+    /// Test-only mutable access to the shell, so a test can drive the same
+    /// `show_offline` sequence `build` performs.
+    ///
+    /// **This is for tests only** — not part of the production API.
+    pub fn shell_for_test_mut(&mut self) -> &mut Shell {
+        &mut self.shell
+    }
+
     /// Test-only: perform a programmatic pop exactly as the render arms do,
     /// i.e. while the controller is mutably borrowed.
     #[doc(hidden)]

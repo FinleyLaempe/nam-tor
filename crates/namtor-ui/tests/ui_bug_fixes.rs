@@ -1335,3 +1335,64 @@ fn collect_switch_rows(widget: &gtk4::Widget, f: &mut dyn FnMut(&libadwaita::Swi
         child = c.next_sibling();
     }
 }
+
+/// `build()` calls `show_offline` twice: once with a no-op callback while the
+/// controller does not exist yet, then again with the real `retry_connection`
+/// closure once it does. If the second call did not replace the first, the
+/// Retry button on the offline page would be dead on first launch and the
+/// user would sit in front of "cannot reach the daemon" with nothing to
+/// press. `build()` itself is never run by a test — it needs a real system
+/// bus — so the replace semantics it depends on are pinned here.
+#[test]
+fn showing_the_offline_page_twice_leaves_the_second_retry_wired() {
+    use gtk4::prelude::*;
+    use namtor_ui::app::AppController;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    common::run_gtk_test(move || {
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.offlineretry")
+            .build();
+        let _guard = app.hold();
+
+        let rc = AppController::new_offline_for_test(&app);
+
+        let first = Rc::new(Cell::new(0u32));
+        let second = Rc::new(Cell::new(0u32));
+
+        {
+            let f = Rc::clone(&first);
+            rc.borrow_mut()
+                .shell_for_test_mut()
+                .show_offline("daemon stopped", move || f.set(f.get() + 1));
+        }
+        {
+            let s = Rc::clone(&second);
+            rc.borrow_mut()
+                .shell_for_test_mut()
+                .show_offline("daemon stopped", move || s.set(s.get() + 1));
+        }
+
+        let window = rc.borrow().shell_for_test().window().clone();
+        let root: gtk4::Widget = window.clone().upcast();
+
+        let mut pressed = 0;
+        common::for_each_button(&root, &mut |b| {
+            b.emit_clicked();
+            pressed += 1;
+        });
+        assert!(pressed > 0, "the offline page must offer a button to press");
+
+        assert_eq!(
+            first.get(),
+            0,
+            "the first callback is still wired: the Retry button would be \
+             dead on first launch"
+        );
+        assert!(
+            second.get() > 0,
+            "the second callback never ran: Retry does nothing"
+        );
+    });
+}

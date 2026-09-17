@@ -9,7 +9,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 
 use crate::dbus_client::DbusManagerClient;
-use crate::types::{ProfileInfo, StatusReport};
+use crate::types::{ProfileInfo, ReviewOutcome, StatusReport};
 
 /// Mutable state behind the fake `org.namtor.Manager` service.
 #[derive(Debug, Default)]
@@ -17,6 +17,21 @@ struct FakeState {
     profiles: Vec<ProfileInfo>,
     daemon_unavailable: bool,
     next_session: u32,
+}
+
+/// The error names the real daemon raises, so the client's `map_zbus_error`
+/// is exercised on a real message rather than on a hand-built one. A fake
+/// that raised `org.freedesktop.DBus.Error.*` instead would have every
+/// method error arrive as `ManagerError::Transport`, which the CLI presents
+/// as a daemon problem.
+#[derive(Debug, zbus::DBusError)]
+#[zbus(prefix = "org.namtor.Error")]
+pub enum FakeError {
+    /// Transport-level failure, as zbus requires.
+    #[zbus(error)]
+    ZBus(zbus::Error),
+    /// `org.namtor.Error.NotFound`.
+    NotFound(String),
 }
 
 /// The zbus interface implementation for the v1 `org.namtor.Manager` surface.
@@ -83,6 +98,38 @@ impl FakeManagerV1 {
         let mut s = self.state.lock().expect("fake state poisoned");
         s.profiles.retain(|p| p.id != id);
         Ok(())
+    }
+
+    fn review_profile(&self, _uid: u32, id: &str) -> Result<ReviewOutcome, FakeError> {
+        let s = self.state.lock().expect("fake state poisoned");
+        match s.profiles.iter().find(|p| p.id == id) {
+            Some(p) => Ok(ReviewOutcome {
+                profile_id: p.id.clone(),
+                needs_reenroll: false,
+                quality: crate::types::QualityLabel::High,
+            }),
+            None => Err(FakeError::NotFound(id.to_string())),
+        }
+    }
+
+    fn merge_profiles(&self, _uid: u32, src: &str, dst: &str) -> Result<(), FakeError> {
+        let mut s = self.state.lock().expect("fake state poisoned");
+        if !s.profiles.iter().any(|p| p.id == dst) {
+            return Err(FakeError::NotFound(dst.to_string()));
+        }
+        s.profiles.retain(|p| p.id != src);
+        Ok(())
+    }
+
+    fn replace_profile(&self, _uid: u32, id: &str, name: &str) -> Result<(), FakeError> {
+        let mut s = self.state.lock().expect("fake state poisoned");
+        match s.profiles.iter_mut().find(|p| p.id == id) {
+            Some(p) => {
+                p.name = name.to_string();
+                Ok(())
+            }
+            None => Err(FakeError::NotFound(id.to_string())),
+        }
     }
 
     fn get_status(&self) -> zbus::fdo::Result<StatusReport> {
