@@ -135,7 +135,19 @@ pub struct AuthenticationView {
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
 pub struct SystemView {
     pub daemon_running: bool,
+    /// A supported IR camera is present on this machine.
+    ///
+    /// Probed locally from sysfs against the quirks database, not inferred.
+    /// This used to be `camera_detected: daemon_reachable` with the comment
+    /// "Simplified: if daemon is up, camera is assumed ready for the view",
+    /// so the System page answered "IR Camera — Detected" on a machine with
+    /// no camera at all, and gave no clue why enrollment then failed.
     pub camera_detected: bool,
+    /// The daemon has validated its models.
+    ///
+    /// Sound to infer from reachability: `namtor daemon` validates every
+    /// model and spawns the worker *before* it binds the PAM socket, so a
+    /// daemon that answers at all has loaded them.
     pub models_loaded: bool,
     pub protection: ProtectionView,
 }
@@ -606,6 +618,58 @@ impl EnrollmentViewV3 {
     pub fn measured_diversity_percent(&self) -> Option<u32> {
         self.has_observation().then_some(self.diversity_percent)
     }
+}
+
+/// Render a Unix timestamp as a coarse, relative "last used" line.
+///
+/// The profile list rendered `format!("epoch {}", row.last_used)`, so a user
+/// saw "last used: epoch 1726550400" — while `ProfileRowView`'s own doc
+/// promised "a localized 'last used' line".
+///
+/// Deliberately coarse. An exact clock time is not what the question "when
+/// did I last use this?" wants, and a relative phrase needs no locale data,
+/// which matters because this crate's `tr()` has no catalog behind it yet.
+pub fn last_used_label(last_used: u64, now: u64) -> String {
+    if last_used == 0 {
+        return crate::tr("never");
+    }
+    // A timestamp in the future means a clock change, not a use. Say the
+    // honest thing rather than "in -3 days".
+    let Some(delta) = now.checked_sub(last_used) else {
+        return crate::tr("just now");
+    };
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    const WEEK: u64 = 7 * DAY;
+    const MONTH: u64 = 30 * DAY;
+    const YEAR: u64 = 365 * DAY;
+
+    let plural = |n: u64, one: &str, many: &str| {
+        if n == 1 {
+            crate::tr(one)
+        } else {
+            format!("{n} {}", crate::tr(many))
+        }
+    };
+    match delta {
+        d if d < MINUTE => crate::tr("just now"),
+        d if d < HOUR => plural(d / MINUTE, "a minute ago", "minutes ago"),
+        d if d < DAY => plural(d / HOUR, "an hour ago", "hours ago"),
+        d if d < WEEK => plural(d / DAY, "yesterday", "days ago"),
+        d if d < MONTH => plural(d / WEEK, "last week", "weeks ago"),
+        d if d < YEAR => plural(d / MONTH, "last month", "months ago"),
+        d => plural(d / YEAR, "last year", "years ago"),
+    }
+}
+
+/// [`last_used_label`] against the current clock.
+pub fn last_used_label_now(last_used: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    last_used_label(last_used, now)
 }
 
 /// Bucket boundaries, mirrored from the daemon's `observation` module so the

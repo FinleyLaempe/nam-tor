@@ -35,6 +35,13 @@ fn main() -> std::process::ExitCode {
     ) {
         return std::process::ExitCode::from(code);
     }
+    // Load the message catalog before any string is rendered. `tr()` is the
+    // gettext seam for every user-facing string; until now nothing ever
+    // called into gettext, so the seam could not be used by a distributor
+    // shipping a .mo. A missing catalog is the ordinary case today and falls
+    // through to the English msgid.
+    namtor_ui::init_translations();
+
     // KDE's GTK-config module writes the legacy prefer-dark-theme flag into
     // ~/.config/gtk-4.0/settings.ini. libadwaita ignores that flag and warns
     // about it the moment its style manager is constructed inside

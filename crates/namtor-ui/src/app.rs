@@ -331,9 +331,10 @@ impl AppController {
         let on_rename: RenameCallback = {
             let presenter = Rc::clone(presenter);
             let rc_rename = Rc::clone(rc);
+            let window = self.shell.window().clone();
             Rc::new(move |id: &str, current_name: &str| {
                 // USA-10: open a rename dialog with an EntryRow pre-filled
-                show_rename_dialog(&presenter, &rc_rename, id, current_name);
+                show_rename_dialog(&presenter, &rc_rename, id, current_name, &window);
             })
         };
         let list_group =
@@ -387,6 +388,7 @@ impl AppController {
             EnrollmentState::Setup => {
                 let presenter_start = Rc::clone(presenter);
                 let rc_start = Rc::clone(rc);
+                let window_start = self.shell.window().clone();
                 let on_start = move |name: &str| {
                     let pending = {
                         let mut p = presenter_start.borrow_mut();
@@ -396,7 +398,12 @@ impl AppController {
                     if let Some(pending) = pending {
                         // USA-3: duplicate name detected. Show a
                         // confirmation dialog before replacing.
-                        show_replace_dialog(&presenter_start, &rc_start, &pending.old_name);
+                        show_replace_dialog(
+                            &presenter_start,
+                            &rc_start,
+                            &pending.old_name,
+                            &window_start,
+                        );
                     } else {
                         rc_start.borrow_mut().render_enrollment(&rc_start);
                     }
@@ -634,6 +641,16 @@ impl AppController {
             }
             self.render_profiles(rc);
         } else {
+            // A failed save leaves the state Stopped (or Error) and the
+            // review page still on top of the navigation stack, so the error
+            // used to be written into the enrollment page *underneath* it:
+            // the user stared at the unchanged Review screen and never saw
+            // why the save failed. Pop the review page first so whatever
+            // render_enrollment draws is the page actually on screen.
+            if self.review_nav_page.is_some() {
+                self.shell.pop_subpage();
+                self.review_nav_page = None;
+            }
             self.render_enrollment(rc);
         }
     }
@@ -643,15 +660,27 @@ fn current_uid() -> u32 {
     nix::unistd::getuid().as_raw()
 }
 
-fn show_replace_dialog(presenter: &PresenterRc, rc: &ControllerRc, name: &str) {
+/// `parent` is required, not optional: a parentless `present()` can appear
+/// detached or behind the window on several compositors, and these two were
+/// the only dialogs in the crate that did not set a transient parent.
+fn show_replace_dialog(
+    presenter: &PresenterRc,
+    rc: &ControllerRc,
+    name: &str,
+    parent: &adw::ApplicationWindow,
+) {
     let dialog = adw::MessageDialog::builder()
-        .heading(format!("Replace profile '{name}'?"))
+        .heading(format!("{} '{name}'?", tr("Replace profile")))
         .body(format!(
-            "A profile named '{name}' already exists. Replace it with a new enrollment?"
+            "{} '{name}' {}",
+            tr("A profile named"),
+            tr("already exists. Replace it with a new enrollment?")
         ))
+        .transient_for(parent)
         .build();
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("replace", "Replace");
+    dialog.set_accessible_role(gtk4::AccessibleRole::Dialog);
+    dialog.add_response("cancel", &tr("_Cancel"));
+    dialog.add_response("replace", &tr("_Replace"));
     dialog.set_response_appearance("replace", adw::ResponseAppearance::Destructive);
 
     let presenter_replace = Rc::clone(presenter);
@@ -681,10 +710,12 @@ fn show_rename_dialog(
     rc: &ControllerRc,
     profile_id: &str,
     current_name: &str,
+    parent: &adw::ApplicationWindow,
 ) {
     let dialog = adw::MessageDialog::builder()
         .heading(tr("Rename Profile"))
         .body(tr("Enter a new name for this profile:"))
+        .transient_for(parent)
         .build();
     dialog.set_accessible_role(gtk4::AccessibleRole::Dialog);
     dialog.update_property(&[gtk4::accessible::Property::Label(&tr("Rename profile"))]);

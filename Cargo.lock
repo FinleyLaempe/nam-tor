@@ -1779,6 +1779,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "namtor-client",
+ "namtor-hwdb",
  "namtor-layout",
  "namtor-proto",
  "nix",

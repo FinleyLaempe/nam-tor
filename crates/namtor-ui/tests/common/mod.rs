@@ -172,3 +172,24 @@ pub fn after<C: ManagerClient>(
     action(presenter);
     presenter.model().clone()
 }
+
+/// Count widgets of a given concrete type in a tree.
+///
+/// Lets a test assert a control actually exists, not merely that a label
+/// mentioning it does — the difference between "the row says Restart Daemon"
+/// and "the row can do anything".
+pub fn count_widgets_of_type<T: gtk4::glib::object::IsA<gtk4::Widget>>(
+    widget: &gtk4::Widget,
+) -> usize {
+    use gtk4::prelude::*;
+    let mut n = 0;
+    if widget.downcast_ref::<T>().is_some() {
+        n += 1;
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        n += count_widgets_of_type::<T>(&c);
+        child = c.next_sibling();
+    }
+    n
+}

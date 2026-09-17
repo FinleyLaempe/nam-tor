@@ -204,7 +204,12 @@ impl<C: ManagerClient> ProfilePresenter<C> {
 
         self.model.system = Some(SystemView {
             daemon_running: daemon_reachable,
-            camera_detected: daemon_reachable, // Simplified: if daemon is up, camera is assumed ready for the view
+            // Probed locally. The wire has no readiness method, so this was
+            // `daemon_reachable` — the System page told a user with no camera
+            // that their camera was detected.
+            camera_detected: crate::supported_camera_present(),
+            // Sound: the daemon validates its models and spawns the worker
+            // before it binds the socket, so a reachable daemon has them.
             models_loaded: daemon_reachable,
             protection: if let Ok(p) = protection {
                 ProtectionView::from_status(&p, self.model.emitter_armed_warning)

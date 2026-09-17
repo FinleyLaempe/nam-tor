@@ -71,14 +71,11 @@ impl ProfileListView {
             for row in &model.profiles {
                 let action_row = adw::ActionRow::builder()
                     .title(tr(&row.name))
-                    .subtitle(tr(&format!(
-                        "last used: {}",
-                        if row.last_used == 0 {
-                            tr("never")
-                        } else {
-                            format!("epoch {}", row.last_used)
-                        }
-                    )))
+                    .subtitle(format!(
+                        "{} {}",
+                        tr("last used:"),
+                        crate::view_model::last_used_label_now(row.last_used)
+                    ))
                     .build();
                 action_row.set_accessible_role(gtk4::AccessibleRole::ListItem);
                 action_row.update_property(&[gtk4::accessible::Property::Label(&tr(&format!(

@@ -118,42 +118,68 @@ pub fn render_system_status<C: crate::client::ManagerClient + 'static>(
         "Troubleshooting group",
     ))]);
 
-    let restart_row = adw::ActionRow::builder()
-        .title(tr("Restart Daemon"))
-        .subtitle(tr("Restart the system daemon service"))
-        .activatable(true)
-        .build();
-    restart_row.update_property(&[
-        gtk4::accessible::Property::Label(&tr("Restart the Nam-tor daemon")),
-        gtk4::accessible::Property::Description(&tr("Restart the system daemon service")),
-    ]);
-    restart_row.connect_activated(move |_| {
-        // USA-8: wired to systemctl restart namtor-daemon via the
-        // org.namtor.restart-daemon polkit action. The actual systemctl
-        // call is handled by the daemon's D-Bus interface or a polkit-
-        // authorized helper. This dialog confirms the action.
-    });
-    trouble_group.add(&restart_row);
-
-    let logs_row = adw::ActionRow::builder()
-        .title(tr("View System Logs"))
-        .subtitle(tr("Open the system journal for the Nam-tor daemon"))
-        .activatable(true)
-        .build();
-    logs_row.update_property(&[
-        gtk4::accessible::Property::Label(&tr("View Nam-tor system logs")),
-        gtk4::accessible::Property::Description(&tr(
-            "Open the system journal for the Nam-tor daemon",
-        )),
-    ]);
-    logs_row.connect_activated(move |_| {
-        // USA-8: wired to journalctl -u namtor-daemon or the systemd
-        // D-Bus journal interface. No polkit needed — the user can read
-        // their own session journal.
-    });
-    trouble_group.add(&logs_row);
+    trouble_group.add(&command_row(
+        "Restart Daemon",
+        "sudo systemctl restart namtor-daemon",
+        "Copy the command that restarts the Nam-tor daemon",
+    ));
+    trouble_group.add(&command_row(
+        "View System Logs",
+        "journalctl -u namtor-daemon -e",
+        "Copy the command that shows the Nam-tor daemon's log",
+    ));
 
     groups.push(trouble_group);
 
     groups
+}
+
+/// A troubleshooting row that shows a command and copies it on click.
+///
+/// These two rows were `activatable(true)` with **empty** `connect_activated`
+/// bodies — they highlighted under the pointer, responded to Enter, and did
+/// nothing at all, under comments describing work that was never done. (The
+/// test named `usa_8_restart_and_logs_rows_wired` only asserted the titles
+/// appeared, never that a handler existed.)
+///
+/// Restarting the daemon needs a privileged action the D-Bus interface does
+/// not expose, and opening a journal viewer means picking a terminal
+/// emulator, which is exactly the per-desktop assumption this UI exists to
+/// avoid. Handing over the exact command works identically on GNOME, KDE,
+/// Xfce and sway, needs no helper, and is honest about what the app can do.
+fn command_row(title: &str, command: &str, accessible: &str) -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title(tr(title))
+        .subtitle(command)
+        .subtitle_lines(0)
+        .build();
+    row.add_css_class("property");
+
+    let button = gtk4::Button::builder()
+        .icon_name("edit-copy-symbolic")
+        .valign(gtk4::Align::Center)
+        .tooltip_text(tr("Copy command"))
+        .css_classes(["flat"])
+        .build();
+    button.update_property(&[gtk4::accessible::Property::Label(&tr(accessible))]);
+
+    let to_copy = command.to_string();
+    button.connect_clicked(move |b| {
+        b.clipboard().set_text(&to_copy);
+        // Confirm in place: a copy with no feedback reads as another dead
+        // button, which is what these rows already were.
+        b.set_icon_name("object-select-symbolic");
+        let b2 = b.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+            b2.set_icon_name("edit-copy-symbolic");
+        });
+    });
+
+    row.add_suffix(&button);
+    row.set_activatable_widget(Some(&button));
+    row.update_property(&[
+        gtk4::accessible::Property::Label(&tr(accessible)),
+        gtk4::accessible::Property::Description(command),
+    ]);
+    row
 }

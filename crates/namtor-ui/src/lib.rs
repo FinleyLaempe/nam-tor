@@ -50,15 +50,84 @@ pub mod view_model;
 ///
 /// Every label, tooltip, accessible name, status title, and guidance phrase
 /// shown in the GTK UI MUST pass through `tr()` so the string is the gettext
-/// msgid. In the test environment `tr()` is the identity function (no
-/// `.mo` catalog is loaded); in production the wizard binary loads a
-/// `gettext::Catalog` and rebinds this to look up the msgid.
+/// msgid.
+///
+/// The doc here used to say "in production the wizard binary loads a
+/// `gettext::Catalog` and rebinds this". It did not: nothing in the crate
+/// ever touched the `gettext` dependency, so every call was the identity
+/// function everywhere and no translation could be loaded even if a
+/// distributor shipped one. [`init_translations`] now actually loads a
+/// catalog, and the wizard calls it at startup.
+///
+/// No catalogs ship with this repository yet. A missing catalog is the
+/// ordinary case and falls through to the msgid unchanged.
 ///
 /// Tests in `tests/shell_navigation.rs` assert that user-facing string
 /// literals are wrapped in `tr()` calls and that no forbidden biometric /
 /// internal wording leaks through.
 pub fn tr(s: &str) -> String {
-    s.to_string()
+    match CATALOG.get() {
+        Some(Some(catalog)) => catalog.gettext(s).to_string(),
+        // No catalog, or `init_translations` was never called: the msgid IS
+        // the English string, so this is a correct rendering, not a fallback
+        // that loses information.
+        _ => s.to_string(),
+    }
+}
+
+static CATALOG: std::sync::OnceLock<Option<gettext::Catalog>> = std::sync::OnceLock::new();
+
+/// Load the message catalog for the current locale, once.
+///
+/// Looks for `<dir>/<lang>/LC_MESSAGES/namtor.mo` under each directory in
+/// `NAMTOR_LOCALE_DIR` or `/usr/share/locale`, trying the full locale
+/// (`de_DE`) before the bare language (`de`). Calling it more than once, or
+/// not at all, is safe: `tr()` falls through to the msgid.
+///
+/// Returns true when a catalog was loaded.
+pub fn init_translations() -> bool {
+    CATALOG.get_or_init(load_catalog).is_some()
+}
+
+fn load_catalog() -> Option<gettext::Catalog> {
+    // Honour the gettext precedence the rest of the desktop uses.
+    let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok())
+        .filter(|v| !v.is_empty() && v != "C" && v != "POSIX")?;
+    // Strip the encoding and modifier: `de_DE.UTF-8@euro` -> `de_DE`.
+    let locale = locale
+        .split('.')
+        .next()
+        .unwrap_or(&locale)
+        .split('@')
+        .next()
+        .unwrap_or(&locale)
+        .to_string();
+    let language = locale.split('_').next().unwrap_or(&locale).to_string();
+
+    let dir = std::env::var("NAMTOR_LOCALE_DIR").unwrap_or_else(|_| "/usr/share/locale".into());
+    for candidate in [locale.as_str(), language.as_str()] {
+        let path = std::path::Path::new(&dir)
+            .join(candidate)
+            .join("LC_MESSAGES")
+            .join("namtor.mo");
+        let Ok(file) = std::fs::File::open(&path) else {
+            continue;
+        };
+        match gettext::Catalog::parse(file) {
+            Ok(c) => return Some(c),
+            Err(e) => {
+                // A corrupt catalog must not take the UI down; English is a
+                // correct rendering.
+                eprintln!(
+                    "namtor: ignoring unreadable catalog {}: {e}",
+                    path.display()
+                );
+            }
+        }
+    }
+    None
 }
 
 pub use a11y::{ProgressAnnouncer, PROGRESS_ANNOUNCE_INTERVAL};
@@ -84,3 +153,53 @@ pub use view_model::{
     PresenterModel, ProfileRowView, ProfileSetupView, ProtectionStatusView, ProtectionView,
     QualityView, ReadinessLevel, ReadinessView, RecoveryHint, ReviewView, ReviewViewV3,
 };
+
+/// Is a supported IR camera present on this machine?
+///
+/// Answered from sysfs and the quirks database, not from the daemon: the
+/// `ManagerClient` wire has no readiness method, so the System page used to
+/// report `camera_detected = daemon_reachable` and tell a user with no camera
+/// that their camera was detected.
+///
+/// Unprivileged — it reads `/sys` and the quirks directory only. A failure to
+/// read either is reported as "not detected" rather than as an error, because
+/// this drives one status row and must never take the page down.
+pub fn supported_camera_present() -> bool {
+    supported_camera_present_in(
+        std::path::Path::new(
+            &std::env::var("NAMTOR_SYSFS_ROOT").unwrap_or_else(|_| "/sys".to_string()),
+        ),
+        std::path::Path::new(
+            &std::env::var("NAMTOR_QUIRKS_DIR")
+                .unwrap_or_else(|_| "/usr/share/namtor/quirks/devices".to_string()),
+        ),
+    )
+}
+
+/// [`supported_camera_present`] against explicit roots, so it can be tested
+/// without a camera attached.
+pub fn supported_camera_present_in(
+    sysfs_root: &std::path::Path,
+    quirks_dir: &std::path::Path,
+) -> bool {
+    let Ok(db) = namtor_hwdb::quirks::load_quirks_dir(quirks_dir) else {
+        return false;
+    };
+    let Ok(devices) = namtor_hwdb::sysfs::enumerate_usb(sysfs_root) else {
+        return false;
+    };
+    devices.iter().any(|d| {
+        // Try the bcd-qualified key first, then the plain vid:pid. A
+        // bcd-qualified lookup deliberately never falls back on its own — the
+        // quirks db treats a bcd mismatch as a different device — and most
+        // entries, including the reference camera's, are keyed without one.
+        // Passing `Some(bcd)` alone made this return false on a machine that
+        // has the reference camera attached.
+        let supported = db.match_device(d.vid, d.pid, Some(d.bcd_device)).is_some()
+            || db.match_device(d.vid, d.pid, None).is_some();
+        supported
+            && namtor_hwdb::nodes::correlate_nodes(d)
+                .map(|nodes| nodes.iter().any(|n| !n.is_metadata))
+                .unwrap_or(false)
+    })
+}

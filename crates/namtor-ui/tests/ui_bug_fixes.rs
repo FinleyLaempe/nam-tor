@@ -373,6 +373,35 @@ fn usa_8_restart_and_logs_rows_wired() {
             all_texts.iter().any(|t| t.contains("View System Logs")),
             "troubleshooting group must have 'View System Logs' row: {all_texts:?}"
         );
+
+        // The rows must actually offer the command. The test was named
+        // "..._rows_wired" but only asserted the two titles appeared, so it
+        // passed for years while both `connect_activated` bodies were empty
+        // and the rows did nothing at all.
+        assert!(
+            all_texts
+                .iter()
+                .any(|t| t.contains("systemctl restart namtor-daemon")),
+            "the restart row must show the command to run: {all_texts:?}"
+        );
+        assert!(
+            all_texts
+                .iter()
+                .any(|t| t.contains("journalctl -u namtor-daemon")),
+            "the logs row must show the command to run: {all_texts:?}"
+        );
+
+        // And a button to copy it, rather than an activatable row that does
+        // nothing when clicked.
+        let mut buttons = 0;
+        for group in &groups {
+            buttons +=
+                common::count_widgets_of_type::<gtk4::Button>(group.upcast_ref::<gtk4::Widget>());
+        }
+        assert!(
+            buttons >= 2,
+            "each troubleshooting row needs a copy button, found {buttons}"
+        );
     });
 }
 
@@ -695,4 +724,46 @@ fn usa_16_presenter_has_dispatch_async() {
         presenter.is_busy(),
         "dispatch_async must set pending_task (USA-16)"
     );
+}
+
+// ===========================================================================
+// The profile list showed a raw Unix timestamp
+// ===========================================================================
+
+/// `format!("epoch {}", row.last_used)` rendered "last used: epoch
+/// 1726550400", while `ProfileRowView`'s doc promised "a localized 'last
+/// used' line".
+#[test]
+fn last_used_is_never_a_raw_epoch() {
+    use namtor_ui::view_model::last_used_label;
+    const NOW: u64 = 1_726_550_400;
+
+    let cases: [(u64, &str); 8] = [
+        (0, "never"),
+        (NOW - 5, "just now"),
+        (NOW - 90, "a minute ago"),
+        (NOW - 3 * 3600, "3 hours ago"),
+        (NOW - 24 * 3600, "yesterday"),
+        (NOW - 3 * 24 * 3600, "3 days ago"),
+        (NOW - 10 * 24 * 3600, "last week"),
+        (NOW - 400 * 24 * 3600, "last year"),
+    ];
+    for (ts, expected) in cases {
+        let got = last_used_label(ts, NOW);
+        assert_eq!(got, expected, "last_used_label({ts}, {NOW})");
+        assert!(
+            !got.contains("epoch") && !got.contains(&ts.to_string()),
+            "a raw timestamp leaked into the label: {got:?}"
+        );
+    }
+}
+
+/// A timestamp in the future means the clock moved, not that the profile will
+/// be used later. "in -3 days" would be worse than saying nothing useful.
+#[test]
+fn a_future_last_used_does_not_render_negative_time() {
+    use namtor_ui::view_model::last_used_label;
+    let got = last_used_label(2_000_000_000, 1_726_550_400);
+    assert_eq!(got, "just now");
+    assert!(!got.contains('-'), "negative duration leaked: {got:?}");
 }
