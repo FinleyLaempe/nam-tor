@@ -12,6 +12,62 @@
 //! Calibration against the reference hardware + attack corpus is deferred to
 //! task 17. Until then the gate runs with a conservative default and its
 //! pass/fail boundaries must not be treated as a tuned APCER gate.
+//!
+//! # MEASURED: this gate vetoes genuine live faces, and no threshold fixes it
+//!
+//! Do not reach for `max_radial_deviation` when this gate refuses a real
+//! face. It is not the knob, and turning it cannot help.
+//!
+//! [`monotonic_falloff_score`] has two early returns that yield **exactly**
+//! `0.0` — `counts.contains(&0)` and `dynamic_range <= 5% * means[0]`. `0.0`
+//! is the strongest spoof assertion the `[0, 1]` score range can carry, so
+//! `raw = 1.0 - score` is `1.0`, and `raw <= max_deviation` is false for
+//! *every* `max_deviation < 1.0`. On those paths the threshold is never
+//! consulted. "I could not compute this statistic" and "this is definitely a
+//! spoof" are spelled the same way, and PAD is a veto, so the first refuses.
+//!
+//! The second early return fires on live faces. Measured on the reference
+//! camera (Sonix 3277:0018, 850 nm, subject square to the lens at working
+//! distance), 8 consecutive face-carrying strobe pairs, YuNet boxes ~50x48 px:
+//! **6 of 8 returned exactly `0.0`**, reproducing the field report of
+//! `pad veto: radial (1.000)` on 23 of 24 authentication attempts.
+//!
+//! The input is *not* degenerate. `D = On - Off` measured `off_mean`
+//! 0.01-0.02/255 against `on_mean` 59-94/255, so `D` is essentially the
+//! illuminated frame: 100% positive inside the face box, mean 126-185, no
+//! clipping on the clean side. `illuminated_first` in the daemon orders the
+//! pair by luminance and gets it right every time — worth stating, because
+//! the parity tag was measured **inverted** on this device in all 8 pairs
+//! (the lit frame is tagged `Off`), exactly the hazard finding F21 names.
+//!
+//! What actually fails is the physical model. The gate assumes the nose is
+//! the nearest point and intensity therefore falls monotonically outward
+//! from the box centre. Inside a tight YuNet box a real face does the
+//! opposite: the central annulus lands on the nostrils, philtrum and mouth
+//! shadow — IR-dark cavities — while the cheeks and forehead at bins 3-5 are
+//! the brightest annuli, and the corners are still skin at nearly the same
+//! range rather than dark background. Measured annular means (bins 0..7) for
+//! one refused pair:
+//!
+//! ```text
+//! [122.71, 122.83, 122.51, 122.30, 126.63, 128.51, 133.29, 131.27]
+//! dynamic_range = means[0] - means[7] = -8.56   (NEGATIVE)
+//! ```
+//!
+//! `dynamic_range` was negative in 5 of the 6 refusals (-2.4, -5.8, -8.6,
+//! -20.0, -21.8, -22.4). The profile rises outward. A 1/d² falloff across a
+//! ~15 cm face at ~50 cm is a few-percent effect to begin with, and the
+//! gate's own guard demands more than 5% of the absolute pedestal before it
+//! will even form an opinion — while `D` carries that full pedestal precisely
+//! because the clean strobe half is black.
+//!
+//! Fixing this means choosing a different statistic (and a policy for the
+//! genuinely undecidable case) and proving the new one separates live from
+//! print/replay. That is task 17 and it needs the attack corpus, which does
+//! not exist. **Widening `max_deviation` would be worse than useless**: it
+//! cannot reach the failing path, and a flat print held close to the lens
+//! produces the same low-contrast crop, so any change that lets these
+//! through must be justified against real attacks, not against convenience.
 
 use crate::GateResult;
 
@@ -121,7 +177,13 @@ pub fn radial_falloff(
 ) -> GateResult {
     let (crop, cw, ch) = crop_bbox(d, w, h, bbox);
     if crop.is_empty() || cw < 8 || ch < 8 {
-        return GateResult::fail(0.0, 0.0);
+        // `raw` is `SCORE_INVERSION - score` on every other path, and the
+        // calibration bridge inverts the mapping on that assumption. Reporting
+        // `raw = 0.0` beside a failure claimed a *perfect* falloff fit while
+        // refusing, so the daemon journalled this veto as
+        // `pad veto: radial (0.000)` — indistinguishable in the audit log from
+        // a gate that passed outright. Score 0.0 means raw 1.0.
+        return GateResult::fail(0.0, SCORE_INVERSION);
     }
     let score = monotonic_falloff_score(&crop, cw, ch);
     let raw = 1.0 - score;
@@ -213,6 +275,128 @@ mod tests {
         let d = vec![10.0; 16];
         let r = radial_falloff(&d, 4, 4, None, 0.55);
         assert!(!r.pass);
+    }
+
+    #[test]
+    fn tiny_crop_reports_raw_consistent_with_its_zero_score() {
+        // Regression: this path used to return `fail(0.0, 0.0)`, so the
+        // daemon logged the veto as `pad veto: radial (0.000)` — the raw a
+        // *perfect* falloff fit produces. `raw = SCORE_INVERSION - score`
+        // holds on every other path and the calibration bridge inverts it.
+        let d = vec![10.0; 16];
+        let r = radial_falloff(&d, 4, 4, None, 0.55);
+        assert!(!r.pass);
+        assert_eq!(r.score, 0.0);
+        assert_eq!(
+            r.raw, SCORE_INVERSION,
+            "a zero-score failure must report raw = 1.0, not 0.0"
+        );
+    }
+
+    /// Build a crop whose annular means about its centre follow `profile`
+    /// (8 bins, innermost first), using the same radial binning the gate does.
+    ///
+    /// This is how the measured hardware profiles below are turned into an
+    /// image without shipping a face.
+    fn from_annular_profile(cw: u32, ch: u32, profile: [f32; 8]) -> Vec<f32> {
+        let cx = (cw as f32 - 1.0) / 2.0;
+        let cy = (ch as f32 - 1.0) / 2.0;
+        let max_radius = ((cw as f32).hypot(ch as f32) / 2.0).max(1.0);
+        let mut img = Vec::with_capacity((cw * ch) as usize);
+        for y in 0..ch {
+            for x in 0..cw {
+                let dx = x as f32 - cx;
+                let dy = y as f32 - cy;
+                let radius = (dx * dx + dy * dy).sqrt();
+                let bin = (((radius / max_radius) * 8.0) as usize).min(7);
+                img.push(profile[bin]);
+            }
+        }
+        img
+    }
+
+    /// MEASURED, reference camera, live human face square to the lens at
+    /// working distance: YuNet box 55x48 px, `D = On - Off` with `off_mean`
+    /// 0.01/255, `D` 100% positive inside the box, mean 126.4.
+    ///
+    /// The annular profile of a real face in a tight face box *rises*
+    /// outward — the central annulus is nostrils and mouth shadow, the
+    /// brightest annuli are the cheeks — so `dynamic_range` is negative and
+    /// [`monotonic_falloff_score`] takes its `dynamic_range <= 5% * means[0]`
+    /// early return and reports exactly 0.0, i.e. `raw` exactly 1.000.
+    ///
+    /// This is the field report `pad veto: radial (1.000)` reproduced with no
+    /// hardware. 6 of 8 consecutive live pairs did this.
+    const MEASURED_LIVE_FACE_PROFILE: [f32; 8] = [
+        122.71, 122.83, 122.51, 122.30, 126.63, 128.51, 133.29, 131.27,
+    ];
+
+    #[test]
+    fn measured_live_face_profile_scores_exactly_zero() {
+        let (w, h) = (55u32, 48u32);
+        let d = from_annular_profile(w, h, MEASURED_LIVE_FACE_PROFILE);
+
+        let r = radial_falloff(&d, w, h, None, 0.55);
+
+        assert!(!r.pass, "measured live face is vetoed: {r:?}");
+        assert_eq!(
+            r.score, 0.0,
+            "not merely a low score — an early return's exact 0.0"
+        );
+        assert_eq!(r.raw, 1.0, "reproduces the field report's radial (1.000)");
+    }
+
+    #[test]
+    fn no_threshold_can_admit_the_measured_live_face() {
+        // The point of the whole investigation. `max_deviation` is never
+        // consulted on the early-return path: `raw` is 1.0, and `raw <= t` is
+        // false for every `t < 1.0`. Calibrating `max_radial_deviation`
+        // therefore cannot fix this veto, however far it is opened.
+        let (w, h) = (55u32, 48u32);
+        let d = from_annular_profile(w, h, MEASURED_LIVE_FACE_PROFILE);
+        for max_deviation in [0.55f32, 0.75, 0.90, 0.95, 0.99] {
+            let r = radial_falloff(&d, w, h, None, max_deviation);
+            assert!(
+                !r.pass,
+                "max_deviation={max_deviation} still vetoes; the threshold is not the knob: {r:?}"
+            );
+            assert_eq!(r.raw, 1.0);
+        }
+    }
+
+    #[test]
+    fn falloff_shallower_than_five_percent_scores_exactly_zero() {
+        // The other half of the same guard: even a *correctly* decreasing
+        // profile is refused outright when the centre-to-corner contrast is
+        // under 5% of the absolute level. Because the clean strobe half
+        // measures ~0.01/255, `D` carries the illuminated frame's full DC, so
+        // the 5% is 5% of that pedestal — and 1/d² across a ~15 cm face at
+        // ~50 cm is a few-percent effect to begin with.
+        let (w, h) = (55u32, 48u32);
+        let shallow = [126.0f32, 125.6, 125.2, 124.8, 124.4, 124.0, 123.6, 123.2];
+        let d = from_annular_profile(w, h, shallow);
+
+        let r = radial_falloff(&d, w, h, None, 0.55);
+
+        assert!(r.raw > 0.0, "the profile really does decrease outward");
+        assert_eq!(r.score, 0.0, "yet it scores the same as a flat print");
+        assert!(!r.pass);
+    }
+
+    #[test]
+    fn same_shape_with_deep_contrast_passes() {
+        // Control for the two tests above: the *shape* is not what is refused.
+        // Scale the identical monotone profile up to a 40% contrast and it
+        // passes, which pins the refusal on the 5% dynamic-range guard rather
+        // than on the monotonicity count.
+        let (w, h) = (55u32, 48u32);
+        let deep = [126.0f32, 118.0, 110.0, 103.0, 96.0, 89.0, 82.0, 76.0];
+        let d = from_annular_profile(w, h, deep);
+
+        let r = radial_falloff(&d, w, h, None, 0.55);
+
+        assert!(r.pass, "a deep monotone falloff passes: {r:?}");
+        assert!(r.score > 0.9, "score={}", r.score);
     }
 
     #[test]
