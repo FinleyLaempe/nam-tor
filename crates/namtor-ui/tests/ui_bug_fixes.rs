@@ -402,6 +402,30 @@ fn usa_8_restart_and_logs_rows_wired() {
             buttons >= 2,
             "each troubleshooting row needs a copy button, found {buttons}"
         );
+
+        // And the buttons must do something when pressed. Counting them is
+        // what the previous version of this test did about the rows, while
+        // both handlers were empty; a button with an empty handler counts
+        // exactly the same. Clicking is the only thing that tells them apart.
+        let mut clicked = 0;
+        for group in &groups {
+            common::for_each_button(group.upcast_ref::<gtk4::Widget>(), &mut |b| {
+                if b.icon_name().as_deref() != Some("edit-copy-symbolic") {
+                    return;
+                }
+                b.emit_clicked();
+                assert_eq!(
+                    b.icon_name().as_deref(),
+                    Some("object-select-symbolic"),
+                    "a copy with no visible confirmation reads as another dead button"
+                );
+                clicked += 1;
+            });
+        }
+        assert!(
+            clicked >= 2,
+            "expected to press both copy buttons, pressed {clicked}"
+        );
     });
 }
 
@@ -875,4 +899,439 @@ fn a_programmatic_pop_while_borrowed_does_not_re_enter() {
         // all is the result.
         rc.borrow_mut().pop_subpage_for_test();
     });
+}
+
+// ===========================================================================
+// The profile rows a user actually touches
+// ===========================================================================
+
+/// Give the fake bus `n` enrolled profiles. It starts empty, and an empty
+/// list renders a single "No profiles enrolled yet." row — no switches, no
+/// rename buttons, and a test that would pass by finding nothing.
+fn seed_profiles(bus: &namtor_client::fake_bus::FakeBus, n: usize) {
+    use namtor_ui::ManagerClient;
+    for i in 0..n {
+        let session = bus
+            .client
+            .start_enrollment(TEST_UID, &format!("profile-{i}"))
+            .expect("start enrollment on the fake bus");
+        bus.client
+            .commit_profile(&session)
+            .expect("commit profile on the fake bus");
+    }
+}
+
+/// Flipping a profile's enable switch runs a callback that takes a mutable
+/// borrow of the presenter, drops it, then takes a mutable borrow of the
+/// controller and re-renders the whole list from inside a GTK signal handler.
+/// The release profile is `panic = "abort"`, so a second live borrow anywhere
+/// on that path kills the Settings app outright — the same class of bug as
+/// the programmatic pop above, on the path with the most user traffic.
+///
+/// Nothing drove it. `AppController` is typed to
+/// `ProfilePresenter<DbusManagerClient>`, so a trait mock cannot be injected,
+/// and every test used `new_offline_for_test`, where `presenter` is `None`
+/// and `render_all` returns before rendering a single row. `FakeBus` hands
+/// out a real `DbusManagerClient`, which is what this uses.
+#[test]
+fn flipping_a_profile_switch_does_not_re_enter_the_controller() {
+    use gtk4::prelude::*;
+    use namtor_client::fake_bus::FakeBus;
+    use namtor_ui::app::AppController;
+
+    common::run_gtk_test(move || {
+        let bus = FakeBus::spawn().expect("spawn fake bus");
+        seed_profiles(&bus, 2);
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.profilerows")
+            .build();
+        let _guard = app.hold();
+
+        // A second client on the same bus, so the test can read back what
+        // the UI's client wrote.
+        let observer = bus.observer();
+
+        let rc = AppController::new_online_for_test(&app, bus.client);
+        let window = rc.borrow().shell_for_test().window().clone();
+        let root: gtk4::Widget = window.clone().upcast();
+
+        // The fake serves profiles, so rows must have rendered. If they did
+        // not, the rest of this test would pass by finding nothing.
+        let switches = common::count_widgets_of_type::<libadwaita::SwitchRow>(&root);
+        assert!(
+            switches > 0,
+            "no profile switch rendered — the test would prove nothing"
+        );
+
+        let sw =
+            common::first_widget_of_type::<libadwaita::SwitchRow>(&root).expect("a profile switch");
+        let before = sw.is_active();
+
+        // The user flips it. Everything downstream — presenter borrow,
+        // controller borrow, full re-render of the list this very widget
+        // belongs to — runs synchronously inside this call.
+        sw.set_active(!before);
+
+        // Surviving is most of the point, but a live controller is the rest:
+        // an aborted borrow would have taken the process with it, and a
+        // poisoned one would show up here.
+        assert!(
+            rc.try_borrow().is_ok(),
+            "the controller is still mutably borrowed after the toggle handler returned"
+        );
+        assert!(rc.borrow().has_presenter_for_test());
+        assert!(!rc.borrow().is_offline_for_test());
+
+        // The re-render replaces the rows, so the widget flipped above is
+        // detached; the current tree is what the user sees.
+        let after = common::count_widgets_of_type::<libadwaita::SwitchRow>(&root);
+        assert_eq!(
+            after, switches,
+            "the list must still hold one switch per profile after re-render"
+        );
+
+        // Surviving is not the same as working. The flip must have reached
+        // the daemon — a handler that swallowed the change would pass every
+        // assertion above.
+        use namtor_ui::ManagerClient;
+        let profiles = observer.list_profiles().expect("list profiles");
+        assert!(
+            profiles.iter().any(|p| p.enabled == !before),
+            "the toggle did not reach the daemon: {profiles:?}"
+        );
+    });
+}
+
+/// The rename button on each profile row opens a dialog. It is wired from the
+/// same place and carries the same re-entrancy shape, and clicking it was
+/// equally undriven.
+#[test]
+fn clicking_rename_on_a_profile_row_does_not_re_enter_the_controller() {
+    use gtk4::prelude::*;
+    use namtor_client::fake_bus::FakeBus;
+    use namtor_ui::app::AppController;
+
+    common::run_gtk_test(move || {
+        let bus = FakeBus::spawn().expect("spawn fake bus");
+        seed_profiles(&bus, 1);
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.profilerename")
+            .build();
+        let _guard = app.hold();
+
+        let rc = AppController::new_online_for_test(&app, bus.client);
+        let window = rc.borrow().shell_for_test().window().clone();
+        let root: gtk4::Widget = window.clone().upcast();
+
+        // The rename button is the one with the edit icon; the Enroll button
+        // has a label instead.
+        let mut rename: Option<gtk4::Button> = None;
+        common::for_each_button(&root, &mut |b| {
+            if b.icon_name().as_deref() == Some("document-edit-symbolic") && rename.is_none() {
+                rename = Some(b.clone());
+            }
+        });
+        let rename = rename.expect("a profile row must carry a rename button");
+
+        rename.emit_clicked();
+
+        assert!(
+            rc.try_borrow().is_ok(),
+            "the controller is still mutably borrowed after the rename handler returned"
+        );
+        assert!(rc.borrow().has_presenter_for_test());
+    });
+}
+
+/// The rename dialog's empty-name guard: pressing Rename with a blank field
+/// must mark the entry and leave the dialog open, not close it having done
+/// nothing. `AdwMessageDialog` does not close itself when a response is
+/// activated — the handler's early `return` is what keeps it open — and that
+/// dependency had never been exercised, so the guard could have been
+/// cosmetic.
+#[test]
+fn renaming_to_a_blank_name_keeps_the_dialog_open_and_changes_nothing() {
+    use gtk4::prelude::*;
+    use libadwaita::prelude::*;
+    use namtor_client::fake_bus::FakeBus;
+    use namtor_ui::app::AppController;
+    use namtor_ui::ManagerClient;
+
+    common::run_gtk_test(move || {
+        let bus = FakeBus::spawn().expect("spawn fake bus");
+        seed_profiles(&bus, 1);
+        let observer = bus.observer();
+        let app = libadwaita::Application::builder()
+            .application_id("org.namtor.test.renameguard")
+            .build();
+        let _guard = app.hold();
+
+        let rc = AppController::new_online_for_test(&app, bus.client);
+        let window = rc.borrow().shell_for_test().window().clone();
+        let root: gtk4::Widget = window.clone().upcast();
+
+        let original = observer.list_profiles().expect("list")[0].name.clone();
+
+        let mut rename: Option<gtk4::Button> = None;
+        common::for_each_button(&root, &mut |b| {
+            if b.icon_name().as_deref() == Some("document-edit-symbolic") && rename.is_none() {
+                rename = Some(b.clone());
+            }
+        });
+        rename.expect("a rename button").emit_clicked();
+
+        let dialog =
+            message_dialog_headed("Rename Profile").expect("the rename dialog must be presented");
+        let entry = common::first_widget_of_type::<libadwaita::EntryRow>(
+            &dialog.clone().upcast::<gtk4::Widget>(),
+        )
+        .expect("the dialog carries a name entry");
+        assert_eq!(
+            entry.text().as_str(),
+            original,
+            "prefilled with the old name"
+        );
+
+        // Whitespace is blank.
+        entry.set_text("   ");
+        dialog.response("rename");
+
+        assert!(
+            dialog.is_visible(),
+            "a blank name must leave the dialog open so the user can correct it"
+        );
+        assert!(
+            entry.has_css_class("error"),
+            "the entry must be marked so the user can see what is wrong"
+        );
+        assert_eq!(
+            observer.list_profiles().expect("list")[0].name,
+            original,
+            "a blank name must not have renamed anything"
+        );
+
+        // A real name goes through, and the dialog closes.
+        entry.remove_css_class("error");
+        entry.set_text("Bright Name");
+        dialog.response("rename");
+        assert!(!dialog.is_visible(), "a valid rename closes the dialog");
+        assert_eq!(
+            observer.list_profiles().expect("list")[0].name,
+            "Bright Name"
+        );
+
+        assert!(
+            rc.try_borrow().is_ok(),
+            "the controller is still mutably borrowed after the rename handler returned"
+        );
+    });
+}
+
+/// The `AdwMessageDialog` whose heading contains `needle`, among the current
+/// toplevels. Dialogs are separate toplevels, so they are not reachable by
+/// walking the window, and a dialog presented without a transient parent is
+/// not necessarily `is_visible()` — matching on the heading is what makes
+/// this reliable in both cases.
+fn message_dialog_headed(needle: &str) -> Option<libadwaita::MessageDialog> {
+    use gtk4::prelude::*;
+    use libadwaita::prelude::*;
+    gtk4::Window::list_toplevels()
+        .into_iter()
+        .filter_map(|w| w.downcast::<libadwaita::MessageDialog>().ok())
+        .find(|d| d.heading().is_some_and(|h| h.contains(needle)))
+}
+
+/// Flipping the "Authentication uses" switch for a service is the one place
+/// in the app that triggers a polkit prompt. The handler ends by putting the
+/// switch back on whatever the daemon reports, and `connect_active_notify`
+/// fires for programmatic changes too — so without the `APPLYING` guard that
+/// re-render re-enters the handler and issues a second toggle, with a second
+/// prompt, for a state the user only asked to have displayed.
+///
+/// The guard existed and was never exercised: no test in the suite ever set
+/// a switch's active state or emitted `active-notify`. The presenter-level
+/// tests drive `request_pam_toggle` directly, which is the layer underneath
+/// it.
+#[test]
+fn enabling_a_safe_service_issues_exactly_one_call_and_asks_nothing() {
+    use gtk4::prelude::*;
+    use namtor_ui::components::pam_services::render_pam_services;
+    use std::sync::Arc;
+
+    common::run_gtk_test(move || {
+        let fake = Arc::new(FakeManagerClient::new());
+        let (rc, target) = pam_fixture(&fake, namtor_ui::PamServiceCompatibility::Safe);
+        let group = render_pam_services(&rc);
+        let root: gtk4::Widget = group.clone().upcast();
+
+        let switch =
+            switch_for_service(&root, &target.id).expect("the target service must have a switch");
+        assert!(!switch.is_active(), "the target service starts disabled");
+
+        let before = fake.pam_toggle_calls();
+        switch.set_active(true);
+        let after = fake.pam_toggle_calls();
+
+        assert_eq!(
+            after - before,
+            1,
+            "toggling {} issued {} calls; each one is a separate polkit prompt",
+            target.display_name,
+            after - before
+        );
+        assert!(
+            message_dialog_headed("high-impact").is_none(),
+            "a Safe service must apply without asking"
+        );
+        assert!(
+            rc.try_borrow().is_ok(),
+            "the presenter is still borrowed after the toggle handler returned"
+        );
+        assert!(switch.is_active(), "the switch must show the applied state");
+    });
+}
+
+/// Enabling a high-impact service asks first and applies nothing until the
+/// warning is accepted. Nothing had ever answered that dialog either way.
+#[test]
+fn confirming_the_high_impact_warning_applies_it_once() {
+    use gtk4::prelude::*;
+    use libadwaita::prelude::*;
+    use namtor_ui::components::pam_services::render_pam_services;
+    use std::sync::Arc;
+
+    common::run_gtk_test(move || {
+        let fake = Arc::new(FakeManagerClient::new());
+        let (rc, target) = pam_fixture(&fake, namtor_ui::PamServiceCompatibility::Risky);
+        let group = render_pam_services(&rc);
+        let root: gtk4::Widget = group.clone().upcast();
+
+        let switch =
+            switch_for_service(&root, &target.id).expect("the target service must have a switch");
+
+        let before = fake.pam_toggle_calls();
+        switch.set_active(true);
+        assert_eq!(
+            fake.pam_toggle_calls(),
+            before,
+            "a high-impact service must not apply before the warning is accepted"
+        );
+
+        let dialog = message_dialog_headed("high-impact")
+            .expect("enabling a high-impact service must ask first");
+        dialog.response("confirm");
+
+        assert_eq!(
+            fake.pam_toggle_calls() - before,
+            1,
+            "accepting the warning must apply it exactly once"
+        );
+        assert!(
+            rc.borrow().model().pending_pam_toggle.is_none(),
+            "the staged toggle must be cleared once it is applied"
+        );
+        assert!(
+            rc.try_borrow().is_ok(),
+            "the presenter is still borrowed after the confirm handler returned"
+        );
+    });
+}
+
+/// Declining the high-impact warning must apply nothing and put the switch
+/// back.
+#[test]
+fn declining_the_high_impact_warning_applies_nothing() {
+    use gtk4::prelude::*;
+    use libadwaita::prelude::*;
+    use namtor_ui::components::pam_services::render_pam_services;
+    use std::sync::Arc;
+
+    common::run_gtk_test(move || {
+        let fake = Arc::new(FakeManagerClient::new());
+        let (rc, target) = pam_fixture(&fake, namtor_ui::PamServiceCompatibility::Risky);
+        let group = render_pam_services(&rc);
+        let root: gtk4::Widget = group.clone().upcast();
+
+        let switch =
+            switch_for_service(&root, &target.id).expect("the target service must have a switch");
+
+        let before = fake.pam_toggle_calls();
+        switch.set_active(true);
+        let dialog = message_dialog_headed("high-impact")
+            .expect("enabling a high-impact service must ask first");
+        dialog.response("cancel");
+
+        assert_eq!(
+            fake.pam_toggle_calls(),
+            before,
+            "declining the warning must not have applied anything"
+        );
+        assert!(
+            !switch.is_active(),
+            "the switch must go back to off after the warning is declined"
+        );
+        assert!(
+            rc.borrow().model().pending_pam_toggle.is_none(),
+            "the staged toggle must be cleared when it is declined"
+        );
+    });
+}
+
+/// A presenter wired to `fake`, refreshed, plus a disabled service of the
+/// given compatibility to act on. Naming the service matters: the first
+/// switch that happens to be off may belong to an `Unsupported` service,
+/// which has no handler at all, and a test that flipped one of those would
+/// observe nothing happening and call it a pass.
+fn pam_fixture(
+    fake: &std::sync::Arc<FakeManagerClient>,
+    want: namtor_ui::PamServiceCompatibility,
+) -> (
+    std::rc::Rc<std::cell::RefCell<ProfilePresenter<FakeManagerClient>>>,
+    namtor_ui::view_model::PamServiceRowView,
+) {
+    let mut presenter = ProfilePresenter::from_arc(std::sync::Arc::clone(fake), TEST_UID);
+    presenter.refresh();
+    let target = presenter
+        .model()
+        .pam_services
+        .iter()
+        .find(|s| s.compatibility == want && !s.enabled)
+        .unwrap_or_else(|| panic!("the fake must serve a disabled {want:?} PAM service"))
+        .clone();
+    (std::rc::Rc::new(std::cell::RefCell::new(presenter)), target)
+}
+
+/// The switch belonging to one PAM service.
+///
+/// Picking "the first switch that is off" picks whichever service happens to
+/// come first, and an `Unsupported` service gets no handler at all — a test
+/// that flipped one of those would observe nothing happening and call it a
+/// pass. The switch carries the service id in its tooltip, so it can be
+/// named.
+fn switch_for_service(root: &gtk4::Widget, service_id: &str) -> Option<libadwaita::SwitchRow> {
+    use gtk4::prelude::*;
+    let mut found = None;
+    collect_switch_rows(root, &mut |sw| {
+        if found.is_none()
+            && sw
+                .tooltip_text()
+                .is_some_and(|t| t.contains(&format!("({service_id})")))
+        {
+            found = Some(sw.clone());
+        }
+    });
+    found
+}
+
+/// Walk a widget tree and hand every `AdwSwitchRow` to `f`.
+fn collect_switch_rows(widget: &gtk4::Widget, f: &mut dyn FnMut(&libadwaita::SwitchRow)) {
+    use gtk4::prelude::*;
+    if let Some(sw) = widget.downcast_ref::<libadwaita::SwitchRow>() {
+        f(sw);
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        collect_switch_rows(&c, f);
+        child = c.next_sibling();
+    }
 }

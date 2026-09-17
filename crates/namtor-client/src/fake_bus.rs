@@ -107,9 +107,19 @@ pub struct FakeBus {
     pub server: zbus::Connection,
     /// A `DbusManagerClient` wired to the client side of the p2p pair.
     pub client: DbusManagerClient,
+    /// The client-side connection, kept so a test can build a second client
+    /// on the same bus and read back what the first one wrote. `client` is
+    /// usually moved into whatever is under test.
+    client_conn: zbus::blocking::Connection,
 }
 
 impl FakeBus {
+    /// A second client on the same connection. Lets a test observe the effect
+    /// of a call made by the client it handed to the code under test.
+    pub fn observer(&self) -> DbusManagerClient {
+        DbusManagerClient::from_connection(self.client_conn.clone())
+    }
+
     /// Spawn a fresh in-process fake bus. No real D-Bus daemon required.
     ///
     /// The server connection is built on a background thread so its handshake
@@ -145,7 +155,11 @@ impl FakeBus {
         let server = rx
             .recv()
             .map_err(|e| zbus::Error::Failure(e.to_string()))??;
-        let client = DbusManagerClient::from_connection(client_conn);
-        Ok(Self { server, client })
+        let client = DbusManagerClient::from_connection(client_conn.clone());
+        Ok(Self {
+            server,
+            client,
+            client_conn,
+        })
     }
 }

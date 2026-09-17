@@ -103,6 +103,11 @@ pub struct FakeManagerClient {
     v3_progress: Mutex<HashMap<String, EnrollmentProgressV3>>,
     /// Delay injected on set_pam_service_enabled to simulate slow polkit.
     pam_toggle_delay_ms: AtomicU64,
+    /// How many times `set_pam_service_enabled` has been called. The PAM
+    /// switch's re-entrancy guard is only observable as a call count: without
+    /// it, showing the authoritative state re-enters the handler and issues a
+    /// second toggle, with a second polkit prompt.
+    pam_toggle_calls: AtomicU64,
     seq: AtomicU64,
     clock: AtomicU64,
 }
@@ -195,6 +200,7 @@ impl FakeManagerClient {
             v3_sessions: Mutex::new(HashMap::new()),
             v3_progress: Mutex::new(HashMap::new()),
             pam_toggle_delay_ms: AtomicU64::new(0),
+            pam_toggle_calls: AtomicU64::new(0),
             seq: AtomicU64::new(1),
             clock: AtomicU64::new(1_700_000_000),
         }
@@ -293,6 +299,12 @@ impl FakeManagerClient {
             .lock()
             .expect("v3 sessions poisoned")
             .contains_key(session)
+    }
+
+    /// How many `set_pam_service_enabled` calls the fake has seen.
+    pub fn pam_toggle_calls(&self) -> u64 {
+        self.pam_toggle_calls
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Test helper: set a delay (in milliseconds) on set_pam_service_enabled
@@ -596,6 +608,8 @@ impl ManagerClient for FakeManagerClient {
     }
 
     fn set_pam_service_enabled(&self, service_id: &str, enabled: bool) -> ManagerResult<bool> {
+        self.pam_toggle_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.check_mut()?;
         // Simulate slow polkit authorization if delay is configured.
         let delay_ms = self

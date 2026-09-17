@@ -300,6 +300,45 @@ impl AppController {
         }))
     }
 
+    /// Test-only constructor that starts *online*, with a presenter driving
+    /// the given client.
+    ///
+    /// `AppController` is hard-wired to `ProfilePresenter<DbusManagerClient>`,
+    /// so a trait mock cannot be injected; every existing test therefore used
+    /// `new_offline_for_test`, where `presenter` is `None` and `render_all`
+    /// returns immediately. The result was that the profile rows a user
+    /// actually touches — the enable switch, the rename button — were
+    /// rendered by no test and their callbacks fired by none either, on a
+    /// release profile that aborts on a double `RefCell` borrow.
+    ///
+    /// `namtor_client::fake_bus::FakeBus` hands out a real
+    /// `DbusManagerClient` over a private bus, so this closes that gap
+    /// without weakening the production type.
+    ///
+    /// **This is for tests only** — production code must use `build()`.
+    pub fn new_online_for_test(app: &adw::Application, client: DbusManagerClient) -> ControllerRc {
+        let shell = Shell::new(app);
+        let uid = current_uid();
+        let presenter = Rc::new(RefCell::new(ProfilePresenter::new(client, uid)));
+        presenter.borrow_mut().refresh();
+        let controller = Rc::new(RefCell::new(Self {
+            shell,
+            presenter: Some(presenter),
+            profile_list: ProfileListView::new(),
+            enrollment_view: EnrollmentViewComponent::new(),
+            review_view: ReviewViewComponent::new(),
+            enrollment_nav_page: None,
+            review_nav_page: None,
+            announcer: crate::a11y::ProgressAnnouncer::new(),
+            poll_source: None,
+            offline: false,
+        }));
+        let rc = Rc::clone(&controller);
+        controller.borrow_mut().render_all(&rc);
+        Self::install_pop_handler(&controller);
+        controller
+    }
+
     /// Test-only accessor for behavioural tests.
     ///
     /// **This is for tests only** — not part of the production API.
