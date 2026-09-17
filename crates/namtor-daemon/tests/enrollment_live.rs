@@ -1794,7 +1794,9 @@ fn authentication_latency_meets_the_median_and_p95_budgets() {
         templates: enrolled.templates,
     };
     {
-        let store = match TemplateStore::open(store_dir.path(), &key_path) {
+        let mut sel = namtor_store::crypto::BackendSelector::file()
+            .with_root_secret_path(store_dir.path().join("root_secret"));
+        let store = match TemplateStore::open_with_selector(store_dir.path(), &key_path, &mut sel) {
             Ok(s) => s,
             Err(e) => {
                 assert_emitter_restored(&emitter_cfg);
@@ -1815,7 +1817,18 @@ fn authentication_latency_meets_the_median_and_p95_budgets() {
     // ---- opened HERE, once, outside every timed region, because the running
     // ---- daemon opens them once at start-up.
     let engine_built_at = Instant::now();
-    let mut engine = match VerifyEngine::new(&yunet, &sface, store_dir.path(), &key_path) {
+    // Use the selector-injecting constructor added for F24: the default one
+    // resolves the root secret to /var/lib/namtor/root_secret, which an
+    // unprivileged process cannot create. Keep the secret inside the tempdir.
+    let mut sel = namtor_store::crypto::BackendSelector::file()
+        .with_root_secret_path(store_dir.path().join("root_secret"));
+    let mut engine = match VerifyEngine::new_with_selector(
+        &yunet,
+        &sface,
+        store_dir.path(),
+        &key_path,
+        &mut sel,
+    ) {
         Ok(e) => e,
         Err(namtor_daemon::verify::VerifyError::Store(e)) => {
             assert_emitter_restored(&emitter_cfg);
