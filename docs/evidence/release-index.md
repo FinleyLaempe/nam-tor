@@ -19,9 +19,18 @@ been executed against a published tag.
 | SBOM | CycloneDX (cargo-cyclonedx, syft fallback) | release.yml | Defined, not yet executed |
 | Provenance | SLSA Level 3 (slsa-framework/slsa-github-generator) | release.yml | Defined, not yet executed |
 
-The workflow builds a matrix (Arch, Fedora 40/41, Debian 12/13; x86_64 and
-aarch64), runs lint, build, install, smoke, upgrade, and uninstall per cell,
-and aborts on any hard blocker. It does not push to a remote package
+The workflow builds a matrix of three cells — Arch Linux (x86_64), Debian 13
+trixie (amd64) and Fedora 41 (x86_64) — and runs lint, build, the shipped-
+weights inference check, install, smoke, upgrade and uninstall in each,
+aborting on any hard blocker.
+
+This paragraph previously claimed "Arch, Fedora 40/41, Debian 12/13; x86_64
+and aarch64". None of that beyond Arch x86_64 was ever in the matrix: until
+2026-09-17 it had one cell, and every release shipped Arch packages only.
+There is no aarch64 cell, no Fedora 40 and no Debian 12. Debian 12 cannot
+build this tree at all — bookworm's cargo predates the v4 Cargo.lock, and
+trixie's rustc 1.85.1 is below the 1.88 that `ort` requires, so the Debian
+cell builds with a rustup toolchain. It does not push to a remote package
 registry; downstream distribution (AUR, COPR, apt repo) is an owner-gated
 manual step.
 
