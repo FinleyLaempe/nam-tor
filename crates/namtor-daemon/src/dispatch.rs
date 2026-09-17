@@ -68,6 +68,38 @@ pub struct DaemonDispatcher<S: WorkerSupervisor, C: Clock, V: VerifyRunner> {
     state: Mutex<DispatchState<S, C, V>>,
 }
 
+/// Darken the emitter using the record the daemon wrote before arming it,
+/// without going through the daemon state.
+///
+/// The fallback for a suspend that cannot take the dispatcher lock in time.
+/// Best-effort by construction: a missing record means nothing was ever armed,
+/// and `force_off_lib` verifies the XU control exists before writing, so a
+/// stale record aimed at another device is a no-op rather than a stray write.
+fn force_emitter_off_from_record() {
+    use namtor_camera::emitter_state::EmitterState;
+    let path = std::path::Path::new(namtor_camera::emitter_state::DEFAULT_PATH);
+    let Ok(Some(state)) = EmitterState::read(path) else {
+        return;
+    };
+    let device = state.resolve_device(std::path::Path::new("/sys"));
+    let Ok(dev) = namtor_uvc::device::V4l2Device::open(&device) else {
+        return;
+    };
+    let mut xu = namtor_uvc::probe::SafeXu::new(dev);
+    // The same write `namtor emitter-off` performs after a SIGKILL. It probes
+    // the control first, so a stale record pointing at another device is a
+    // no-op rather than a stray write.
+    match namtor_camera::emitter_off_cli::force_off_lib_raw(
+        &mut xu,
+        state.unit,
+        state.selector,
+        &state.payload_off,
+    ) {
+        Ok(()) => tracing::info!(device = %device.display(), "emitter forced off for suspend"),
+        Err(e) => tracing::warn!(error = %e, "emitter force-off for suspend failed"),
+    }
+}
+
 impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> DaemonDispatcher<S, C, V> {
     /// Close the auth capture and return the lifecycle to Cold, because the
     /// machine is about to suspend.
@@ -81,18 +113,51 @@ impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> DaemonDispatc
     /// infallible and forces Cold from any phase, so this is safe to call
     /// whatever the daemon was doing.
     pub fn release_for_suspend(&self) {
-        let mut st = match self.state.lock() {
-            Ok(g) => g,
-            // A poisoned lock still guards a capture that must be closed.
-            Err(p) => p.into_inner(),
-        };
-        let was_open = st.daemon.capture_open();
-        if let Err(e) = st.daemon.release() {
-            tracing::warn!(error = %e, "release before suspend failed");
+        // Bounded, because we are inside logind's delay window.
+        //
+        // `dispatch` holds this mutex across the blocking verify, and a verify
+        // can stall indefinitely: `VERIFY_TIMEOUT` is only checked between
+        // frames and a DQBUF on a camera that has stopped delivering — which
+        // is what the start of a suspend causes — does not return. Blocking
+        // here until that clears burns the whole `InhibitDelayMaxSec` (5 s by
+        // default) and the machine then suspends with the emitter still lit,
+        // which is the exact outcome this function exists to prevent.
+        let deadline = std::time::Instant::now() + Duration::from_millis(750);
+        loop {
+            match self.state.try_lock() {
+                Ok(mut st) => {
+                    let was_open = st.daemon.capture_open();
+                    if let Err(e) = st.daemon.release() {
+                        tracing::warn!(error = %e, "release before suspend failed");
+                    }
+                    if was_open {
+                        tracing::info!("auth capture closed for suspend; emitter off");
+                    }
+                    return;
+                }
+                // A poisoned lock still guards a capture that must be closed.
+                Err(std::sync::TryLockError::Poisoned(p)) => {
+                    let mut st = p.into_inner();
+                    let _ = st.daemon.release();
+                    return;
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
         }
-        if was_open {
-            tracing::info!("auth capture closed for suspend; emitter off");
-        }
+
+        // Could not take the lock in time. Darken the emitter anyway, without
+        // it, from the record the daemon wrote before arming — the same route
+        // `namtor emitter-off` takes after a SIGKILL. The capture stays open,
+        // but an open capture in the dark is the safe half of the problem.
+        tracing::warn!(
+            "an authentication still held the dispatcher at suspend; forcing the              emitter off directly"
+        );
+        force_emitter_off_from_record();
     }
 
     /// Build a dispatcher over the given daemon, verify runner, and backoff
@@ -761,6 +826,54 @@ mod tests {
     #[test]
     fn release_for_suspend_with_no_capture_is_a_noop() {
         let (disp, _clock) = build(VerifyOutcome::no_match("none"));
+        disp.release_for_suspend();
+        let st = disp.state.lock().unwrap();
+        assert!(!st.daemon.capture_open());
+        assert_eq!(st.daemon.phase(), LcPhase::Cold);
+    }
+
+    /// A suspend must not block indefinitely on an authentication.
+    ///
+    /// `dispatch` holds the dispatcher mutex across the blocking verify, and a
+    /// verify can stall for as long as a camera withholds a frame — which is
+    /// what the start of a suspend causes. Waiting for it burns logind's whole
+    /// delay window (5 s by default) and the machine then suspends with the
+    /// emitter still lit, which is the outcome the handler exists to prevent.
+    #[test]
+    fn release_for_suspend_gives_up_rather_than_waiting_out_the_inhibitor() {
+        let (disp, _clock) = build(VerifyOutcome::no_match("none"));
+
+        // Hold the lock, as an in-flight verify would.
+        let held = disp.state.lock().expect("lock");
+
+        let start = Instant::now();
+        std::thread::scope(|s| {
+            s.spawn(|| disp.release_for_suspend());
+        });
+        let waited = start.elapsed();
+
+        drop(held);
+        assert!(
+            waited < Duration::from_secs(3),
+            "gave up after {waited:?}; logind's default InhibitDelayMaxSec is 5s, \
+             and cancel_all_sessions still has to run after this"
+        );
+    }
+
+    /// With the lock free it takes the normal path and closes the capture.
+    #[test]
+    fn release_for_suspend_takes_the_lock_when_it_is_free() {
+        let (disp, _clock) = build(VerifyOutcome::no_match("none"));
+        {
+            let mut st = disp.state.lock().unwrap();
+            st.daemon
+                .prepare_for_auth(Requester {
+                    uid: 1000,
+                    label: "pam".into(),
+                })
+                .unwrap();
+            assert!(st.daemon.capture_open());
+        }
         disp.release_for_suspend();
         let st = disp.state.lock().unwrap();
         assert!(!st.daemon.capture_open());

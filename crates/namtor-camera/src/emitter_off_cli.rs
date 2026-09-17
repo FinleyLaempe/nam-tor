@@ -171,7 +171,7 @@ fn from_state(state_path: &Path) -> ExitCode {
 /// `force_off_lib` without an `EmitterCfg`. The record deliberately stores the
 /// three fields that function reads rather than a whole quirks entry, so the
 /// crash path never depends on a quirks file still being readable.
-fn force_off_lib_raw<T: namtor_uvc::probe::XuTransport>(
+pub fn force_off_lib_raw<T: namtor_uvc::probe::XuTransport>(
     xu: &mut namtor_uvc::probe::SafeXu<T>,
     unit: u8,
     selector: u8,
