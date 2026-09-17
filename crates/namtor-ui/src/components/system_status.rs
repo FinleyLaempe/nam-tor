@@ -54,13 +54,19 @@ pub fn render_system_status<C: crate::client::ManagerClient + 'static>(
     ))]);
     status_group.add(&daemon_row);
 
+    // Four outcomes, not two. "Not detected" for a missing device database
+    // sent the user to check their hardware when the fix is to reinstall.
     let camera_row = adw::ActionRow::builder()
         .title(tr("IR Camera"))
-        .subtitle(tr(if system.camera_detected {
-            "Detected"
-        } else {
-            "Not detected"
+        .subtitle(tr(match system.camera {
+            crate::CameraPresence::Present => "Detected",
+            crate::CameraPresence::Absent => "Not detected",
+            crate::CameraPresence::NoDeviceDatabase => {
+                "Cannot tell — the device database is missing. Reinstall namtor."
+            }
+            crate::CameraPresence::NoSysfs => "Cannot tell — /sys is not readable",
         }))
+        .subtitle_lines(0)
         .build();
     camera_row.update_property(&[gtk4::accessible::Property::Description(&tr(
         "Whether an infrared camera was detected",

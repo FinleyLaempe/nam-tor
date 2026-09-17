@@ -212,7 +212,7 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             // Probed locally. The wire has no readiness method, so this was
             // `daemon_reachable` — the System page told a user with no camera
             // that their camera was detected.
-            camera_detected: crate::supported_camera_present(),
+            camera: crate::supported_camera_presence(),
             // Sound: the daemon validates its models and spawns the worker
             // before it binds the socket, so a reachable daemon has them.
             models_loaded: daemon_reachable,
@@ -1059,6 +1059,20 @@ impl<C: ManagerClient> ProfilePresenter<C> {
     pub fn cancel_pam_toggle(&mut self) -> &PresenterModel {
         self.model.pending_pam_toggle = None;
         &self.model
+    }
+
+    /// Override what the local camera probe reported.
+    ///
+    /// The probe reads the real `/sys` and the real quirks directory, so a
+    /// test cannot arrange three of its four outcomes by any other means —
+    /// which is why the System page's camera row went for so long with two
+    /// subtitles covering three conditions.
+    ///
+    /// **This is for tests only** — not part of the production API.
+    pub fn set_camera_presence_for_test(&mut self, presence: crate::CameraPresence) {
+        if let Some(system) = self.model.system.as_mut() {
+            system.camera = presence;
+        }
     }
 
     pub fn dismiss_error(&mut self) -> &PresenterModel {

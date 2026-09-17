@@ -508,7 +508,7 @@ fn system_view_carries_no_biometrics() {
     use namtor_ui::view_model::{ProtectionView, SystemView};
     let sample = SystemView {
         daemon_running: true,
-        camera_detected: true,
+        camera: namtor_ui::CameraPresence::Present,
         models_loaded: true,
         protection: ProtectionView {
             label: "TPM2 (hardware-bound)".into(),
@@ -570,7 +570,7 @@ fn mutation_test_forbidden_fields_in_system_view() {
     use namtor_ui::view_model::{ProtectionView, SystemView};
     let clean = SystemView {
         daemon_running: true,
-        camera_detected: true,
+        camera: namtor_ui::CameraPresence::Present,
         models_loaded: true,
         protection: ProtectionView::default(),
     };
@@ -583,7 +583,7 @@ fn mutation_test_forbidden_fields_in_system_view() {
         let key = (*forbidden).to_string();
         let json = serde_json::json!({
             "daemon_running": true,
-            "camera_detected": true,
+            "camera": "present",
             "models_loaded": true,
             "protection": {
                 "label": "TPM2 (hardware-bound)",

@@ -177,6 +177,37 @@ pub use view_model::{
     QualityView, ReadinessLevel, ReadinessView, RecoveryHint, ReviewView, ReviewViewV3,
 };
 
+/// What the local probe can say about an IR camera.
+///
+/// Three different situations used to collapse into `false`, and the System
+/// page rendered all of them as "IR Camera — Not detected": no matching
+/// device, an unreadable quirks database, and unreadable sysfs. Only the
+/// first is a statement about the hardware. A package installed without its
+/// device database sent the user to check their camera when the fix is to
+/// reinstall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CameraPresence {
+    /// A supported camera is attached and exposes a capture node.
+    Present,
+    /// Nothing attached matches the device database.
+    #[default]
+    Absent,
+    /// The device database is missing, unreadable, or empty, so nothing
+    /// could be matched against it. Says nothing about the hardware.
+    NoDeviceDatabase,
+    /// `/sys` could not be enumerated.
+    NoSysfs,
+}
+
+impl CameraPresence {
+    /// Whether a supported camera is attached. `false` for every condition
+    /// under which that could not be determined.
+    pub fn is_present(self) -> bool {
+        matches!(self, Self::Present)
+    }
+}
+
 /// Is a supported IR camera present on this machine?
 ///
 /// Answered from sysfs and the quirks database, not from the daemon: the
@@ -184,11 +215,11 @@ pub use view_model::{
 /// report `camera_detected = daemon_reachable` and tell a user with no camera
 /// that their camera was detected.
 ///
-/// Unprivileged — it reads `/sys` and the quirks directory only. A failure to
-/// read either is reported as "not detected" rather than as an error, because
-/// this drives one status row and must never take the page down.
-pub fn supported_camera_present() -> bool {
-    supported_camera_present_in(
+/// Unprivileged — it reads `/sys` and the quirks directory only. Nothing here
+/// returns an error: this drives one status row and must never take the page
+/// down. See [`CameraPresence`] for why the reasons are kept apart.
+pub fn supported_camera_presence() -> CameraPresence {
+    supported_camera_presence_in(
         std::path::Path::new(
             &std::env::var("NAMTOR_SYSFS_ROOT").unwrap_or_else(|_| "/sys".to_string()),
         ),
@@ -199,19 +230,24 @@ pub fn supported_camera_present() -> bool {
     )
 }
 
-/// [`supported_camera_present`] against explicit roots, so it can be tested
-/// without a camera attached.
-pub fn supported_camera_present_in(
+/// [`supported_camera_presence`] against explicit roots.
+pub fn supported_camera_presence_in(
     sysfs_root: &std::path::Path,
     quirks_dir: &std::path::Path,
-) -> bool {
-    let Ok(db) = namtor_hwdb::quirks::load_quirks_dir(quirks_dir) else {
-        return false;
+) -> CameraPresence {
+    // `load_quirks_dir` answers `Ok` with an empty database for a directory
+    // that is not there — it is written to merge several candidate roots, so
+    // a missing one is not fatal to it. An empty database cannot match
+    // anything, so for this probe "missing" and "empty" are one condition,
+    // and neither is a statement about the hardware.
+    let db = match namtor_hwdb::quirks::load_quirks_dir(quirks_dir) {
+        Ok(db) if !db.entries.is_empty() => db,
+        _ => return CameraPresence::NoDeviceDatabase,
     };
     let Ok(devices) = namtor_hwdb::sysfs::enumerate_usb(sysfs_root) else {
-        return false;
+        return CameraPresence::NoSysfs;
     };
-    devices.iter().any(|d| {
+    let found = devices.iter().any(|d| {
         // Try the bcd-qualified key first, then the plain vid:pid. A
         // bcd-qualified lookup deliberately never falls back on its own — the
         // quirks db treats a bcd mismatch as a different device — and most
@@ -224,5 +260,24 @@ pub fn supported_camera_present_in(
             && namtor_hwdb::nodes::correlate_nodes(d)
                 .map(|nodes| nodes.iter().any(|n| !n.is_metadata))
                 .unwrap_or(false)
-    })
+    });
+    if found {
+        CameraPresence::Present
+    } else {
+        CameraPresence::Absent
+    }
+}
+
+/// Is a supported IR camera present on this machine?
+pub fn supported_camera_present() -> bool {
+    supported_camera_presence().is_present()
+}
+
+/// [`supported_camera_present`] against explicit roots, so it can be tested
+/// without a camera attached.
+pub fn supported_camera_present_in(
+    sysfs_root: &std::path::Path,
+    quirks_dir: &std::path::Path,
+) -> bool {
+    supported_camera_presence_in(sysfs_root, quirks_dir).is_present()
 }

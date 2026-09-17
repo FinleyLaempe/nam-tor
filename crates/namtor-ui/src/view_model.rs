@@ -155,14 +155,17 @@ pub struct AuthenticationView {
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
 pub struct SystemView {
     pub daemon_running: bool,
-    /// A supported IR camera is present on this machine.
+    /// What the local probe can say about an IR camera.
     ///
-    /// Probed locally from sysfs against the quirks database, not inferred.
-    /// This used to be `camera_detected: daemon_reachable` with the comment
-    /// "Simplified: if daemon is up, camera is assumed ready for the view",
-    /// so the System page answered "IR Camera — Detected" on a machine with
-    /// no camera at all, and gave no clue why enrollment then failed.
-    pub camera_detected: bool,
+    /// Probed from sysfs against the quirks database, not inferred. This used
+    /// to be `camera_detected: daemon_reachable` with the comment "Simplified:
+    /// if daemon is up, camera is assumed ready for the view", so the System
+    /// page answered "IR Camera — Detected" on a machine with no camera at
+    /// all, and gave no clue why enrollment then failed. It then became a
+    /// `bool` from the real probe, which was right about the hardware but
+    /// folded "the device database is missing" into "no camera" — see
+    /// [`crate::CameraPresence`].
+    pub camera: crate::CameraPresence,
     /// The daemon has validated its models.
     ///
     /// Sound to infer from reachability: `namtor daemon` validates every

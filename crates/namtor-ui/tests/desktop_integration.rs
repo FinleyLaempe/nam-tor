@@ -9,6 +9,8 @@
 
 mod common;
 
+use gtk4::prelude::*;
+
 const WIZARD_SRC: &str = include_str!("../src/bin/wizard.rs");
 
 /// The wizard must drive its appearance from `AdwStyleManager`, never from
@@ -251,4 +253,91 @@ fn a_missing_catalog_is_not_an_error() {
     assert_eq!(namtor_ui::tr("Enroll Face"), "Enroll Face");
     std::env::remove_var("NAMTOR_LOCALE_DIR");
     std::env::remove_var("LC_ALL");
+}
+
+/// The System page's camera row had two outcomes for three situations. A
+/// package installed without its device database reported "IR Camera — Not
+/// detected", which sends the user to check their hardware when the fix is to
+/// reinstall; unreadable sysfs said the same. Only one of the three is a
+/// statement about the hardware.
+#[test]
+fn the_camera_row_says_when_it_cannot_tell() {
+    use namtor_ui::CameraPresence;
+
+    // A quirks directory that does not exist is a missing device database,
+    // not an absent camera — whatever is plugged in.
+    let missing_db = namtor_ui::supported_camera_presence_in(
+        std::path::Path::new("/sys"),
+        std::path::Path::new("/nonexistent/namtor/quirks/devices"),
+    );
+    assert_eq!(missing_db, CameraPresence::NoDeviceDatabase);
+    assert!(!missing_db.is_present());
+
+    // An unreadable sysfs is its own condition.
+    let no_sysfs = namtor_ui::supported_camera_presence_in(
+        std::path::Path::new("/nonexistent/sys"),
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../quirks/devices")),
+    );
+    assert_eq!(no_sysfs, CameraPresence::NoSysfs);
+
+    // And only Present counts as present.
+    for p in [
+        CameraPresence::Absent,
+        CameraPresence::NoDeviceDatabase,
+        CameraPresence::NoSysfs,
+    ] {
+        assert!(!p.is_present(), "{p:?}");
+    }
+    assert!(CameraPresence::Present.is_present());
+}
+
+/// Each condition gets its own subtitle, and the one that is fixable says how.
+#[test]
+fn every_camera_condition_reads_differently_on_the_page() {
+    use namtor_ui::components::system_status::render_system_status;
+    use namtor_ui::fake::FakeManagerClient;
+    use namtor_ui::{CameraPresence, ProfilePresenter};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    common::run_gtk_test(|| {
+        let mut seen: Vec<String> = Vec::new();
+        for presence in [
+            CameraPresence::Present,
+            CameraPresence::Absent,
+            CameraPresence::NoDeviceDatabase,
+            CameraPresence::NoSysfs,
+        ] {
+            let mut presenter = ProfilePresenter::new(FakeManagerClient::new(), 1000);
+            presenter.refresh();
+            presenter.set_camera_presence_for_test(presence);
+            let rc = Rc::new(RefCell::new(presenter));
+            let groups = render_system_status(&rc);
+            let mut texts = Vec::new();
+            for g in &groups {
+                texts.extend(common::collect_widget_text(g.upcast_ref::<gtk4::Widget>()));
+            }
+            let idx = texts
+                .iter()
+                .position(|t| t == "IR Camera")
+                .expect("the camera row is on the page");
+            let subtitle = texts
+                .get(idx + 1)
+                .cloned()
+                .expect("the camera row has a subtitle");
+            if presence == CameraPresence::NoDeviceDatabase {
+                assert!(
+                    subtitle.contains("Reinstall"),
+                    "a missing device database is fixable and must say how: {subtitle}"
+                );
+            }
+            seen.push(subtitle);
+        }
+        let unique: std::collections::BTreeSet<_> = seen.iter().collect();
+        assert_eq!(
+            unique.len(),
+            seen.len(),
+            "two conditions read the same on the page: {seen:?}"
+        );
+    });
 }
