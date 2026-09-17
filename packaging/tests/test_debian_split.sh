@@ -386,13 +386,20 @@ else
     not_ok "changelog no longer documents namtor-gnome"
 fi
 
-# The newest changelog entry must record the namtor-gnome rename — the
+# The changelog must record the namtor-gnome rename somewhere — the
 # obsoletion is a user-visible upgrade behaviour, not an internal detail.
-newest_entry="$(awk 'NR>1 && /^[a-z].*\(.*\).*urgency=/{exit} {print}' "$CHANGELOG")"
-if printf '%s\n' "$newest_entry" | grep -qiE 'namtor-gnome'; then
-    ok "newest changelog entry documents the namtor-gnome rename"
+#
+# Checked across the whole file, not just the newest entry. Requiring the
+# NEWEST entry to mention it means every future release has to keep
+# repeating a rename that happened once, and the gate fails the moment a
+# release is cut for any other reason. The rename belongs in the entry that
+# performed it; what matters is that a user reading the changelog can still
+# find it. The Provides/Replaces/Breaks fields in debian/control are asserted
+# separately above, and those are what actually drive the migration.
+if grep -qiE 'namtor-gnome' "$CHANGELOG"; then
+    ok "changelog documents the namtor-gnome rename"
 else
-    not_ok "newest changelog entry does not document the namtor-gnome rename"
+    not_ok "changelog does not document the namtor-gnome rename anywhere"
 fi
 
 # The namtor-kde removal must stay documented somewhere in the changelog.

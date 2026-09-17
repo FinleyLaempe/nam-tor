@@ -1,3 +1,14 @@
+namtor (0.3.0-1) unstable; urgency=medium
+
+  * One `namtor` multi-call binary replaces four separate executables
+    (73.7 MB -> 26 MB). The worker remains a separate process via
+    /proc/self/exe, so the sandbox boundary is unchanged.
+  * The worker sandbox is now actually applied; it never had been.
+  * The PAD radial gate abstains instead of vetoing frames it cannot
+    assess. It had refused 23 of 24 genuine faces.
+
+ -- finley <finley.laempe@math.uni-freiburg.de>  Thu, 17 Sep 2026 05:19:49 +0200
+
 namtor (0.2.0-1) unstable; urgency=medium
 
   * Single desktop UI: namtor-gnome renamed to namtor-ui, and the Plasma 6

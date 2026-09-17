@@ -56,7 +56,7 @@
 %global debug_package %{nil}
 
 Name:           namtor
-Version:        0.2.0
+Version:        0.3.0
 Release:        1%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
@@ -338,6 +338,17 @@ fi
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.0-1
+- One `namtor` multi-call binary replaces namtor-daemon, namtor-worker,
+  namtor-cli and namtor-camera-emitter-off: 73.7 MB of separate executables
+  become 26 MB. The worker is still a separate PROCESS, re-exec'd through
+  /proc/self/exe, so the seccomp+Landlock privilege boundary is unchanged.
+- The worker sandbox is now actually applied. The daemon had never passed
+  --apply-sandbox, so inference ran unconfined despite every document saying
+  otherwise. Models are preloaded before the process seals itself.
+- The analytic PAD radial gate no longer vetoes what it cannot assess. It
+  had refused 23 of 24 genuine faces; measured after the fix, 23 of 24
+  authenticate. Spoof resistance remains unmeasured (G4 WITHHELD).
 * Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.2.0-1
 - Release 0.2.0. The shipped package set changed, so this is a minor version
   bump rather than another revision: namtor-kde is gone and namtor-gnome is
