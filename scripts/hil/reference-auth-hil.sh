@@ -36,8 +36,10 @@
 #   NAMTOR_NEG_UID      — uid guaranteed unenrolled for negative verify
 #                         (default 65534, the 'nobody' account)
 #   NAMTOR_SOCKET       — daemon socket (default /run/namtor/auth.sock)
-#   NAMTOR_DAEMON_BIN   — daemon binary (default /usr/lib/namtor/namtor-daemon)
-#   NAMTOR_CLI_BIN      — cli binary (default /usr/bin/namtor-cli)
+#   NAMTOR_DAEMON_BIN   — the multi-call binary, run as `$NAMTOR_DAEMON_BIN
+#                         daemon` (default /usr/bin/namtor)
+#   NAMTOR_CLI_BIN      — cli entry point (default /usr/bin/namtor-cli, the
+#                         compat symlink to the same file)
 #   NAMTOR_IR_NODE      — IR camera node (default /dev/video2)
 #   NAMTOR_DRY_RUN      — set to 1 to force WITHHELD regardless of hardware
 #                         (used by CI; never fabricates a pass)
@@ -54,7 +56,7 @@ NAMTOR_EVIDENCE="${NAMTOR_EVIDENCE:-$REPO_ROOT/docs/evidence/reference-auth-hil.
 NAMTOR_TEST_USER="${NAMTOR_TEST_USER:-$(id -un 2>/dev/null || echo hil-test)}"
 NAMTOR_NEG_UID="${NAMTOR_NEG_UID:-65534}"
 NAMTOR_SOCKET="${NAMTOR_SOCKET:-/run/namtor/auth.sock}"
-NAMTOR_DAEMON_BIN="${NAMTOR_DAEMON_BIN:-/usr/lib/namtor/namtor-daemon}"
+NAMTOR_DAEMON_BIN="${NAMTOR_DAEMON_BIN:-/usr/bin/namtor}"
 NAMTOR_CLI_BIN="${NAMTOR_CLI_BIN:-/usr/bin/namtor-cli}"
 NAMTOR_IR_NODE="${NAMTOR_IR_NODE:-/dev/video2}"
 NAMTOR_DRY_RUN="${NAMTOR_DRY_RUN:-0}"
@@ -326,7 +328,6 @@ install_check() {
     # Check the critical binaries + PAM module exist and are executable.
     local paths=(
         "$NAMTOR_DAEMON_BIN"
-        "/usr/lib/namtor/namtor-worker"
         "$NAMTOR_CLI_BIN"
         "/usr/lib/security/pam_namtor.so"
         "/usr/lib/systemd/system/namtor-daemon.service"

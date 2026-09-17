@@ -2,14 +2,22 @@
 .SH NAME
 namtor\-daemon \- Nam-tor infrared face authentication daemon
 .SH SYNOPSIS
-.B namtor\-daemon
+.B namtor daemon
 .SH DESCRIPTION
-.B namtor\-daemon
+.B namtor daemon
 owns the infrared camera and emitter, runs face detection, liveness
 detection and template matching, and serves authentication requests on
 .IR /run/namtor/auth.sock .
-It is started by systemd and takes no arguments. Inference runs in a
-separate sandboxed worker process.
+It is started by systemd and takes no arguments beyond the
+.B daemon
+subcommand. Inference runs in a separate sandboxed worker process: the
+daemon re-execs its own executable as
+.B namtor worker
+(resolved through
+.IR /proc/self/exe ),
+which applies seccomp and Landlock to itself before serving. Daemon and
+worker are the same file but never the same process — the sandbox is the
+privilege boundary.
 .PP
 The daemon runs as the unprivileged
 .I namtor
@@ -42,8 +50,11 @@ Install manifest consulted at startup to resolve installed paths.
 .SH ENVIRONMENT
 .TP
 .B NAMTOR_WORKER_BIN
-Path to the sandboxed inference worker. Set by the shipped systemd unit to
-.IR /usr/lib/namtor/namtor\-worker .
+Fallback path to the executable re-exec'd as the sandboxed inference
+worker, used only when
+.I /proc/self/exe
+cannot be read. Set by the shipped systemd unit to
+.IR /usr/bin/namtor .
 .SH EXIT STATUS
 .TP
 .B 0
@@ -61,3 +72,17 @@ Unrecognised command-line argument.
 .SH SEE ALSO
 .BR namtor\-cli (1),
 .BR pam_namtor (8)
+.SH NOTES
+.B namtor
+is a single multi-call executable:
+.BR "namtor daemon" ,
+.BR "namtor worker" ,
+.BR "namtor cli " ...
+and
+.B namtor emitter-off
+.I DEVICE
+are all the same file. The PAM module
+.RB ( pam_namtor.so )
+and the enrolment wizard
+.RB ( namtor\-enroll\-wizard )
+are deliberately separate artifacts.

@@ -27,7 +27,7 @@ depend on it.
 | Type | Purpose |
 |---|---|
 | `InstallRoot` | Enum: `Installed`, `Staged`, `Source` |
-| `LayoutPaths` | Resolved paths: `daemon_bin`, `cli_bin`, `worker_bin`, `enroll_wizard_bin`, `models_dir`, `templates_dir`, `key_path`, `backoff_path`, `daemon_socket`, `quirks_dirs`, `manifest_path` |
+| `LayoutPaths` | Resolved paths: `namtor_bin`, `cli_symlink`, `enroll_wizard_bin`, `models_dir`, `templates_dir`, `key_path`, `backoff_path`, `daemon_socket`, `quirks_dirs`, `manifest_path`. `daemon_bin`/`cli_bin`/`worker_bin` collapsed into `namtor_bin` when the four executables were merged into one multi-call binary; `cli_symlink` is the `namtor-cli` compat symlink |
 | `ManifestDests` | All file/dir dests from the manifest (for cross-check tests) |
 | `LayoutPaths::resolve(root, manifest_path, kind)` | Derives all paths from the manifest + runtime constants |
 | `LayoutPaths::parse_all_dests(manifest_path)` | Returns every `[[files]]` dest and `[[dirs]]` path |
@@ -50,7 +50,7 @@ depend on it.
 - Deleted `src/install_layout.rs` (moved to `namtor-layout`).
 - `lib.rs`: `pub use namtor_layout as install_layout;` — re-export preserves
   existing `crate::install_layout::...` import paths.
-- `bin/namtor-cli.rs`: clap args changed from `default_value = "/var/lib/..."`
+- `app.rs` (was `bin/namtor-cli.rs`): clap args changed from `default_value = "/var/lib/..."`
   to `Option<PathBuf>`; defaults filled from `LayoutPaths::resolve` at
   runtime. No hardcoded install paths in the CLI binary.
 - `enroll.rs`: `emitter_cfg()` now uses `LayoutPaths::quirks_dirs` instead of
@@ -59,10 +59,13 @@ depend on it.
 ### `namtor-daemon` changes
 
 - Added `namtor-layout` dependency.
-- `bin/namtor-daemon.rs`: env var fallbacks (`NAMTOR_SOCKET`,
+- `app.rs` (was `bin/namtor-daemon.rs`): env var fallbacks (`NAMTOR_SOCKET`,
   `NAMTOR_MODELS_DIR`, `NAMTOR_STORE_DIR`, `NAMTOR_KEY_PATH`,
   `NAMTOR_WORKER_BIN`, `NAMTOR_BACKOFF_PATH`) now default to
   `LayoutPaths::resolve(...)` instead of hardcoded string literals.
+  `NAMTOR_WORKER_BIN` became a fallback only: `ChildSupervisor` re-execs
+  `/proc/self/exe` with the `worker` subcommand, so the worker is this same
+  executable in a separate process.
 
 ### `namtor-pam` cross-check
 

@@ -25,7 +25,8 @@
 #
 # Environment overrides (all have safe defaults):
 #   NAMTOR_HW_TEST       — must be "1" to run the live path
-#   NAMTOR_DAEMON_BIN    — daemon binary (default /usr/lib/namtor/namtor-daemon)
+#   NAMTOR_DAEMON_BIN    — the multi-call binary, run as `$NAMTOR_DAEMON_BIN
+#                          daemon` (default /usr/bin/namtor)
 #   NAMTOR_UI_BIN        — wizard binary (default /usr/bin/namtor-enroll-wizard)
 #   NAMTOR_SOCKET        — daemon socket (default /run/namtor/auth.sock)
 #   NAMTOR_EVIDENCE_DIR  — screenshot root (default docs/evidence/ui/real-run)
@@ -47,7 +48,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-NAMTOR_DAEMON_BIN="${NAMTOR_DAEMON_BIN:-/usr/lib/namtor/namtor-daemon}"
+NAMTOR_DAEMON_BIN="${NAMTOR_DAEMON_BIN:-/usr/bin/namtor}"
 NAMTOR_UI_BIN="${NAMTOR_UI_BIN:-/usr/bin/namtor-enroll-wizard}"
 NAMTOR_SOCKET="${NAMTOR_SOCKET:-/run/namtor/auth.sock}"
 NAMTOR_EVIDENCE_DIR="${NAMTOR_EVIDENCE_DIR:-$REPO_ROOT/docs/evidence/ui/real-run}"
@@ -209,7 +210,7 @@ start_daemon() {
     fi
     # Fall back to direct binary launch (for non-systemd or dev environments).
     if [[ -x "$NAMTOR_DAEMON_BIN" ]]; then
-        "$NAMTOR_DAEMON_BIN" &
+        "$NAMTOR_DAEMON_BIN" daemon &
         DAEMON_PID=$!
         DAEMON_STARTED_BY_US=1
         sleep 2

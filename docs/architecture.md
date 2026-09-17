@@ -14,13 +14,13 @@ A navigational map into the [specification](superpowers/specs/2026-08-04-nam-tor
         │ SO_PEERCRED verified         │
         ▼                              ▼
  ┌────────────────────────────────────────────────────┐
- │ namtor-daemon      user: namtor, groups: video, tss│
+ │ namtor daemon      user: namtor, groups: video, tss│
  │  owns: sealed templates, policy, TPM handle        │
  └────────────────┬───────────────────────────────────┘
                   │ pipe: frames in → vectors out
                   ▼
  ┌────────────────────────────────────────────────────┐
- │ namtor-worker    user: namtor, seccomp + landlock  │
+ │ namtor worker    user: namtor, seccomp + landlock  │
  │  no filesystem, no network, no IPC but the pipe    │
  └────────────────────────────────────────────────────┘
 ```
@@ -75,11 +75,28 @@ The **socket ACL is the security-critical seam** (§3.2). Anyone who can assert 
 | `namtor-capture` | V4L2 streaming, capture sources, replay | GPL-3.0 |
 | `namtor-pipeline` | Detect, align, embed, PAD, fusion, decision | GPL-3.0 |
 | `namtor-store` | Template storage, TPM sealing | GPL-3.0 |
-| `namtor-worker` | Sandboxed inference host | GPL-3.0 |
-| `namtor-daemon` | Orchestration, D-Bus, socket service | GPL-3.0 |
+| `namtor-worker` | Sandboxed inference host (`namtor worker`) | GPL-3.0 |
+| `namtor-daemon` | Orchestration, D-Bus, socket service (`namtor daemon`) | GPL-3.0 |
 | `namtor-pam` | PAM module | GPL-3.0 |
-| `namtor-cli` | Enrollment, status, diagnostics | GPL-3.0 |
+| `namtor-cli` | Enrollment, status, diagnostics (`namtor cli ...`) | GPL-3.0 |
 | `namtor-collect` | Consent-gated PAD data collection | GPL-3.0 |
+| `namtor` | The single shipped executable: dispatches `daemon` / `worker` / `cli` / `emitter-off` | GPL-3.0 |
+
+### Shipped artifacts
+
+Three files reach `/usr`, not one per crate:
+
+| File | Contents |
+|---|---|
+| `/usr/bin/namtor` | `namtor daemon`, `namtor worker`, `namtor cli ...`, `namtor emitter-off <device>` — one multi-call binary, with `/usr/bin/namtor-cli` as a compat symlink |
+| `/usr/lib/security/pam_namtor.so` | The PAM cdylib. Separate because `sudo`/`gdm` dlopen it into their own address space, and because the G5.1 gate requires it to link no ML or image code inside a 512000-byte budget |
+| `/usr/bin/namtor-enroll-wizard` | The GTK4/libadwaita wizard. Separate so a server can install `namtor` alone for daemon + PAM + CLI without pulling GTK or Qt |
+
+Four processes is still four processes. `namtor daemon` re-execs
+`/proc/self/exe` as `namtor worker`, which self-applies seccomp and Landlock
+before serving: the same file, a separate address space. Merging inference
+into the daemon's process would delete the isolation that keeps Nam-tor out
+of Howdy's authentication-bypass CVE class.
 
 The Apache-2.0 boundary is not arbitrary: those three crates plus `quirks/` solve a Linux-wide problem and should be reusable by anyone, including the kernel. See [`COPYING.md`](../COPYING.md) and spec §4.11.
 

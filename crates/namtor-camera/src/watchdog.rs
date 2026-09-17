@@ -3,7 +3,7 @@
 //!
 //! Spec §4.10.2: the emitter must not stay on indefinitely. A watchdog arms
 //! when the emitter is turned on and forces it off after `max_on_ms` (default
-//! 2000 from quirks). The `namtor-camera-emitter-off` binary is a thin
+//! 2000 from quirks). The `namtor emitter-off` subcommand is a thin
 //! `ExecStopPost=` target for the systemd unit: best-effort force-off on
 //! unexpected teardown.
 
@@ -94,7 +94,7 @@ impl<'a, C: Clock> Watchdog<'a, C> {
     }
 }
 
-/// Library-level force-off used by the `namtor-camera-emitter-off` binary.
+/// Library-level force-off used by the `namtor emitter-off` subcommand.
 /// Best-effort: logs errors, never panics.
 pub fn force_off_lib<T: XuTransport>(xu: &mut SafeXu<T>, cfg: &EmitterCfg) -> Result<(), String> {
     let unit = cfg.unit.ok_or("emitter config missing unit")?;
@@ -113,7 +113,7 @@ pub fn force_off_lib<T: XuTransport>(xu: &mut SafeXu<T>, cfg: &EmitterCfg) -> Re
 }
 
 /// Opens a V4L2 device, builds a `SafeXu`, and forces the emitter off.
-/// Called by the `namtor-camera-emitter-off` binary on `ExecStopPost`.
+/// Called by the `namtor emitter-off` subcommand on `ExecStopPost`.
 pub fn force_off_on_device(device: &Path, cfg: &EmitterCfg) -> Result<(), String> {
     let dev = V4l2Device::open(device).map_err(|e| format!("open {}: {e}", device.display()))?;
     let mut xu = SafeXu::new(dev);

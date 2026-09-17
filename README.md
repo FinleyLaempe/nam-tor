@@ -126,7 +126,7 @@ It is designed around four commitments, each expressed as a measurable acceptanc
 
 ## How it differs
 
-**Security architecture.** Four processes across three trust levels. Model inference — the largest attack surface, being big C++ parsers eating attacker-influenced pixels — runs in a worker process under seccomp and landlock with no filesystem, no network, and no access to templates. The worker shares the daemon's UID (`namtor`) but the sandbox denies all file opens after model load. The daemon is not root. The PAM module contains no ML code and fails closed on every path.
+**Security architecture.** Four processes across three trust levels. Model inference — the largest attack surface, being big C++ parsers eating attacker-influenced pixels — runs in a worker process under seccomp and landlock with no filesystem, no network, and no access to templates. The worker shares the daemon's UID (`namtor`) and, since the merge into a single `namtor` executable, the same file — the daemon re-execs `/proc/self/exe` as `namtor worker` — but it is still a separate process, and the sandbox denies all file opens after model load. The daemon is not root. The PAM module contains no ML code and fails closed on every path.
 
 **Detection that matches Windows Hello's.** Hello identifies IR sensors by their `MFVideoFormat_L8` format GUID. `uvcvideo` collapses that to V4L2 `GREY` and discards the GUID — and `GREY` means greyscale, not infrared, which is why every Linux tool guesses and Howdy makes you pick a device number by hand. Nam-tor reads the raw USB descriptors from sysfs and recovers the same signal.
 
