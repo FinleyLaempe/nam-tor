@@ -439,7 +439,7 @@ fn usa_9_completion_cue_present() {
         let mut comp = EnrollmentViewComponent::new();
 
         // Complete view: must show completion cue.
-        let page = comp.render(Some(&complete_view), |_| {}, || {}, || {});
+        let page = comp.render(Some(&complete_view), true, |_| {}, || {}, || {});
         let texts = common::collect_widget_text(page.upcast_ref::<gtk4::Widget>());
         assert!(
             texts.iter().any(|t| t.contains("Enrollment complete")),
@@ -447,7 +447,7 @@ fn usa_9_completion_cue_present() {
         );
 
         // Incomplete view: must NOT show completion cue.
-        let page_incomplete = comp.render(Some(&incomplete_view), |_| {}, || {}, || {});
+        let page_incomplete = comp.render(Some(&incomplete_view), true, |_| {}, || {}, || {});
         let texts_incomplete =
             common::collect_widget_text(page_incomplete.upcast_ref::<gtk4::Widget>());
         assert!(

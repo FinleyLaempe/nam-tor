@@ -97,6 +97,7 @@ pub fn headline_block(
     encouraging: bool,
     detail: Option<String>,
     quality_bucket: u8,
+    announce: bool,
 ) -> gtk4::Widget {
     let headline = gtk4::Label::builder()
         .label(headline_text)
@@ -110,7 +111,15 @@ pub fn headline_block(
     } else {
         headline.set_css_classes(&["title-1"]);
     }
-    headline.set_accessible_role(gtk4::AccessibleRole::Status);
+    // `Status` makes AT-SPI announce the text every time it changes, and the
+    // capture page rebuilds this label on every poll. `ProgressAnnouncer`
+    // exists precisely to rate-limit that and was never wired to anything, so
+    // the flood it documents was unmitigated. When the announcer says no, the
+    // headline is still rendered and still readable — it just does not
+    // interrupt the screen reader again.
+    if announce {
+        headline.set_accessible_role(gtk4::AccessibleRole::Status);
+    }
     headline.update_property(&[
         gtk4::accessible::Property::Label(&tr("Scan guidance")),
         gtk4::accessible::Property::Description(&tr("What to do right now to improve the scan")),
@@ -145,6 +154,7 @@ pub fn hero_with(
     encouraging: bool,
     detail: Option<String>,
     quality_bucket: u8,
+    announce: bool,
 ) -> gtk4::Widget {
     let column = gtk4::Box::builder()
         .orientation(gtk4::Orientation::Vertical)
@@ -159,18 +169,20 @@ pub fn hero_with(
         encouraging,
         detail,
         quality_bucket,
+        announce,
     ));
     column.upcast()
 }
 
 /// Hero block driven by the daemon's guidance: silhouette above the guidance
 /// headline and its one-line "how".
-pub fn hero(guidance: &GuidanceView, quality_bucket: u8) -> gtk4::Widget {
+pub fn hero(guidance: &GuidanceView, quality_bucket: u8, announce: bool) -> gtk4::Widget {
     hero_with(
         &guidance.label(),
         guidance.is_encouraging(),
         guidance.hint(),
         quality_bucket,
+        announce,
     )
 }
 
@@ -290,7 +302,10 @@ pub fn count_row(title: &str, subtitle: &str, value: u32, accessible_name: &str)
 /// the D-Bus contract, but the guidance token *is* the daemon's own statement
 /// of which signal it is unhappy with. Naming it here is the honest way to
 /// answer "why is the quality low?" without inventing numbers.
-pub fn attention_row(guidance: &GuidanceView) -> adw::ActionRow {
+/// `announce` gates the AT-SPI announcement, like the headline: this row is
+/// also rebuilt on every poll and also carried `AccessibleRole::Status`, so
+/// it was a second unthrottled announcement per redraw.
+pub fn attention_row(guidance: &GuidanceView, announce: bool) -> adw::ActionRow {
     let (value_text, value_class, subtitle) = match guidance.signal() {
         Some(signal) => (
             tr(signal.as_label()),
@@ -325,7 +340,9 @@ pub fn attention_row(guidance: &GuidanceView) -> adw::ActionRow {
         .subtitle_lines(0)
         .build();
     row.add_suffix(&value);
-    row.set_accessible_role(gtk4::AccessibleRole::Status);
+    if announce {
+        row.set_accessible_role(gtk4::AccessibleRole::Status);
+    }
     row.update_property(&[
         gtk4::accessible::Property::Label(&tr("Signal needing attention")),
         gtk4::accessible::Property::Description(&value_text),

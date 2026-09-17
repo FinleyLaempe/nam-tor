@@ -193,3 +193,19 @@ pub fn count_widgets_of_type<T: gtk4::glib::object::IsA<gtk4::Widget>>(
     }
     n
 }
+
+/// True if any widget in the tree carries `role`.
+pub fn has_accessible_role(widget: &gtk4::Widget, role: gtk4::AccessibleRole) -> bool {
+    use gtk4::prelude::*;
+    if widget.accessible_role() == role {
+        return true;
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        if has_accessible_role(&c, role) {
+            return true;
+        }
+        child = c.next_sibling();
+    }
+    false
+}

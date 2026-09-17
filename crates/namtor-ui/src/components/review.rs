@@ -73,6 +73,9 @@ impl ReviewViewComponent {
             view.ready_to_save,
             Some(advice),
             verdict_bucket,
+            // The review screen is rendered once on arrival, not polled, so
+            // its headline always announces.
+            true,
         ));
 
         let signals_group = adw::PreferencesGroup::builder()
@@ -87,7 +90,7 @@ impl ReviewViewComponent {
         ));
 
         signals_group.add(&scan_feedback::angle_variety_row(view.diversity_percent));
-        signals_group.add(&scan_feedback::attention_row(&view.guidance));
+        signals_group.add(&scan_feedback::attention_row(&view.guidance, true));
         signals_group.add(&scan_feedback::count_row(
             "Accepted",
             "Kept for your face model",

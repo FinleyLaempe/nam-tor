@@ -234,7 +234,7 @@ fn app_controller_uses_enrollment_and_review_components() {
     common::run_gtk_test(move || {
         // EnrollmentViewComponent must render the capture phase.
         let mut enrollment = EnrollmentViewComponent::new();
-        let page = enrollment.render(Some(&view), |_| {}, || {}, || {});
+        let page = enrollment.render(Some(&view), true, |_| {}, || {}, || {});
         let texts = common::collect_widget_text(page.upcast_ref::<gtk4::Widget>());
         assert!(
             texts.iter().any(|t| t.contains("Scan quality")),
@@ -316,7 +316,7 @@ fn enrollment_component_connects_callbacks() {
 
     common::run_gtk_test(move || {
         let mut comp = EnrollmentViewComponent::new();
-        let page = comp.render(Some(&view), |_| {}, || {}, || {});
+        let page = comp.render(Some(&view), true, |_| {}, || {}, || {});
 
         // The capture phase must have Stop and Cancel buttons.
         let texts = common::collect_widget_text(page.upcast_ref::<gtk4::Widget>());

@@ -31,7 +31,7 @@ fn render_capture_text(view: &EnrollmentViewV3) -> Vec<String> {
     let view = view.clone();
     common::run_gtk_test(move || {
         let mut comp = EnrollmentViewComponent::new();
-        let page = comp.render(Some(&view), |_| {}, || {}, || {});
+        let page = comp.render(Some(&view), true, |_| {}, || {}, || {});
         let _ = tx.send(common::collect_widget_text(
             page.upcast_ref::<gtk4::Widget>(),
         ));
@@ -347,7 +347,7 @@ fn capture_bars(view: &EnrollmentViewV3) -> Vec<(u32, Vec<String>)> {
     let view = view.clone();
     common::run_gtk_test(move || {
         let mut comp = EnrollmentViewComponent::new();
-        let page = comp.render(Some(&view), |_| {}, || {}, || {});
+        let page = comp.render(Some(&view), true, |_| {}, || {}, || {});
         let mut out = Vec::new();
         walk(page.upcast_ref::<gtk4::Widget>(), &mut out);
         let _ = tx.send(out);
@@ -567,4 +567,40 @@ fn known_guidance_is_not_flagged_unrecognised() {
         !GuidanceView::from_wire("").is_unrecognised(),
         "an empty token is Silent, not unrecognised"
     );
+}
+
+/// The guidance headline must only carry `AccessibleRole::Status` when the
+/// announcer allows it.
+///
+/// `ProgressAnnouncer` documents the exact flood it prevents — "Status
+/// triggers an AT-SPI announcement every time the label text changes" — and
+/// was written, tested and then wired to nothing, while the capture headline
+/// carried that role and was rebuilt on every poll.
+#[test]
+fn the_guidance_headline_announces_only_when_the_announcer_allows() {
+    use gtk4::prelude::*;
+    common::run_gtk_test(|| {
+        let view = view_with_quality(50, 1, "centering");
+
+        let mut announcing = EnrollmentViewComponent::new();
+        let page = announcing.render(Some(&view), true, |_| {}, || {}, || {});
+        assert!(
+            common::has_accessible_role(
+                page.upcast_ref::<gtk4::Widget>(),
+                gtk4::AccessibleRole::Status
+            ),
+            "with announce = true the headline must be a Status for AT-SPI"
+        );
+
+        let mut quiet = EnrollmentViewComponent::new();
+        let page = quiet.render(Some(&view), false, |_| {}, || {}, || {});
+        assert!(
+            !common::has_accessible_role(
+                page.upcast_ref::<gtk4::Widget>(),
+                gtk4::AccessibleRole::Status
+            ),
+            "with announce = false the headline must render without \
+             re-interrupting the screen reader"
+        );
+    });
 }

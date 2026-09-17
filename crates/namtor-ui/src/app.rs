@@ -51,6 +51,13 @@ pub struct AppController {
     /// The review sub-page (NavigationPage wrapping the review
     /// PreferencesPage). `Some` while the review is visible.
     review_nav_page: Option<adw::NavigationPage>,
+    /// Rate-limiter for screen-reader announcements of the guidance headline.
+    ///
+    /// `ProgressAnnouncer` documents exactly this flood — "AccessibleRole::
+    /// Status triggers an AT-SPI announcement every time the label text
+    /// changes" — and was written, tested, and then wired to nothing, while
+    /// the capture headline carried that role and was rebuilt on every poll.
+    announcer: crate::a11y::ProgressAnnouncer,
     /// The 500 ms progress poll, while one is running.
     ///
     /// Holding the id is what stops the timer multiplying. The poll used to
@@ -95,6 +102,7 @@ impl AppController {
             review_view: ReviewViewComponent::new(),
             enrollment_nav_page: None,
             review_nav_page: None,
+            announcer: crate::a11y::ProgressAnnouncer::new(),
             poll_source: None,
             offline,
         }));
@@ -227,6 +235,7 @@ impl AppController {
             review_view: ReviewViewComponent::new(),
             enrollment_nav_page: None,
             review_nav_page: None,
+            announcer: crate::a11y::ProgressAnnouncer::new(),
             poll_source: None,
             offline: true,
         }))
@@ -420,7 +429,7 @@ impl AppController {
                 };
 
                 self.enrollment_view
-                    .render(None, on_start, move || {}, on_cancel);
+                    .render(None, true, on_start, move || {}, on_cancel);
 
                 if self.enrollment_nav_page.is_none() {
                     let nav = self.enrollment_view.navigation_page("Enroll Face");
@@ -450,8 +459,18 @@ impl AppController {
                     rc_cancel.borrow_mut().render_profiles(&rc_cancel);
                 };
 
-                self.enrollment_view
-                    .render(view.as_ref(), move |_| {}, on_stop, on_cancel);
+                // Rate-limit the screen-reader announcement of the guidance
+                // headline. The page is rebuilt on every poll, and the
+                // headline carries AccessibleRole::Status, so without this
+                // every redraw interrupts the screen reader.
+                let announce = self.announcer.should_announce(std::time::Instant::now());
+                self.enrollment_view.render(
+                    view.as_ref(),
+                    announce,
+                    move |_| {},
+                    on_stop,
+                    on_cancel,
+                );
 
                 if self.enrollment_nav_page.is_none() {
                     let nav = self.enrollment_view.navigation_page("Enroll Face");
@@ -571,8 +590,13 @@ impl AppController {
                     self.review_nav_page = None;
                 }
                 let view = model.enrollment_view_v3.clone();
-                self.enrollment_view
-                    .render(view.as_ref(), move |_| {}, move || {}, move || {});
+                self.enrollment_view.render(
+                    view.as_ref(),
+                    true,
+                    move |_| {},
+                    move || {},
+                    move || {},
+                );
             }
             EnrollmentState::Error(detail) => {
                 // A failed scan must say what failed and offer a way out. The

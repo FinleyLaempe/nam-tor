@@ -370,14 +370,14 @@ fn keyboard_traversal_order_is_logical() {
 
     common::run_gtk_test(|| {
         let mut enrollment = EnrollmentViewComponent::new();
-        let setup = enrollment.render(None, |_| {}, || {}, || {});
+        let setup = enrollment.render(None, true, |_| {}, || {}, || {});
         let setup_texts = common::collect_widget_text(setup.upcast_ref::<gtk4::Widget>());
         assert!(
             setup_texts.iter().any(|t| t.contains("Start")),
             "setup phase must offer a Start action: {setup_texts:?}"
         );
 
-        let capture = enrollment.render(Some(&capture_view()), |_| {}, || {}, || {});
+        let capture = enrollment.render(Some(&capture_view()), true, |_| {}, || {}, || {});
         let capture_texts = common::collect_widget_text(capture.upcast_ref::<gtk4::Widget>());
         assert!(
             capture_texts.iter().any(|t| t.contains("Stop")),
@@ -404,7 +404,7 @@ fn no_focus_trap_in_navigation() {
 
     common::run_gtk_test(|| {
         let mut enrollment = EnrollmentViewComponent::new();
-        let page = enrollment.render(Some(&capture_view()), |_| {}, || {}, || {});
+        let page = enrollment.render(Some(&capture_view()), true, |_| {}, || {}, || {});
 
         assert!(
             !common::widget_tree_contains_type(
@@ -434,11 +434,11 @@ fn primary_actions_have_mnemonics() {
 
         let pages: Vec<gtk4::Widget> = vec![
             setup_comp
-                .render(None, |_| {}, || {}, || {})
+                .render(None, true, |_| {}, || {}, || {})
                 .clone()
                 .upcast(),
             capture_comp
-                .render(Some(&capture_view()), |_| {}, || {}, || {})
+                .render(Some(&capture_view()), true, |_| {}, || {}, || {})
                 .clone()
                 .upcast(),
             review_comp

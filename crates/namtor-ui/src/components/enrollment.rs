@@ -33,9 +33,12 @@ impl EnrollmentViewComponent {
     ///
     /// If `view` is `None`, the component renders the setup phase (Name entry + Privacy).
     /// If `view` is `Some`, it renders the capture progress phase.
+    /// `announce` gates the screen-reader announcement of the guidance
+    /// headline; see `ProgressAnnouncer`. The headline always renders.
     pub fn render(
         &mut self,
         view: Option<&EnrollmentViewV3>,
+        announce: bool,
         on_start: impl Fn(&str) + 'static,
         on_stop: impl Fn() + 'static,
         on_cancel: impl Fn() + 'static,
@@ -43,7 +46,7 @@ impl EnrollmentViewComponent {
         self.clear();
 
         if let Some(enrollment) = view {
-            self.render_capture_phase(enrollment, on_stop, on_cancel);
+            self.render_capture_phase(enrollment, announce, on_stop, on_cancel);
         } else {
             self.render_setup_phase(on_start, on_cancel);
         }
@@ -114,8 +117,13 @@ impl EnrollmentViewComponent {
         self.groups = vec![group];
     }
 
-    fn render_capture_phase<F1, F2>(&mut self, view: &EnrollmentViewV3, on_stop: F1, on_cancel: F2)
-    where
+    fn render_capture_phase<F1, F2>(
+        &mut self,
+        view: &EnrollmentViewV3,
+        announce: bool,
+        on_stop: F1,
+        on_cancel: F2,
+    ) where
         F1: Fn() + 'static,
         F2: Fn() + 'static,
     {
@@ -134,9 +142,14 @@ impl EnrollmentViewComponent {
                 true,
                 Some(tr("Press Stop and review to save this profile.")),
                 view.quality_bucket,
+                announce,
             ));
         } else {
-            hero_group.add(&scan_feedback::hero(&view.guidance, view.quality_bucket));
+            hero_group.add(&scan_feedback::hero(
+                &view.guidance,
+                view.quality_bucket,
+                announce,
+            ));
         }
 
         // Breakdown: three separately measured signals plus the one the
@@ -157,7 +170,7 @@ impl EnrollmentViewComponent {
             view.measured_diversity_percent(),
         ));
         signals_group.add(&scan_feedback::kept_rate_row(view.accept_rate_percent()));
-        signals_group.add(&scan_feedback::attention_row(&view.guidance));
+        signals_group.add(&scan_feedback::attention_row(&view.guidance, announce));
 
         // Counters: the three numbers on the wire, each labelled for what it
         // actually is. `frames_seen == accepted + rejected` holds, so the
