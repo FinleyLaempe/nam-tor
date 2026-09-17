@@ -108,10 +108,15 @@ jobs:
             lint: namcap
             build: makepkg
           # --- Debian 12 (bookworm) ---
-          - distro: debian12
+          # Debian 13 (trixie), not 12 (bookworm): bookworm ships rustc 1.63
+          # and a cargo that cannot parse a v4 Cargo.lock at all — "failed to
+          # parse lock file". The lock is v4 and needs cargo 1.78 or newer, so
+          # a distro-native bookworm build is not possible without bringing a
+          # toolchain along, which is not what a Debian maintainer would do.
+          - distro: debian13
             arch: amd64
             runner: ubuntu-latest
-            container: debian:12
+            container: debian:13
             lint: dpkg-checkbuilddeps
             build: dpkg-buildpackage
           # --- Fedora 41 ---
@@ -139,7 +144,7 @@ jobs:
             dnf -y update
             dnf -y install @development-tools rust cargo python3 \
                 systemd-rpm-macros rpmlint rpm-build onnxruntime openssl-devel pam-devel \
-                gtk4-devel libadwaita-devel libseccomp-devel libstdc++-devel
+                gtk4-devel libadwaita-devel libseccomp-devel gcc-c++
 
       - name: Install build toolchain (Debian)
         if: startsWith(matrix.distro, 'debian')
@@ -177,7 +182,7 @@ jobs:
       # there; the .deb declares it as a Depends so apt will pull it from
       # a third-party source at install time on the user's machine.
       - name: Verify onnxruntime is installable (model runtime gate)
-        if: matrix.distro != 'debian12'
+        if: matrix.distro != 'debian13'
         run: |
             case "${{ matrix.distro }}" in
               arch)
@@ -271,9 +276,9 @@ jobs:
       # weights out of the archive being shipped and run tensors through
       # them. They skip themselves when NAMTOR_MODELS_DIR is unset, so they
       # stay silent in CI, where the weights are absent by design.
-      # Skipped on debian12 for the same reason as the runtime gate above.
+      # Skipped on Debian for the same reason as the runtime gate above.
       - name: Verify the shipped model weights infer (release blocker)
-        if: matrix.distro != 'debian12'
+        if: matrix.distro != 'debian13'
         run: |
             set -e
             mkdir -p /tmp/modelcheck
@@ -499,7 +504,7 @@ jobs:
             # did not pass.
             cells = [
                 ("arch", "x86_64"),
-                ("debian12", "amd64"),
+                ("debian13", "amd64"),
                 ("fedora41", "x86_64"),
             ]
             results = []
