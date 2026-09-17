@@ -3,7 +3,7 @@
   "title": "CI gates for public package completeness and policy drift",
   "gate": "ci-packaging-baseline",
   "status": "PASS",
-  "summary": "Baseline run of all 11 packaging test suites: 11 passed, 0 skipped (hardware-gated), 0 failed. Each suite is a CI gate that blocks on nonzero exit (77 = hardware-gated skip, not a failure). Suites cover: split-package structure (Arch/Fedora/Debian), PAM default-off at install, lifecycle helper phases, model archive reproducibility/tamper/manifest hygiene, uninstall closure, supply chain (SBOM + provenance + model cards), release signatures, doc audit (stale strings + experimental warning), support bundle (privacy-safe diagnostics + legacy setuid detection).",
+  "summary": "Baseline run of all 11 packaging test suites: 18 passed, 0 skipped (hardware-gated), 0 failed. Each suite is a CI gate that blocks on nonzero exit (77 = hardware-gated skip, not a failure). Suites cover: split-package structure (Arch/Fedora/Debian), PAM default-off at install, lifecycle helper phases, model archive reproducibility/tamper/manifest hygiene, uninstall closure, supply chain (SBOM + provenance + model cards), release signatures, doc audit (stale strings + experimental warning), support bundle (privacy-safe diagnostics + legacy setuid detection).",
   "suites": [
     {
       "suite": "test_arch_split.sh",
@@ -11,12 +11,27 @@
       "status": "PASS"
     },
     {
-      "suite": "test_fedora_split.sh",
+      "suite": "test_core_cert.sh",
       "exit_code": 0,
       "status": "PASS"
     },
     {
       "suite": "test_debian_split.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_desktop_cert.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_doc_audit.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_fedora_split.sh",
       "exit_code": 0,
       "status": "PASS"
     },
@@ -31,17 +46,27 @@
       "status": "PASS"
     },
     {
+      "suite": "test_lifecycle_cert.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_man_pages.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
       "suite": "test_model_archive.sh",
       "exit_code": 0,
       "status": "PASS"
     },
     {
-      "suite": "test_uninstall_closure.sh",
+      "suite": "test_pam_install.sh",
       "exit_code": 0,
       "status": "PASS"
     },
     {
-      "suite": "test_supply_chain.sh",
+      "suite": "test_release_ledger.sh",
       "exit_code": 0,
       "status": "PASS"
     },
@@ -51,7 +76,7 @@
       "status": "PASS"
     },
     {
-      "suite": "test_doc_audit.sh",
+      "suite": "test_supply_chain.sh",
       "exit_code": 0,
       "status": "PASS"
     },
@@ -59,10 +84,20 @@
       "suite": "test_support_bundle.sh",
       "exit_code": 0,
       "status": "PASS"
+    },
+    {
+      "suite": "test_uninstall_closure.sh",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "suite": "test_workflow_lint.sh",
+      "exit_code": 0,
+      "status": "PASS"
     }
   ],
   "totals": {
-    "pass": 11,
+    "pass": 18,
     "skip": 0,
     "fail": 0
   },

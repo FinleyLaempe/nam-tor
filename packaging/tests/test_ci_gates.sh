@@ -108,22 +108,46 @@ PY
 
 # --- baseline: run every packaging test suite -------------------------------
 #
-# All 11 suites. exit 0 = PASS, exit 77 = SKIP (hardware-gated, e.g. models
-# absent in CI), anything else = FAIL.
-
-BASELINE_SUITES=(
-    "test_arch_split.sh"
-    "test_fedora_split.sh"
-    "test_debian_split.sh"
-    "test_install_default_off.sh"
-    "test_lifecycle.sh"
-    "test_model_archive.sh"
-    "test_uninstall_closure.sh"
-    "test_supply_chain.sh"
-    "test_release_signatures.sh"
-    "test_doc_audit.sh"
-    "test_support_bundle.sh"
+# exit 0 = PASS, exit 77 = SKIP (hardware-gated, e.g. models absent in CI),
+# anything else = FAIL.
+#
+# DISCOVERED from the directory, not listed by hand. The hand-written list held
+# 11 of the 20 gates in packaging/tests/, so the meta-gate certified "every
+# packaging test suite" while nine were outside it — including the three that
+# no workflow ran either, which is how they drifted to 19 failures unnoticed.
+# A list that must be edited whenever a gate is added is a list that will be
+# out of date; discovery means a new gate is covered the moment it is written.
+#
+# NEEDS_BINARIES gates stage or exercise target/release artifacts. This job
+# does not build them, so they run in the `build` job instead and are recorded
+# here as an explicit SKIP with a reason rather than silently dropped.
+NEEDS_BINARIES=(
+    "test_lifecycle_cert.sh"
+    "test_pam_install.sh"
+    "test_desktop_cert.sh"
+    "test_core_cert.sh"
 )
+
+BASELINE_SUITES=()
+for script_path in "$SCRIPT_DIR"/test_*.sh; do
+    suite="$(basename "$script_path")"
+    # Never recurse into this meta-gate.
+    [[ "$suite" == "test_ci_gates.sh" ]] && continue
+    BASELINE_SUITES+=("$suite")
+done
+
+if [[ ${#BASELINE_SUITES[@]} -eq 0 ]]; then
+    echo "ERROR: discovered no packaging gates — the meta-gate would be vacuous" >&2
+    exit 1
+fi
+
+needs_binaries() {
+    local suite="$1" n
+    for n in "${NEEDS_BINARIES[@]}"; do
+        [[ "$suite" == "$n" ]] && return 0
+    done
+    return 1
+}
 
 # baseline_results: "suite\texit_code" lines, fed to the JSON emitter.
 BASELINE_RESULTS="$BACKUP_DIR/baseline.tsv"
@@ -135,6 +159,11 @@ echo "============================================================"
 for suite in "${BASELINE_SUITES[@]}"; do
     script="$SCRIPT_DIR/$suite"
     echo "--- $suite ---"
+    if needs_binaries "$suite" && [[ ! -x "$REPO_ROOT/target/release/namtor" ]]; then
+        echo "SKIP: needs target/release binaries; runs in the build job"
+        printf '%s\t%d\n' "$suite" 77 >>"$BASELINE_RESULTS"
+        continue
+    fi
     set +e
     bash "$script" >/tmp/namtor-ci-gate-"$suite".log 2>&1
     rc=$?

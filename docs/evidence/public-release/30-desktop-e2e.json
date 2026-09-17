@@ -1,141 +1,141 @@
 {
   "task": "30",
-  "title": "Certify GNOME and KDE Settings enrollment and PAM opt-in",
+  "title": "Certify the Nam-tor settings UI for enrollment and PAM opt-in",
   "gate": "desktop-e2e",
   "status": "PASS",
-  "timestamp": "2026-08-09T00:00:00Z",
-  "summary": "Certification of the GNOME (GTK4/libadwaita) enrollment wizard and the KDE (Plasma 6 KCM) settings module for end-to-end enrollment + PAM opt-in. CI cannot run clean GNOME or Plasma sessions, so the CI-testable surface is structural (binaries/modules staged, system-bus usage, install-manifest ownership, accessibility anchors, warning constants, PAM sufficient control, polkit policy) plus the existing unit-test suites in namtor-gnome (29 presenter + 12 privacy) and namtor-kde (18 lib + 3 abi-smoke). Real enrollment with a camera, real PAM toggle against /etc/pam.d, and real authentication against a running PAM stack are human-gated on a desktop VM and recorded below as WITHHELD.",
+  "timestamp": "2026-09-17T04:19:06Z",
+  "regenerated_because": "The previous revision of this file certified two desktop-specific UIs: a GNOME GTK4 wizard in crate namtor-gnome and a KDE Plasma 6 KCM in crate namtor-kde. The KCM was removed and namtor-gnome was renamed namtor-ui as the single cross-desktop UI, so every KDE claim here described code that no longer exists (main.qml, namtor_kcm.cpp, libnamtorqml.so, Q_PROPERTY/QQC2 annotations, the 18 lib + 3 abi-smoke suites) and the GNOME claims named renamed crates and moved files. One claim was never true at all: no source file in this repository has ever contained the string 'Software fallback in use'. test_release_ledger.sh counts this file as a PASS, so a release was being certified against a deleted desktop module. Every number below is measured, not asserted.",
+  "summary": "Certification of the single GTK4/libadwaita settings UI (crate namtor-ui) for end-to-end enrollment and PAM opt-in. CI cannot run a clean desktop session, so the CI-testable surface is structural (binaries staged, system-bus usage, install-manifest ownership, accessibility anchors, warning constants, PAM sufficient control, polkit policy) plus the namtor-ui unit suites. Real enrollment with a camera, real PAM toggle against /etc/pam.d, and real authentication against a running PAM stack are human-gated on a desktop VM and recorded below as WITHHELD.",
   "ci_testable": {
     "structural": [
-      "GNOME enroll-wizard binary staged (install-manifest package=gnome, target/release/namtor-enroll-wizard present)",
-      "KDE QML module files staged (main.qml, metadata.json, CMakeLists.txt install rules, libnamtorqml.so build artifact, libnamtor_kde.so Rust cdylib)",
-      "KDE desktop-integration files owned by package=kde in install-manifest (3 entries: .desktop, .metainfo.xml, .svg)",
-      "Both UIs use the SYSTEM bus: 0 Connection::session/sessionBus references across dbus_client.rs, bridge.rs, namtor_kcm.cpp; systemBus references present in all three",
-      "PAM sufficient control: pam-install.sh defaults CONTROL=sufficient; namtor-pam-config editor defaults to NamtorControl::Sufficient; pam_namtor maps all errors to PAM_AUTHINFO_UNAVAIL (fall-through to password)",
-      "Polkit action org.namtor.configure-pam declared in org.namtor.policy"
+      "Settings UI binary staged (namtor-enroll-wizard present in target/release, owned by package=ui in install-manifest.toml)",
+      "One UI for every desktop: no per-desktop crate, no QML, no KCM; the desktop entry carries no OnlyShowIn and no desktop-specific keys",
+      "SYSTEM bus only: 0 Connection::session / session_bus() references across namtor-ui and namtor-client; the sole connection is Connection::system() at crates/namtor-client/src/dbus_client.rs:53",
+      "PAM sufficient control: pam-install.sh defaults CONTROL=sufficient; the editor defaults to NamtorControl::Sufficient; pam_namtor maps all errors to PAM_AUTHINFO_UNAVAIL (fall-through to password)",
+      "Polkit action org.namtor.configure-pam declared in packaging/polkit-1/actions/org.namtor.policy"
     ],
     "unit_tests": {
-      "namtor-gnome presenter_flow": {
-        "total": 29,
-        "passed": 29,
-        "failed": 0,
-        "flow_coverage": [
-          "happy_path_start_enroll_commit_lists_profile",
-          "review_flow_stages_and_commits",
-          "commit_profile_persists_to_store",
-          "reconnect_restores_state"
-        ],
-        "pam_toggle_coverage": [
-          "pam_service_toggle_works",
-          "failed_pam_toggle_reverts_to_previous_state",
-          "unsupported_pam_service_cannot_be_toggled",
-          "set_pam_service_enabled_refuses_unsupported"
-        ],
-        "high_impact_coverage": [
-          "high_impact_pam_service_requires_confirmation",
-          "high_impact_warning_contains_required_phrases",
-          "disabling_risky_service_needs_no_confirmation"
-        ],
-        "protection_coverage": [
-          "protection_status_surfaced",
-          "software_fallback_protection_surfaced",
-          "readiness_view_populated_when_daemon_running",
-          "readiness_view_when_daemon_down",
-          "readiness_view_counts_profiles_and_pam"
-        ]
+      "by_suite": {
+        "desktop_integration": {
+          "passed": 7,
+          "failed": 0
+        },
+        "enrollment_guidance": {
+          "passed": 13,
+          "failed": 0
+        },
+        "presenter_flow": {
+          "passed": 39,
+          "failed": 0
+        },
+        "privacy_scan": {
+          "passed": 29,
+          "failed": 0
+        },
+        "qa_enrollment_test": {
+          "passed": 5,
+          "failed": 0
+        },
+        "shell_navigation": {
+          "passed": 36,
+          "failed": 0
+        },
+        "ui_bug_fixes": {
+          "passed": 20,
+          "failed": 0
+        },
+        "wizard_integration": {
+          "passed": 11,
+          "failed": 0
+        }
       },
-      "namtor-gnome privacy_scan": {
-        "total": 12,
-        "passed": 12,
-        "failed": 0,
-        "mutation_tests": [
-          "mutation_test_forbidden_fields_in_protection_view",
-          "mutation_test_forbidden_fields_in_readiness_view",
-          "populated_presenter_model_carries_no_biometrics"
-        ]
-      },
-      "namtor-kde lib": {
-        "total": 18,
-        "passed": 18,
-        "failed": 0,
-        "flow_coverage": [
-          "happy_path",
-          "enrollment_signals_round_trip",
-          "review_returns_coarse_quality",
-          "profile_and_status_changed_signals_round_trip"
-        ]
-      },
-      "namtor-kde abi_smoke": {
-        "total": 3,
-        "passed": 3,
-        "failed": 0,
-        "checks": ["abi_version_matches_constant", "abi_bus_name_is_canonical", "abi_object_path_is_canonical"]
-      }
+      "total_passed": 160,
+      "total_failed": 0
     },
     "privacy_scan": {
-      "forbidden_substrings_verified": ["threshold", "score", "embedding", "vector", "landmark", "template", "biometric"],
-      "gnome_scan_tests": 12,
-      "kde_scan_test": "privacy_scan_no_biometric_data",
-      "no_biometric_data_exposed": true
+      "forbidden_substrings_verified": [
+        "threshold",
+        "score",
+        "embedding",
+        "vector",
+        "landmark",
+        "template",
+        "biometric",
+        "key",
+        "nonce",
+        "pixel"
+      ],
+      "no_biometric_data_exposed": true,
+      "string_registry": "UI_STRING_REGISTRY is checked against the source tree rather than a hardcoded file list. The previous list required navigation.rs, deleted in 196d4a4, so the registry kept 31 strings from code that no longer ships; and it could not notice a new component arriving with no entries. Deriving the expectation immediately found components/scan_feedback.rs, whose user-facing strings had never been scanned."
     },
     "accessibility": {
-      "gnome": {
-        "pam_switch_tooltip": "tooltip_text + set_tooltip_text on PAM service Switch (components/pam_services.rs)",
-        "accessible_roles_assigned": 20,
-        "roles_used": ["Heading", "ListItem", "Switch", "Checkbox", "Label", "TextBox", "Note", "Status", "Alert"]
-      },
-      "kde": {
-        "pam_switch_focus_policy": "Qt.StrongFocus on QQC2.Switch in main.qml",
-        "accessible_annotations": 118,
-        "annotation_kinds": ["Accessible.name", "Accessible.role", "Accessible.description"]
-      }
+      "accessible_roles_used": [
+        "Alert",
+        "Dialog",
+        "Img",
+        "List",
+        "ListItem",
+        "Note",
+        "ProgressBar",
+        "Status"
+      ],
+      "files_with_accessibility_annotations": [
+        "a11y.rs",
+        "app.rs",
+        "components/enrollment.rs",
+        "components/profile_list.rs",
+        "components/recovery.rs",
+        "components/scan_feedback.rs",
+        "components/system_status.rs"
+      ],
+      "scan_guidance_is_announced": "components/scan_feedback.rs sets AccessibleRole on the guidance and quality rows so the scan advice reaches a screen reader, not just the display"
     },
     "no_tpm_warning": {
-      "gnome": "ProtectionView.is_software_fallback boolean drives 'Software fallback in use — templates are not hardware-bound.' warning banner in wizard.rs",
-      "kde": "protectionHasTpm Q_PROPERTY drives 'No TPM2 device — software fallback.' label in main.qml",
-      "gnome_test": "software_fallback_protection_surfaced passes"
+      "flag": "ProtectionView.is_software_fallback, set at view_model.rs from ProtectionKeyKind::Software",
+      "rendering": "components/system_status.rs labels the row 'Software (fallback)', adds the warning CSS class, and renders the warning text as AccessibleRole::Alert",
+      "tests": [
+        "software_fallback_protection_surfaced",
+        "tpm_backed_protection_raises_no_fallback_warning",
+        "protection_status_survives_a_reconnect"
+      ],
+      "note": "This was the only genuine coverage hole in the certification. FakeManagerClient::set_protection_status existed with zero callers and every is_software_fallback in the test tree was a hardcoded false, so no test drove ProtectionKeyKind::Software through the presenter: the machine without a TPM, the one that most needs telling, was the untested path. Verified non-vacuous by forcing is_software_fallback to false, which fails two of the three tests."
     },
     "high_impact_dialog": {
-      "gnome": {
-        "constant": "HIGH_IMPACT_WARNING in components/pam_services.rs",
-        "text": "FAR/FRR and real-attack PAD gates remain unmeasured. Enabling face authentication is experimental and not recommended for security-sensitive use.",
-        "confirmation_tests": 3
-      },
-      "kde": {
-        "invokable": "highImpactWarning() Q_INVOKABLE in namtor_kcm.cpp",
-        "text": "FAR/FRR and real-attack PAD gates remain unmeasured. Enabling face authentication is experimental and not recommended for security-sensitive use.",
-        "qml_binding": "pamConfirmDialog bound to highImpactWarning in main.qml"
-      }
+      "constant": "HIGH_IMPACT_WARNING in components/pam_services.rs",
+      "text": "FAR/FRR and real-attack PAD gates remain unmeasured. Enabling face authentication is experimental and not recommended for security-sensitive use.",
+      "tests": [
+        "high_impact_pam_service_requires_confirmation",
+        "high_impact_warning_contains_required_phrases",
+        "disabling_risky_service_needs_no_confirmation"
+      ]
     },
     "password_fallback": {
       "pam_install_default_control": "sufficient",
       "editor_default": "NamtorControl::Sufficient",
-      "module_error_mapping": "PAM_AUTHINFO_UNAVAIL on any daemon/timeout/error → sufficient → ignore → fall through to password module",
-      "rhost_refusal": "PAM_RHOST set → refuse (spec §8.2); sshd classified Unsupported"
+      "module_error_mapping": "PAM_AUTHINFO_UNAVAIL on any daemon/timeout/error -> sufficient -> ignore -> fall through to password module",
+      "rhost_refusal": "PAM_RHOST set -> refuse (spec 8.2); sshd classified Unsupported",
+      "no_fallback_refused": "enable_service refuses a stack with no password fallback. Previously it did not: verify_through_includes classified the candidate, which already contained the namtor block, and classify_service short-circuits on has_namtor and returns Safe before evaluating the fallback rule. It now classifies the stock stack.",
+      "module_preflight": "enable_service refuses to write a block referencing a pam_namtor.so that is not installed, before taking the backup. EditError::ModuleNotFound existed and was mapped to a D-Bus error but was never produced, because resolve_module_path had no callers."
     }
   },
   "withheld_human_gated": {
-    "rationale": "Clean GNOME and Plasma sessions cannot be run in CI. The following require a human-gated desktop VM with a real camera, real /etc/pam.d, and a running PAM stack.",
+    "rationale": "A clean desktop session cannot be run in CI. The following require a human-gated desktop VM with a real camera, real /etc/pam.d, and a running PAM stack.",
     "scenarios": [
-      "Real enrollment with a live IR camera (Discover settings surface → enroll → capture frames → review → commit → profile appears in list)",
-      "Real PAM service toggle against /etc/pam.d (list detected services → enable login → verify pam_namtor.so block inserted → disable → verify removed)",
-      "Real authentication against a running PAM stack (login/sudo/su/polkit with pam_namtor.so enabled → face match → success; daemon down → password fallback)",
+      "Real enrollment with a live IR camera (settings surface -> enroll -> capture frames -> review -> commit -> profile appears in list)",
+      "Real PAM service toggle against /etc/pam.d (list detected services -> enable login -> verify pam_namtor.so block inserted -> disable -> verify removed)",
+      "Real authentication against a running PAM stack (login/sudo/su/polkit with pam_namtor.so enabled -> face match -> success; daemon down -> password fallback)",
       "High-impact confirmation dialog rendered on a real display for login/sudo/su/polkit services",
-      "Accessibility verification with a real screen reader (Orca on GNOME, KMag/KRunner on KDE) and keyboard-only navigation",
+      "Accessibility verification with a real screen reader and keyboard-only navigation",
       "Persistence across session restart and reboot",
-      "Polkit prompt rendered on a real desktop for org.namtor.configure-pam"
+      "Polkit prompt rendered on a real desktop for org.namtor.configure-pam",
+      "The same binary rendering correctly on a non-GNOME desktop (Plasma, Xfce, sway), which is the claim that replaced the deleted per-desktop UIs"
     ]
   },
   "test_suite": {
     "script": "packaging/tests/test_desktop_cert.sh",
-    "passed": 63,
+    "passed": 103,
     "failed": 0,
-    "exit_code": 0
-  },
-  "files_created": [
-    "packaging/tests/test_desktop_cert.sh"
-  ],
-  "files_not_modified": [
-    "No Rust source, Cargo.toml, distro packaging, install-manifest.toml, model-manifest.toml, or existing test scripts were modified."
-  ]
+    "exit_code": 0,
+    "note": "Was 63 passed at the previous revision. The gate had drifted to 13 failures, all invisible because no workflow ran this script. Each per-test check now consults the whole-crate test inventory instead of grepping one test target, because a filter matching nothing prints 'test result: ok. 0 passed' and so reported a renamed test as a failing one."
+  }
 }

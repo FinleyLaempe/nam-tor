@@ -59,6 +59,19 @@ jobs:
       - name: Gate — lifecycle certification (stages real release binaries)
         run: bash packaging/tests/test_lifecycle_cert.sh
 
+      # Also belongs here rather than in packaging-gates: pam-install.sh drives
+      # `namtor pam-edit`, so the gate needs target/release/namtor to exist.
+      # It was unwired and had drifted to 6 failures, two of them safety checks
+      # that were not refusing what they claimed to refuse.
+      - name: Gate — PAM install/uninstall matrix (needs release binaries)
+        run: bash packaging/tests/test_pam_install.sh
+
+      # Also needs this job: it checks for target/release/namtor-enroll-wizard
+      # and runs the namtor-ui suites, and packaging-gates builds neither.
+      # It was unwired and had drifted to 13 failures.
+      - name: Gate — desktop certification (single cross-desktop UI)
+        run: bash packaging/tests/test_desktop_cert.sh
+
   rust:
     runs-on: ubuntu-latest
     steps:
@@ -210,6 +223,12 @@ jobs:
         run: bash packaging/tests/test_man_pages.sh
       - name: Gate — release workflow shell idioms
         run: bash packaging/tests/test_workflow_lint.sh
+
+      # Unwired until now, so its assertions were enforced nowhere — the same
+      # gap that hid test_lifecycle_cert.sh. It reads evidence JSON only and
+      # needs no binaries, so it belongs in this job.
+      - name: Gate — release ledger reconciliation
+        run: bash packaging/tests/test_release_ledger.sh
 
       # Core certification. Was kept out of CI because six of its assertions
       # failed on one missing build artifact (the model archive), so its
