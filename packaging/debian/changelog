@@ -1,3 +1,17 @@
+namtor (0.3.3-1) unstable; urgency=medium
+
+  * Stopping an enrollment scan no longer leaves the IR emitter lit on the
+    Review screen; Resume re-arms it.
+  * Pausing and resuming an enrollment no longer breaks face unlock until a
+    daemon restart (leaked V4L2 buffer mappings caused EBUSY).
+  * Close every capture on suspend, under a logind delay inhibitor.
+  * Release the capture when a remote-host request is refused mid-session.
+  * The SIGKILL emitter backstop re-resolves the camera by USB identity.
+  * Saving a profile no longer freezes the window; unfinished scans ask first.
+  * G1.5 measured on all four teardown paths, within the 200 ms budget.
+
+ -- finley <finley.laempe@math.uni-freiburg.de>  Thu, 17 Sep 2026 09:10:54 +0200
+
 namtor (0.3.2-1) unstable; urgency=medium
 
   * Fix the enrollment scan page freezing the app: the progress poll was

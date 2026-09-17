@@ -51,7 +51,7 @@ License: GPL-3.0-only
 Depends:
     ${misc:Depends},
     ${shlibs:Depends},
-    namtor (= 0.3.2-1),
+    namtor (= 0.3.3-1),
     libgtk-4-1,
     libadwaita-1-0,
 Provides: namtor-gnome

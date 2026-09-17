@@ -56,7 +56,7 @@
 %global debug_package %{nil}
 
 Name:           namtor
-Version:        0.3.2
+Version:        0.3.3
 Release:        1%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
@@ -338,6 +338,28 @@ fi
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.3-1
+- Stopping an enrollment scan left the IR emitter lit for as long as the
+  Review screen stayed open. The capture source is kept across Stop so Resume
+  can restart it, stop() only halted the stream, and the per-frame watchdog
+  cannot fire on a source that pulls no frames. Stop now darkens the emitter
+  and Resume re-arms it.
+- Pausing and resuming an enrollment broke face unlock until the daemon was
+  restarted. Re-requesting V4L2 buffers orphaned the first set of mappings,
+  which kept the driver queue busy, so every later capture failed with EBUSY
+  and PAM silently fell back to the password.
+- The daemon did nothing on suspend. Captures now close on logind
+  PrepareForSleep, under a delay inhibitor so logind waits for the write.
+- A refused remote-host request after a clean Prepare skipped the connection
+  cleanup and left the capture open for the warm window.
+- The SIGKILL backstop no longer hardcodes /dev/video2 or the reference
+  camera's payload; it re-resolves the device from its USB identity.
+- Saving a profile no longer freezes the window; the commit runs on a worker
+  thread behind a real saving state. Saving a scan the daemon calls unfinished
+  now asks first.
+- Gate G1.5 measured on all four teardown paths (end, stop, suspend, SIGKILL):
+  control-plane teardown 4.8-49.5 ms median against a 200 ms budget.
+
 * Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.2-1
 - The enrollment scan page destroyed itself. The 500 ms progress poll was
   registered inside the render it triggers, with its source id discarded, so
