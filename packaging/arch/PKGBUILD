@@ -71,7 +71,14 @@ url="https://github.com/FinleyLaempe/nam-tor"
 license=('GPL-3.0-only' 'MIT' 'Apache-2.0')
 groups=()
 checkdepends=('cargo')
-optdepends=()
+# tpm2-tools is optional because the software fallback is a supported
+# mode, but without it hardware-backed sealing is simply unavailable:
+# namtor_store::Tpm2Backend shells out to the `tpm2` dispatcher, and
+# `which_tpm2` fails with "tpm2-tools not on PATH". Nothing declared it
+# anywhere, so every install silently sealed templates with a software
+# key while the settings app reported "Software (fallback)" for a reason
+# the user had no way to act on.
+optdepends=('tpm2-tools: hardware-backed template sealing (TPM2); without it templates are sealed with a software key')
 backup=()
 validpgpkeys=()
 # Release profile already strips; debug symbols not shipped.

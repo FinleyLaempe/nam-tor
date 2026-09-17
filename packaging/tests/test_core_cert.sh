@@ -822,6 +822,52 @@ fi
 # ===========================================================================
 # WITHHELD: gates that require a clean-distro VM (not CI-testable)
 # ===========================================================================
+# (z) Runtime tool dependencies are declared
+# ===========================================================================
+#
+# `namtor_store::Tpm2Backend` shells out to the `tpm2` dispatcher from
+# tpm2-tools. Nothing declared it in any packaging file, so a fresh install
+# had no TPM sealing at all: `which_tpm2` failed with "tpm2-tools not on
+# PATH", the store fell back to a software key, and the settings app reported
+# "Software (fallback)" for a cause the user could not see or act on.
+#
+# It is optional rather than required — the software fallback is a supported
+# mode — so this asserts the declaration exists, not that it is mandatory.
+echo ""
+echo "[z] Runtime tool dependencies declared"
+
+ARCH_PKGBUILD="$REPO_ROOT/packaging/arch/PKGBUILD"
+DEBIAN_CONTROL="$REPO_ROOT/packaging/debian/control"
+SPEC="$REPO_ROOT/packaging/fedora/namtor.spec"
+
+if grep_all -E "optdepends=\\(.*tpm2-tools" "$ARCH_PKGBUILD"; then
+    ok "Arch declares tpm2-tools (optdepends)"
+else
+    not_ok "Arch does not declare tpm2-tools; TPM sealing silently unavailable"
+fi
+
+if grep_all -E "^Recommends:.*tpm2-tools" "$DEBIAN_CONTROL"; then
+    ok "Debian recommends tpm2-tools"
+else
+    not_ok "Debian does not declare tpm2-tools"
+fi
+
+if grep_all -E "^Recommends:[[:space:]]+tpm2-tools" "$SPEC"; then
+    ok "Fedora recommends tpm2-tools"
+else
+    not_ok "Fedora does not declare tpm2-tools"
+fi
+
+# The declaration must match what the code actually invokes: the backend looks
+# for a binary named `tpm2`, not `tpm2_createprimary`, so a rename in the code
+# would leave these declarations pointing at the wrong thing.
+if grep_all -E 'join\("tpm2"\)' "$REPO_ROOT/crates/namtor-store/src/tpm2_backend.rs"; then
+    ok "the backend still looks for the tpm2 dispatcher that these packages name"
+else
+    not_ok "the TPM backend no longer looks for \`tpm2\`; the packaging declarations may be stale"
+fi
+
+# ===========================================================================
 
 echo "--- WITHHELD: clean-distro VM gates (documented, not CI-testable) ---"
 

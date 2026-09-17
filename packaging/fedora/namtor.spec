@@ -94,6 +94,9 @@ Requires:       onnxruntime
 Requires:       pam
 Requires:       systemd
 Requires:       %{_lib}gcc%{?_isa}
+# Optional: without tpm2-tools the TPM2 backend cannot run the `tpm2`
+# dispatcher and templates are sealed with a software key instead.
+Recommends:     tpm2-tools
 
 # The core package provides a PAM module; conflict with any other package
 # that ships pam_namtor.so.

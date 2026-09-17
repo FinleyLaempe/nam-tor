@@ -26,6 +26,10 @@ Depends:
     onnxruntime,
     libpam0g,
     systemd,
+# Optional: without tpm2-tools, namtor_store::Tpm2Backend cannot run the
+# `tpm2` dispatcher and templates are sealed with a software key instead,
+# which the settings app reports as "Software (fallback)".
+Recommends: tpm2-tools
 Multi-Arch: foreign
 Description: IR face authentication for Linux — daemon, PAM module, CLI
  Nam-tor replaces Howdy, targeting Windows Hello parity on speed and
