@@ -28,6 +28,12 @@ pub struct RawFrame {
 
 /// Abstracts the streaming layer so `IrUvc` is unit-testable without a device.
 pub trait Streamer: Send {
+    /// Frames the device produced that this streamer never dequeued, summed
+    /// over the stream. Default `0` for mock streamers, which cannot drop.
+    fn dropped_frames(&self) -> u64 {
+        0
+    }
+
     /// Requests and queues `buffer_count` MMAP buffers and starts streaming.
     /// Default is a no-op for mock streamers.
     fn start(&mut self, buffer_count: u32) -> Result<(), CaptureError> {
@@ -113,6 +119,10 @@ impl<S: Streamer, P: EmitterPolicy> CaptureSource for IrUvc<S, P> {
         self.caps
     }
 
+    fn dropped_frames(&self) -> u64 {
+        self.streamer.dropped_frames()
+    }
+
     fn start(&mut self) -> Result<(), CaptureError> {
         self.streamer.start(4)?;
         self.started = true;
@@ -133,12 +143,55 @@ impl<S: Streamer, P: EmitterPolicy> CaptureSource for IrUvc<S, P> {
     }
 }
 
+/// Tracks the strobe phase of a V4L2 stream across dropped frames.
+///
+/// [`ParityPolicy`] reads emitter-on/emitter-off off the parity of the frame
+/// index. A counter incremented once per dequeue assumes the consumer never
+/// misses a frame; enrollment spends ~100 ms of ONNX per frame against a
+/// sensor producing one every 33 ms, so the ring overruns and the driver
+/// drops frames continuously. One dropped frame inverted the labelling for
+/// the rest of the stream: every illuminated frame recorded as dark and
+/// every dark one as illuminated, which runs PAD's strobe differential
+/// backwards and hands enrollment the unlit frames to find a face in.
+///
+/// The driver's `sequence` counts frames it produced whether or not they
+/// were dequeued, so stepping by its delta keeps the phase on the sensor. A
+/// driver that reports no sequence leaves it pinned at 0; the delta floors
+/// at 1 and the behaviour is the old one exactly.
+#[derive(Debug, Default)]
+struct PhaseTracker {
+    index: u64,
+    last: Option<u32>,
+    dropped: u64,
+}
+
+impl PhaseTracker {
+    /// Record a dequeued frame with driver sequence `sequence` and return
+    /// the strobe phase index to label it with.
+    fn observe(&mut self, sequence: u32) -> u64 {
+        let step = match self.last {
+            None => 0,
+            // `wrapping_sub` because the driver's counter is u32 and wraps.
+            // Flooring at 1 covers a driver that never moves it.
+            Some(prev) => u64::from(sequence.wrapping_sub(prev)).max(1),
+        };
+        self.dropped += step.saturating_sub(1);
+        self.last = Some(sequence);
+        self.index += step;
+        self.index
+    }
+
+    fn dropped(&self) -> u64 {
+        self.dropped
+    }
+}
+
 /// Production streaming layer: V4L2 MMAP on the IR node, with an optional
 /// second V4L2 stream on the metadata node for SOF extraction.
 pub struct V4l2IrStream {
     ir: V4l2Stream,
     meta: Option<V4l2Stream>,
-    frame_index: u64,
+    phase: PhaseTracker,
     #[allow(dead_code)]
     format: V4l2Format,
 }
@@ -168,7 +221,7 @@ impl V4l2IrStream {
         Ok(Self {
             ir,
             meta,
-            frame_index: 0,
+            phase: PhaseTracker::default(),
             format,
         })
     }
@@ -197,9 +250,15 @@ impl V4l2IrStream {
         Ok(())
     }
 
+    /// Frames the driver produced that this stream never dequeued, summed
+    /// over the life of the stream. Zero on a consumer that keeps up.
+    pub fn dropped_frames(&self) -> u64 {
+        self.phase.dropped()
+    }
+
     fn dequeue_sof(&mut self) -> Option<u16> {
         let m = self.meta.as_mut()?;
-        let (idx, _) = m.dequeue().ok()?;
+        let (idx, _, _) = m.dequeue().ok()?;
         let buf = m.read_buffer(idx).ok()?;
         let sof = if buf.len() >= 10 {
             Some(u16::from_ne_bytes([buf[8], buf[9]]))
@@ -212,6 +271,10 @@ impl V4l2IrStream {
 }
 
 impl Streamer for V4l2IrStream {
+    fn dropped_frames(&self) -> u64 {
+        self.phase.dropped()
+    }
+
     fn start(&mut self, buffer_count: u32) -> Result<(), CaptureError> {
         self.start_streaming(buffer_count)
     }
@@ -223,15 +286,31 @@ impl Streamer for V4l2IrStream {
         }
     }
 
+    /// Dequeue one frame and advance the strobe phase by the driver's own
+    /// frame-sequence delta.
+    ///
+    /// [`ParityPolicy`] labels a frame emitter-on or emitter-off from the
+    /// parity of this counter. Counting one per dequeue silently assumed the
+    /// consumer never misses a frame. It does: enrollment spends ~100 ms of
+    /// ONNX per frame against a sensor producing one every 33 ms, so the
+    /// four-buffer ring overruns and the driver drops frames continuously.
+    /// Each dropped frame of odd length inverted the labelling for the whole
+    /// rest of the stream — every illuminated frame recorded as dark and
+    /// every dark one as illuminated — which feeds PAD's strobe differential
+    /// backwards and hands enrollment the unlit frames to look for a face in.
+    ///
+    /// The driver's `sequence` counts frames it produced, dequeued or not,
+    /// so stepping by its delta keeps the phase pinned to the sensor. A
+    /// driver that does not report a sequence leaves it at 0, the delta
+    /// floors at 1, and the behaviour is exactly the old one.
     fn next_raw(&mut self) -> Result<RawFrame, CaptureError> {
-        let (idx, ts) = self.ir.dequeue().map_err(v4l2_err_to_capture)?;
+        let (idx, ts, sequence) = self.ir.dequeue().map_err(v4l2_err_to_capture)?;
         let buf = self.ir.read_buffer(idx).map_err(v4l2_err_to_capture)?;
         let data = buf.to_vec();
         self.ir.requeue(idx).map_err(v4l2_err_to_capture)?;
 
         let sof = self.dequeue_sof();
-        let frame_index = self.frame_index;
-        self.frame_index += 1;
+        let frame_index = self.phase.observe(sequence);
 
         Ok(RawFrame {
             data,
@@ -246,6 +325,90 @@ fn v4l2_err_to_capture(e: crate::v4l2::V4l2Error) -> CaptureError {
     // `From<V4l2Error>` keeps EBUSY typed as `CaptureError::Busy`; everything
     // else flattens to `Device`.
     CaptureError::from(e)
+}
+
+#[cfg(test)]
+mod phase_tests {
+    use super::{EmitterPolicy, ParityPolicy, PhaseTracker};
+    use crate::frame::EmitterState;
+
+    fn label(seqs: &[u32]) -> Vec<EmitterState> {
+        let mut t = PhaseTracker::default();
+        seqs.iter()
+            .map(|&s| ParityPolicy.tag(t.observe(s)))
+            .collect()
+    }
+
+    /// With nothing dropped the labelling is unchanged: frame 0 is lit.
+    #[test]
+    fn an_unbroken_stream_alternates_from_on() {
+        use EmitterState::{Off, On};
+        assert_eq!(label(&[0, 1, 2, 3, 4]), vec![On, Off, On, Off, On]);
+    }
+
+    /// The regression. One dropped frame is an odd step, so a per-dequeue
+    /// counter puts every later frame on the wrong side of the strobe:
+    /// sensor frame 3 is emitter-off, but a counter that saw only three
+    /// frames calls it index 2 and labels it on. PAD's differential is then
+    /// computed backwards and enrollment searches the unlit frames for a
+    /// face.
+    #[test]
+    fn one_dropped_frame_does_not_invert_the_rest_of_the_stream() {
+        use EmitterState::{Off, On};
+        // Dequeued sequences 0, 1, 3: the driver produced 2 and it was lost.
+        assert_eq!(label(&[0, 1, 3]), vec![On, Off, Off]);
+        // A whole run after the gap stays pinned to the sensor.
+        assert_eq!(label(&[0, 1, 3, 4, 5, 6]), vec![On, Off, Off, On, Off, On]);
+    }
+
+    /// An even-length gap happens to preserve parity; it must still be
+    /// counted as lost frames.
+    #[test]
+    fn an_even_gap_keeps_the_phase_and_is_still_counted() {
+        use EmitterState::{Off, On};
+        assert_eq!(label(&[0, 1, 4]), vec![On, Off, On]);
+        let mut t = PhaseTracker::default();
+        for s in [0, 1, 4] {
+            t.observe(s);
+        }
+        assert_eq!(t.dropped(), 2, "frames 2 and 3 were produced and lost");
+    }
+
+    /// A driver that does not fill in `sequence` leaves it at 0 forever. The
+    /// step floors at 1, so such a device behaves exactly as it did before
+    /// the sequence was consulted at all.
+    #[test]
+    fn a_driver_with_no_sequence_falls_back_to_one_per_frame() {
+        use EmitterState::{Off, On};
+        assert_eq!(label(&[0, 0, 0, 0]), vec![On, Off, On, Off]);
+        let mut t = PhaseTracker::default();
+        for _ in 0..4 {
+            t.observe(0);
+        }
+        assert_eq!(t.dropped(), 0, "a flat sequence is not evidence of loss");
+    }
+
+    /// The driver's counter is u32 and wraps. A wrap is a step of 1, not a
+    /// four-billion-frame gap.
+    #[test]
+    fn the_sequence_wrapping_is_a_step_of_one() {
+        let mut t = PhaseTracker::default();
+        t.observe(u32::MAX - 1);
+        let a = t.observe(u32::MAX);
+        let b = t.observe(0);
+        assert_eq!(b, a + 1, "wrap must advance by one");
+        assert_eq!(t.dropped(), 0);
+    }
+
+    /// A stream that starts partway through the driver's counter still
+    /// starts its own phase at 0 — the first frame of an armed window is the
+    /// lit one by construction.
+    #[test]
+    fn the_first_frame_is_always_phase_zero() {
+        let mut t = PhaseTracker::default();
+        assert_eq!(t.observe(9_001), 0);
+        assert_eq!(t.dropped(), 0);
+    }
 }
 
 #[cfg(test)]

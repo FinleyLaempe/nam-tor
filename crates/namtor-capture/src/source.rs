@@ -50,6 +50,14 @@ pub enum CaptureError {
 /// block until the next frame arrives and never return `Ok(None)` until stopped.
 pub trait CaptureSource: Send {
     fn caps(&self) -> SourceCaps;
+    /// Frames the device produced that were never handed to the consumer,
+    /// summed over the stream. Non-zero means the consumer is slower than
+    /// the sensor — the condition that silently turned enrollment into zero
+    /// templates. Sources that cannot drop (replay, synthetic, mocks) return
+    /// `0`.
+    fn dropped_frames(&self) -> u64 {
+        0
+    }
     fn start(&mut self) -> Result<(), CaptureError>;
     fn next_frame(&mut self) -> Result<Option<Frame>, CaptureError>;
     fn stop(&mut self);

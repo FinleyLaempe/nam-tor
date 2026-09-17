@@ -560,6 +560,19 @@ impl EnrollmentCapture {
             return Err(ApiError::State("stop requires capturing phase".into()));
         }
         if let Some(c) = self.capture.as_mut() {
+            // A consumer slower than the sensor is the difference between a
+            // session that enrols and one that quietly produces nothing, and
+            // it leaves no other trace. Say so once, at stop, rather than
+            // letting the operator infer it from an empty template set.
+            let dropped = c.dropped_frames();
+            if dropped > 0 {
+                tracing::warn!(
+                    dropped,
+                    seen = self.total_seen,
+                    accepted = self.accepted,
+                    "capture could not keep up: frames were produced and lost"
+                );
+            }
             c.stop();
         }
         self.phase = CapturePhase::Stopped;

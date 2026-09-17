@@ -1411,6 +1411,17 @@ struct LiveEnrollment {
 /// source. So this uses the CLI's enrollment path, which is equally shipped
 /// and equally real, and notes the difference rather than hiding it.
 ///
+/// One cause of that measurement has since been found and fixed: a consumer
+/// this far behind the sensor makes the driver drop frames, and the strobe
+/// phase was counted one per dequeue rather than from the driver's frame
+/// sequence, so a single dropped frame inverted emitter-on/emitter-off for
+/// the rest of the stream — enrollment was searching the unlit frames for a
+/// face. See `PhaseTracker` in `namtor-capture::ir_uvc`. `EnrollmentCapture`
+/// now also logs the dropped-frame count at stop, so a repeat is visible
+/// rather than inferred. **The measurement above predates that fix and has
+/// not been retaken**; whether the AE clipping alone still starves the
+/// session is an open question for the next run on the reference camera.
+///
 /// Every armed window is bounded by the device's own `max_on_ms` watchdog and
 /// closed explicitly; `payload_off` is restored on every path including panic.
 fn enroll_live(

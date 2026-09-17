@@ -138,7 +138,7 @@ impl V4l2RgbStream {
 
     fn dequeue_sof(&mut self) -> Option<u16> {
         let m = self.meta.as_mut()?;
-        let (idx, _) = m.dequeue().ok()?;
+        let (idx, _, _) = m.dequeue().ok()?;
         let buf = m.read_buffer(idx).ok()?;
         let sof = if buf.len() >= 10 {
             Some(u16::from_ne_bytes([buf[8], buf[9]]))
@@ -163,7 +163,7 @@ impl Streamer for V4l2RgbStream {
     }
 
     fn next_raw(&mut self) -> Result<RawFrame, CaptureError> {
-        let (idx, ts) = self.rgb.dequeue().map_err(v4l2_err_to_capture)?;
+        let (idx, ts, _seq) = self.rgb.dequeue().map_err(v4l2_err_to_capture)?;
         let buf = self.rgb.read_buffer(idx).map_err(v4l2_err_to_capture)?;
         let data = buf.to_vec();
         self.rgb.requeue(idx).map_err(v4l2_err_to_capture)?;

@@ -299,7 +299,12 @@ impl V4l2Stream {
 
     /// Dequeues the next filled buffer, returning its index and the kernel
     /// timestamp. Blocks until a frame is ready.
-    pub fn dequeue(&mut self) -> Result<(usize, Duration), V4l2Error> {
+    ///
+    /// The third element is the driver's own frame sequence number, counted
+    /// from stream start. It advances for every frame the driver produced,
+    /// including ones the consumer was too slow to dequeue, so a gap in it
+    /// is the only honest signal that frames were lost.
+    pub fn dequeue(&mut self) -> Result<(usize, Duration, u32), V4l2Error> {
         if !self.started {
             return Err(V4l2Error::NotStreaming);
         }
@@ -313,7 +318,7 @@ impl V4l2Stream {
 
         let ts = buf.timestamp;
         let elapsed = Duration::new(ts.tv_sec as u64, ts.tv_usec as u32 * 1000);
-        Ok((buf.index as usize, elapsed))
+        Ok((buf.index as usize, elapsed, buf.sequence))
     }
 
     /// Requeues a buffer for reuse by the driver.
@@ -638,7 +643,7 @@ mod tests {
         s.streamon().expect("STREAMON");
 
         for _ in 0..2 {
-            let (idx, ts) = s.dequeue().expect("DQBUF");
+            let (idx, ts, _seq) = s.dequeue().expect("DQBUF");
             let buf = s.read_buffer(idx).expect("read_buffer");
             assert_eq!(buf.len(), 230_400, "mmap buffer size");
             assert!(ts.as_secs() < 60, "timestamp sanity");
