@@ -17,7 +17,20 @@ Environment=NAMTOR_WORKER_BIN=/usr/bin/namtor
 ExecStart=/usr/bin/namtor daemon
 # SIGKILL backstop: after TimeoutStopSec, systemd sends SIGKILL; ExecStopPost
 # runs even then to force the emitter off (spec §4.10.2 G1.4).
-ExecStopPost=/usr/bin/namtor emitter-off /dev/video2
+#
+# No device argument. This used to read `emitter-off /dev/video2`, with the
+# quirks file resolved from NAMTOR_QUIRKS — which this unit never set — or
+# else a hardcoded path to the *reference* device's entry. Both halves were
+# only correct on the development machine: namtor_hwdb::nodes documents that
+# "node numbering is allocation-order dependent and changes between boots", so
+# on any other machine, or after a renumber, the backstop aimed the reference
+# device's payload at whatever camera happened to be video2.
+#
+# With no argument, emitter-off reads the record the daemon writes before it
+# arms the emitter and re-resolves the node from the recorded USB vendor,
+# product and interface. It exits 0 when no record exists, so an ordinary stop
+# on a machine that never armed the emitter is silent.
+ExecStopPost=/usr/bin/namtor emitter-off
 TimeoutStopSec=2
 
 # --- Privilege reduction ---------------------------------------------------

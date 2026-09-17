@@ -7,6 +7,7 @@ use crate::daemon::CaptureFactory;
 use crate::DaemonError;
 use namtor_camera::always_on::ProtectionLevel;
 use namtor_camera::emitter_ctrl::{ApplyOutcome, EmitterController, EnvConsent};
+use namtor_camera::emitter_state::EmitterState;
 use namtor_camera::hotplug::{DeviceEvent, HotplugState};
 use namtor_camera::inventory::{
     select_camera_from_inventory, CameraInventory, DiscoveredCamera, SysfsInventory,
@@ -131,11 +132,69 @@ impl Drop for EmitterGuard {
     }
 }
 
+/// Write the `namtor emitter-off` record for `dev`.
+///
+/// The device's USB identity is recovered by walking sysfs for the USB device
+/// that owns this node, so the backstop can re-resolve the node after a
+/// renumber instead of trusting a `/dev/videoN` path that the kernel is free
+/// to reassign on the next boot.
+fn record_emitter_state(dev: &Path, cfg: &EmitterCfg) -> Result<(), String> {
+    let unit = cfg.unit.ok_or("emitter config has no unit")?;
+    let selector = cfg.selector.ok_or("emitter config has no selector")?;
+    if cfg.payload_off.is_empty() {
+        return Err("emitter config has an empty payload_off".into());
+    }
+
+    let sysfs_root = std::env::var("NAMTOR_SYSFS_ROOT").unwrap_or_else(|_| "/sys".to_string());
+    let (vid, pid, interface) = usb_identity_of(Path::new(&sysfs_root), dev)
+        .ok_or_else(|| format!("no USB device in sysfs owns {}", dev.display()))?;
+
+    let state = EmitterState {
+        vid,
+        pid,
+        interface,
+        device: dev.to_path_buf(),
+        unit,
+        selector,
+        payload_off: cfg.payload_off.clone(),
+    };
+    let path = std::env::var("NAMTOR_EMITTER_STATE")
+        .unwrap_or_else(|_| namtor_camera::emitter_state::DEFAULT_PATH.to_string());
+    state.write(Path::new(&path))
+}
+
+/// Find the USB vendor/product and UVC interface number that own `node`.
+fn usb_identity_of(sysfs_root: &Path, node: &Path) -> Option<(u16, u16, u8)> {
+    let devices = namtor_hwdb::sysfs::enumerate_usb(sysfs_root).ok()?;
+    for usb in &devices {
+        let Ok(nodes) = namtor_hwdb::nodes::correlate_nodes(usb) else {
+            continue;
+        };
+        if let Some(n) = nodes.iter().find(|n| n.dev_path == node) {
+            return Some((usb.vid, usb.pid, n.interface));
+        }
+    }
+    None
+}
+
 fn activate_emitter(dev: &Path, emitter_cfg: Option<&EmitterCfg>) -> Result<EmitterGuard, String> {
     use namtor_uvc::device::V4l2Device;
     use namtor_uvc::probe::SafeXu;
 
     let cfg = emitter_cfg.ok_or_else(|| "no emitter config for selected device".to_string())?;
+
+    // Record how to darken this emitter BEFORE turning it on, so the record
+    // exists even if we die between here and the first frame. `ExecStopPost`
+    // reads it after SIGKILL, when nothing can be asked of this process. A
+    // failure to write is logged, not fatal: refusing to authenticate because
+    // a backstop file could not be written would be the worse trade.
+    if let Err(e) = record_emitter_state(dev, cfg) {
+        tracing::warn!(
+            error = %e,
+            "could not record emitter state; the ExecStopPost backstop will have nothing to read"
+        );
+    }
+
     let v4l2_dev = V4l2Device::open(dev).map_err(|e| format!("open {}: {e}", dev.display()))?;
     let mut xu = Box::new(SafeXu::new(v4l2_dev));
     let max_on_ms = cfg.lifecycle.as_ref().map(|l| l.max_on_ms).unwrap_or(2000);
