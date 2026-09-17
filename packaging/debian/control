@@ -7,6 +7,14 @@ Source: namtor
 Section: admin
 Priority: optional
 Maintainer: Nam-tor Project <namtor@example.invalid>
+# `cargo` and `rustc` are deliberately unversioned, and that is not an
+# oversight. The tree needs rustc 1.88 (ort 2.0.0-rc.13; see rust-version in
+# the workspace Cargo.toml), which no Debian stable ships: bookworm has 1.63
+# and trixie 1.85.1. Writing `rustc (>= 1.88)` here would be accurate and
+# would make dpkg-checkbuilddeps refuse on every current Debian, which is
+# worse than letting cargo say so itself in one clear line. Build this with a
+# toolchain from rustup until Debian catches up; the release workflow's
+# Debian cell does exactly that.
 Build-Depends:
     debhelper-compat (= 13),
     cargo,
