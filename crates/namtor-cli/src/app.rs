@@ -189,6 +189,33 @@ fn cmd_status() -> ExitCode {
     run_status_command(&source)
 }
 
+/// Turn a `journalctl` invocation into the bundle's log section.
+///
+/// A non-zero exit is the interesting case: on a machine where the user is
+/// not in `systemd-journal`, `journalctl -u namtor-daemon` exits 1 with an
+/// empty stdout and a message on stderr. Treating that as success put an
+/// empty log section in the bundle, which reads as "the daemon logged
+/// nothing" — the opposite of what happened, and the exact thing a support
+/// bundle exists to avoid getting wrong.
+fn journal_excerpts(output: std::io::Result<std::process::Output>) -> String {
+    match output {
+        Ok(o) if o.status.success() => filter_log_lines(&String::from_utf8_lossy(&o.stdout)),
+        Ok(o) => {
+            let why = String::from_utf8_lossy(&o.stderr);
+            let why = why.trim();
+            if why.is_empty() {
+                format!("journalctl failed ({})", o.status)
+            } else {
+                // The stderr line is systemd's own, not log content, but it
+                // still goes through the filter: the privacy scanner is a
+                // gate on everything the bundle carries.
+                format!("journalctl failed: {}", filter_log_lines(why).trim())
+            }
+        }
+        Err(_) => String::from("journalctl unavailable"),
+    }
+}
+
 fn cmd_diagnostics(out_dir: Option<PathBuf>) -> ExitCode {
     let cfg = DiagnosticConfig::production();
     let report = run_doctor(&cfg);
@@ -198,10 +225,7 @@ fn cmd_diagnostics(out_dir: Option<PathBuf>) -> ExitCode {
     let raw_logs = std::process::Command::new("journalctl")
         .args(["-u", "namtor-daemon", "--no-pager", "-n", "200"])
         .output();
-    let log_excerpts = match raw_logs {
-        Ok(o) => filter_log_lines(&String::from_utf8_lossy(&o.stdout)),
-        Err(_) => String::from("journalctl unavailable"),
-    };
+    let log_excerpts = journal_excerpts(raw_logs);
     let info = BundleInfo {
         cli_version: env!("CARGO_PKG_VERSION"),
         daemon_version,
@@ -219,6 +243,75 @@ fn cmd_diagnostics(out_dir: Option<PathBuf>) -> ExitCode {
             eprintln!("diagnostics: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod journal_excerpt_tests {
+    use super::journal_excerpts;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+
+    fn output(code: i32, stdout: &str, stderr: &str) -> std::io::Result<Output> {
+        Ok(Output {
+            status: ExitStatus::from_raw(code << 8),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        })
+    }
+
+    #[test]
+    fn a_successful_run_is_filtered_and_kept() {
+        let text = journal_excerpts(output(0, "namtor-daemon: started\n", ""));
+        assert!(text.contains("started"), "{text}");
+    }
+
+    /// The regression. `journalctl` exits 1 with empty stdout when the user
+    /// cannot read the journal; the bundle then said nothing at all, which
+    /// reads as "the daemon logged nothing".
+    #[test]
+    fn a_failed_run_says_it_failed_rather_than_looking_empty() {
+        let text = journal_excerpts(output(1, "", "Failed to add match: Permission denied"));
+        assert!(text.contains("journalctl failed"), "{text}");
+        assert!(text.contains("Permission denied"), "{text}");
+        assert!(!text.trim().is_empty());
+    }
+
+    /// A failure with nothing on stderr still has to say so.
+    #[test]
+    fn a_silent_failure_still_reports_the_status() {
+        let text = journal_excerpts(output(2, "", ""));
+        assert!(text.starts_with("journalctl failed ("), "{text}");
+    }
+
+    /// journalctl missing entirely is a different condition and keeps its
+    /// own wording.
+    #[test]
+    fn a_missing_journalctl_is_distinguishable_from_a_failing_one() {
+        let text = journal_excerpts(Err(std::io::Error::from(std::io::ErrorKind::NotFound)));
+        assert_eq!(text, "journalctl unavailable");
+    }
+
+    /// Everything the bundle carries goes through the privacy filter,
+    /// including systemd's own stderr. The filter drops lines naming
+    /// biometric terms and redacts long hex runs; both must apply here, or
+    /// the failure path becomes a way into the bundle that the scanner does
+    /// not cover.
+    #[test]
+    fn the_failure_text_is_filtered_too() {
+        let hex = "a".repeat(64);
+        let text = journal_excerpts(output(1, "", &format!("cannot read {hex}")));
+        assert!(
+            !text.contains(&hex),
+            "a long hex run reached the bundle unredacted: {text}"
+        );
+        assert!(text.contains("[redacted]"), "{text}");
+
+        let dropped = journal_excerpts(output(1, "", "could not open template store"));
+        assert!(
+            !dropped.contains("template"),
+            "a filtered term reached the bundle: {dropped}"
+        );
     }
 }
 

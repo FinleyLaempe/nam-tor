@@ -108,6 +108,27 @@ extern "C" fn handle_signal(_sig: nix::libc::c_int) {
     SHUTDOWN.store(true, Ordering::Relaxed);
 }
 
+/// The three models the daemon requires, named once so the list it asks the
+/// manifest for and the roles it binds them to cannot drift apart.
+pub const MODEL_DETECTOR: &str = "yunet_2023mar";
+pub const MODEL_EMBEDDER: &str = "sface_2021dec";
+pub const MODEL_PAD: &str = "minifasnet_pad";
+
+/// Take one validated model out of the set by id.
+///
+/// `resolve_required_specs` already fails when a required id is absent, so
+/// this is unreachable in practice — which is exactly why it must not be an
+/// index into a vector. An error here names the model; a wrong index would
+/// silently hand the detector the PAD weights.
+pub fn take_model(
+    validated: &mut std::collections::HashMap<String, PathBuf>,
+    id: &str,
+) -> Result<PathBuf, String> {
+    validated
+        .remove(id)
+        .ok_or_else(|| format!("model '{id}' was required but not validated"))
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -159,7 +180,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let manifest = ModelManifest::parse(&model_manifest_path)?;
         tracing::info!(path = %model_manifest_path.display(), "model manifest parsed");
 
-        let required_ids: [&str; 3] = ["yunet_2023mar", "sface_2021dec", "minifasnet_pad"];
+        let required_ids: [&str; 3] = [MODEL_DETECTOR, MODEL_EMBEDDER, MODEL_PAD];
         let specs = resolve_required_specs(&manifest, &required_ids)?;
 
         let fetcher = ModelFetcher::new(&models_dir, Box::new(NoFetch));
@@ -170,7 +191,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             allow_restricted: false,
         };
 
-        let mut validated_paths: Vec<PathBuf> = Vec::new();
+        // Keyed by model id, not by position. Binding by index meant the
+        // order of `required_ids` and the order of these three assignments
+        // had to agree, with nothing to enforce it: reorder one and the
+        // daemon loads the PAD network as the face detector and boots
+        // "successfully".
+        let mut validated: std::collections::HashMap<String, PathBuf> =
+            std::collections::HashMap::new();
         for spec in &specs {
             let path = fetcher.validate_against_manifest(&gate, spec)?;
             tracing::info!(
@@ -179,13 +206,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 path = %path.display(),
                 "model validated"
             );
-            validated_paths.push(path);
+            validated.insert(spec.id.clone(), path);
         }
-        tracing::info!(count = validated_paths.len(), "all models validated");
+        tracing::info!(count = validated.len(), "all models validated");
 
-        yunet_path = validated_paths[0].clone();
-        sface_path = validated_paths[1].clone();
-        pad_path = validated_paths[2].clone();
+        yunet_path = take_model(&mut validated, MODEL_DETECTOR)?;
+        sface_path = take_model(&mut validated, MODEL_EMBEDDER)?;
+        pad_path = take_model(&mut validated, MODEL_PAD)?;
         specs
     };
 
@@ -447,5 +474,62 @@ fn start_manager_bus(
             tracing::warn!(error = %e, "manager d-bus service not started (pam path continues)");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod model_binding_tests {
+    use super::{take_model, MODEL_DETECTOR, MODEL_EMBEDDER, MODEL_PAD};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn validated() -> HashMap<String, PathBuf> {
+        [
+            (MODEL_PAD, "/models/minifasnet_pad.onnx"),
+            (MODEL_DETECTOR, "/models/yunet_2023mar.onnx"),
+            (MODEL_EMBEDDER, "/models/sface_2021dec.onnx"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), PathBuf::from(v)))
+        .collect()
+    }
+
+    /// The point of the change: the order the models were validated in no
+    /// longer decides which role each one gets. The map above is built in
+    /// PAD-first order on purpose.
+    #[test]
+    fn each_role_gets_its_own_model_whatever_the_order() {
+        let mut v = validated();
+        assert_eq!(
+            take_model(&mut v, MODEL_DETECTOR).unwrap(),
+            PathBuf::from("/models/yunet_2023mar.onnx")
+        );
+        assert_eq!(
+            take_model(&mut v, MODEL_EMBEDDER).unwrap(),
+            PathBuf::from("/models/sface_2021dec.onnx")
+        );
+        assert_eq!(
+            take_model(&mut v, MODEL_PAD).unwrap(),
+            PathBuf::from("/models/minifasnet_pad.onnx")
+        );
+        assert!(v.is_empty(), "left over: {v:?}");
+    }
+
+    /// A missing model names itself rather than panicking on an index.
+    #[test]
+    fn a_missing_model_is_named() {
+        let mut v = validated();
+        v.remove(MODEL_PAD);
+        let err = take_model(&mut v, MODEL_PAD).unwrap_err();
+        assert!(err.contains(MODEL_PAD), "{err}");
+    }
+
+    /// The three ids are distinct; two roles sharing one id would load the
+    /// same weights twice and look like it worked.
+    #[test]
+    fn the_three_model_ids_are_distinct() {
+        let ids = [MODEL_DETECTOR, MODEL_EMBEDDER, MODEL_PAD];
+        let unique: std::collections::BTreeSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "{ids:?}");
     }
 }
