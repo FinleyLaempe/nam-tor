@@ -80,12 +80,24 @@ Source1:        %{url}/releases/download/models-v%{modelver}/namtor-models-%{mod
 # Source0 is verified by the release workflow via the GPG-signed checksums
 # file; Source1 is verified in %prep against model-manifest.toml.
 
-# Build requirements — Fedora ships rust-toolchain + cargo in the standard
-# repos. python3 >= 3.11 is needed for packaging/stage.sh (stdlib tomllib).
-BuildRequires:  rust-toolchain
+# Build requirements. python3 >= 3.11 is needed for packaging/stage.sh
+# (stdlib tomllib). The compiler was declared as `rust-toolchain`, which is
+# not a Fedora package name — Fedora ships `rust` and `cargo` — so rpmbuild
+# refused the build on unmet BuildRequires before reaching %build.
+#
+# The -devel packages are what Fedora splits out and Arch does not, which is
+# why the PKGBUILD's makedepends list is shorter: the GTK app, the PAM module
+# and the TLS-using crates all need headers at build time. The release
+# workflow's dnf step installed them while the spec did not declare them, so
+# a build anywhere else — mock, COPR, a maintainer's machine — would fail.
+BuildRequires:  rust
 BuildRequires:  cargo
 BuildRequires:  python3 >= 3.11
 BuildRequires:  systemd-rpm-macros
+BuildRequires:  pam-devel
+BuildRequires:  openssl-devel
+BuildRequires:  gtk4-devel
+BuildRequires:  libadwaita-devel
 
 # Core runtime requirements — daemon/worker/CLI/PAM only. The GUI toolkit
 # deps (gtk4/libadwaita) live in the subpackage so a headless host is not
@@ -93,7 +105,10 @@ BuildRequires:  systemd-rpm-macros
 Requires:       onnxruntime
 Requires:       pam
 Requires:       systemd
-Requires:       %{_lib}gcc%{?_isa}
+# `libgcc`, not `%{_lib}gcc`: `%{_lib}` expands to `lib64` on x86_64, so that
+# asked for a package named `lib64gcc` — a Mandriva-ism that no Fedora repo
+# has ever provided, which makes the built rpm uninstallable.
+Requires:       libgcc
 # Optional: without tpm2-tools the TPM2 backend cannot run the `tpm2`
 # dispatcher and templates are sealed with a software key instead.
 Recommends:     tpm2-tools

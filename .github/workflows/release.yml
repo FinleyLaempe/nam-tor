@@ -17,10 +17,12 @@
 # ever built or installed, and the release shipped Arch artifacts only
 # while the project claimed to support three distros.
 #
-# Fedora is still disabled and the reason is unchanged: the .spec needs
-# further debugging. Its lint/build/install/smoke/upgrade/uninstall steps
-# are written below and gated by `if: startsWith(matrix.distro, 'fedora')`;
-# re-add its `include:` entry once the spec builds.
+# Fedora is enabled too. Its blocker was "the .spec needs further
+# debugging", which turned out to be two package names that no Fedora repo
+# has: `BuildRequires: rust-toolchain` (Fedora ships `rust`) and
+# `Requires: %{_lib}gcc`, which expands to `lib64gcc` on x86_64 — a
+# Mandriva-ism, so the built rpm could not install. The spec also never
+# declared the -devel packages Fedora splits out and Arch does not.
 #
 # `workflow_dispatch` with `dry_run: true` runs the whole matrix and
 # publishes nothing, which is how a newly-enabled cell gets exercised
@@ -112,6 +114,13 @@ jobs:
             container: debian:12
             lint: dpkg-checkbuilddeps
             build: dpkg-buildpackage
+          # --- Fedora 41 ---
+          - distro: fedora41
+            arch: x86_64
+            runner: ubuntu-latest
+            container: fedora:41
+            lint: rpmlint
+            build: rpmbuild
     steps:
       - uses: actions/checkout@v5
 
