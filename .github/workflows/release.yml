@@ -189,9 +189,18 @@ jobs:
                   { echo "::error::onnxruntime not installable on Fedora — release blocked"; exit 1; }
                 ;;
             esac
-            # Verify it actually loads.
-            python3 -c "import ctypes; ctypes.CDLL('libonnxruntime.so.1')" || \
-              { echo "::error::onnxruntime shared lib not loadable — release blocked"; exit 1; }
+            # Verify it actually loads — without assuming a soname. This
+            # hardcoded `libonnxruntime.so.1`, which is what Arch ships;
+            # Fedora 41 installs onnxruntime 1.17.3 and has no such file, so
+            # the gate failed on a distro where the library was present and
+            # fine. Ask the linker cache what is actually there.
+            lib="$(ldconfig -p | awk '/libonnxruntime\.so/ {print $NF; exit}')"
+            [ -n "$lib" ] || {
+              echo "::error::onnxruntime is installed but no libonnxruntime.so* is in the linker cache — release blocked"
+              exit 1; }
+            python3 -c "import ctypes, sys; ctypes.CDLL(sys.argv[1])" "$lib" || \
+              { echo "::error::$lib is not loadable — release blocked"; exit 1; }
+            echo "::notice::onnxruntime loadable: $lib"
 
       # --- Create source tarball + model archive (needed by all distro builds) ---
       - name: Create source tarball, fetch model archive

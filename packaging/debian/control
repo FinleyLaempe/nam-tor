@@ -1,4 +1,8 @@
-SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# `#` is a comment in deb822; as a bare field this produced
+# "dpkg-source: warning: unknown information field 'Spdx-License-Identifier'"
+# on every build.
 Source: namtor
 Section: admin
 Priority: optional
@@ -10,16 +14,16 @@ Build-Depends:
     python3 (>= 3.11),
     dh-cargo,
     libpam0g-dev,
+    libgtk-4-dev,
+    libadwaita-1-dev,
 Standards-Version: 4.7.0
 Homepage: https://github.com/namtor/nam-tor
 Rules-Requires-Root: binary-targets
 Vcs-Git: https://github.com/namtor/nam-tor.git
 Vcs-Browser: https://github.com/namtor/nam-tor
-License: GPL-3.0-only and Apache-2.0 and MIT
 
 Package: namtor
 Architecture: amd64 arm64
-License: GPL-3.0-only and Apache-2.0 and MIT
 Depends:
     ${misc:Depends},
     ${shlibs:Depends},
@@ -51,7 +55,6 @@ Description: IR face authentication for Linux — daemon, PAM module, CLI
 
 Package: namtor-ui
 Architecture: amd64 arm64
-License: GPL-3.0-only
 Depends:
     ${misc:Depends},
     ${shlibs:Depends},
