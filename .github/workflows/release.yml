@@ -216,6 +216,29 @@ jobs:
             cd /tmp
             sha256sum "namtor-$PKGVER.tar.gz" "namtor-models-$MODELVER.tar.gz"
 
+      # --- Do the weights we are about to ship actually infer? ---
+      # The gate above proves onnxruntime loads; it says nothing about the
+      # model files. A YuNet export whose input shape the runtime refuses
+      # would build, package, sign and install cleanly, and fail for the
+      # first person who pressed "Scan my face". These tests load the real
+      # weights out of the archive being shipped and run tensors through
+      # them. They skip themselves when NAMTOR_MODELS_DIR is unset, so they
+      # stay silent in CI, where the weights are absent by design.
+      # Skipped on debian12 for the same reason as the runtime gate above.
+      - name: Verify the shipped model weights infer (release blocker)
+        if: matrix.distro != 'debian12'
+        run: |
+            set -e
+            mkdir -p /tmp/modelcheck
+            tar -xzf "/tmp/namtor-models-$MODELVER.tar.gz" -C /tmp/modelcheck
+            models="$(dirname "$(find /tmp/modelcheck -name yunet_2023mar.onnx | head -1)")"
+            [ -n "$models" ] || {
+              echo "::error::model archive contains no yunet_2023mar.onnx"; exit 1; }
+            cd "$GITHUB_WORKSPACE"
+            NAMTOR_MODELS_DIR="$models" \
+              cargo test -p namtor-recog --test real_models_infer -- --ignored --test-threads=1 || {
+              echo "::error::the shipped ONNX weights do not infer — release blocked"; exit 1; }
+
       # --- Build the package from source ---
       - name: Build Arch package (makepkg)
         if: matrix.distro == 'arch'

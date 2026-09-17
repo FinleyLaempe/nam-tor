@@ -40,6 +40,38 @@ pub struct FaceDetector {
     input_size: (u32, u32),
 }
 
+/// Rejects a detector whose `input_size` the model will not accept.
+///
+/// The backend builds its tensor from the model's own declared input shape,
+/// not from `input_size`; `input_size` only decides how the frame is
+/// letterboxed. When the two disagree the mismatch surfaces on the first
+/// frame as `tensor: Cannot create a tensor from raw data; shape
+/// [1, 3, 640, 640] ... is different from the length of the data provided`,
+/// which names neither the model nor the setting that is wrong. A model with
+/// a dynamic (0) spatial dim accepts whatever it is given and is left alone.
+fn check_input_size(
+    model_shape: &[u64],
+    input_size: (u32, u32),
+    model_path: &std::path::Path,
+) -> Result<(), WorkerError> {
+    // NCHW: [batch, channels, height, width].
+    let (Some(&h), Some(&w)) = (model_shape.get(2), model_shape.get(3)) else {
+        return Ok(());
+    };
+    if h == 0 || w == 0 {
+        return Ok(());
+    }
+    let (want_w, want_h) = (input_size.0 as u64, input_size.1 as u64);
+    if (w, h) == (want_w, want_h) {
+        return Ok(());
+    }
+    Err(WorkerError::Infer(format!(
+        "{} expects {w}x{h} input but the detector was built for {want_w}x{want_h}; \
+         they must match or every frame fails at inference",
+        model_path.display()
+    )))
+}
+
 impl FaceDetector {
     pub fn new(model_path: &std::path::Path, input_size: (u32, u32)) -> Result<Self, WorkerError> {
         let mut backend = namtor_worker::infer_onnx::OnnxCpu::new(1);
@@ -49,6 +81,7 @@ impl FaceDetector {
             sha256: [0; 32],
         };
         let loaded = backend.load_file(model_path, &spec)?;
+        check_input_size(&loaded.input_shape, input_size, model_path)?;
         Ok(Self {
             backend,
             loaded,
