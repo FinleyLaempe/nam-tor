@@ -111,8 +111,21 @@ for d in $evidence_distros; do
         fail "evidence job publishes results for '$d', which is not in the build matrix"
     fi
 done
+# And the other direction: a matrix cell missing from the evidence list
+# publishes a file saying a platform went untested when it was built,
+# installed, upgraded and uninstalled. That is the same evidence file being
+# wrong, just in the direction that under-claims. The original check was
+# written for the over-claiming case and let the matrix grow past it.
+for d in $matrix_distros; do
+    if ! printf '%s\n' $evidence_distros | grep_all -x "$d"; then
+        fail "build matrix has cell '$d' but the evidence job never records it"
+    fi
+done
 if [ -z "$evidence_distros" ]; then
     fail "could not parse the evidence cell list in $R — this gate would be vacuous"
+fi
+if [ -z "$matrix_distros" ]; then
+    fail "could not parse the build matrix in $R — this gate would be vacuous"
 fi
 
 # --- P3: retired action majors ---------------------------------------------

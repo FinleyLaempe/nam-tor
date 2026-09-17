@@ -465,13 +465,23 @@ jobs:
             python3 - <<'PY'
             import json, os
             from datetime import datetime, timezone
-            # MUST mirror the build matrix above. Listing a cell that is
-            # not in the matrix publishes a "pass" for a platform nobody
-            # tested — a release-integrity defect, not a cosmetic one.
-            # Enforced by packaging/tests/test_workflow_lint.sh, which
-            # cross-checks this list against the `- distro:` matrix entries.
+            # MUST mirror the build matrix above, in both directions.
+            # Listing a cell that is not in the matrix publishes a "pass" for
+            # a platform nobody tested — a release-integrity defect, not a
+            # cosmetic one. Omitting one that IS in the matrix publishes
+            # evidence saying a platform went untested when it did not, which
+            # is the same file being wrong the other way round. Both
+            # directions are enforced by
+            # packaging/tests/test_workflow_lint.sh.
+            #
+            # This job is `needs: build`, and `fail-fast: false` means a
+            # failed cell leaves that dependency unsatisfied, so evidence is
+            # skipped entirely rather than recording a pass for a cell that
+            # did not pass.
             cells = [
                 ("arch", "x86_64"),
+                ("debian12", "amd64"),
+                ("fedora41", "x86_64"),
             ]
             results = []
             for distro, arch in cells:
