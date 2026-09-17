@@ -42,30 +42,18 @@ pub fn measure_open_cost(node: &Path) -> Result<Duration, CaptureError> {
     use crate::v4l2::{V4l2Stream, V4L2_PIX_FMT_GREY};
 
     let started = Instant::now();
-    let mut stream = V4l2Stream::open(node).map_err(|e| CaptureError::Device(e.to_string()))?;
+    let mut stream = V4l2Stream::open(node).map_err(CaptureError::from)?;
     stream
         .negotiate_format(640, 360, V4L2_PIX_FMT_GREY)
-        .map_err(|e| CaptureError::Device(e.to_string()))?;
-    let n = stream
-        .request_buffers(4)
-        .map_err(|e| CaptureError::Device(e.to_string()))?;
-    stream
-        .mmap_buffers()
-        .map_err(|e| CaptureError::Device(e.to_string()))?;
+        .map_err(CaptureError::from)?;
+    let n = stream.request_buffers(4).map_err(CaptureError::from)?;
+    stream.mmap_buffers().map_err(CaptureError::from)?;
     for i in 0..n {
-        stream
-            .requeue(i as usize)
-            .map_err(|e| CaptureError::Device(e.to_string()))?;
+        stream.requeue(i as usize).map_err(CaptureError::from)?;
     }
-    stream
-        .streamon()
-        .map_err(|e| CaptureError::Device(e.to_string()))?;
-    let _ = stream
-        .dequeue()
-        .map_err(|e| CaptureError::Device(e.to_string()))?;
-    stream
-        .streamoff()
-        .map_err(|e| CaptureError::Device(e.to_string()))?;
+    stream.streamon().map_err(CaptureError::from)?;
+    let _ = stream.dequeue().map_err(CaptureError::from)?;
+    stream.streamoff().map_err(CaptureError::from)?;
     Ok(started.elapsed())
 }
 

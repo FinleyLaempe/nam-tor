@@ -37,14 +37,22 @@ enum Command {
     /// Save (commit) / Resume (continue capture) / Discard (cancel). SIGINT
     /// discards cleanly.
     Enroll {
-        #[arg(long)]
+        /// Directory holding the ONNX models. `--old` only: on the v3 path
+        /// the daemon owns the models.
+        #[arg(long, requires = "old")]
         models_dir: Option<PathBuf>,
-        #[arg(long)]
+        /// Directory the encrypted templates are written to. `--old` only.
+        #[arg(long, requires = "old")]
         templates_dir: Option<PathBuf>,
-        #[arg(long)]
+        /// Path to the template encryption key. `--old` only.
+        #[arg(long, requires = "old")]
         key_path: Option<PathBuf>,
-        #[arg(long)]
+        /// IR camera node to capture from. `--old` only: on the v3 path the
+        /// daemon selects the camera from its own inventory, so accepting
+        /// this flag there would silently capture from a different device.
+        #[arg(long, requires = "old")]
         device: Option<String>,
+        /// Enroll another user instead of yourself (requires root).
         #[arg(long)]
         user: Option<String>,
         /// Use the v1 local capture-and-store flow instead of the v3 daemon
@@ -211,5 +219,61 @@ fn cmd_diagnostics(out_dir: Option<PathBuf>) -> ExitCode {
             eprintln!("diagnostics: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod arg_gating_tests {
+    use super::Cli;
+    use clap::Parser;
+
+    /// `--models-dir`, `--templates-dir`, `--key-path` and `--device` only
+    /// reach the v1 local flow; the v3 lifecycle takes its models, store and
+    /// camera from the daemon. Accepting them on the default path meant a
+    /// user who passed `--device /dev/video2` was silently captured from
+    /// whichever camera the daemon picked. Requiring `--old` makes clap say
+    /// so instead.
+    #[test]
+    fn local_flow_options_are_refused_without_old() {
+        for flag in [
+            ["--models-dir", "/tmp/m"],
+            ["--templates-dir", "/tmp/t"],
+            ["--key-path", "/tmp/k"],
+            ["--device", "/dev/video2"],
+        ] {
+            let argv = vec!["namtor cli", "enroll", flag[0], flag[1]];
+            let err = Cli::try_parse_from(argv).expect_err(&format!(
+                "{} must not be silently ignored on the v3 path",
+                flag[0]
+            ));
+            let msg = err.to_string();
+            assert!(msg.contains("--old"), "{}: {msg}", flag[0]);
+        }
+    }
+
+    /// With `--old` they are exactly the options the local flow needs.
+    #[test]
+    fn local_flow_options_are_accepted_with_old() {
+        Cli::try_parse_from([
+            "namtor cli",
+            "enroll",
+            "--old",
+            "--models-dir",
+            "/tmp/m",
+            "--templates-dir",
+            "/tmp/t",
+            "--key-path",
+            "/tmp/k",
+            "--device",
+            "/dev/video2",
+        ])
+        .expect("the local flow still takes its own paths");
+    }
+
+    /// `--user` works on both paths and must not have been swept up.
+    #[test]
+    fn user_still_works_on_the_default_path() {
+        Cli::try_parse_from(["namtor cli", "enroll", "--user", "alice"])
+            .expect("--user is valid on the v3 path");
     }
 }

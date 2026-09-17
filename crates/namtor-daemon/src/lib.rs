@@ -48,4 +48,10 @@ pub enum DaemonError {
     Io(#[from] std::io::Error),
     #[error("capture error: {0}")]
     Capture(String),
+    /// A camera is present but another program holds it. Distinct from
+    /// [`DaemonError::Capture`] so the enrollment surfaces can offer a
+    /// remedy instead of quoting an ioctl name — this is the most common way
+    /// capture fails on a machine that is otherwise working.
+    #[error("camera is busy: {0}")]
+    CameraBusy(String),
 }

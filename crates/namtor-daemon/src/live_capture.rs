@@ -17,6 +17,17 @@ use namtor_camera::watchdog::force_off_lib;
 use namtor_capture::source::CaptureSource;
 use namtor_hwdb::quirks::EmitterCfg;
 
+/// Keeps "another program has the camera" typed on its way out of the
+/// capture layer. Everything else flattens to [`DaemonError::Capture`].
+fn capture_err(e: namtor_capture::source::CaptureError) -> crate::DaemonError {
+    match e {
+        namtor_capture::source::CaptureError::Busy(detail) => {
+            crate::DaemonError::CameraBusy(detail)
+        }
+        other => crate::DaemonError::Capture(other.to_string()),
+    }
+}
+
 pub fn factory_with_configured(configured: Option<String>) -> CaptureFactory {
     factory_with_inventory(Box::new(SysfsInventory::default()), configured, None)
 }
@@ -81,7 +92,7 @@ fn open_selected_camera(
         cam.width,
         cam.height,
     )
-    .map_err(|e| crate::DaemonError::Capture(e.to_string()))?;
+    .map_err(capture_err)?;
     let caps = namtor_capture::source::SourceCaps {
         spectrum: namtor_capture::source::Spectrum::Ir,
         format: namtor_capture::frame::PixFmt::Grey8,
@@ -92,9 +103,7 @@ fn open_selected_camera(
     };
     let mut source =
         namtor_capture::ir_uvc::IrUvc::new(streamer, namtor_capture::ir_uvc::ParityPolicy, caps);
-    source
-        .start()
-        .map_err(|e| crate::DaemonError::Capture(e.to_string()))?;
+    source.start().map_err(capture_err)?;
     Ok(Box::new(EmitterSource {
         source,
         _emitter: emitter,

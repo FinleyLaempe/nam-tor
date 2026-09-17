@@ -686,6 +686,10 @@ pub enum EnrollmentError {
     Daemon(String),
     /// The reply tuple was malformed and could not be deserialised.
     MalformedTuple(String),
+    /// The daemon could not open the camera because another program holds
+    /// it. Carries no D-Bus jargon: this is the one enrollment failure an
+    /// operator can fix, and the message says how.
+    CameraBusy(String),
 }
 
 impl std::fmt::Display for EnrollmentError {
@@ -696,6 +700,14 @@ impl std::fmt::Display for EnrollmentError {
             EnrollmentError::MalformedTuple(m) => {
                 write!(f, "enrollment malformed v3 tuple: {m}")
             }
+            EnrollmentError::CameraBusy(detail) => write!(
+                f,
+                "the camera is in use by another program.\n  \
+                 Close whatever is using it — a video call, a camera app, or another\n  \
+                 enrollment — and try again.\n  \
+                 `fuser -v /dev/video*` names the program holding it.\n  \
+                 Technical detail: {detail}"
+            ),
         }
     }
 }
@@ -1135,6 +1147,11 @@ impl DbusEnrollmentServiceV3 {
             {
                 EnrollmentError::Transport(msg)
             }
+            zbus::Error::MethodError(ref name, ref detail, _)
+                if name.as_str() == "org.namtor.Error.CameraBusy" =>
+            {
+                EnrollmentError::CameraBusy(detail.clone().unwrap_or_else(|| "EBUSY".to_string()))
+            }
             _ => EnrollmentError::Daemon(msg),
         }
     }
@@ -1190,6 +1207,57 @@ impl EnrollmentServiceV3 for DbusEnrollmentServiceV3 {
         } else {
             None
         })
+    }
+}
+
+#[cfg(test)]
+mod busy_camera_tests {
+    use super::{DbusEnrollmentServiceV3, EnrollmentError};
+
+    fn method_error(name: &str, detail: &str) -> zbus::Error {
+        zbus::Error::MethodError(
+            zbus::names::OwnedErrorName::try_from(name.to_string()).expect("error name"),
+            Some(detail.to_string()),
+            zbus::message::Message::method_call("/org/namtor/Manager3", "Ping")
+                .expect("builder")
+                .destination("org.namtor.Manager3")
+                .expect("destination")
+                .interface("org.namtor.Manager3")
+                .expect("interface")
+                .build(&())
+                .expect("message"),
+        )
+    }
+
+    /// The daemon now raises its own error name for a busy camera. If the
+    /// CLI kept folding it into `Daemon`, the terminal would still print
+    /// `enrollment daemon error: org.namtor.Error.CameraBusy: ...` — the D-Bus
+    /// name is not a remedy.
+    #[test]
+    fn a_busy_camera_is_classified_and_explained() {
+        let e = DbusEnrollmentServiceV3::classify_error(method_error(
+            "org.namtor.Error.CameraBusy",
+            "in use by another program (V4L2 VIDIOC_S_FMT returned EBUSY)",
+        ));
+        assert!(matches!(e, EnrollmentError::CameraBusy(_)), "{e:?}");
+        let msg = e.to_string();
+        assert!(msg.contains("in use by another program"), "{msg}");
+        assert!(msg.contains("fuser"), "{msg}");
+        assert!(
+            !msg.contains("org.namtor.Error"),
+            "a D-Bus error name is not a remedy: {msg}"
+        );
+    }
+
+    /// Other daemon errors keep the generic wording — there is nothing
+    /// specific to advise.
+    #[test]
+    fn other_daemon_errors_are_unchanged() {
+        let e = DbusEnrollmentServiceV3::classify_error(method_error(
+            "org.namtor.Error.State",
+            "capture source: no IR camera found",
+        ));
+        assert!(matches!(e, EnrollmentError::Daemon(_)), "{e:?}");
     }
 }
 

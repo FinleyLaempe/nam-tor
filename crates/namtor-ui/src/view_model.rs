@@ -104,6 +104,15 @@ impl RecoveryHint {
                     format!("Polkit detail: {detail}"),
                 ],
             }),
+            crate::client::ManagerError::CameraBusy(detail) => Some(Self {
+                title: "Another program is using the camera".into(),
+                steps: vec![
+                    "Close any video call, camera app, or recorder that has the camera open".into(),
+                    "Find what is holding it: fuser -v /dev/video*".into(),
+                    "Then press Try Again".into(),
+                    format!("Technical detail: {detail}"),
+                ],
+            }),
             _ => None,
         }
     }

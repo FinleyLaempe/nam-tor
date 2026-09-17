@@ -369,6 +369,10 @@ pub enum ManagerError {
     /// `org.namtor.Error.IncompatibleVersion` — version negotiation failed.
     #[error("incompatible version: {0}")]
     IncompatibleVersion(String),
+    /// `org.namtor.Error.CameraBusy` — a camera is present but another
+    /// program holds it. Its own variant so the UI can show a remedy.
+    #[error("camera is busy: {0}")]
+    CameraBusy(String),
     /// v2: `org.namtor.Error.Unsupported` — PAM service is unsupported.
     #[error("unsupported: {0}")]
     Unsupported(String),

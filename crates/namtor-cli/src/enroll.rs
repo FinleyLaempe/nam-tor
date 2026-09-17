@@ -453,6 +453,29 @@ fn metadata_dev_for(dev: &str) -> Option<String> {
     }
 }
 
+/// Turns a capture failure into something the operator can act on.
+///
+/// A camera held by another program is the most common way enrollment fails
+/// on a working machine, and the kernel's own words for it — "ioctl failed:
+/// VIDIOC_S_FMT: EBUSY: Device or resource busy" — name an ioctl rather than
+/// a remedy. `CaptureError::Busy` is typed, so this says what to close and
+/// how to find out what is holding the node.
+fn describe_capture_error(
+    dev: &str,
+    stage: &str,
+    e: namtor_capture::source::CaptureError,
+) -> String {
+    match e {
+        namtor_capture::source::CaptureError::Busy(_) => format!(
+            "the IR camera {dev} is in use by another program.\n  \
+             Close whatever is using it — a video call, a camera app, or a running\n  \
+             namtor daemon (`systemctl stop namtor`) — and try again.\n  \
+             `fuser -v {dev}` names the program holding it."
+        ),
+        other => format!("{stage} {dev}: {other}"),
+    }
+}
+
 fn capture_enrollment_frames(device: Option<&str>) -> Result<Vec<CapturedFrame>, String> {
     let dev = match device {
         Some(d) => d.to_string(),
@@ -501,7 +524,7 @@ fn capture_enrollment_frames(device: Option<&str>) -> Result<Vec<CapturedFrame>,
         width,
         height,
     )
-    .map_err(|e| format!("open {dev}: {e}"))?;
+    .map_err(|e| describe_capture_error(&dev, "open", e))?;
 
     let caps = namtor_capture::source::SourceCaps {
         spectrum: namtor_capture::source::Spectrum::Ir,
@@ -513,7 +536,9 @@ fn capture_enrollment_frames(device: Option<&str>) -> Result<Vec<CapturedFrame>,
     };
 
     let mut source = IrUvc::new(streamer, ParityPolicy, caps);
-    source.start().map_err(|e| format!("start: {e}"))?;
+    source
+        .start()
+        .map_err(|e| describe_capture_error(&dev, "start", e))?;
 
     // Discard the first few frames while the strobe settles (~6 ms, but
     // the AE loop takes ~1 s / 15 pairs to stabilise per the quirk DB).
@@ -657,6 +682,38 @@ fn activate_emitter(dev: &str, vid_pid: &str) -> Result<EmitterGuard, String> {
 
 #[cfg(test)]
 mod tests {
+    /// The busy case is the one an operator can actually fix, so the message
+    /// has to name the device, say what to close, and hand over a command
+    /// that identifies the holder. A bare errno does none of that.
+    #[test]
+    fn a_busy_camera_tells_the_operator_what_to_do() {
+        let msg = super::describe_capture_error(
+            "/dev/video2",
+            "open",
+            namtor_capture::source::CaptureError::Busy("VIDIOC_S_FMT".into()),
+        );
+        assert!(msg.contains("/dev/video2"), "{msg}");
+        assert!(msg.contains("in use by another program"), "{msg}");
+        assert!(msg.contains("fuser"), "{msg}");
+        assert!(
+            !msg.contains("VIDIOC_S_FMT"),
+            "an ioctl name is not a remedy: {msg}"
+        );
+    }
+
+    /// Everything else keeps the stage and the underlying words — there is
+    /// no remedy to offer, so inventing one would be worse than the detail.
+    #[test]
+    fn other_capture_failures_keep_the_stage_and_the_detail() {
+        let msg = super::describe_capture_error(
+            "/dev/video2",
+            "start",
+            namtor_capture::source::CaptureError::Device("VIDIOC_STREAMON: ENODEV".into()),
+        );
+        assert!(msg.starts_with("start /dev/video2:"), "{msg}");
+        assert!(msg.contains("ENODEV"), "{msg}");
+    }
+
     use super::*;
     use std::path::PathBuf;
 

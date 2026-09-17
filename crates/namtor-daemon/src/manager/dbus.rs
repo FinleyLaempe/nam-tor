@@ -289,6 +289,10 @@ pub enum Manager3DBusError {
     SessionBusy(String),
     SessionNotFound(String),
     IncompatibleVersion(String),
+    /// A camera is present but another program holds it. Its own wire name so
+    /// clients can offer a remedy without parsing English out of a State
+    /// error.
+    CameraBusy(String),
 }
 
 /// v3 API-level error.
@@ -308,6 +312,8 @@ pub enum Manager3ApiError {
     SessionNotFound(String),
     #[error("incompatible version: requested {requested}, supported {supported}")]
     IncompatibleVersion { requested: u32, supported: u32 },
+    #[error("camera is busy: {0}")]
+    CameraBusy(String),
 }
 
 impl From<Manager3ApiError> for Manager3DBusError {
@@ -323,6 +329,7 @@ impl From<Manager3ApiError> for Manager3DBusError {
                 requested,
                 supported,
             } => Self::IncompatibleVersion(format!("requested {requested}, supported {supported}")),
+            Manager3ApiError::CameraBusy(s) => Self::CameraBusy(s),
         }
     }
 }
@@ -450,9 +457,13 @@ impl<P: PolkitAuthority> Manager3Service<P> {
     ) -> Result<(Option<Box<dyn CaptureSource>>, Option<Box<dyn EmbedSource>>), Manager3ApiError>
     {
         let capture = match self.capture_factory.as_ref() {
-            Some(f) => Some(
-                lock(f)().map_err(|e| Manager3ApiError::State(format!("capture source: {e}")))?,
-            ),
+            Some(f) => Some(lock(f)().map_err(|e| match e {
+                // A busy camera is the one capture failure the user can fix,
+                // so it keeps its own error name all the way to the client
+                // rather than being folded into a generic State error.
+                crate::DaemonError::CameraBusy(detail) => Manager3ApiError::CameraBusy(detail),
+                other => Manager3ApiError::State(format!("capture source: {other}")),
+            })?),
             None => None,
         };
         let embed = match self.embed_factory.as_ref() {
@@ -1785,6 +1796,47 @@ mod tests {
             "unexpected error {err:?}"
         );
         // The failed start must not have left a session behind.
+        assert!(svc.start_enrollment(&peer(0), 0, "alice").is_err());
+    }
+
+    /// A camera held by another program must not arrive as a generic
+    /// "Operation failed". It is the one capture failure the user can act
+    /// on, so it keeps its own error name out to the client.
+    #[test]
+    fn v3_start_enrollment_reports_a_busy_camera_as_its_own_condition() {
+        let store: Arc<dyn ProfileStore> = Arc::new(NullProfileStore);
+        let svc = Manager3Service::new_with_capture(
+            StubPolkit,
+            store,
+            Box::new(|| {
+                Err(crate::DaemonError::CameraBusy(
+                    "in use by another program (V4L2 VIDIOC_S_FMT returned EBUSY)".into(),
+                ))
+            }),
+            Box::new(|| {
+                Ok(Box::new(crate::manager::session::MockEmbedSource::new(8))
+                    as Box<dyn crate::manager::session::EmbedSource>)
+            }),
+        );
+        let err = svc.start_enrollment(&peer(0), 0, "alice").unwrap_err();
+        assert!(
+            matches!(err, Manager3ApiError::CameraBusy(ref m) if m.contains("EBUSY")),
+            "unexpected error {err:?}"
+        );
+        // And it must survive the hop onto the wire as a distinct name.
+        let wire: Manager3DBusError = err.into();
+        assert!(
+            matches!(wire, Manager3DBusError::CameraBusy(_)),
+            "unexpected wire error {wire:?}"
+        );
+        // The literal name the clients switch on. Renaming the variant
+        // renames the wire error, which would silently drop every client
+        // back to a generic failure.
+        assert_eq!(
+            zbus::DBusError::name(&wire).as_str(),
+            "org.namtor.Error.CameraBusy"
+        );
+        // A failed start still leaves no session behind.
         assert!(svc.start_enrollment(&peer(0), 0, "alice").is_err());
     }
 

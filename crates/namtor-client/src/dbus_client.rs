@@ -169,6 +169,7 @@ fn map_zbus_error(e: zbus::Error) -> ManagerError {
                 "org.namtor.Error.SessionBusy" => ManagerError::SessionBusy(detail),
                 "org.namtor.Error.State" => ManagerError::State(detail),
                 "org.namtor.Error.IncompatibleVersion" => ManagerError::IncompatibleVersion(detail),
+                "org.namtor.Error.CameraBusy" => ManagerError::CameraBusy(detail),
                 "org.namtor.Error.Unsupported" => ManagerError::Unsupported(detail),
                 "org.namtor.Error.Rollback" => ManagerError::Rollback(detail),
                 "org.namtor.Error.Conflict" => ManagerError::Conflict(detail),

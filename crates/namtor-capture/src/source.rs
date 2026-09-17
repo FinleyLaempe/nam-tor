@@ -31,6 +31,12 @@ pub enum CaptureError {
     NotStarted,
     #[error("device error: {0}")]
     Device(String),
+    /// The device exists and opened, but the driver refused to hand over the
+    /// stream because another program already holds it. Kept distinct from
+    /// [`CaptureError::Device`] so callers can say "close the other app"
+    /// instead of quoting an ioctl name at the user.
+    #[error("camera is busy: {0}")]
+    Busy(String),
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
     #[error("malformed recording: {0}")]

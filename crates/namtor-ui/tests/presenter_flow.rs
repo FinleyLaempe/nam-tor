@@ -1205,6 +1205,53 @@ fn daemon_down_error_carries_actionable_recovery_steps() {
     );
 }
 
+/// A camera held by another program is the most common way enrollment fails
+/// on a working machine. Before this it reached the screen as
+/// "Operation failed" over a nested chain ending in an ioctl name, and
+/// `RecoveryHint::for_error` returned `None`, so the "How to fix this" group
+/// did not render at all — the one failure the user can actually fix was the
+/// one the UI explained least.
+#[test]
+fn a_busy_camera_is_named_and_carries_recovery_steps() {
+    let client = Arc::new(FakeManagerClient::new());
+    client.set_mode(Mode::CameraBusy(
+        "in use by another program (V4L2 VIDIOC_S_FMT returned EBUSY)".into(),
+    ));
+    let mut p = namtor_ui::ProfilePresenter::from_arc(client, TEST_UID);
+
+    after(&mut p, |p| {
+        p.start_enrollment_v3("Ida Busy");
+    });
+
+    let err = p
+        .model()
+        .error
+        .as_ref()
+        .expect("a busy camera sets an error");
+    assert_eq!(
+        err.title, "Camera is busy",
+        "the busy camera must be named, not reported as a generic failure"
+    );
+    let recovery = err
+        .recovery
+        .as_ref()
+        .expect("a busy camera must carry recovery steps");
+    let steps = recovery.steps.join(" ");
+    assert!(
+        steps.contains("Close"),
+        "the first thing to do is close the other program: {steps}"
+    );
+    assert!(
+        steps.contains("fuser"),
+        "the user needs a way to find the holder: {steps}"
+    );
+    assert!(
+        !err.title.contains("VIDIOC"),
+        "an ioctl name is not a title: {}",
+        err.title
+    );
+}
+
 #[test]
 fn quality_view_shows_guidance_only_when_low() {
     // `QualityLabel::Low => show_guidance: true` was the mapping the old

@@ -36,6 +36,9 @@ pub enum Mode {
     PolkitDenied(String),
     /// Force progress to report `quality == Low`.
     LowDiversity,
+    /// `org.namtor.Error.CameraBusy` on every mutating call: a camera is
+    /// present but another program holds it.
+    CameraBusy(String),
 }
 
 #[derive(Debug, Clone)]
@@ -317,6 +320,7 @@ impl FakeManagerClient {
         match self.mode() {
             Mode::DaemonDown(msg) => Err(ManagerError::DaemonUnavailable(msg)),
             Mode::PolkitDenied(msg) => Err(ManagerError::Denied(msg)),
+            Mode::CameraBusy(msg) => Err(ManagerError::CameraBusy(msg)),
             Mode::Normal | Mode::LowDiversity => Ok(()),
         }
     }
@@ -324,7 +328,9 @@ impl FakeManagerClient {
     fn check_read(&self) -> ManagerResult<()> {
         match self.mode() {
             Mode::DaemonDown(msg) => Err(ManagerError::DaemonUnavailable(msg)),
-            Mode::Normal | Mode::PolkitDenied(_) | Mode::LowDiversity => Ok(()),
+            Mode::Normal | Mode::PolkitDenied(_) | Mode::LowDiversity | Mode::CameraBusy(_) => {
+                Ok(())
+            }
         }
     }
 }

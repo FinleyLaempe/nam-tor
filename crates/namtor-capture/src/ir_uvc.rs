@@ -243,7 +243,9 @@ impl Streamer for V4l2IrStream {
 }
 
 fn v4l2_err_to_capture(e: crate::v4l2::V4l2Error) -> CaptureError {
-    CaptureError::Device(e.to_string())
+    // `From<V4l2Error>` keeps EBUSY typed as `CaptureError::Busy`; everything
+    // else flattens to `Device`.
+    CaptureError::from(e)
 }
 
 #[cfg(test)]

@@ -39,6 +39,15 @@ pub enum V4l2Error {
     Io(#[from] std::io::Error),
     #[error("ioctl failed: {0}")]
     Ioctl(String),
+    /// The driver refused because another program already holds the stream.
+    /// EBUSY is the single most common real-world capture failure — a video
+    /// call, a camera app, or a second namtor process — so it gets its own
+    /// variant rather than being flattened into [`V4l2Error::Ioctl`]. The
+    /// text keeps the literal "EBUSY" token: the daemon's §8.3 classifier
+    /// (`namtor_daemon::verify::failure_of`) reads it out of the reason
+    /// string to raise `FailureReason::CameraBusy`.
+    #[error("camera is busy: in use by another program (V4L2 {0} returned EBUSY)")]
+    Busy(String),
     #[error("device {0} is not a character device")]
     NotCharDevice(String),
     #[error("negotiation refused the requested format")]
@@ -47,6 +56,29 @@ pub enum V4l2Error {
     NoBuffers,
     #[error("stream not started")]
     NotStreaming,
+}
+
+/// Classifies an ioctl failure: EBUSY becomes [`V4l2Error::Busy`], everything
+/// else keeps the ioctl name and errno.
+fn ioctl_err(op: &str, e: nix::errno::Errno) -> V4l2Error {
+    if e == nix::errno::Errno::EBUSY {
+        V4l2Error::Busy(op.to_string())
+    } else {
+        V4l2Error::Ioctl(format!("{op}: {e}"))
+    }
+}
+
+impl From<V4l2Error> for crate::source::CaptureError {
+    fn from(e: V4l2Error) -> Self {
+        match e {
+            // `CaptureError::Busy` already prefixes "camera is busy"; carry
+            // only the detail across so the two Displays do not stack.
+            V4l2Error::Busy(op) => crate::source::CaptureError::Busy(format!(
+                "in use by another program (V4L2 {op} returned EBUSY)"
+            )),
+            other => crate::source::CaptureError::Device(other.to_string()),
+        }
+    }
 }
 
 /// The negotiated image geometry for a buffer.
@@ -97,7 +129,13 @@ impl V4l2Stream {
             .read(true)
             .write(true)
             .open(path)
-            .map_err(V4l2Error::from)?;
+            .map_err(|e| {
+                if e.raw_os_error() == Some(nix::libc::EBUSY) {
+                    V4l2Error::Busy("open".into())
+                } else {
+                    V4l2Error::from(e)
+                }
+            })?;
         Ok(Self {
             file,
             buffers: Vec::new(),
@@ -125,7 +163,7 @@ impl V4l2Stream {
         // SAFETY: VIDIOC_S_FMT is _IOWR('V', 5, struct v4l2_format); `fmt` is
         // a fully-owned stack value of the matching type.
         unsafe { vidioc_s_fmt(self.file.as_raw_fd(), &mut fmt) }
-            .map_err(|e| V4l2Error::Ioctl(format!("VIDIOC_S_FMT: {e}")))?;
+            .map_err(|e| ioctl_err("VIDIOC_S_FMT", e))?;
 
         let negotiated = V4l2Format {
             width: fmt.fmt.pix.width,
@@ -176,7 +214,7 @@ impl V4l2Stream {
 
         // SAFETY: VIDIOC_REQBUFS is _IOWR('V', 8, struct v4l2_requestbuffers).
         unsafe { vidioc_reqbufs(self.file.as_raw_fd(), &mut rb) }
-            .map_err(|e| V4l2Error::Ioctl(format!("VIDIOC_REQBUFS: {e}")))?;
+            .map_err(|e| ioctl_err("VIDIOC_REQBUFS", e))?;
 
         self.buffers = (0..rb.count).map(|_| None).collect();
         Ok(rb.count)
@@ -254,7 +292,7 @@ impl V4l2Stream {
         // SAFETY: VIDIOC_STREAMON is _IOW('V', 18, int); `ty` is the buffer
         // type passed by value through the ioctl.
         unsafe { vidioc_streamon(self.file.as_raw_fd(), &ty) }
-            .map_err(|e| V4l2Error::Ioctl(format!("VIDIOC_STREAMON: {e}")))?;
+            .map_err(|e| ioctl_err("VIDIOC_STREAMON", e))?;
         self.started = true;
         Ok(())
     }
@@ -495,6 +533,56 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// EBUSY from any ioctl is the "another program has the camera" case and
+    /// must not be flattened into a generic ioctl failure — the whole point
+    /// of the variant is that callers can offer a remedy.
+    #[test]
+    fn ebusy_from_an_ioctl_is_classified_as_busy() {
+        let e = ioctl_err("VIDIOC_S_FMT", nix::errno::Errno::EBUSY);
+        assert!(
+            matches!(e, V4l2Error::Busy(ref op) if op == "VIDIOC_S_FMT"),
+            "{e:?}"
+        );
+    }
+
+    /// Any other errno keeps the ioctl name and the errno, because those are
+    /// the only useful facts about it.
+    #[test]
+    fn other_errnos_keep_the_ioctl_name_and_errno() {
+        let e = ioctl_err("VIDIOC_S_FMT", nix::errno::Errno::EINVAL);
+        let msg = e.to_string();
+        assert!(matches!(e, V4l2Error::Ioctl(_)), "{e:?}");
+        assert!(msg.contains("VIDIOC_S_FMT"), "{msg}");
+        assert!(msg.contains("EINVAL"), "{msg}");
+    }
+
+    /// Two Displays that both say "camera is busy" would stack into
+    /// "camera is busy: camera is busy: ...". Every surface but the CLI
+    /// stringifies this error, so the doubling would be what users read.
+    #[test]
+    fn the_busy_prefix_is_not_said_twice() {
+        let e: crate::source::CaptureError = V4l2Error::Busy("VIDIOC_S_FMT".into()).into();
+        let msg = e.to_string();
+        assert_eq!(
+            msg.matches("camera is busy").count(),
+            1,
+            "prefix stacked: {msg}"
+        );
+        assert!(msg.contains("EBUSY"), "{msg}");
+    }
+
+    /// The daemon's §8.3 classifier looks for the EBUSY token in this text.
+    /// Rewording it without updating
+    /// `namtor_daemon::verify::failure_of` would silently downgrade a busy
+    /// camera to a nameless "unavailable".
+    #[test]
+    fn the_busy_message_names_the_condition_the_classifier_reads() {
+        let msg = V4l2Error::Busy("VIDIOC_STREAMON".into()).to_string();
+        let lower = msg.to_ascii_lowercase();
+        assert!(lower.contains("busy"), "{msg}");
+        assert!(lower.contains("ebusy"), "{msg}");
+    }
 
     #[test]
     fn v4l2_pix_fmt_grey_is_grey_fourcc() {

@@ -1078,6 +1078,10 @@ impl<C: ManagerClient> ProfilePresenter<C> {
             ManagerError::SessionNotFound(_) => "Session not found".into(),
             ManagerError::SessionBusy(_) => "Session busy".into(),
             ManagerError::State(_) => "Operation failed".into(),
+            // Same wording as the PAM surface (§8.3 `FailureReason::CameraBusy`)
+            // so the phrase a user learns at the lock screen is the phrase
+            // they meet in Settings.
+            ManagerError::CameraBusy(_) => "Camera is busy".into(),
             ManagerError::IncompatibleVersion(_) => "Version mismatch".into(),
             ManagerError::Unsupported(_) => "Unsupported".into(),
             ManagerError::Rollback(_) => "Rollback".into(),
