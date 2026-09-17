@@ -1527,7 +1527,7 @@ dependencies = [
 
 [[package]]
 name = "namtor"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "namtor-camera",
  "namtor-capture",
@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-camera"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "namtor-capture",
  "namtor-hwdb",
@@ -1557,7 +1557,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-capture"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "nix",
  "serde",
@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-cli"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "clap",
  "namtor-camera",
@@ -1594,7 +1594,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-client"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "namtor-proto",
  "serde",
@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-collect"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "namtor-capture",
  "namtor-pad",
@@ -1618,7 +1618,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-daemon"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "libc",
  "namtor-camera",
@@ -1651,7 +1651,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-eval"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-hwdb"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "namtor-uvc",
  "serde",
@@ -1672,7 +1672,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-layout"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "serde",
  "tempfile",
@@ -1681,7 +1681,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-pad"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -1691,7 +1691,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-pam"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "libc",
  "namtor-daemon",
@@ -1704,7 +1704,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-pam-config"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "libc",
  "serde",
@@ -1715,7 +1715,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-probe"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "clap",
  "namtor-capture",
@@ -1729,7 +1729,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-proto"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "namtor-capture",
  "serde",
@@ -1739,7 +1739,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-recog"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "namtor-capture",
  "namtor-proto",
@@ -1753,7 +1753,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-store"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -1771,7 +1771,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-ui"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "gettext",
  "gio",
@@ -1792,7 +1792,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-uvc"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "namtor-capture",
  "nix",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "namtor-worker"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "landlock",
  "libc",

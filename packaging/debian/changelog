@@ -1,3 +1,14 @@
+namtor (0.3.5-1) unstable; urgency=medium
+
+  * SECURITY: take the PAM daemon socket from the module's PAM argument
+    rather than the NAMTOR_SOCKET environment variable, which was an
+    authentication bypass wherever a caller controls the environment.
+  * Show the spec 8.3 failure messages to the user via the PAM conversation
+    function; a PAD veto stays indistinguishable from a plain non-match.
+  * Verified against real libpam with a temporary PAM stack.
+
+ -- finley <finley.laempe@math.uni-freiburg.de>  Thu, 17 Sep 2026 10:51:10 +0200
+
 namtor (0.3.4-1) unstable; urgency=medium
 
   * Fix the settings app aborting when Save Profile is pressed.

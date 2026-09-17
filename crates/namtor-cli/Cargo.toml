@@ -1,6 +1,6 @@
 [package]
 name = "namtor-cli"
-version = "0.3.4"
+version = "0.3.5"
 edition.workspace = true
 license = "GPL-3.0-only"
 

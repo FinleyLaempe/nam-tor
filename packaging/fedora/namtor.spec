@@ -56,7 +56,7 @@
 %global debug_package %{nil}
 
 Name:           namtor
-Version:        0.3.4
+Version:        0.3.5
 Release:        1%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
@@ -338,6 +338,23 @@ fi
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.5-1
+- SECURITY: the PAM module read its daemon socket path from the
+  NAMTOR_SOCKET environment variable. Since it returns PAM_SUCCESS on a match,
+  anything able to set that variable for a PAM-using process could point it at
+  a socket it controls and authenticate. sudo resets the environment by
+  default; su inherits the caller's. The socket now comes from the module's
+  own PAM argument (socket=), which lives in root-owned /etc/pam.d. Nothing
+  shipped set the variable, so no deployed configuration changes.
+- The spec 8.3 failure messages are now shown to the user through the PAM
+  conversation function: "No infrared camera found", "Camera is busy",
+  "Camera privacy shutter is closed", "Face unlock unavailable", "Face not
+  recognised", "Too many attempts". A presentation-attack veto renders exactly
+  like a plain non-match, so the system never reveals which signal caught it;
+  the journal keeps them distinct. A user with no enrolment is told nothing.
+- Verified through real libpam in a temporary PAM stack — no root, nothing
+  installed — including that every condition still fails closed.
+
 * Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.4-1
 - Pressing "Save Profile" aborted the settings app. AdwNavigationView emits
   `popped` synchronously, so the back-navigation handler added in 0.3.2 ran
