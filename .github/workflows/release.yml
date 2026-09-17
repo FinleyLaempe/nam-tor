@@ -138,7 +138,7 @@ jobs:
             apt-get update
             apt-get install -y --no-install-recommends build-essential cargo rustc \
                 python3 debhelper-compat dh-cargo libpam0g-dev openssl devscripts \
-                libgtk-4-dev libadwaita-1-dev
+                libgtk-4-dev libadwaita-1-dev curl ca-certificates
             # onnxruntime is not in Debian 12 repos — it's a runtime dep
             # declared in the .deb control, not a build dep. Skip it here.
 
@@ -215,14 +215,31 @@ jobs:
             # see AGENTS.md), so build-model-archive.sh cannot run inside
             # this checkout. The deterministic archive is instead hosted as
             # a standing release asset (models-v0.1.0). This is a private
-            # repo, so release-asset downloads need auth — plain curl gets
-            # a 404 (GitHub hides asset existence from unauthenticated
-            # requests). Use `gh release download`, which handles the
-            # GH_TOKEN auth automatically.
-            gh release download "models-v$MODELVER" \
-                --repo "${{ github.repository }}" \
-                --pattern "namtor-models-$MODELVER.tar.gz" \
-                --dir /tmp --clobber
+            # repo, so the download needs auth: an unauthenticated request
+            # gets a 404, because GitHub hides asset existence rather than
+            # admitting to a 403.
+            #
+            # This used `gh release download`, which is fine on Arch and not
+            # present in the Debian image — `gh: not found`, exit 127, and
+            # the cell could not get past its first real step. curl and
+            # python3 exist in both, so the download goes through the REST
+            # API directly: resolve the asset id by name, then fetch it with
+            # `Accept: application/octet-stream`, which is what makes the
+            # asset endpoint return the bytes instead of its JSON.
+            ASSET="namtor-models-$MODELVER.tar.gz"
+            API="https://api.github.com/repos/${{ github.repository }}"
+            export ASSET
+            asset_id="$(curl -sSfL \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "$API/releases/tags/models-v$MODELVER" \
+              | python3 -c "import json,os,sys; d=json.load(sys.stdin); w=os.environ['ASSET']; print(next((a['id'] for a in d.get('assets',[]) if a['name']==w), ''))")"
+            [ -n "$asset_id" ] || {
+              echo "::error::release models-v$MODELVER has no asset named $ASSET"; exit 1; }
+            curl -sSfL \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/octet-stream" \
+                "$API/releases/assets/$asset_id" -o "/tmp/$ASSET"
             echo "$NAMTOR_MODELS_SHA256  /tmp/namtor-models-$MODELVER.tar.gz" | sha256sum -c -
 
             cd /tmp
