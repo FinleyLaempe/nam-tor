@@ -35,14 +35,32 @@ fn build_pamd(fixtures: &[&str]) -> (TempDir, PathBuf, PathBuf) {
     let reg = tmp.path().join("namtor");
     fs::create_dir_all(&pamd).expect("mkdir pam.d");
     fs::create_dir_all(&reg).expect("mkdir reg");
+    // Stage a stub pam_namtor.so so the enable preflight finds a module.
+    // Existence is all the preflight checks, so an empty file suffices.
+    stage_module(tmp.path());
     for f in fixtures {
         copy_fixture(f, &pamd);
     }
     (tmp, pamd, reg)
 }
 
+/// Create an empty `pam_namtor.so` in the canonical module directory under
+/// `root`, so `enable_service` with `module_root = root` passes preflight.
+fn stage_module(root: &Path) {
+    let dir = root.join("usr/lib/security");
+    fs::create_dir_all(&dir).expect("mkdir security");
+    fs::write(dir.join("pam_namtor.so"), b"").expect("write stub module");
+}
+
+/// The staging root for a pamd path produced by `build_pamd`: the temp dir
+/// that holds both `pam.d` and `usr/lib/security`.
+fn module_root_for(pamd: &Path) -> PathBuf {
+    pamd.parent().expect("pamd has a parent").to_path_buf()
+}
+
 fn opts(pamd: PathBuf, reg: PathBuf) -> EditOptions {
-    EditOptions::new(pamd, reg)
+    let root = module_root_for(&pamd);
+    EditOptions::new(pamd, reg).with_module_root(root)
 }
 
 // --- snapshot tests ---------------------------------------------------------
@@ -180,10 +198,8 @@ fn migrate_updates_block_format() {
 
     // Migrate with a different control (simulates format change).
     let o_ignore = EditOptions {
-        pamd_root: pamd.clone(),
-        registry_root: reg.clone(),
         control: NamtorControl::DefaultIgnore,
-        crash: None,
+        ..opts(pamd.clone(), reg.clone())
     };
     let report = migrate(&o_ignore).unwrap();
     assert!(report

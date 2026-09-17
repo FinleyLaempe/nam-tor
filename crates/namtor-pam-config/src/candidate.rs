@@ -197,8 +197,21 @@ fn verify_through_includes(
     pamd_root: &Path,
     service_id: &str,
 ) -> Result<(), EditError> {
+    // Classify the STOCK stack, with our own block removed.
+    //
+    // `content` is the CANDIDATE — it already contains the namtor block — and
+    // classify_service short-circuits on `has_namtor` and returns Safe before
+    // it ever evaluates the password-fallback rule. Handing it the candidate
+    // therefore asked "is this safe?" of a file whose namtor block guaranteed
+    // the answer yes: the check was defeated by the very block it exists to
+    // validate, and a service with no password fallback installed cleanly.
+    //
+    // The question this function must answer is whether a fallback exists
+    // INDEPENDENT of namtor — i.e. whether the user can still get in when the
+    // daemon is down — so the stock stack is the correct subject.
+    let stock = remove_block(content);
     let temp = pamd_root.join(format!(".namtor.verify.{service_id}"));
-    fs::write(&temp, content)?;
+    fs::write(&temp, &stock)?;
     let result = classify_service(service_id, &temp, pamd_root);
     let _ = fs::remove_file(&temp);
     match result {

@@ -42,8 +42,8 @@ mod scanner;
 pub use classify::{classify_service, known_service_label, ClassificationContext};
 pub use desktop_lockscreen::{set_face, would_cause_lockout, LockscreenError};
 pub use editor::{
-    disable_service, enable_service, resolve_module_path, CrashPoint, EditError, EditOptions,
-    EditOutcome, NamtorControl,
+    disable_service, enable_service, resolve_module_path, resolve_module_path_in, restore_service,
+    CrashPoint, EditError, EditOptions, EditOutcome, NamtorControl,
 };
 pub use lifecycle::{
     disable_all_services, migrate, purge, snapshot, validate, MigrationReport,

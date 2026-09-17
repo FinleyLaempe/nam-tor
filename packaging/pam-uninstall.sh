@@ -13,11 +13,16 @@
 #
 # Options:
 #   --target PATH     target PAM service (default /etc/pam.d/gdm-password)
+#   --restore-backup  restore the file byte-for-byte from the enable-time
+#                     backup instead of removing the block from the file as
+#                     it stands now. Use this when the stack has been damaged
+#                     since; it fails rather than guesses if no backup exists.
 #   -h, --help        show this help
 
 set -euo pipefail
 
 TARGET_PAM="/etc/pam.d/gdm-password"
+ACTION="disable"
 
 usage() {
     sed -n '3,/^$/p' "$0" | sed 's/^# \?//' >&2
@@ -27,6 +32,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --target) TARGET_PAM="$2"; shift 2 ;;
+        --restore-backup) ACTION="restore"; shift ;;
         -h|--help) usage ;;
         *) echo "pam-uninstall: unknown option: $1" >&2; usage ;;
     esac
@@ -61,8 +67,12 @@ if [[ -n "$DESTDIR" ]]; then
     REGISTRY_ROOT="${DESTDIR%/}/var/lib/namtor"
 fi
 
-echo "pam-uninstall: disabling pam_namtor.so for service '$SERVICE_ID'"
-if "$PAM_EDIT" disable \
+if [[ "$ACTION" == "restore" ]]; then
+    echo "pam-uninstall: restoring service '$SERVICE_ID' from its backup"
+else
+    echo "pam-uninstall: disabling pam_namtor.so for service '$SERVICE_ID'"
+fi
+if "$PAM_EDIT" "$ACTION" \
     --service "$SERVICE_ID" \
     --pamd-root "$PAMD_ROOT" \
     --registry-root "$REGISTRY_ROOT"; then

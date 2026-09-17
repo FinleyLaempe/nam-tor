@@ -77,9 +77,15 @@ esac
 # Resolve paths under DESTDIR.
 PAMD_ROOT="/etc/pam.d"
 REGISTRY_ROOT="/var/lib/namtor"
+# Root the pam_namtor.so preflight searches. Under DESTDIR the module lives
+# in the staging tree, not on the live system, so the two must agree — a
+# preflight against / would pass on a machine that already has Nam-tor
+# installed and report a staging tree as sound when it is empty.
+MODULE_ROOT="/"
 if [[ -n "$DESTDIR" ]]; then
     PAMD_ROOT="${DESTDIR%/}/etc/pam.d"
     REGISTRY_ROOT="${DESTDIR%/}/var/lib/namtor"
+    MODULE_ROOT="${DESTDIR%/}"
     mkdir -p "$PAMD_ROOT" "$REGISTRY_ROOT"
 fi
 
@@ -88,6 +94,7 @@ if "$PAM_EDIT" enable \
     --service "$SERVICE_ID" \
     --pamd-root "$PAMD_ROOT" \
     --registry-root "$REGISTRY_ROOT" \
+    --module-root "$MODULE_ROOT" \
     --control "$CONTROL_FLAG"; then
     echo "pam-install: done. Service $SERVICE_ID now has the namtor block."
 else

@@ -129,6 +129,7 @@ pub struct Manager2Service<P: PolkitAuthority> {
     store: Arc<dyn ProfileStore>,
     pamd_root: PathBuf,
     registry_root: PathBuf,
+    module_root: PathBuf,
     signals: Mutex<Vec<PamSignal>>,
 }
 
@@ -144,8 +145,16 @@ impl<P: PolkitAuthority> Manager2Service<P> {
             store,
             pamd_root,
             registry_root,
+            module_root: PathBuf::from("/"),
             signals: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Point the `pam_namtor.so` preflight at a staging root instead of `/`.
+    /// Production uses `/`; only tests and staged installs move it.
+    pub fn with_module_root(mut self, root: PathBuf) -> Self {
+        self.module_root = root;
+        self
     }
 
     fn authz(&self, action_id: &str, peer: &PeerIdentity) -> Result<(), PamApiError> {
@@ -164,6 +173,7 @@ impl<P: PolkitAuthority> Manager2Service<P> {
 
     fn edit_options(&self) -> EditOptions {
         EditOptions::new(self.pamd_root.clone(), self.registry_root.clone())
+            .with_module_root(self.module_root.clone())
     }
 
     fn push_pam_services_changed(&self) {
@@ -902,6 +912,17 @@ mod tests {
         PeerIdentity::for_testing(uid, String::new())
     }
 
+    /// Stage a stub `pam_namtor.so` so `enable` passes its module preflight,
+    /// and return the root to hand to `with_module_root`. `pamd` is
+    /// `<tmp>/pam.d`, so its parent is the staging root.
+    fn stage_module_for(pamd: &std::path::Path) -> PathBuf {
+        let root = pamd.parent().expect("pamd has a parent").to_path_buf();
+        let dir = root.join("usr/lib/security");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("pam_namtor.so"), b"").unwrap();
+        root
+    }
+
     fn write_service(dir: &std::path::Path, id: &str) {
         let content = "#%PAM-1.0\nauth required pam_unix.so\naccount required pam_unix.so\npassword required pam_unix.so\nsession required pam_unix.so\n";
         fs::write(dir.join(id), content).unwrap();
@@ -915,6 +936,7 @@ mod tests {
             pamd.to_path_buf(),
             registry.to_path_buf(),
         )
+        .with_module_root(stage_module_for(pamd))
     }
 
     fn new_svc_fail_closed(
@@ -928,6 +950,7 @@ mod tests {
             pamd.to_path_buf(),
             registry.to_path_buf(),
         )
+        .with_module_root(stage_module_for(pamd))
     }
 
     // ---- Guidance wire serialization ----
@@ -1063,7 +1086,9 @@ mod tests {
         write_service(&pamd, "gdm-password");
 
         let store: Arc<dyn ProfileStore> = Arc::new(NullProfileStore);
-        let svc = Manager2Service::new(ChallengePolkit, store, pamd, registry);
+        let module_root = stage_module_for(&pamd);
+        let svc = Manager2Service::new(ChallengePolkit, store, pamd, registry)
+            .with_module_root(module_root);
         let err = svc
             .set_pam_service_enabled(&peer(1000), "gdm-password", true)
             .unwrap_err();

@@ -9,8 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use namtor_pam_config::{
-    disable_service, enable_service, CrashPoint, EditError, EditOptions, EditOutcome,
-    NamtorControl, Registry,
+    disable_service, enable_service, restore_service, CrashPoint, EditError, EditOptions,
+    EditOutcome, NamtorControl, Registry,
 };
 use tempfile::TempDir;
 
@@ -34,22 +34,38 @@ fn build_pamd(fixtures: &[&str]) -> (TempDir, PathBuf, PathBuf) {
     let reg = tmp.path().join("namtor");
     fs::create_dir_all(&pamd).expect("mkdir pam.d");
     fs::create_dir_all(&reg).expect("mkdir reg");
+    // Stage a stub pam_namtor.so so the enable preflight finds a module.
+    // Existence is all the preflight checks, so an empty file suffices.
+    stage_module(tmp.path());
     for f in fixtures {
         copy_fixture(f, &pamd);
     }
     (tmp, pamd, reg)
 }
 
+/// Create an empty `pam_namtor.so` in the canonical module directory under
+/// `root`, so `enable_service` with `module_root = root` passes preflight.
+fn stage_module(root: &Path) {
+    let dir = root.join("usr/lib/security");
+    fs::create_dir_all(&dir).expect("mkdir security");
+    fs::write(dir.join("pam_namtor.so"), b"").expect("write stub module");
+}
+
+/// The staging root for a pamd path produced by `build_pamd`: the temp dir
+/// that holds both `pam.d` and `usr/lib/security`.
+fn module_root_for(pamd: &Path) -> PathBuf {
+    pamd.parent().expect("pamd has a parent").to_path_buf()
+}
+
 fn opts(pamd: PathBuf, reg: PathBuf) -> EditOptions {
-    EditOptions::new(pamd, reg)
+    let root = module_root_for(&pamd);
+    EditOptions::new(pamd, reg).with_module_root(root)
 }
 
 fn opts_crash(pamd: PathBuf, reg: PathBuf, crash: CrashPoint) -> EditOptions {
     EditOptions {
-        pamd_root: pamd,
-        registry_root: reg,
-        control: NamtorControl::Sufficient,
         crash: Some(crash),
+        ..opts(pamd, reg)
     }
 }
 
@@ -348,6 +364,7 @@ fn deny_at_insertion_point_rejected() {
     let reg = tmp.path().join("namtor");
     fs::create_dir_all(&pamd).unwrap();
     fs::create_dir_all(&reg).unwrap();
+    stage_module(tmp.path());
     fs::write(
         pamd.join("test-svc"),
         "#%PAM-1.0\nauth required pam_deny.so\nauth required pam_unix.so\n",
@@ -368,6 +385,7 @@ fn deny_between_block_and_password_rejected() {
     let reg = tmp.path().join("namtor");
     fs::create_dir_all(&pamd).unwrap();
     fs::create_dir_all(&reg).unwrap();
+    stage_module(tmp.path());
     fs::write(
         pamd.join("test-svc"),
         "#%PAM-1.0\nauth optional pam_permit.so\nauth required pam_deny.so\nauth required pam_unix.so\n",
@@ -384,6 +402,7 @@ fn no_auth_lines_rejected() {
     let reg = tmp.path().join("namtor");
     fs::create_dir_all(&pamd).unwrap();
     fs::create_dir_all(&reg).unwrap();
+    stage_module(tmp.path());
     fs::write(
         pamd.join("test-svc"),
         "#%PAM-1.0\naccount required pam_unix.so\n",
@@ -500,10 +519,8 @@ fn registry_tracks_multiple_services() {
 fn default_ignore_control_renders_correctly() {
     let (_tmp, pamd, reg) = build_pamd(&["arch/gdm-password", "arch/system-auth"]);
     let o = EditOptions {
-        pamd_root: pamd.clone(),
-        registry_root: reg,
         control: NamtorControl::DefaultIgnore,
-        crash: None,
+        ..opts(pamd.clone(), reg)
     };
     enable_service("gdm-password", &o).unwrap();
     let content = fs::read_to_string(pamd.join("gdm-password")).unwrap();
@@ -516,10 +533,8 @@ fn control_change_is_an_upgrade_not_stale() {
     let o_sufficient = opts(pamd.clone(), reg.clone());
     enable_service("gdm-password", &o_sufficient).unwrap();
     let o_ignore = EditOptions {
-        pamd_root: pamd.clone(),
-        registry_root: reg,
         control: NamtorControl::DefaultIgnore,
-        crash: None,
+        ..opts(pamd.clone(), reg)
     };
     let result = enable_service("gdm-password", &o_ignore).unwrap();
     assert_eq!(result, EditOutcome::Changed);
@@ -614,4 +629,167 @@ fn full_debian_enable_disable_cycle() {
         let content = fs::read_to_string(pamd.join(svc)).unwrap();
         assert!(content.contains("# namtor-begin"));
     }
+}
+
+// --- preflight and fallback regression tests --------------------------------
+
+#[test]
+fn enable_refuses_when_module_is_not_installed() {
+    let tmp = TempDir::new().unwrap();
+    let pamd = tmp.path().join("pam.d");
+    let reg = tmp.path().join("namtor");
+    fs::create_dir_all(&pamd).unwrap();
+    fs::create_dir_all(&reg).unwrap();
+    // Deliberately NOT staging pam_namtor.so.
+    fs::write(
+        pamd.join("test-svc"),
+        "#%PAM-1.0\nauth sufficient pam_unix.so\n",
+    )
+    .unwrap();
+
+    let result = enable_service("test-svc", &opts(pamd.clone(), reg));
+    assert!(
+        matches!(result, Err(EditError::ModuleNotFound)),
+        "expected ModuleNotFound, got {result:?}"
+    );
+
+    // Preflight runs before the backup, so a refused enable leaves no trace.
+    let content = fs::read_to_string(pamd.join("test-svc")).unwrap();
+    assert_eq!(content, "#%PAM-1.0\nauth sufficient pam_unix.so\n");
+    assert!(!pamd.join("test-svc.namtor-backup").exists());
+}
+
+#[test]
+fn enable_refuses_service_with_no_password_fallback() {
+    // Regression: verify_candidate falls through to verify_through_includes,
+    // which classified the CANDIDATE — a stack that already contained our own
+    // block. classify_service short-circuits on `has_namtor` and returns Safe
+    // before evaluating the fallback rule, so the check answered "safe?" of a
+    // file its own block guaranteed safe, and this stack installed cleanly.
+    let tmp = TempDir::new().unwrap();
+    let pamd = tmp.path().join("pam.d");
+    let reg = tmp.path().join("namtor");
+    fs::create_dir_all(&pamd).unwrap();
+    fs::create_dir_all(&reg).unwrap();
+    stage_module(tmp.path());
+    // pam_echo is an auth module, but it is not a password fallback, and the
+    // only include is an `account` line the auth walk must not follow.
+    fs::write(
+        pamd.join("test-svc"),
+        "#%PAM-1.0\nauth     required   pam_echo.so\naccount  include    system-auth\n",
+    )
+    .unwrap();
+
+    let result = enable_service("test-svc", &opts(pamd.clone(), reg));
+    assert!(
+        matches!(result, Err(EditError::NoPasswordFallback(_))),
+        "expected NoPasswordFallback, got {result:?}"
+    );
+    let content = fs::read_to_string(pamd.join("test-svc")).unwrap();
+    assert!(!content.contains("namtor"));
+}
+
+#[test]
+fn module_root_is_honoured_over_the_live_system() {
+    // resolve_module_path_in must not leak to `/`: a staging root with no
+    // module must report none even when the live system has one installed.
+    let tmp = TempDir::new().unwrap();
+    assert!(namtor_pam_config::resolve_module_path_in(tmp.path()).is_none());
+    stage_module(tmp.path());
+    let found = namtor_pam_config::resolve_module_path_in(tmp.path()).unwrap();
+    assert!(found.starts_with(tmp.path()));
+    assert!(found.ends_with("usr/lib/security/pam_namtor.so"));
+}
+
+// --- restore-from-backup tests ----------------------------------------------
+
+#[test]
+fn restore_returns_the_file_to_its_pre_namtor_bytes() {
+    let (_tmp, pamd, reg) = build_pamd(&["arch/gdm-password", "arch/system-auth"]);
+    let target = pamd.join("gdm-password");
+    let original = fs::read_to_string(&target).unwrap();
+
+    let o = opts(pamd.clone(), reg.clone());
+    enable_service("gdm-password", &o).unwrap();
+    assert!(fs::read_to_string(&target).unwrap().contains("namtor"));
+
+    assert_eq!(
+        restore_service("gdm-password", &o).unwrap(),
+        EditOutcome::Changed
+    );
+    assert_eq!(fs::read_to_string(&target).unwrap(), original);
+    assert!(!Registry::load(&reg).unwrap().is_enabled("gdm-password"));
+}
+
+#[test]
+fn restore_undoes_damage_that_disable_would_carry_forward() {
+    // This is the whole reason restore exists as a separate operation.
+    let (_tmp, pamd, reg) = build_pamd(&["arch/gdm-password", "arch/system-auth"]);
+    let target = pamd.join("gdm-password");
+    let original = fs::read_to_string(&target).unwrap();
+
+    let o = opts(pamd.clone(), reg.clone());
+    enable_service("gdm-password", &o).unwrap();
+
+    // Someone appends a line after the block. `disable` would strip only our
+    // block and leave this behind; `restore` reverts to the captured bytes.
+    let damaged = format!(
+        "{}auth optional pam_debug.so\n",
+        fs::read_to_string(&target).unwrap()
+    );
+    fs::write(&target, &damaged).unwrap();
+
+    restore_service("gdm-password", &o).unwrap();
+    assert_eq!(fs::read_to_string(&target).unwrap(), original);
+}
+
+#[test]
+fn restore_without_a_backup_is_refused_not_guessed() {
+    let (_tmp, pamd, reg) = build_pamd(&["arch/gdm-password", "arch/system-auth"]);
+    let o = opts(pamd, reg);
+    // Never enabled, so no backup was ever taken.
+    let result = restore_service("gdm-password", &o);
+    assert!(
+        matches!(result, Err(EditError::TargetMissing(_))),
+        "expected TargetMissing, got {result:?}"
+    );
+}
+
+#[test]
+fn restore_is_idempotent() {
+    let (_tmp, pamd, reg) = build_pamd(&["arch/gdm-password", "arch/system-auth"]);
+    let o = opts(pamd, reg);
+    enable_service("gdm-password", &o).unwrap();
+    assert_eq!(
+        restore_service("gdm-password", &o).unwrap(),
+        EditOutcome::Changed
+    );
+    assert_eq!(
+        restore_service("gdm-password", &o).unwrap(),
+        EditOutcome::NoOp
+    );
+}
+
+#[test]
+fn restore_refuses_a_backup_that_would_reinstate_the_block() {
+    let (_tmp, pamd, reg) = build_pamd(&["arch/gdm-password", "arch/system-auth"]);
+    let target = pamd.join("gdm-password");
+    let o = opts(pamd.clone(), reg);
+    enable_service("gdm-password", &o).unwrap();
+
+    // Forge a backup that already contains a namtor block, and re-checksum it
+    // so the integrity check passes and the content check is what must catch
+    // it. Restoring this would put back the block the caller is removing.
+    let enabled = fs::read_to_string(&target).unwrap();
+    let backup = pamd.join("gdm-password.namtor.bak");
+    assert!(backup.exists(), "enable should have written a backup");
+    fs::write(&backup, &enabled).unwrap();
+    let digest = sha256_hex(enabled.as_bytes());
+    fs::write(pamd.join("gdm-password.namtor.bak.sha256"), digest).unwrap();
+
+    let result = restore_service("gdm-password", &o);
+    assert!(
+        matches!(result, Err(EditError::StaleEdit(_))),
+        "expected StaleEdit, got {result:?}"
+    );
 }

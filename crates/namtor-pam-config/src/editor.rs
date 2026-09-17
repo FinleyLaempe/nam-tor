@@ -109,6 +109,9 @@ pub enum CrashPoint {
 pub struct EditOptions {
     pub pamd_root: PathBuf,
     pub registry_root: PathBuf,
+    /// Filesystem root the `pam_namtor.so` preflight searches under.
+    /// `/` in production; a staging root under DESTDIR-style installs.
+    pub module_root: PathBuf,
     pub control: NamtorControl,
     pub crash: Option<CrashPoint>,
 }
@@ -118,9 +121,16 @@ impl EditOptions {
         Self {
             pamd_root,
             registry_root,
+            module_root: PathBuf::from("/"),
             control: NamtorControl::Sufficient,
             crash: None,
         }
+    }
+
+    /// Search for `pam_namtor.so` under a staging root instead of `/`.
+    pub fn with_module_root(mut self, root: PathBuf) -> Self {
+        self.module_root = root;
+        self
     }
 }
 
@@ -163,6 +173,18 @@ pub fn enable_service(service_id: &str, opts: &EditOptions) -> Result<EditOutcom
 
     if !candidate::has_auth_lines(&stock) {
         return Err(EditError::NoAuthLines(service_id.into()));
+    }
+
+    // Preflight: refuse to write a block referencing a module that is not
+    // installed. Runs before the backup so a failed preflight leaves no
+    // trace — not the backup, not the checksum, not the PAM file.
+    //
+    // `sufficient` and `[default=ignore]` both treat an unloadable module as
+    // a non-fatal failure, so this is not itself a lockout; it is a broken
+    // install that silently never authenticates anyone, and every unlock
+    // pays the module-load error before falling through to the password.
+    if resolve_module_path_in(&opts.module_root).is_none() {
+        return Err(EditError::ModuleNotFound);
     }
 
     if opts.crash == Some(CrashPoint::BeforeBackup) {
@@ -244,16 +266,89 @@ pub fn disable_service(service_id: &str, opts: &EditOptions) -> Result<EditOutco
     Ok(EditOutcome::Changed)
 }
 
+/// Restore a PAM service from the backup taken at enable time.
+///
+/// This is the recovery path, and it differs from `disable_service` in what
+/// it trusts. `disable` reconstructs the stock stack by deleting our block
+/// from the file as it stands now, so it carries forward every edit made
+/// since — including damage. `restore` writes back the bytes captured before
+/// Nam-tor first touched the file, after checking them against the stored
+/// SHA-256, and so is the only operation that can undo an edit nobody has a
+/// clean record of.
+///
+/// Refuses rather than guesses when there is no backup: without one there is
+/// nothing to restore *to*, and silently falling back to `disable` would
+/// quietly downgrade the guarantee the caller asked for.
+pub fn restore_service(service_id: &str, opts: &EditOptions) -> Result<EditOutcome, EditError> {
+    validate_service_id(service_id)?;
+    let target = opts.pamd_root.join(service_id);
+    let backup = flock::backup_path(&target);
+    let checksum = flock::checksum_path(&target);
+
+    let _lock = flock::FileLock::acquire(&lock_path(&opts.pamd_root))?;
+    flock::cleanup_stale_temps(&opts.pamd_root);
+    reject_symlink(&target)?;
+
+    if !backup.exists() {
+        return Err(EditError::TargetMissing(format!(
+            "{service_id}: no backup to restore from ({})",
+            backup.display()
+        )));
+    }
+    flock::verify_backup(&backup, &checksum)?;
+    let backup_content = fs::read_to_string(&backup)?;
+
+    // The backup is the pre-Nam-tor file, so it must not contain our block.
+    // If it does, the backup was taken from an already-edited file and
+    // restoring it would reinstate the very block we are removing.
+    if candidate::has_block(&backup_content) {
+        return Err(EditError::StaleEdit(format!(
+            "{service_id}: backup contains a namtor block; refusing to restore"
+        )));
+    }
+
+    // Restoring must not strand the user without a way in. The backup is a
+    // stock stack, so this is the same check disable performs.
+    candidate::verify_fallback_after_disable(&backup_content, &opts.pamd_root, service_id)?;
+
+    let current = fs::read_to_string(&target).unwrap_or_default();
+    if current == backup_content {
+        return Ok(EditOutcome::NoOp);
+    }
+
+    flock::atomic_write(&target, backup_content.as_bytes())?;
+
+    let mut reg = Registry::load(&opts.registry_root).unwrap_or_default();
+    reg.disable(service_id);
+    reg.save(&opts.registry_root).map_err(EditError::Registry)?;
+
+    Ok(EditOutcome::Changed)
+}
+
+/// Directories, relative to a filesystem root, where distros keep PAM
+/// modules. Arch/Fedora use the canonical path, Fedora also lib64, Debian
+/// relocates to a multiarch triplet directory after staging.
+const MODULE_DIRS: [&str; 4] = [
+    "usr/lib/security",
+    "usr/lib64/security",
+    "usr/lib/x86_64-linux-gnu/security",
+    "usr/lib/aarch64-linux-gnu/security",
+];
+
 /// Resolve the PAM module path for the current distro.
 pub fn resolve_module_path() -> Option<PathBuf> {
-    let dirs = [
-        Path::new("/usr/lib/security"),
-        Path::new("/usr/lib64/security"),
-        Path::new("/usr/lib/x86_64-linux-gnu/security"),
-        Path::new("/usr/lib/aarch64-linux-gnu/security"),
-    ];
-    dirs.iter().find_map(|d| {
-        let p = d.join("pam_namtor.so");
+    resolve_module_path_in(Path::new("/"))
+}
+
+/// Resolve the PAM module path under an arbitrary filesystem root.
+///
+/// The candidate directories are stored relative precisely so that joining
+/// them onto a staging root works: `PathBuf::join` with an *absolute*
+/// argument discards the root entirely, so an absolute candidate list would
+/// silently search the live system while claiming to search the staging tree.
+pub fn resolve_module_path_in(root: &Path) -> Option<PathBuf> {
+    MODULE_DIRS.iter().find_map(|d| {
+        let p = root.join(d).join("pam_namtor.so");
         p.is_file().then_some(p)
     })
 }

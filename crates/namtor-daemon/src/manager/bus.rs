@@ -841,12 +841,15 @@ mod tests {
     fn new_svc2() -> Arc<Svc2> {
         let tmp = TempDir::new().expect("tempdir");
         let store: Arc<dyn crate::manager::store::ProfileStore> = Arc::new(NullProfileStore);
-        Arc::new(Manager2Service::new(
-            SystemPolkit::for_testing(),
-            store,
-            tmp.path().join("pam.d"),
-            tmp.path().join("registry"),
-        ))
+        Arc::new(
+            Manager2Service::new(
+                SystemPolkit::for_testing(),
+                store,
+                tmp.path().join("pam.d"),
+                tmp.path().join("registry"),
+            )
+            .with_module_root(tmp.path().to_path_buf()),
+        )
     }
 
     fn new_svc3() -> Arc<Svc3> {

@@ -2,8 +2,9 @@
 //! CLI for the transactional PAM editor.
 //!
 //! Usage:
-//!   namtor-pam-edit enable  --service <id> [--pamd-root <dir>] [--registry-root <dir>] [--control sufficient|default-ignore]
+//!   namtor-pam-edit enable  --service <id> [--pamd-root <dir>] [--registry-root <dir>] [--module-root <dir>] [--control sufficient|default-ignore]
 //!   namtor-pam-edit disable --service <id> [--pamd-root <dir>] [--registry-root <dir>]
+//!   namtor-pam-edit restore --service <id> [--pamd-root <dir>] [--registry-root <dir>]
 //!   namtor-pam-edit snapshot    [--pamd-root <dir>] [--registry-root <dir>]
 //!   namtor-pam-edit validate    [--pamd-root <dir>] [--registry-root <dir>]
 //!   namtor-pam-edit migrate     [--pamd-root <dir>] [--registry-root <dir>] [--control sufficient|default-ignore]
@@ -15,19 +16,20 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use namtor_pam_config::{
-    disable_all_services, disable_service, enable_service, migrate, purge, snapshot, validate,
-    EditOptions, NamtorControl, ValidationStatus,
+    disable_all_services, disable_service, enable_service, migrate, purge, restore_service,
+    snapshot, validate, EditOptions, NamtorControl, ValidationStatus,
 };
 
 const LIFECYCLE_ACTIONS: &[&str] = &["snapshot", "validate", "migrate", "disable-all", "purge"];
 
 fn print_usage() {
-    eprintln!("usage: namtor-pam-edit <enable|disable> --service <id> [options]");
+    eprintln!("usage: namtor-pam-edit <enable|disable|restore> --service <id> [options]");
     eprintln!("       namtor-pam-edit <snapshot|validate|migrate|disable-all|purge> [options]");
     eprintln!();
     eprintln!("  --service <id>        PAM service ID (filename in pam.d)");
     eprintln!("  --pamd-root <dir>     PAM config root (default /etc/pam.d)");
     eprintln!("  --registry-root <dir> Nam-tor state root (default /var/lib/namtor)");
+    eprintln!("  --module-root <dir>   root to search for pam_namtor.so (default /)");
     eprintln!("  --control <c>         sufficient|default-ignore (default sufficient)");
 }
 
@@ -44,6 +46,7 @@ fn main() -> ExitCode {
     let mut service: Option<String> = None;
     let mut pamd_root = PathBuf::from("/etc/pam.d");
     let mut registry_root = PathBuf::from("/var/lib/namtor");
+    let mut module_root = PathBuf::from("/");
     let mut control = NamtorControl::Sufficient;
 
     let mut i = 2;
@@ -62,6 +65,12 @@ fn main() -> ExitCode {
             "--registry-root" => {
                 if let Some(v) = args.get(i + 1) {
                     registry_root = PathBuf::from(v);
+                }
+                i += 2;
+            }
+            "--module-root" => {
+                if let Some(v) = args.get(i + 1) {
+                    module_root = PathBuf::from(v);
                 }
                 i += 2;
             }
@@ -92,6 +101,7 @@ fn main() -> ExitCode {
     let opts = EditOptions {
         pamd_root,
         registry_root,
+        module_root,
         control,
         crash: None,
     };
@@ -111,9 +121,10 @@ fn main() -> ExitCode {
     let result = match action.as_str() {
         "enable" => enable_service(&service, &opts),
         "disable" => disable_service(&service, &opts),
+        "restore" => restore_service(&service, &opts),
         _ => {
             eprintln!(
-                "unknown action: {action} (expected enable|disable|snapshot|validate|migrate|disable-all|purge)"
+                "unknown action: {action} (expected enable|disable|restore|snapshot|validate|migrate|disable-all|purge)"
             );
             return ExitCode::from(2);
         }
