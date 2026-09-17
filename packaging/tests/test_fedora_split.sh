@@ -29,6 +29,20 @@
 
 set -uo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` is unreliable: `grep -q` exits on the
+# first match, the writer on the left then dies with SIGPIPE, and pipefail
+# reports the WRITER's status — so a match can be reported as a miss. It stays
+# latent until the input outgrows the 64 KiB pipe buffer, which is how it
+# surfaced: test_desktop_cert read a real `test result: FAILED` out of full
+# cargo output as "no failures". In an "expected absent" check the same race
+# turns a forbidden match into a silent pass. Without -q grep never exits
+# early, so nothing upstream is signalled, and the exit status is unchanged:
+# 0 match, 1 no match, 2 error.
+grep_all() { grep "$@" >/dev/null; }
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGING_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SPEC="$PACKAGING_DIR/fedora/namtor.spec"
@@ -78,7 +92,7 @@ check "Name: namtor present" 'grep -qE "^Name:[[:space:]]+namtor$" "$SPEC"' true
 
 # UI subpackage: `%package ui` (yields namtor-ui) OR `-n namtor-ui`.
 if grep -qE "^%package[[:space:]]+ui($|[[:space:]])" "$SPEC" \
-        || grep -qE "^%package[[:space:]]+-n[[:space:]]+namtor-ui($|[[:space:]])" "$SPEC"; then
+        || grep_all -E "^%package[[:space:]]+-n[[:space:]]+namtor-ui($|[[:space:]])" "$SPEC"; then
     ok "namtor-ui subpackage defined"
 else
     not_ok "namtor-ui subpackage defined"
@@ -89,7 +103,7 @@ fi
 # subpackages own exactly the same four files, so a leftover namtor-gnome
 # file-conflicts with namtor-ui.
 if grep -qE "^%package[[:space:]]+gnome($|[[:space:]])" "$SPEC" \
-        || grep -qE "^%package[[:space:]]+-n[[:space:]]+namtor-gnome($|[[:space:]])" "$SPEC"; then
+        || grep_all -E "^%package[[:space:]]+-n[[:space:]]+namtor-gnome($|[[:space:]])" "$SPEC"; then
     not_ok "namtor-gnome subpackage is back (it was renamed to namtor-ui)"
 else
     ok "namtor-gnome subpackage renamed away"
@@ -122,7 +136,7 @@ fi
 
 # The KDE subpackage must be GONE — but obsoleted, not merely deleted.
 if grep -qE "^%package[[:space:]]+kde($|[[:space:]])" "$SPEC" \
-        || grep -qE "^%package[[:space:]]+-n[[:space:]]+namtor-kde($|[[:space:]])" "$SPEC"; then
+        || grep_all -E "^%package[[:space:]]+-n[[:space:]]+namtor-kde($|[[:space:]])" "$SPEC"; then
     not_ok "namtor-kde subpackage is back (the Plasma KCM was removed)"
 else
     ok "namtor-kde subpackage removed"
@@ -142,7 +156,7 @@ for br in cmake qt6-qtbase-devel kf6-kirigami-devel kf6-kcoreaddons-devel extra-
 done
 
 # Each subpackage must have its own %description.
-check "namtor-ui has %description" 'grep -qE "^%description[[:space:]]+ui($|[[:space:]])" "$SPEC" || grep -qE "^%description[[:space:]]+-n[[:space:]]+namtor-ui($|[[:space:]])" "$SPEC"' true
+check "namtor-ui has %description" 'grep -qE "^%description[[:space:]]+ui($|[[:space:]])" "$SPEC" || grep_all -E "^%description[[:space:]]+-n[[:space:]]+namtor-ui($|[[:space:]])" "$SPEC"' true
 
 # ---------------------------------------------------------------------------
 # 2. %files sections exist per subpackage
@@ -155,7 +169,7 @@ if grep -qE "^%files[[:space:]]*$" "$SPEC"; then
 else
     not_ok "core %files (bare) present"
 fi
-check "namtor-ui %files present" 'grep -qE "^%files[[:space:]]+ui($|[[:space:]])" "$SPEC" || grep -qE "^%files[[:space:]]+-n[[:space:]]+namtor-ui($|[[:space:]])" "$SPEC"' true
+check "namtor-ui %files present" 'grep -qE "^%files[[:space:]]+ui($|[[:space:]])" "$SPEC" || grep_all -E "^%files[[:space:]]+-n[[:space:]]+namtor-ui($|[[:space:]])" "$SPEC"' true
 
 # Helper: body of a %files section (handles `-n namtor-foo` and `foo` forms).
 files_body() {
@@ -179,7 +193,7 @@ files_body() {
 CORE_FILES="$(files_body "")"
 UI_FILES="$(files_body ui)"
 
-contains() { printf '%s\n' "$1" | grep -qE -- "$2"; }
+contains() { printf '%s\n' "$1" | grep_all -E -- "$2"; }
 
 # ---------------------------------------------------------------------------
 # 3. Core %files — the single namtor binary + namtor-cli symlink, PAM,
@@ -309,37 +323,37 @@ core_requires="$(awk '
 ' "$SPEC")"
 
 # The UI subpackage requires core exactly once with version-release pin.
-if printf '%s\n' "$ui_requires" | grep -qE 'Requires:[[:space:]]+%?\{?name\}?[[:space:]]*=[[:space:]]*%?\{?version\}?-%?\{?release\}?'; then
+if printf '%s\n' "$ui_requires" | grep_all -E 'Requires:[[:space:]]+%?\{?name\}?[[:space:]]*=[[:space:]]*%?\{?version\}?-%?\{?release\}?'; then
     ok "ui Requires: namtor = %{version}-%{release}"
 else
     not_ok "ui Requires: namtor = %{version}-%{release}"
 fi
 # The UI subpackage pulls GTK4 + libadwaita.
-if printf '%s\n' "$ui_requires" | grep -qi 'gtk4'; then ok "ui Requires gtk4"; else not_ok "ui Requires gtk4"; fi
-if printf '%s\n' "$ui_requires" | grep -qi 'libadwaita'; then ok "ui Requires libadwaita"; else not_ok "ui Requires libadwaita"; fi
+if printf '%s\n' "$ui_requires" | grep_all -i 'gtk4'; then ok "ui Requires gtk4"; else not_ok "ui Requires gtk4"; fi
+if printf '%s\n' "$ui_requires" | grep_all -i 'libadwaita'; then ok "ui Requires libadwaita"; else not_ok "ui Requires libadwaita"; fi
 # The desktop subpackage must NOT pull Qt6/KF6 — nothing in the tree does
 # any more.
-if printf '%s\n' "$ui_requires" | grep -qiE 'qt6|kf6|kirigami|kcoreaddons'; then
+if printf '%s\n' "$ui_requires" | grep_all -iE 'qt6|kf6|kirigami|kcoreaddons'; then
     not_ok "ui Requires Qt6/KF6 (forbidden)"
 else
     ok "ui has no Qt6/KF6 Requires"
 fi
 
 # Core must NOT pull GTK4/libadwaita or Qt6/KF6 runtime.
-if printf '%s\n' "$core_requires" | grep -qiE 'gtk4|libadwaita'; then
+if printf '%s\n' "$core_requires" | grep_all -iE 'gtk4|libadwaita'; then
     not_ok "core Requires GTK4/libadwaita (must be in subpackages)"
 else
     ok "core has no GTK4/libadwaita Requires"
 fi
-if printf '%s\n' "$core_requires" | grep -qiE 'qt6|kf6|kirigami|kcoreaddons'; then
+if printf '%s\n' "$core_requires" | grep_all -iE 'qt6|kf6|kirigami|kcoreaddons'; then
     not_ok "core Requires Qt6/KF6 (must be in subpackages)"
 else
     ok "core has no Qt6/KF6 Requires"
 fi
 # Core must pull onnxruntime + pam + systemd.
-if printf '%s\n' "$core_requires" | grep -qi 'onnxruntime'; then ok "core Requires onnxruntime"; else not_ok "core Requires onnxruntime"; fi
-if printf '%s\n' "$core_requires" | grep -qi 'pam'; then ok "core Requires pam"; else not_ok "core Requires pam"; fi
-if printf '%s\n' "$core_requires" | grep -qi 'systemd'; then ok "core Requires systemd"; else not_ok "core Requires systemd"; fi
+if printf '%s\n' "$core_requires" | grep_all -i 'onnxruntime'; then ok "core Requires onnxruntime"; else not_ok "core Requires onnxruntime"; fi
+if printf '%s\n' "$core_requires" | grep_all -i 'pam'; then ok "core Requires pam"; else not_ok "core Requires pam"; fi
+if printf '%s\n' "$core_requires" | grep_all -i 'systemd'; then ok "core Requires systemd"; else not_ok "core Requires systemd"; fi
 
 # ---------------------------------------------------------------------------
 # 8. License + Source fields correct
@@ -349,9 +363,9 @@ echo "--- (8) License + Source fields ---"
 # License must be a SPDX AND-expression covering GPL-3.0-only + MIT + Apache-2.0
 # (the bundled models carry their own permissive licences).
 license_line="$(grep -E '^License:' "$SPEC" | head -1)"
-if printf '%s\n' "$license_line" | grep -q 'GPL-3.0-only'; then ok "License has GPL-3.0-only"; else not_ok "License has GPL-3.0-only"; fi
-if printf '%s\n' "$license_line" | grep -q 'MIT'; then ok "License has MIT"; else not_ok "License has MIT"; fi
-if printf '%s\n' "$license_line" | grep -q 'Apache-2.0'; then ok "License has Apache-2.0"; else not_ok "License has Apache-2.0"; fi
+if printf '%s\n' "$license_line" | grep_all 'GPL-3.0-only'; then ok "License has GPL-3.0-only"; else not_ok "License has GPL-3.0-only"; fi
+if printf '%s\n' "$license_line" | grep_all 'MIT'; then ok "License has MIT"; else not_ok "License has MIT"; fi
+if printf '%s\n' "$license_line" | grep_all 'Apache-2.0'; then ok "License has Apache-2.0"; else not_ok "License has Apache-2.0"; fi
 
 # Source0 + Source1 present (release tarball + model archive).
 check "Source0 present" 'grep -qE "^Source0:" "$SPEC"' true
@@ -385,20 +399,20 @@ echo "--- (11) no network fetch / models bundled / PAM off ---"
 # %install must extract Source1 (the model archive) — no curl/wget. Strip
 # comments so a doc line mentioning "no curl" does not trip the check.
 install_body="$(section_body install | sed '/^[[:space:]]*#/d')"
-if printf '%s\n' "$install_body" | grep -qE 'curl|wget|ftp'; then
+if printf '%s\n' "$install_body" | grep_all -E 'curl|wget|ftp'; then
     not_ok "%install performs network fetch (forbidden)"
 else
     ok "%install performs no network fetch"
 fi
-check "%install extracts model archive (tar)" 'printf "%s\n" "$install_body" | grep -qE "tar[[:space:]]+-xzf.*models"' true
+check "%install extracts model archive (tar)" 'printf "%s\n" "$install_body" | grep_all -E "tar[[:space:]]+-xzf.*models"' true
 # Pre-written licence.accepted records (auto-accept permissive model licences).
-check "%install pre-writes licence.accepted" 'printf "%s\n" "$install_body" | grep -q "licence.accepted"' true
+check "%install pre-writes licence.accepted" 'printf "%s\n" "$install_body" | grep_all "licence.accepted"' true
 
 # PAM off by default: %post must not CALL pam-install.sh or write /etc/pam.d.
 # Strip comment lines first — comments may mention /etc/pam.d to document
 # that the hook does NOT touch it.
 post_body="$(section_body post | sed '/^[[:space:]]*#/d')"
-if printf '%s\n' "$post_body" | grep -qE 'pam-install\.sh|/etc/pam\.d'; then
+if printf '%s\n' "$post_body" | grep_all -E 'pam-install\.sh|/etc/pam\.d'; then
     not_ok "%post edits PAM (must be default-off)"
 else
     ok "%post does not edit PAM (default-off)"
@@ -411,9 +425,9 @@ echo "--- (12) removal purges approved state ---"
 # %postun $1 == 0 path must invoke the cached lifecycle post-remove (which
 # drives `namtor-pam-edit purge` and removes runtime dirs).
 postun_body="$(section_body postun)"
-check "%postun handles removal (\$1 -eq 0)" 'printf "%s\n" "$postun_body" | grep -qE "\\\$1[[:space:]]*-eq[[:space:]]*0"' true
-check "%postun calls cached post-remove on purge" 'printf "%s\n" "$postun_body" | grep -qE "post-remove"' true
-check "%postun removes the lifecycle cache" 'printf "%s\n" "$postun_body" | grep -qE "rm[[:space:]]+.*namtor-lifecycle\.sh"' true
+check "%postun handles removal (\$1 -eq 0)" 'printf "%s\n" "$postun_body" | grep_all -E "\\\$1[[:space:]]*-eq[[:space:]]*0"' true
+check "%postun calls cached post-remove on purge" 'printf "%s\n" "$postun_body" | grep_all -E "post-remove"' true
+check "%postun removes the lifecycle cache" 'printf "%s\n" "$postun_body" | grep_all -E "rm[[:space:]]+.*namtor-lifecycle\.sh"' true
 
 # ---------------------------------------------------------------------------
 # Summary

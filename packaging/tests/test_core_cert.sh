@@ -32,6 +32,20 @@
 
 set -uo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` is unreliable: `grep -q` exits on the
+# first match, the writer on the left then dies with SIGPIPE, and pipefail
+# reports the WRITER's status — so a match can be reported as a miss. It stays
+# latent until the input outgrows the 64 KiB pipe buffer, which is how it
+# surfaced: test_desktop_cert read a real `test result: FAILED` out of full
+# cargo output as "no failures". In an "expected absent" check the same race
+# turns a forbidden match into a silent pass. Without -q grep never exits
+# early, so nothing upstream is signalled, and the exit status is unchanged:
+# 0 match, 1 no match, 2 error.
+grep_all() { grep "$@" >/dev/null; }
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGING_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PACKAGING_DIR/.." && pwd)"
@@ -267,7 +281,7 @@ else
 fi
 
 # At least one .onnx model present.
-if [[ -d "$models_dir" ]] && find "$models_dir" -name '*.onnx' -type f | grep -q .; then
+if [[ -d "$models_dir" ]] && find "$models_dir" -name '*.onnx' -type f | grep_all .; then
     ok "bundled ONNX models present"
 else
     not_ok "no bundled ONNX models under $models_dir"
@@ -472,7 +486,7 @@ fi
 # The lifecycle helper's post-install phase must not call pam-edit. Verify
 # structurally: lifecycle.sh post-install has no call_pam_edit invocation.
 post_install_body="$(awk '/namtor_lc_phase_post_install\(\)/{f=1;next} f&&/^namtor_lc_phase_/{exit} f{print}' "$LIFECYCLE_SRC")"
-if printf '%s\n' "$post_install_body" | grep -qE 'call_pam_edit'; then
+if printf '%s\n' "$post_install_body" | grep_all -E 'call_pam_edit'; then
     not_ok "lifecycle.sh post-install calls pam-edit (should not)"
 else
     ok "lifecycle.sh post-install does not call pam-edit"
@@ -530,7 +544,7 @@ else
 fi
 
 if [[ -x "$NAMTOR_BIN" ]]; then
-    if "$NAMTOR_BIN" worker --help 2>&1 | grep -qE 'apply-sandbox'; then
+    if "$NAMTOR_BIN" worker --help 2>&1 | grep_all -E 'apply-sandbox'; then
         ok "namtor worker subcommand exposes --apply-sandbox"
     else
         not_ok "namtor worker subcommand missing --apply-sandbox"
@@ -592,7 +606,7 @@ fi
 # The CLI must have a diagnostics subcommand. We check the binary's --help
 # output (unprivileged, no daemon needed) and the source module.
 if [[ -x "$NAMTOR_BIN" ]]; then
-    if "$NAMTOR_BIN" cli --help 2>&1 | grep -qE 'diagnostics'; then
+    if "$NAMTOR_BIN" cli --help 2>&1 | grep_all -E 'diagnostics'; then
         ok "namtor cli has diagnostics subcommand"
     else
         not_ok "namtor cli missing diagnostics subcommand"
@@ -654,7 +668,7 @@ if [[ -f "$CLIENT_TOML" ]]; then
     else
         ok "namtor-client has no gtk4/libadwaita/qt6/gio/glib/x11/wayland dependency"
     fi
-    if grep -A20 '^zbus\s*=' "$CLIENT_TOML" | grep -qE '"(gio|glib)"'; then
+    if grep -A20 '^zbus\s*=' "$CLIENT_TOML" | grep_all -E '"(gio|glib)"'; then
         not_ok "namtor-client's zbus dependency enables the gio/glib feature"
     else
         ok "namtor-client's zbus dependency does not enable gio/glib features"
@@ -721,7 +735,7 @@ else
     not_ok "namtor emitter-off not staged"
 fi
 if [[ -x "$NAMTOR_BIN" ]]; then
-    if "$NAMTOR_BIN" emitter-off --help 2>&1 | grep -qE '<device>'; then
+    if "$NAMTOR_BIN" emitter-off --help 2>&1 | grep_all -E '<device>'; then
         ok "namtor emitter-off subcommand present"
     else
         not_ok "namtor emitter-off subcommand missing"

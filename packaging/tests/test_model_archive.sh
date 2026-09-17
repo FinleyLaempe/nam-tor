@@ -19,6 +19,20 @@
 
 set -euo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` is unreliable: `grep -q` exits on the
+# first match, the writer on the left then dies with SIGPIPE, and pipefail
+# reports the WRITER's status — so a match can be reported as a miss. It stays
+# latent until the input outgrows the 64 KiB pipe buffer, which is how it
+# surfaced: test_desktop_cert read a real `test result: FAILED` out of full
+# cargo output as "no failures". In an "expected absent" check the same race
+# turns a forbidden match into a silent pass. Without -q grep never exits
+# early, so nothing upstream is signalled, and the exit status is unchanged:
+# 0 match, 1 no match, 2 error.
+grep_all() { grep "$@" >/dev/null; }
+
+
 srcdir="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 builder="$srcdir/packaging/build-model-archive.sh"
 manifest="$srcdir/packaging/model-manifest.toml"
@@ -145,7 +159,7 @@ for required in \
     licences/minifasnet_pad.NOTICE \
     PROVENANCE.txt \
     MANIFEST.json; do
-    if echo "$contents" | grep -qxF "$required"; then
+    if echo "$contents" | grep_all -xF "$required"; then
         pass=$((pass + 1))
         echo "  PASS: archive contains $required"
     else

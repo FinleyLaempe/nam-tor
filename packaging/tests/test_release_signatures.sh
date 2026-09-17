@@ -29,6 +29,20 @@
 
 set -euo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` is unreliable: `grep -q` exits on the
+# first match, the writer on the left then dies with SIGPIPE, and pipefail
+# reports the WRITER's status — so a match can be reported as a miss. It stays
+# latent until the input outgrows the 64 KiB pipe buffer, which is how it
+# surfaced: test_desktop_cert read a real `test result: FAILED` out of full
+# cargo output as "no failures". In an "expected absent" check the same race
+# turns a forbidden match into a silent pass. Without -q grep never exits
+# early, so nothing upstream is signalled, and the exit status is unchanged:
+# 0 match, 1 no match, 2 error.
+grep_all() { grep "$@" >/dev/null; }
+
+
 srcdir="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 sign_script="$srcdir/packaging/sign-packages.sh"
 verify_script="$srcdir/packaging/verify-reproducible.sh"
@@ -93,7 +107,7 @@ for pattern in \
     "\\.deb" \
     "SHA256SUMS" \
     "namtor\\.provenance\\.json"; do
-    if printf '%s\n' "$sign_body" | grep -qE "$pattern"; then
+    if printf '%s\n' "$sign_body" | grep_all -E "$pattern"; then
         pass=$((pass + 1))
         echo "  PASS: sign-packages.sh references /$pattern/"
     else
@@ -104,12 +118,12 @@ for pattern in \
 done
 
 # Release-dir mode flag must be parsed.
-if printf '%s\n' "$sign_body" | grep -q -- '--release-dir'; then
+if printf '%s\n' "$sign_body" | grep_all -- '--release-dir'; then
     pass=$((pass + 1)); echo "  PASS: sign-packages.sh parses --release-dir"
 else
     fail=$((fail + 1)); failures+=("--release-dir not parsed"); echo "  FAIL: --release-dir not parsed"
 fi
-if printf '%s\n' "$sign_body" | grep -q -- '--checksums'; then
+if printf '%s\n' "$sign_body" | grep_all -- '--checksums'; then
     pass=$((pass + 1)); echo "  PASS: sign-packages.sh parses --checksums"
 else
     fail=$((fail + 1)); failures+=("--checksums not parsed"); echo "  FAIL: --checksums not parsed"
@@ -117,7 +131,7 @@ fi
 
 echo "## Gate 2: verify-reproducible.sh accepts --release-dir and emits kinds"
 verify_body="$(cat "$verify_script")"
-if printf '%s\n' "$verify_body" | grep -q -- '--release-dir'; then
+if printf '%s\n' "$verify_body" | grep_all -- '--release-dir'; then
     pass=$((pass + 1)); echo "  PASS: verify-reproducible.sh parses --release-dir"
 else
     fail=$((fail + 1)); failures+=("verify-reproducible.sh missing --release-dir"); echo "  FAIL: verify-reproducible.sh missing --release-dir"
@@ -126,7 +140,7 @@ fi
 # arch-package, fedora-package, debian-package, source-tarball, checksums,
 # provenance).
 for kind in model-archive arch-package fedora-package debian-package source-tarball checksums provenance; do
-    if printf '%s\n' "$verify_body" | grep -qF "\"$kind\""; then
+    if printf '%s\n' "$verify_body" | grep_all -F "\"$kind\""; then
         pass=$((pass + 1)); echo "  PASS: verify-reproducible.sh emits kind=$kind"
     else
         fail=$((fail + 1)); failures+=("verify-reproducible.sh missing kind=$kind"); echo "  FAIL: verify-reproducible.sh missing kind=$kind"

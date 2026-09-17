@@ -23,7 +23,7 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends \
                 libgtk-4-dev libadwaita-1-dev libpam0g-dev libssl-dev \
-                libudev-dev libseccomp-dev pkg-config
+                libudev-dev libseccomp-dev pkg-config xvfb
       - name: cargo build --release (all shippable crates)
         run: |
             cargo build --release --locked \
@@ -70,7 +70,11 @@ jobs:
       # and runs the namtor-ui suites, and packaging-gates builds neither.
       # It was unwired and had drifted to 13 failures.
       - name: Gate — desktop certification (single cross-desktop UI)
-        run: bash packaging/tests/test_desktop_cert.sh
+        # Under a virtual display. This gate runs the namtor-ui suites, most of
+        # which build real GTK widgets, and this job had no display: on its
+        # first CI run only 73 of 177 tests passed. The `rust` job already runs
+        # the same suites under xvfb-run; this gate needs the same.
+        run: xvfb-run -a bash packaging/tests/test_desktop_cert.sh
 
   rust:
     runs-on: ubuntu-latest

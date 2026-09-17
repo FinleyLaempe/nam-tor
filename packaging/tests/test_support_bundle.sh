@@ -16,6 +16,20 @@
 
 set -uo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` is unreliable: `grep -q` exits on the
+# first match, the writer on the left then dies with SIGPIPE, and pipefail
+# reports the WRITER's status — so a match can be reported as a miss. It stays
+# latent until the input outgrows the 64 KiB pipe buffer, which is how it
+# surfaced: test_desktop_cert read a real `test result: FAILED` out of full
+# cargo output as "no failures". In an "expected absent" check the same race
+# turns a forbidden match into a silent pass. Without -q grep never exits
+# early, so nothing upstream is signalled, and the exit status is unchanged:
+# 0 match, 1 no match, 2 error.
+grep_all() { grep "$@" >/dev/null; }
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGING_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PACKAGING_DIR/.." && pwd)"
@@ -41,7 +55,7 @@ run_test() {
     local desc="$2"
     local out
     out=$(cargo test -p namtor-cli --lib -- "$test_name" 2>&1)
-    if echo "$out" | grep -q "test result: ok"; then
+    if echo "$out" | grep_all "test result: ok"; then
         ok "$desc"
     else
         not_ok "$desc"
@@ -68,7 +82,7 @@ FORBIDDEN_TOKENS=(
 
 echo "== (a) cargo test — diagnostics run unprivileged =="
 
-if cargo test -p namtor-cli --lib 2>&1 | grep -q "test result: ok"; then
+if cargo test -p namtor-cli --lib 2>&1 | grep_all "test result: ok"; then
     ok "cargo test -p namtor-cli --lib passes"
 else
     not_ok "cargo test -p namtor-cli --lib failed"
@@ -93,7 +107,7 @@ echo "== (b) privacy scan — no forbidden tokens =="
 PRIVACY_OUTPUT=$(cargo test -p namtor-cli --lib -- full_report_passes_privacy_scanner --nocapture 2>&1)
 
 for token in "${FORBIDDEN_TOKENS[@]}"; do
-    if echo "$PRIVACY_OUTPUT" | grep -qi "$token"; then
+    if echo "$PRIVACY_OUTPUT" | grep_all -i "$token"; then
         not_ok "forbidden token '$token' found in diagnostic output"
     else
         ok "forbidden token '$token' absent from diagnostic output"

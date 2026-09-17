@@ -44,6 +44,20 @@
 
 set -uo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` is unreliable: `grep -q` exits on the
+# first match, the writer on the left then dies with SIGPIPE, and pipefail
+# reports the WRITER's status — so a match can be reported as a miss. It stays
+# latent until the input outgrows the 64 KiB pipe buffer, which is how it
+# surfaced: test_desktop_cert read a real `test result: FAILED` out of full
+# cargo output as "no failures". In an "expected absent" check the same race
+# turns a forbidden match into a silent pass. Without -q grep never exits
+# early, so nothing upstream is signalled, and the exit status is unchanged:
+# 0 match, 1 no match, 2 error.
+grep_all() { grep "$@" >/dev/null; }
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGING_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PACKAGING_DIR/.." && pwd)"
@@ -205,8 +219,10 @@ echo "[d] UI presenter flow unit tests"
 # gate reported "not covered" for scenarios that were in fact covered — and a
 # filter matching nothing prints `test result: ok. 0 passed`, so a renamed test
 # was indistinguishable from a failing one and got reported as "failed".
-UI_TEST_OUT="$(cargo test -p namtor-ui --no-fail-fast 2>&1)"
-if printf '%s' "$UI_TEST_OUT" | grep -qE 'test result: FAILED'; then
+# Single-threaded, as the `rust` CI job runs it: GTK must be driven from one
+# thread, and parallel widget tests are nondeterministic under a virtual display.
+UI_TEST_OUT="$(cargo test -p namtor-ui --no-fail-fast -- --test-threads=1 2>&1)"
+if printf '%s' "$UI_TEST_OUT" | grep_all -E 'test result: FAILED'; then
     not_ok "namtor-ui test suite has failures"
     UI_PASSED=0
 else
@@ -234,7 +250,7 @@ ui_test_present() {
     local label="$1"; shift
     local t
     for t in "$@"; do
-        if printf '%s\n' "$UI_TEST_NAMES" | grep -qxF "$t"; then
+        if printf '%s\n' "$UI_TEST_NAMES" | grep_all -xF "$t"; then
             ok "$label (covered by $t)"
             return 0
         fi
@@ -545,14 +561,14 @@ fi
 echo ""
 echo "[p] Executable linkage (namtor-ui binary)"
 if grep -q 'name = "namtor-enroll-wizard"' "$UI_CRATE/Cargo.toml" \
-   || grep -q 'path = "src/bin/wizard.rs"' "$UI_CRATE/Cargo.toml"; then
+   || grep_all 'path = "src/bin/wizard.rs"' "$UI_CRATE/Cargo.toml"; then
     ok "namtor-ui Cargo.toml declares namtor-enroll-wizard binary"
 else
     not_ok "namtor-ui Cargo.toml missing binary declaration"
 fi
 check_file "wizard.rs binary source" "$UI_CRATE/src/bin/wizard.rs"
 if grep -A6 'dest = "/usr/bin/namtor-enroll-wizard"' "$MANIFEST" \
-   | grep -q 'src = "target/release/namtor-enroll-wizard"'; then
+   | grep_all 'src = "target/release/namtor-enroll-wizard"'; then
     ok "install-manifest maps namtor-enroll-wizard to target/release binary"
 else
     not_ok "install-manifest binary source mapping missing"
@@ -632,7 +648,7 @@ echo "[r] Core package GTK-free (no gtk4/libadwaita in core deps)"
 ARCH_PKGBUILD="$PACKAGING_DIR/arch/PKGBUILD"
 core_body_arch="$(awk '/^package_namtor\(\)/{f=1} f{print} f&&/^}/{exit}' "$ARCH_PKGBUILD")"
 for nodep in gtk4 libadwaita; do
-    if printf '%s\n' "$core_body_arch" | grep -qE "['\"]${nodep}['\"]"; then
+    if printf '%s\n' "$core_body_arch" | grep_all -E "['\"]${nodep}['\"]"; then
         not_ok "Arch core depends on $nodep (must not)"
     else
         ok "Arch core does not depend on $nodep"
@@ -641,7 +657,7 @@ done
 SPEC="$PACKAGING_DIR/fedora/namtor.spec"
 core_requires_fed=$(awk '/^%package/{exit} /^Requires:/{print}' "$SPEC")
 for nodep in gtk4 libadwaita; do
-    if printf '%s\n' "$core_requires_fed" | grep -qi "$nodep"; then
+    if printf '%s\n' "$core_requires_fed" | grep_all -i "$nodep"; then
         not_ok "Fedora core Requires $nodep (must not)"
     else
         ok "Fedora core does not Require $nodep"
@@ -650,7 +666,7 @@ done
 DEBIAN_CONTROL="$PACKAGING_DIR/debian/control"
 core_depends_deb=$(awk '/^Package: namtor$/{f=1;next} f&&/^Depends:/{f=2;next} f==2&&/^[[:space:]]/{gsub(/[[:space:]]/,"");print;next} f==2&&!/^[[:space:]]/{exit}' "$DEBIAN_CONTROL" | tr -d '\n')
 for nodep in libgtk-4-1 libadwaita-1-0; do
-    if printf '%s' "$core_depends_deb" | grep -q "$nodep"; then
+    if printf '%s' "$core_depends_deb" | grep_all "$nodep"; then
         not_ok "Debian core Depends on $nodep (must not)"
     else
         ok "Debian core does not Depend on $nodep"
@@ -663,13 +679,13 @@ done
 echo ""
 echo "[s] namtor-ui depends on namtor (exact version)"
 ui_body_arch="$(awk '/^package_namtor-ui\(\)/{f=1} f{print} f&&/^}/{exit}' "$ARCH_PKGBUILD")"
-if printf '%s\n' "$ui_body_arch" | grep -qF 'namtor=$pkgver'; then
+if printf '%s\n' "$ui_body_arch" | grep_all -F 'namtor=$pkgver'; then
     ok "Arch ui depends on namtor=\$pkgver (exact)"
 else
     not_ok "Arch ui missing namtor=\$pkgver exact dep"
 fi
 ui_requires_fed=$(awk '/^%package ui/{f=1;next} f&&/^Requires:/{print} f&&/^%/{exit}' "$SPEC")
-if printf '%s\n' "$ui_requires_fed" | grep -q '%{name} = %{version}-%{release}'; then
+if printf '%s\n' "$ui_requires_fed" | grep_all '%{name} = %{version}-%{release}'; then
     ok "Fedora ui Requires namtor = ver-rel (exact)"
 else
     not_ok "Fedora ui missing exact namtor Requires"
@@ -682,7 +698,7 @@ ui_depends_deb=$(awk '/^Package: namtor-ui$/{f=1;next} f&&/^Depends:/{f=2;next} 
 deb_ver="$(sed -n '1s/.*(\([^)]*\)).*/\1/p' "$PACKAGING_DIR/debian/changelog")"
 if [[ -z "$deb_ver" ]]; then
     not_ok "could not read version from debian/changelog"
-elif printf '%s' "$ui_depends_deb" | grep -qF "namtor(=${deb_ver})"; then
+elif printf '%s' "$ui_depends_deb" | grep_all -F "namtor(=${deb_ver})"; then
     ok "Debian ui Depends on namtor (= ${deb_ver}) (exact)"
 else
     not_ok "Debian ui missing exact namtor Depends (= ${deb_ver}); got: ${ui_depends_deb}"

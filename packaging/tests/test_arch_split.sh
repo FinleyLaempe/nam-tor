@@ -29,6 +29,20 @@
 
 set -uo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` is unreliable: `grep -q` exits on the
+# first match, the writer on the left then dies with SIGPIPE, and pipefail
+# reports the WRITER's status — so a match can be reported as a miss. It stays
+# latent until the input outgrows the 64 KiB pipe buffer, which is how it
+# surfaced: test_desktop_cert read a real `test result: FAILED` out of full
+# cargo output as "no failures". In an "expected absent" check the same race
+# turns a forbidden match into a silent pass. Without -q grep never exits
+# early, so nothing upstream is signalled, and the exit status is unchanged:
+# 0 match, 1 no match, 2 error.
+grep_all() { grep "$@" >/dev/null; }
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGING_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PACKAGING_DIR/.." && pwd)"
@@ -186,7 +200,7 @@ core_body="$(extract_func 'package_namtor' "$PKGBUILD")"
 # Core deps: onnxruntime, pam, systemd, gcc-libs (no gtk4/libadwaita/qt6/kde).
 for dep in onnxruntime pam systemd gcc-libs; do
     # Check the depends array inside package_namtor.
-    if printf '%s\n' "$core_body" | grep -qE "['\"]${dep}['\"]|['\"]${dep}[=<>]| ${dep}['\" ]" ; then
+    if printf '%s\n' "$core_body" | grep_all -E "['\"]${dep}['\"]|['\"]${dep}[=<>]| ${dep}['\" ]" ; then
         ok "core depends on $dep"
     else
         not_ok "core missing dependency: $dep"
@@ -195,7 +209,7 @@ done
 
 # Core must NOT depend on desktop libs.
 for nodep in gtk4 libadwaita qt6-base kirigami kcoreaddons; do
-    if printf '%s\n' "$core_body" | grep -qE "depends=.*['\"]${nodep}['\"]|depends=.* ${nodep}['\" ]" ; then
+    if printf '%s\n' "$core_body" | grep_all -E "depends=.*['\"]${nodep}['\"]|depends=.* ${nodep}['\" ]" ; then
         not_ok "core depends on $nodep (should not — desktop dep in core)"
     else
         ok "core does not depend on $nodep"
@@ -203,21 +217,21 @@ for nodep in gtk4 libadwaita qt6-base kirigami kcoreaddons; do
 done
 
 # Core stages --package core.
-if printf '%s\n' "$core_body" | grep -q -- '--package core'; then
+if printf '%s\n' "$core_body" | grep_all -- '--package core'; then
     ok "core stages --package core"
 else
     not_ok "core does not stage --package core"
 fi
 
 # Core bundles models.
-if printf '%s\n' "$core_body" | grep -q 'var/lib/namtor/models'; then
+if printf '%s\n' "$core_body" | grep_all 'var/lib/namtor/models'; then
     ok "core bundles models"
 else
     not_ok "core does not bundle models"
 fi
 
 # Core pre-writes licence acceptance records.
-if printf '%s\n' "$core_body" | grep -q 'licence.accepted'; then
+if printf '%s\n' "$core_body" | grep_all 'licence.accepted'; then
     ok "core pre-writes licence acceptance records"
 else
     not_ok "core does not pre-write licence acceptance records"
@@ -230,7 +244,7 @@ echo "--- (d) ui package deps + content ---"
 ui_body="$(extract_func 'package_namtor-ui' "$PKGBUILD")"
 
 # The UI package depends on namtor=exact version.
-if printf '%s\n' "$ui_body" | grep -qF 'namtor=$pkgver'; then
+if printf '%s\n' "$ui_body" | grep_all -F 'namtor=$pkgver'; then
     ok "ui depends on namtor=\$pkgver (exact version)"
 else
     not_ok "ui does not depend on namtor=\$pkgver (exact version)"
@@ -238,7 +252,7 @@ fi
 
 # The UI package depends on gtk4 + libadwaita.
 for dep in gtk4 libadwaita; do
-    if printf '%s\n' "$ui_body" | grep -qE "['\"]${dep}['\"]| ${dep}['\" ]"; then
+    if printf '%s\n' "$ui_body" | grep_all -E "['\"]${dep}['\"]| ${dep}['\" ]"; then
         ok "ui depends on $dep"
     else
         not_ok "ui missing dependency: $dep"
@@ -247,7 +261,7 @@ done
 
 # The UI package must NOT depend on Qt/KDE.
 for nodep in qt6-base kirigami kcoreaddons; do
-    if printf '%s\n' "$ui_body" | grep -qE "depends=.*['\"]${nodep}['\"]|depends=.* ${nodep}['\" ]"; then
+    if printf '%s\n' "$ui_body" | grep_all -E "depends=.*['\"]${nodep}['\"]|depends=.* ${nodep}['\" ]"; then
         not_ok "ui depends on $nodep (should not — Qt/KDE dep in the GTK UI)"
     else
         ok "ui does not depend on $nodep"
@@ -255,7 +269,7 @@ for nodep in qt6-base kirigami kcoreaddons; do
 done
 
 # The UI package stages --package ui.
-if printf '%s\n' "$ui_body" | grep -q -- '--package ui'; then
+if printf '%s\n' "$ui_body" | grep_all -- '--package ui'; then
     ok "ui stages --package ui"
 else
     not_ok "ui does not stage --package ui"
@@ -271,7 +285,7 @@ echo "--- (e) desktop package obsoletes namtor-gnome and namtor-kde ---"
 # provides/conflicts/replaces the old package lingers and the install fails
 # on a file conflict.
 for field in provides conflicts replaces; do
-    if printf '%s\n' "$ui_body" | grep -qE "${field}=\\(.*namtor-gnome"; then
+    if printf '%s\n' "$ui_body" | grep_all -E "${field}=\\(.*namtor-gnome"; then
         ok "desktop package ${field}=('namtor-gnome') (rename migration)"
     else
         not_ok "desktop package does not ${field} namtor-gnome — the pre-rename package will file-conflict"
@@ -300,12 +314,12 @@ fi
 # has it installed has an unsatisfiable dependency and pacman aborts the
 # WHOLE transaction rather than upgrading the core package. The surviving
 # desktop package must therefore replace and conflict with it.
-if printf '%s\n' "$ui_body" | grep -qE "replaces=\(.*namtor-kde"; then
+if printf '%s\n' "$ui_body" | grep_all -E "replaces=\(.*namtor-kde"; then
     ok "desktop package replaces=('namtor-kde') (unblocks core upgrades)"
 else
     not_ok "desktop package does not replace namtor-kde — a leftover namtor-kde will block core upgrades"
 fi
-if printf '%s\n' "$ui_body" | grep -qE "conflicts=\(.*namtor-kde"; then
+if printf '%s\n' "$ui_body" | grep_all -E "conflicts=\(.*namtor-kde"; then
     ok "desktop package conflicts=('namtor-kde')"
 else
     not_ok "desktop package does not conflict with namtor-kde"
@@ -332,7 +346,7 @@ done
 echo "--- (f) all sha256sums pinned (no SKIP) ---"
 
 sha_entries="$(printf '%s\n' "$pb_output" | awk -F= '/^sha256sum_entry=/{print $2}')"
-if printf '%s\n' "$sha_entries" | grep -qi 'SKIP'; then
+if printf '%s\n' "$sha_entries" | grep_all -i 'SKIP'; then
     not_ok "sha256sums contains SKIP (must be pinned)"
 else
     ok "sha256sums contains no SKIP"
@@ -368,7 +382,7 @@ else
 fi
 
 # Verify the install hook is referenced by the core package function.
-if printf '%s\n' "$core_body" | grep -q 'install='; then
+if printf '%s\n' "$core_body" | grep_all 'install='; then
     ok "core package function sets install= variable"
 else
     not_ok "core package function does not set install="
@@ -384,7 +398,7 @@ for body_name in ui_body; do
     install_line="$(printf '%s\n' "$body" | grep -E '^\s*install=' || true)"
     if [[ -z "$install_line" ]]; then
         ok "$body_name has no install= (no hook)"
-    elif printf '%s\n' "$install_line" | grep -qE "install=(''|\"\"|\s*$)"; then
+    elif printf '%s\n' "$install_line" | grep_all -E "install=(''|\"\"|\s*$)"; then
         ok "$body_name sets install= empty (no hook)"
     else
         not_ok "$body_name sets install='$install_line' (desktop should have no hook)"
@@ -521,7 +535,7 @@ if [[ -n "$paths_core" ]]; then
         usr/lib/systemd/system/namtor-daemon.service \
         usr/lib/sysusers.d/namtor.conf \
         usr/share/namtor/model-manifest.toml; do
-        if printf '%s\n' "$paths_core" | grep -q "^${required}$"; then
+        if printf '%s\n' "$paths_core" | grep_all "^${required}$"; then
             ok "core contains $required"
         else
             not_ok "core missing $required"
@@ -553,7 +567,7 @@ else
     fi
 
     # Verify pkgbase in srcinfo.
-    if printf '%s\n' "$srcinfo_output" | grep -q '^pkgbase = namtor$'; then
+    if printf '%s\n' "$srcinfo_output" | grep_all '^pkgbase = namtor$'; then
         ok "makepkg --printsrcinfo has pkgbase = namtor"
     else
         not_ok "makepkg --printsrcinfo missing pkgbase = namtor"
@@ -561,7 +575,7 @@ else
 
     # Verify each package has its own depends in the srcinfo.
     for pkg in namtor namtor-ui; do
-        if printf '%s\n' "$srcinfo_output" | grep -q "^pkgname = ${pkg}$"; then
+        if printf '%s\n' "$srcinfo_output" | grep_all "^pkgname = ${pkg}$"; then
             ok "makepkg --printsrcinfo includes pkgname = $pkg"
         else
             not_ok "makepkg --printsrcinfo missing pkgname = $pkg"

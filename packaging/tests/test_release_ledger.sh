@@ -26,6 +26,20 @@
 
 set -euo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` is unreliable: `grep -q` exits on the
+# first match, the writer on the left then dies with SIGPIPE, and pipefail
+# reports the WRITER's status — so a match can be reported as a miss. It stays
+# latent until the input outgrows the 64 KiB pipe buffer, which is how it
+# surfaced: test_desktop_cert read a real `test result: FAILED` out of full
+# cargo output as "no failures". In an "expected absent" check the same race
+# turns a forbidden match into a silent pass. Without -q grep never exits
+# early, so nothing upstream is signalled, and the exit status is unchanged:
+# 0 match, 1 no match, 2 error.
+grep_all() { grep "$@" >/dev/null; }
+
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EVIDENCE_DIR="$REPO_ROOT/docs/evidence/public-release"
 STATUS_AUDIT="$REPO_ROOT/docs/evidence/status-audit.md"
@@ -96,11 +110,11 @@ indicates_pass() {
 gate_is_withheld() {
     local label="$1"
     # Match a table row or bullet containing the label and WITHHELD.
-    if grep -E "\*\*${label}\b" "$STATUS_AUDIT" 2>/dev/null | grep -qi "WITHHELD"; then
+    if grep -E "\*\*${label}\b" "$STATUS_AUDIT" 2>/dev/null | grep_all -i "WITHHELD"; then
         return 0
     fi
     # Looser match: label anywhere with WITHHELD nearby (R4/R5/R10/S3 rows).
-    if grep -i "$label" "$STATUS_AUDIT" 2>/dev/null | grep -qi "WITHHELD"; then
+    if grep -i "$label" "$STATUS_AUDIT" 2>/dev/null | grep_all -i "WITHHELD"; then
         return 0
     fi
     return 1
@@ -473,8 +487,8 @@ reconcile_dir_paths() {
     # C. WITHHELD gates in the (temp) status-audit copy
     local withheld_gates=("G1" "G2" "G3" "G4" "G5.5" "R5" "R10" "R4" "S3")
     for g in "${withheld_gates[@]}"; do
-        if ! grep -E "\*\*${g}\b" "$audit" 2>/dev/null | grep -qi "WITHHELD"; then
-            if ! grep -i "$g" "$audit" 2>/dev/null | grep -qi "WITHHELD"; then
+        if ! grep -E "\*\*${g}\b" "$audit" 2>/dev/null | grep_all -i "WITHHELD"; then
+            if ! grep -i "$g" "$audit" 2>/dev/null | grep_all -i "WITHHELD"; then
                 rc=1
             fi
         fi

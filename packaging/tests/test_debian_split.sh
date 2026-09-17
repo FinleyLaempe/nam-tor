@@ -32,6 +32,20 @@
 
 set -uo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` is unreliable: `grep -q` exits on the
+# first match, the writer on the left then dies with SIGPIPE, and pipefail
+# reports the WRITER's status — so a match can be reported as a miss. It stays
+# latent until the input outgrows the 64 KiB pipe buffer, which is how it
+# surfaced: test_desktop_cert read a real `test result: FAILED` out of full
+# cargo output as "no failures". In an "expected absent" check the same race
+# turns a forbidden match into a silent pass. Without -q grep never exits
+# early, so nothing upstream is signalled, and the exit status is unchanged:
+# 0 match, 1 no match, 2 error.
+grep_all() { grep "$@" >/dev/null; }
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGING_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEBIAN_DIR="$PACKAGING_DIR/debian"
@@ -125,7 +139,7 @@ UI_DEPS="$(depends_block "$UI_BODY")"
 echo "--- (b) core Depends (no desktop deps) ---"
 
 for dep in onnxruntime libpam0g systemd; do
-    if printf '%s\n' "$CORE_DEPS" | grep -qE "^${dep}(,|[[:space:]]|$)"; then
+    if printf '%s\n' "$CORE_DEPS" | grep_all -E "^${dep}(,|[[:space:]]|$)"; then
         ok "core Depends on $dep"
     else
         not_ok "core missing dependency: $dep"
@@ -133,7 +147,7 @@ for dep in onnxruntime libpam0g systemd; do
 done
 
 for nodep in libgtk-4-1 libadwaita-1-0 libqt6 kirigami kcoreaddons; do
-    if printf '%s\n' "$CORE_DEPS" | grep -qiE "$nodep"; then
+    if printf '%s\n' "$CORE_DEPS" | grep_all -iE "$nodep"; then
         not_ok "core Depends on $nodep (should not — desktop dep in core)"
     else
         ok "core does not depend on $nodep"
@@ -149,14 +163,14 @@ echo "--- (c) ui Depends ---"
 # so a version bump cannot leave this assertion silently checking the old
 # value while its message claims the new one.
 _deb_ver="$(sed -n '1s/.*(\([^)]*\)).*/\1/p' "$DEBIAN_DIR/changelog")"
-if printf '%s\n' "$UI_DEPS" | grep -qE "namtor[[:space:]]*\(=[[:space:]]*${_deb_ver//./\\.}\)"; then
+if printf '%s\n' "$UI_DEPS" | grep_all -E "namtor[[:space:]]*\(=[[:space:]]*${_deb_ver//./\\.}\)"; then
     ok "ui Depends on namtor (= $_deb_ver) (exact version, from changelog)"
 else
     not_ok "ui does not depend on namtor (= $_deb_ver) (exact version, from changelog)"
 fi
 
 for dep in libgtk-4-1 libadwaita-1-0; do
-    if printf '%s\n' "$UI_DEPS" | grep -qiE "$dep"; then
+    if printf '%s\n' "$UI_DEPS" | grep_all -iE "$dep"; then
         ok "ui Depends on $dep"
     else
         not_ok "ui missing dependency: $dep"
@@ -164,7 +178,7 @@ for dep in libgtk-4-1 libadwaita-1-0; do
 done
 
 for nodep in libqt6 kirigami kcoreaddons; do
-    if printf '%s\n' "$UI_DEPS" | grep -qiE "$nodep"; then
+    if printf '%s\n' "$UI_DEPS" | grep_all -iE "$nodep"; then
         not_ok "ui Depends on $nodep (should not — Qt/KDE dep in the GTK UI)"
     else
         ok "ui does not depend on $nodep"
@@ -182,7 +196,7 @@ echo "--- (d) obsoletion of namtor-gnome and namtor-kde ---"
 # file conflict. Provides keeps anything that depended on the old name
 # satisfiable through the transaction.
 for field in Provides Replaces Breaks; do
-    if printf '%s\n' "$UI_BODY" | grep -qE "^${field}:.*namtor-gnome"; then
+    if printf '%s\n' "$UI_BODY" | grep_all -E "^${field}:.*namtor-gnome"; then
         ok "namtor-ui ${field}: namtor-gnome (rename migration)"
     else
         not_ok "namtor-ui does not ${field} namtor-gnome — the pre-rename package will file-conflict"
@@ -193,12 +207,12 @@ done
 # `Depends: namtor (= <version>)`, so a machine that still has it installed
 # keeps an unsatisfiable dependency and apt holds back the core upgrade.
 # Replaces + Breaks tells apt to remove it as part of the transaction.
-if printf '%s\n' "$UI_BODY" | grep -qE '^Replaces:.*namtor-kde'; then
+if printf '%s\n' "$UI_BODY" | grep_all -E '^Replaces:.*namtor-kde'; then
     ok "namtor-ui Replaces: namtor-kde (unblocks core upgrades)"
 else
     not_ok "namtor-ui does not Replace namtor-kde — a leftover install will block core upgrades"
 fi
-if printf '%s\n' "$UI_BODY" | grep -qE '^Breaks:.*namtor-kde'; then
+if printf '%s\n' "$UI_BODY" | grep_all -E '^Breaks:.*namtor-kde'; then
     ok "namtor-ui Breaks: namtor-kde"
 else
     not_ok "namtor-ui does not Break namtor-kde"
@@ -260,7 +274,7 @@ fi
 
 # The mv command spans two lines with a backslash continuation; use a
 # multi-line awk check instead of a single-line grep.
-if awk '/mv[[:space:]]+.*pam_namtor\.so/{found=1} found && /DEB_HOST_MULTIARCH/{print; exit}' "$RULES" | grep -q .; then
+if awk '/mv[[:space:]]+.*pam_namtor\.so/{found=1} found && /DEB_HOST_MULTIARCH/{print; exit}' "$RULES" | grep_all .; then
     ok "rules mv relocates pam_namtor.so to multiarch path"
 else
     not_ok "rules does not mv pam_namtor.so to multiarch path"
@@ -431,7 +445,7 @@ fi
 # PAM default-off: postinst must not call pam-install.sh or write /etc/pam.d
 if [[ -f "$CORE_POSTINST" ]]; then
     core_postinst_body="$(sed '/^[[:space:]]*#/d' "$CORE_POSTINST")"
-    if printf '%s\n' "$core_postinst_body" | grep -qE 'pam-install\.sh|/etc/pam\.d'; then
+    if printf '%s\n' "$core_postinst_body" | grep_all -E 'pam-install\.sh|/etc/pam\.d'; then
         not_ok "namtor.postinst edits PAM (must be default-off)"
     else
         ok "namtor.postinst does not edit PAM (default-off)"
@@ -460,13 +474,13 @@ fi
 # purge path SHOULD call cached lifecycle post-remove
 if [[ -f "$CORE_POSTRM" ]]; then
     postrm_remove_body="$(awk '/remove\)/{f=1;next} /purge\)|upgrade|abort|disappear|\*\)/{f=0} f' "$CORE_POSTRM")"
-    if printf '%s\n' "$postrm_remove_body" | grep -qE 'post-remove'; then
+    if printf '%s\n' "$postrm_remove_body" | grep_all -E 'post-remove'; then
         not_ok "postrm remove path calls post-remove (should keep state for reinstall)"
     else
         ok "postrm remove path does not call post-remove (keeps state)"
     fi
     postrm_purge_body="$(awk '/purge\)/{f=1;next} /upgrade|abort|disappear|\*\)/{f=0} f' "$CORE_POSTRM")"
-    if printf '%s\n' "$postrm_purge_body" | grep -qE 'post-remove'; then
+    if printf '%s\n' "$postrm_purge_body" | grep_all -E 'post-remove'; then
         ok "postrm purge path calls post-remove (full purge)"
     else
         not_ok "postrm purge path does not call post-remove"
@@ -517,7 +531,7 @@ echo "--- (o) Architecture fields ---"
 
 for pkg in namtor namtor-ui; do
     body="$(stanza_body "$pkg")"
-    if printf '%s\n' "$body" | grep -qE '^Architecture:[[:space:]]+(amd64[[:space:]]+arm64|arm64[[:space:]]+amd64)'; then
+    if printf '%s\n' "$body" | grep_all -E '^Architecture:[[:space:]]+(amd64[[:space:]]+arm64|arm64[[:space:]]+amd64)'; then
         ok "$pkg has Architecture: amd64 arm64"
     else
         not_ok "$pkg missing or wrong Architecture field"

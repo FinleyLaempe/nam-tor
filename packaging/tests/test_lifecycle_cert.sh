@@ -42,6 +42,20 @@
 
 set -uo pipefail
 
+# `grep_all` is `grep` that always reads its whole input.
+#
+# `cmd | grep -q PAT` under `pipefail` is unreliable: `grep -q` exits on the
+# first match, the writer on the left then dies with SIGPIPE, and pipefail
+# reports the WRITER's status — so a match can be reported as a miss. It stays
+# latent until the input outgrows the 64 KiB pipe buffer, which is how it
+# surfaced: test_desktop_cert read a real `test result: FAILED` out of full
+# cargo output as "no failures". In an "expected absent" check the same race
+# turns a forbidden match into a silent pass. Without -q grep never exits
+# early, so nothing upstream is signalled, and the exit status is unchanged:
+# 0 match, 1 no match, 2 error.
+grep_all() { grep "$@" >/dev/null; }
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGING_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PACKAGING_DIR/.." && pwd)"
@@ -619,7 +633,7 @@ else
 fi
 
 post_install_body="$(awk '/namtor_lc_phase_post_install\(\)/{f=1;next} f&&/^namtor_lc_phase_/{exit} f{print}' "$LIFECYCLE_SRC")"
-if printf '%s\n' "$post_install_body" | grep -qE 'call_pam_edit'; then
+if printf '%s\n' "$post_install_body" | grep_all -E 'call_pam_edit'; then
     not_ok "password-preservation: lifecycle.sh post-install calls pam-edit (should not)"
 else
     ok "password-preservation: lifecycle.sh post-install does not call pam-edit"
@@ -683,7 +697,7 @@ printf 'stale-legacy-binary' >"$ROOT_F2/usr/lib/namtor/namtor-legacy-old"
 stale_f2="$(scan_stale "$ROOT_F2")"
 stale_f2_count="$(printf '%s' "$stale_f2" | grep -c . 2>/dev/null || true)"
 if [[ "$stale_f2_count" -ge 1 ]] \
-   && printf '%s' "$stale_f2" | grep -q 'namtor-legacy-old'; then
+   && printf '%s' "$stale_f2" | grep_all 'namtor-legacy-old'; then
     ok "F2: stale file detected ($stale_f2_count file(s) not in manifest, incl namtor-legacy-old)"
 else
     not_ok "F2: stale file NOT detected (expected namtor-legacy-old flagged)"
@@ -742,7 +756,7 @@ if [[ $uninstall_rc -ne 0 ]]; then
 else
     not_ok "F4: uninstall with missing manifest exits 0 (should fail nonzero)"
 fi
-if printf '%s' "$uninstall_out" | grep -qiE 'FATAL|install-manifest.*not found'; then
+if printf '%s' "$uninstall_out" | grep_all -iE 'FATAL|install-manifest.*not found'; then
     ok "F4: uninstall reports FATAL / manifest-not-found message"
 else
     not_ok "F4: uninstall does not report a clear missing-manifest message"
