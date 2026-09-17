@@ -21,9 +21,9 @@ use crate::{
 
 const LIFECYCLE_ACTIONS: &[&str] = &["snapshot", "validate", "migrate", "disable-all", "purge"];
 
-fn print_usage() {
-    eprintln!("usage: namtor-pam-edit <enable|disable|restore> --service <id> [options]");
-    eprintln!("       namtor-pam-edit <snapshot|validate|migrate|disable-all|purge> [options]");
+fn print_usage(prog: &str) {
+    eprintln!("usage: {prog} <enable|disable|restore> --service <id> [options]");
+    eprintln!("       {prog} <snapshot|validate|migrate|disable-all|purge> [options]");
     eprintln!();
     eprintln!("  --service <id>        PAM service ID (filename in pam.d)");
     eprintln!("  --pamd-root <dir>     PAM config root (default /etc/pam.d)");
@@ -50,8 +50,16 @@ pub fn main(argv: Vec<String>) -> ExitCode {
         .unwrap_or_else(|| "namtor-pam-edit".to_string());
     let args = argv;
     if args.len() < 2 {
-        print_usage();
+        print_usage(&prog);
         return ExitCode::from(2);
+    }
+
+    // `-h`/`--help` arrives in the ACTION slot, not the option slot: the option
+    // loop starts at index 2, so `namtor pam-edit --help` parsed "--help" as
+    // the action and died with "--service is required for --help".
+    if args[1] == "-h" || args[1] == "--help" {
+        print_usage(&prog);
+        return ExitCode::SUCCESS;
     }
 
     let action = &args[1];
@@ -102,7 +110,7 @@ pub fn main(argv: Vec<String>) -> ExitCode {
                 i += 2;
             }
             "-h" | "--help" => {
-                print_usage();
+                print_usage(&prog);
                 return ExitCode::from(0);
             }
             _ => {

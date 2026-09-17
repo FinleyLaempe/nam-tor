@@ -793,3 +793,28 @@ fn restore_refuses_a_backup_that_would_reinstate_the_block() {
         "expected StaleEdit, got {result:?}"
     );
 }
+
+// --- CLI argument handling ---------------------------------------------------
+
+#[test]
+fn help_is_accepted_in_the_action_slot() {
+    use std::process::ExitCode;
+    // `-h`/`--help` arrives where the action goes, because the option loop
+    // starts at index 2. `namtor pam-edit --help` used to parse "--help" as
+    // the action and exit 2 with "--service is required for --help".
+    for flag in ["--help", "-h"] {
+        let code = namtor_pam_config::app::main(vec!["namtor pam-edit".into(), flag.into()]);
+        assert_eq!(
+            format!("{code:?}"),
+            format!("{:?}", ExitCode::SUCCESS),
+            "{flag} in the action slot must succeed"
+        );
+    }
+}
+
+#[test]
+fn no_action_is_a_usage_error() {
+    use std::process::ExitCode;
+    let code = namtor_pam_config::app::main(vec!["namtor pam-edit".into()]);
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(2)));
+}

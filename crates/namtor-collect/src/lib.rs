@@ -22,6 +22,56 @@
 //!   exported as a [`manifest::CollectionManifest`]. A
 //!   [`manifest::RetentionManifest`] aggregates the whole store.
 
+/// Serialises the tests that touch `NAMTOR_RESEARCH_CAPTURE`.
+///
+/// That variable is the real authorisation gate for raw research capture, not
+/// a test hook, so it cannot be replaced with a parameter. But six tests
+/// across `research` and `store` were mutating it while the default test
+/// runner ran them in parallel: `research::tests` took a private `TEST_LOCK`
+/// and `store::tests` took nothing, so a `remove_var` from one landed between
+/// another's `set_var` and its `authorize()` call and the test failed with
+/// `ResearchNotAuthorised`. The two modules must share one lock, and the
+/// guard restores the variable on drop so a panicking test cannot leave it
+/// set for whatever runs next.
+#[cfg(test)]
+pub(crate) mod test_env {
+    use std::sync::{Mutex, MutexGuard};
+
+    static RESEARCH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    pub(crate) struct ResearchEnv {
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl ResearchEnv {
+        fn acquire() -> MutexGuard<'static, ()> {
+            // A test that panics while holding the lock poisons it; the next
+            // test should still run rather than fail for an unrelated reason.
+            RESEARCH_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
+        /// Hold the lock with raw capture authorised.
+        pub(crate) fn authorised() -> Self {
+            let guard = Self::acquire();
+            std::env::set_var(crate::RESEARCH_ENV_VAR, "1");
+            Self { _guard: guard }
+        }
+
+        /// Hold the lock with raw capture NOT authorised.
+        pub(crate) fn unauthorised() -> Self {
+            let guard = Self::acquire();
+            std::env::remove_var(crate::RESEARCH_ENV_VAR);
+            Self { _guard: guard }
+        }
+    }
+
+    impl Drop for ResearchEnv {
+        fn drop(&mut self) {
+            std::env::remove_var(crate::RESEARCH_ENV_VAR);
+        }
+    }
+}
+
 pub mod consent;
 pub mod manifest;
 pub mod research;

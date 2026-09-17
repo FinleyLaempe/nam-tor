@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn write_pair_creates_files_under_raw_subdir() {
-        std::env::set_var(crate::research::RESEARCH_ENV_VAR, "1");
+        let _env = crate::test_env::ResearchEnv::authorised();
         let dir = tempfile::tempdir().unwrap();
         let store = CollectionStore::open(dir.path()).unwrap();
         let meta = test_meta("sess1", "alice", SessionKind::Bonafide);
@@ -435,7 +435,6 @@ mod tests {
         assert!(session_dir.join("raw/pair_0000_on.raw").exists());
         assert!(session_dir.join("raw/pair_0000_off.raw").exists());
         assert!(session_dir.join("pair_0000_d.json").exists());
-        std::env::remove_var(crate::research::RESEARCH_ENV_VAR);
     }
 
     #[test]
@@ -624,7 +623,7 @@ mod tests {
 
     #[test]
     fn retention_manifest_aggregates_raw_pairs_and_eligibility() {
-        std::env::set_var(crate::research::RESEARCH_ENV_VAR, "1");
+        let _env = crate::test_env::ResearchEnv::authorised();
         let dir = tempfile::tempdir().unwrap();
         let store = CollectionStore::open(dir.path()).unwrap();
         let consent =
@@ -656,7 +655,6 @@ mod tests {
         assert!(manifest.export_eligible);
         let export = store.export_session("s2").unwrap();
         assert!(!export.raw_eligible);
-        std::env::remove_var(crate::research::RESEARCH_ENV_VAR);
     }
 
     #[test]
