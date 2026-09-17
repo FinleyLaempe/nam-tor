@@ -305,7 +305,29 @@ pub fn count_row(title: &str, subtitle: &str, value: u32, accessible_name: &str)
 /// `announce` gates the AT-SPI announcement, like the headline: this row is
 /// also rebuilt on every poll and also carried `AccessibleRole::Status`, so
 /// it was a second unthrottled announcement per redraw.
-pub fn attention_row(guidance: &GuidanceView, announce: bool) -> adw::ActionRow {
+pub fn attention_row(guidance: &GuidanceView, announce: bool, measured: bool) -> adw::ActionRow {
+    // Before the first frame nothing is known, so "every signal is good
+    // enough right now" is not a reassurance — it is a claim about
+    // measurements that do not exist, sitting directly beneath three meters
+    // all reading "Waiting for the first view".
+    if !measured && guidance.signal().is_none() {
+        let row = adw::ActionRow::builder()
+            .title(tr("Needs attention"))
+            .subtitle(tr("Waiting for the first view"))
+            .subtitle_lines(0)
+            .build();
+        let value = gtk4::Label::builder()
+            .label(tr("—"))
+            .valign(gtk4::Align::Center)
+            .css_classes(["heading", "dim-label"])
+            .build();
+        row.add_suffix(&value);
+        row.update_property(&[
+            gtk4::accessible::Property::Label(&tr("Signal needing attention")),
+            gtk4::accessible::Property::Description(&tr("Not measured yet")),
+        ]);
+        return row;
+    }
     let (value_text, value_class, subtitle) = match guidance.signal() {
         Some(signal) => (
             tr(signal.as_label()),

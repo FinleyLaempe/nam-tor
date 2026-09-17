@@ -90,7 +90,7 @@ impl ReviewViewComponent {
         ));
 
         signals_group.add(&scan_feedback::angle_variety_row(view.diversity_percent));
-        signals_group.add(&scan_feedback::attention_row(&view.guidance, true));
+        signals_group.add(&scan_feedback::attention_row(&view.guidance, true, true));
         signals_group.add(&scan_feedback::count_row(
             "Accepted",
             "Kept for your face model",

@@ -675,3 +675,64 @@ fn tr_args_substitutes_without_destroying_the_msgid() {
     // No placeholder: the msgid passes through.
     assert_eq!(tr_args("no placeholder", &["x"]), "no placeholder");
 }
+
+/// Before the first frame, the scan must not claim anything is good.
+///
+/// `Guidance::Capturing` has no attention signal, so the "Needs attention"
+/// row fell through to "Nothing — every signal is good enough right now" while
+/// the three meters beside it all read "Waiting for the first view". It was a
+/// claim about measurements that did not exist.
+#[test]
+fn the_scan_does_not_reassure_before_it_has_measured_anything() {
+    use gtk4::prelude::*;
+    common::run_gtk_test(|| {
+        let fresh = namtor_ui::view_model::EnrollmentViewV3 {
+            phase: "capturing".into(),
+            quality_percent: 0,
+            diversity_percent: 0,
+            frames_seen: 0,
+            frames_accepted: 0,
+            frames_rejected: 0,
+            quality_bucket: 0,
+            guidance: GuidanceView::from_wire("capturing"),
+        };
+        let mut c = EnrollmentViewComponent::new();
+        let page = c.render(Some(&fresh), true, |_| {}, || {}, || {});
+        let texts = common::collect_widget_text(page.upcast_ref::<gtk4::Widget>());
+        assert!(
+            !texts.iter().any(|t| t.contains("good enough right now")),
+            "nothing has been measured; the page must not say every signal is fine: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("Needs attention")),
+            "the row must still be present: {texts:?}"
+        );
+    });
+}
+
+/// Once frames have been seen, the attention row reports the real signal.
+#[test]
+fn the_scan_names_the_signal_it_is_waiting_on() {
+    use gtk4::prelude::*;
+    common::run_gtk_test(|| {
+        let v = namtor_ui::view_model::EnrollmentViewV3 {
+            phase: "capturing".into(),
+            quality_percent: 71,
+            diversity_percent: 35,
+            frames_seen: 160,
+            frames_accepted: 120,
+            frames_rejected: 40,
+            quality_bucket: 2,
+            guidance: GuidanceView::from_wire("insufficient_pose"),
+        };
+        let mut c = EnrollmentViewComponent::new();
+        let page = c.render(Some(&v), true, |_| {}, || {}, || {});
+        let texts = common::collect_widget_text(page.upcast_ref::<gtk4::Widget>());
+        for expected in ["71%", "35%", "75%", "Head angles", "Turn your head slowly"] {
+            assert!(
+                texts.iter().any(|t| t.contains(expected)),
+                "the scan must show {expected:?}: {texts:?}"
+            );
+        }
+    });
+}

@@ -170,7 +170,11 @@ impl EnrollmentViewComponent {
             view.measured_diversity_percent(),
         ));
         signals_group.add(&scan_feedback::kept_rate_row(view.accept_rate_percent()));
-        signals_group.add(&scan_feedback::attention_row(&view.guidance, announce));
+        signals_group.add(&scan_feedback::attention_row(
+            &view.guidance,
+            announce,
+            view.has_observation(),
+        ));
 
         // Counters: the three numbers on the wire, each labelled for what it
         // actually is. `frames_seen == accepted + rejected` holds, so the
