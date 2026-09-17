@@ -736,3 +736,55 @@ fn the_scan_names_the_signal_it_is_waiting_on() {
         }
     });
 }
+
+/// An instruction must not be styled as success.
+///
+/// The headline greened on `encouraging || quality_bucket >= 2`, so "Adjust
+/// your pose" — shown while the scan waits on head angles — rendered in
+/// success green because the image quality happened to be good. The largest
+/// text on the page said "all is well" directly above a row naming the signal
+/// that was blocking progress. Caught by looking at the rendered page.
+#[test]
+fn only_encouraging_guidance_is_styled_as_success() {
+    use gtk4::prelude::*;
+    common::run_gtk_test(|| {
+        // Good image quality, but the scan is waiting on pose.
+        let blocked = namtor_ui::view_model::EnrollmentViewV3 {
+            phase: "capturing".into(),
+            quality_percent: 71,
+            diversity_percent: 35,
+            frames_seen: 160,
+            frames_accepted: 120,
+            frames_rejected: 40,
+            quality_bucket: 2,
+            guidance: GuidanceView::from_wire("insufficient_pose"),
+        };
+        let mut c = EnrollmentViewComponent::new();
+        let page = c.render(Some(&blocked), true, |_| {}, || {}, || {});
+        assert!(
+            !common::has_label_with_class(
+                page.upcast_ref::<gtk4::Widget>(),
+                "Adjust your pose",
+                "success"
+            ),
+            "an instruction must not be green while a signal is blocking"
+        );
+
+        // And the genuinely good state still is green.
+        let good = namtor_ui::view_model::EnrollmentViewV3 {
+            guidance: GuidanceView::from_wire("looking_good"),
+            diversity_percent: 100,
+            ..blocked.clone()
+        };
+        let mut c2 = EnrollmentViewComponent::new();
+        let page2 = c2.render(Some(&good), true, |_| {}, || {}, || {});
+        assert!(
+            common::has_label_with_class(
+                page2.upcast_ref::<gtk4::Widget>(),
+                "Enrollment complete",
+                "success"
+            ),
+            "a finished scan must still read as success"
+        );
+    });
+}

@@ -227,3 +227,21 @@ pub fn first_widget_of_type<T: gtk4::glib::object::IsA<gtk4::Widget> + Clone>(
     }
     None
 }
+
+/// True if a label with exactly `text` carries `class`.
+pub fn has_label_with_class(widget: &gtk4::Widget, text: &str, class: &str) -> bool {
+    use gtk4::prelude::*;
+    if let Some(l) = widget.downcast_ref::<gtk4::Label>() {
+        if l.text() == text && l.css_classes().iter().any(|c| c == class) {
+            return true;
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        if has_label_with_class(&c, text, class) {
+            return true;
+        }
+        child = c.next_sibling();
+    }
+    false
+}

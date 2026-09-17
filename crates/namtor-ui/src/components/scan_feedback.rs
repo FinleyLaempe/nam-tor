@@ -106,7 +106,15 @@ pub fn headline_block(
         .max_width_chars(24)
         .halign(gtk4::Align::Center)
         .build();
-    if encouraging || quality_bucket >= 2 {
+    // Green only when the scan is actually happy. It used to also green on
+    // `quality_bucket >= 2`, so a headline telling the user to DO something —
+    // "Adjust your pose", while the scan waits on head angles — was styled as
+    // success because the image quality happened to be good. The largest text
+    // on the page said "all is well" while the row beneath it named the signal
+    // blocking progress. Image quality has its own meter; the headline is the
+    // instruction, and an instruction is not a success.
+    let _ = quality_bucket;
+    if encouraging {
         headline.set_css_classes(&["title-1", "success"]);
     } else {
         headline.set_css_classes(&["title-1"]);
