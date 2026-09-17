@@ -106,6 +106,10 @@ BuildRequires:  libadwaita-devel
 # failing.
 BuildRequires:  libseccomp-devel
 BuildRequires:  gcc-c++
+# libudev-sys builds against libudev.pc; on Fedora that comes from
+# systemd-devel. Without it the build stops at "failed to run custom build
+# command for `libudev-sys`".
+BuildRequires:  systemd-devel
 
 # Core runtime requirements — daemon/worker/CLI/PAM only. The GUI toolkit
 # deps (gtk4/libadwaita) live in the subpackage so a headless host is not
