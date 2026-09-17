@@ -274,3 +274,48 @@ Note: `cargo test --workspace` in parallel mode has 2 pre-existing failures in
 `namtor-collect` (test-ordering and shared-temp-directory issue, passes in
 isolation and with `--test-threads=1`). This is unrelated to the enrollment
 redesign.
+
+---
+
+## Addendum — 2026-09-17: the pages were rendered and looked at
+
+**Section 1's prerequisites were wrong**, and the review above was weaker than
+it appeared because of it. It states that the app "cannot render its real
+states without" (1) a system-installed package and (2) a running daemon on the
+system bus, and concludes that the verdicts must rest on "the design contract,
+the automated test suite, and the accessibility and privacy scans rather than
+captured pixels".
+
+Neither is true. The shipped components render from a view model, and
+`namtor_client::fake_bus::FakeBus` is a real D-Bus server on a socket pair, so
+the whole settings window renders against real data with no package, no
+daemon, no root and no camera. Two dev-only examples do it —
+`crates/namtor-ui/examples/scan_page.rs` for the enrollment states and
+`examples/app_pages.rs` for the three destinations — and each writes a PNG by
+rendering the window's own widget tree through GTK's renderer, so it never
+reads the screen and produces the same image with or without a compositor.
+`examples/` is not part of any package; nothing here ships.
+
+**Four defects were found by looking, all of which the contract, the test
+suite and the scans had passed:**
+
+1. The capture page showed "Adjust your pose" — an instruction, with "Needs
+   attention: Head angles" beside it — under a success-green silhouette, the
+   largest element on the page and the same green as "Enrollment complete".
+   The silhouette was coloured from the image-quality bucket alone.
+2. The Profiles page carried the heading "Enrolled Profiles" twice: once over
+   the list, once over the button that adds to it.
+3. An error on the Profiles page was a single red line — title and detail glued
+   together with `"{}: {}"` — and the recovery steps the presenter had already
+   worked out were discarded.
+4. The review screen's detail line was the daemon's capture-time guidance, so
+   under "Ready to save" it read "Looking good — keep going — Keep turning your
+   head slowly so the scan sees every angle": instructions to carry on with a
+   scan that had stopped.
+
+Each is fixed with a behavioural test; see the commits of 2026-09-17.
+
+**What is still WITHHELD, and why.** A capture of a *live* enrollment — a real
+IR frame, a real face, a real daemon session — needs the camera and a person,
+and that is unchanged. What is no longer withheld is the app's own appearance,
+which is what the section above was actually reviewing.
