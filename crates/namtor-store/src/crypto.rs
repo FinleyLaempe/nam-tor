@@ -751,7 +751,17 @@ impl FileBackend {
             Aes256Gcm::new_from_slice(&kek).map_err(|e| StoreError::Crypto(e.to_string()))?;
         let nonce = Nonce::from_slice(nonce_bytes);
         let pt = cipher.decrypt(nonce, ct).map_err(|_| {
-            StoreError::Crypto("file-v2 unseal failed (wrong root secret or corrupted)".into())
+            // This halts the daemon, so it is the only thing the operator will
+            // see. "wrong root secret or corrupted" was true and told them
+            // nothing: not which file was consulted, not what it means for
+            // their enrolments, not what to do. The realistic cause is a root
+            // secret that was lost or replaced — a restored disk, a reinstall
+            // that kept /var/lib/namtor/templates but not the secret beside
+            // it — and in that case the templates are simply unreadable.
+            StoreError::Crypto(format!(
+                "the stored key cannot be decrypted with the root secret at {}.                  That secret was replaced or the key file is damaged. Enrolled                  face templates are sealed with it and cannot be recovered                  without it; delete the key file and the templates directory to                  enrol again. Password login is unaffected.",
+                self.root_secret_path.display()
+            ))
         })?;
         if pt.len() != 32 {
             return Err(StoreError::Crypto(format!(
@@ -1532,5 +1542,68 @@ mod tests {
             !tmp.exists(),
             "temp file must not remain after successful migration"
         );
+    }
+}
+
+#[cfg(test)]
+mod recovery_message_tests {
+    use super::*;
+
+    /// A lost root secret stops the daemon, so its message is the only thing
+    /// the operator sees. It must name the file that was consulted and say
+    /// what it means for their enrolments.
+    ///
+    /// The realistic cause is mundane: a restored disk, or a reinstall that
+    /// kept /var/lib/namtor/templates but not the secret beside it. Before
+    /// this, the whole diagnosis was "file-v2 unseal failed (wrong root secret
+    /// or corrupted)".
+    #[test]
+    fn a_lost_root_secret_explains_itself_and_the_way_out() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key_path = dir.path().join("key");
+        let secret_a = dir.path().join("secret_a");
+        let secret_b = dir.path().join("secret_b");
+
+        // Seal a key under one root secret.
+        let mut sel_a = BackendSelector::file().with_root_secret_path(secret_a);
+        let _ = SealedKey::load_or_create_with(&key_path, &mut sel_a).expect("create");
+
+        // Now the secret is gone and a different one is in its place, exactly
+        // as a restore or reinstall leaves things.
+        let mut sel_b = BackendSelector::file().with_root_secret_path(secret_b.clone());
+        let err = SealedKey::load_or_create_with(&key_path, &mut sel_b)
+            .expect_err("a key sealed under another secret must not open");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&secret_b.display().to_string()),
+            "must name the secret it consulted: {msg}"
+        );
+        for expected in [
+            "cannot be recovered",
+            "enrol again",
+            "Password login is unaffected",
+        ] {
+            assert!(
+                msg.contains(expected),
+                "must tell the operator what to do — missing {expected:?}: {msg}"
+            );
+        }
+    }
+
+    /// The same key opens fine under its own secret, so the test above fails
+    /// for the right reason.
+    #[test]
+    fn the_key_opens_under_its_own_root_secret() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key_path = dir.path().join("key");
+        let secret = dir.path().join("secret");
+
+        let mut sel = BackendSelector::file().with_root_secret_path(secret.clone());
+        let first = SealedKey::load_or_create_with(&key_path, &mut sel).expect("create");
+
+        let mut sel2 = BackendSelector::file().with_root_secret_path(secret);
+        let second = SealedKey::load_or_create_with(&key_path, &mut sel2).expect("reopen");
+        assert_eq!(first.source(), second.source());
     }
 }
