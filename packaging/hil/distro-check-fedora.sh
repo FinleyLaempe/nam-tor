@@ -39,7 +39,7 @@ rpm -q --requires namtor | grep -iE 'onnx|lib64gcc' && { echo "FAIL: bogus requi
 
 step "smoke"
 timeout -k 10 10 /usr/bin/namtor daemon --version
-if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then echo "FAIL: pam module unresolved"; exit 1; fi
+if ldd /usr/lib64/security/pam_namtor.so | grep 'not found'; then echo "FAIL: pam module unresolved"; exit 1; fi
 if ldd /usr/bin/namtor-enroll-wizard | grep 'not found'; then echo "FAIL: wizard unresolved"; exit 1; fi
 echo "binaries link"
 
