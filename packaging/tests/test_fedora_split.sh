@@ -205,7 +205,7 @@ echo "--- (3) core %files payload ---"
 core_expect=(
     '/usr/bin/namtor'
     '/usr/bin/namtor-cli'
-    '/usr/lib/security/pam_namtor\.so'
+    '_libdir\}/security/pam_namtor\.so'
     'namtor-daemon\.service'
     'namtor-daemon\.socket'
     'sysusers\.d/namtor\.conf'

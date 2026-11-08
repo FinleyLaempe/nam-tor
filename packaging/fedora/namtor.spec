@@ -204,6 +204,11 @@ test -f "$archive" || { echo "error: model archive missing: $archive" >&2; exit 
 # ingest. Disable LTO for the C compilation; Rust LTO (lto=true in
 # Cargo.toml [profile.release]) is unaffected.
 %global _lto_cflags %{nil}
+# redhat-rpm-config exports RUSTFLAGS (-Copt-level=3 -Cdebuginfo=2 -Cstrip=none),
+# which overrides Cargo.toml's [profile.release] (opt-level z, strip): the PAM
+# module came out 12.5 MB against a 500 KB budget. The project profile is the
+# single source of truth for size; debuginfo is disabled (debug_package nil).
+unset RUSTFLAGS
 # Build every artifact the install manifest references. -p pins avoid
 # pulling unrelated workspace members (e.g. namtor-eval, namtor-probe).
 cargo build --release --frozen \
@@ -220,6 +225,7 @@ cargo build --release --frozen \
 # "ld: final link failed: No space left on device". Tests need neither.
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
+unset RUSTFLAGS
 cargo test --workspace -- --test-threads=1
 
 %install
@@ -227,6 +233,12 @@ cargo test --workspace -- --test-threads=1
 # all static files for every split package (core, ui) into one
 # buildroot; the %files sections partition the tree by subpackage.
 ./packaging/stage.sh "%{buildroot}" "%{_builddir}/nam-tor-%{version}"
+
+# Fedora's PAM loads modules from %{_libdir}/security (/usr/lib64/security on
+# x86_64); stage.sh installs to /usr/lib/security, where PAM would never look.
+mkdir -p "%{buildroot}%{_libdir}/security"
+mv "%{buildroot}/usr/lib/security/pam_namtor.so" "%{buildroot}%{_libdir}/security/pam_namtor.so"
+rmdir --ignore-fail-on-non-empty "%{buildroot}/usr/lib/security" 2>/dev/null || :
 
 # Bundle models from the verified archive (Source1). No network fetch.
 archive="%{_sourcedir}/namtor-models-%{modelver}.tar.gz"
@@ -263,7 +275,7 @@ echo '{"model_id":"sface_2021dec","licence_url":"https://www.apache.org/licenses
 %doc %{_defaultdocdir}/%{name}/namtor.cyclonedx.json
 /usr/bin/namtor
 /usr/bin/namtor-cli
-/usr/lib/security/pam_namtor.so
+%{_libdir}/security/pam_namtor.so
 /usr/lib/systemd/system/namtor-daemon.service
 /usr/lib/systemd/system/namtor-daemon.socket
 /usr/lib/sysusers.d/namtor.conf
