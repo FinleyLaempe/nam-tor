@@ -45,6 +45,8 @@ fn main() {
     let app = adw::Application::builder()
         .application_id("org.namtor.AppPagesPreview")
         .build();
+    let failed_all = std::rc::Rc::new(std::cell::Cell::new(false));
+    let failed_main = std::rc::Rc::clone(&failed_all);
 
     app.connect_activate(move |app| {
         let bus = FakeBus::spawn().expect("fake bus");
@@ -75,7 +77,9 @@ fn main() {
         // Wait for the window to actually paint before walking the pages;
         // how many frames that takes depends on the compositor.
         let tries = std::cell::Cell::new(0u32);
+        let failed2 = std::rc::Rc::clone(&failed_all);
         glib::timeout_add_local(std::time::Duration::from_millis(150), move || {
+            let failed = &failed2;
             tries.set(tries.get() + 1);
             let ready = {
                 let w: &gtk4::Widget = window.upcast_ref();
@@ -89,9 +93,23 @@ fn main() {
                 // Let the stack settle on the new page before capturing.
                 while glib::MainContext::default().iteration(false) {}
                 let path = format!("{out}/page-{}.png", dest.name());
-                match capture(&window, &path) {
+                // How many frames a freshly shown page needs before it paints
+                // depends on the compositor: keep pumping and retry.
+                let mut result = capture(&window, &path);
+                for _ in 0..40 {
+                    if result.is_ok() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    while glib::MainContext::default().iteration(false) {}
+                    result = capture(&window, &path);
+                }
+                match result {
                     Ok(()) => println!("wrote {path}"),
-                    Err(e) => eprintln!("capture {path} failed: {e}"),
+                    Err(e) => {
+                        eprintln!("capture {path} failed: {e}");
+                        failed.set(true);
+                    }
                 }
             }
             app2.quit();
@@ -99,4 +117,7 @@ fn main() {
         });
     });
     app.run_with_args::<&str>(&[]);
+    if failed_main.get() {
+        std::process::exit(1);
+    }
 }
