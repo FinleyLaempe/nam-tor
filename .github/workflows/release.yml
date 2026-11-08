@@ -475,6 +475,14 @@ jobs:
                 /tmp/*.rpm
                 /tmp/*.deb
 
+      # The cell runs as root inside a container on a self-hosted runner, so it
+      # leaves root-owned files in the bind-mounted workspace; the next job's
+      # actions/checkout then dies with EACCES while cleaning it (#18). Give
+      # the tree back to the uid that owns the workspace's parent directory.
+      - name: Hand the workspace back to the runner user
+        if: always()
+        run: chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE/..")" "$GITHUB_WORKSPACE" || true
+
   # ===========================================================================
   # package-matrix-evidence — collect per-cell results into the evidence file
   # ===========================================================================
