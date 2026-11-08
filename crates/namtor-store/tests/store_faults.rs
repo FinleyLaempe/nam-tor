@@ -130,6 +130,14 @@ fn symlink_record_rejected() {
 
 #[test]
 fn wrong_owner_rejected_on_read() {
+    // As root the store's chown to `wrong_uid` succeeds, so the file really is
+    // owned by `wrong_uid` and the read is (correctly) accepted. The rpm and
+    // deb builds run the suite as root; skip loudly rather than fail on a
+    // condition the test cannot create.
+    if current_euid() == 0 {
+        eprintln!("SKIP wrong_owner_rejected_on_read: root can chown to any uid");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let key_path = dir.path().join("key");
     let wrong_uid = current_euid().wrapping_add(9999);
