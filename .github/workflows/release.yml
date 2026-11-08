@@ -103,7 +103,7 @@ jobs:
           # --- Arch Linux (rolling — one build covers it) ---
           - distro: arch
             arch: x86_64
-            runner: ubuntu-latest
+            runner: ${{ vars.RUNNER_LINUX && fromJSON(vars.RUNNER_LINUX) || 'ubuntu-latest' }}
             container: archlinux:latest
             lint: namcap
             build: makepkg
@@ -116,14 +116,14 @@ jobs:
           # the cell brings a current toolchain — see the toolchain step.
           - distro: debian13
             arch: amd64
-            runner: ubuntu-latest
+            runner: ${{ vars.RUNNER_LINUX && fromJSON(vars.RUNNER_LINUX) || 'ubuntu-latest' }}
             container: debian:13
             lint: dpkg-checkbuilddeps
             build: dpkg-buildpackage
           # --- Fedora 41 ---
           - distro: fedora41
             arch: x86_64
-            runner: ubuntu-latest
+            runner: ${{ vars.RUNNER_LINUX && fromJSON(vars.RUNNER_LINUX) || 'ubuntu-latest' }}
             container: fedora:41
             lint: rpmlint
             build: rpmbuild
@@ -480,7 +480,7 @@ jobs:
   # ===========================================================================
   evidence:
     name: package-matrix evidence
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LINUX && fromJSON(vars.RUNNER_LINUX) || 'ubuntu-latest' }}
     needs: build
     steps:
       - uses: actions/checkout@v5
@@ -573,7 +573,7 @@ jobs:
   # ===========================================================================
   publish:
     name: publish (checksums, signature, SBOM, provenance)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LINUX && fromJSON(vars.RUNNER_LINUX) || 'ubuntu-latest' }}
     needs: [build, evidence]
     # Skip publish on dry-run (workflow_dispatch default).
     if: github.event_name == 'push' || github.event.inputs.dry_run != 'true'
