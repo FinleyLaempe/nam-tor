@@ -292,6 +292,8 @@ echo '{"model_id":"sface_2021dec","licence_url":"https://www.apache.org/licenses
 %{_datadir}/namtor/pam-preflight.sh
 %{_datadir}/namtor/lifecycle.sh
 %{_datadir}/dbus-1/system-services/org.namtor.Manager.service
+%{_datadir}/dbus-1/system.d/org.namtor.Manager.conf
+%{_datadir}/namtor/quirks
 %{_datadir}/polkit-1/actions/org.namtor.policy
 # Bundled models (MIT/Apache-2.0, redistributable) + pre-written licence
 # acceptance records. No network fetch at install.

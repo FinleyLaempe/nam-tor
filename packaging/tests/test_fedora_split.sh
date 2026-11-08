@@ -211,6 +211,8 @@ core_expect=(
     'sysusers\.d/namtor\.conf'
     'tmpfiles\.d/namtor\.conf'
     'dbus-1/system-services/org\.namtor\.Manager\.service'
+    'dbus-1/system\.d/org\.namtor\.Manager\.conf'
+    'namtor/quirks'
     'polkit-1/actions/org\.namtor\.policy'
     'model-manifest\.toml'
     'install-manifest\.toml'
