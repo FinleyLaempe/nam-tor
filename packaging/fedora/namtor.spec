@@ -229,6 +229,8 @@ cargo build --release --frozen \
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
 unset RUSTFLAGS
+# Headless GTK tests must not need a GL stack (libGLESv2 is absent in a build root).
+export GSK_RENDERER=cairo
 xvfb-run -a cargo test --workspace -- --test-threads=1
 
 %install

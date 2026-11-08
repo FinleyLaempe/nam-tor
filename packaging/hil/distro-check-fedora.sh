@@ -45,7 +45,7 @@ echo "binaries link"
 
 step "UI test suite under Xvfb"
 cd "/build/nam-tor-$PKGVER"
-export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 GSK_RENDERER=cairo
 xvfb-run -a cargo test -p namtor-ui -- --test-threads=1 2>&1 | grep -E "^test result|FAILED|panicked" | tee /out/ui-tests.txt
 
 step "render the UI on this distro"
