@@ -403,13 +403,26 @@ emit_receipt() {
 
 # --- shared mandatory payload validation (post-install + post-upgrade) -------
 
+# Where the PAM module lives depends on the distro: /usr/lib/security (Arch),
+# /usr/lib/<triplet>/security (Debian multiarch), /usr/lib64/security (Fedora).
+namtor_lc_pam_module() {
+    local c
+    for c in "$ROOT"/usr/lib/security/pam_namtor.so \
+             "$ROOT"/usr/lib/*/security/pam_namtor.so \
+             "$ROOT"/usr/lib64/security/pam_namtor.so; do
+        if [[ -e "$c" ]]; then printf '%s\n' "$c"; return 0; fi
+    done
+    printf '%s\n' "$ROOT/usr/lib/security/pam_namtor.so"
+    return 1
+}
+
 namtor_lc_validate_payload() {
     check_file "$ROOT/usr/lib/sysusers.d/namtor.conf" "sysusers.d/namtor.conf"
     check_file "$ROOT/usr/lib/tmpfiles.d/namtor.conf" "tmpfiles.d/namtor.conf"
     check_file "$ROOT/usr/lib/systemd/system/namtor-daemon.socket" "namtor-daemon.socket unit"
     check_file "$ROOT/usr/lib/systemd/system/namtor-daemon.service" "namtor-daemon.service unit"
     check_file "$ROOT/usr/share/dbus-1/system-services/org.namtor.Manager.service" "D-Bus service org.namtor.Manager"
-    check_file "$ROOT/usr/lib/security/pam_namtor.so" "pam_namtor.so module"
+    check_file "$(namtor_lc_pam_module)" "pam_namtor.so module"
     local manifest
     manifest="$(resolve_manifest)"
     validate_models "$ROOT/var/lib/namtor/models" "$manifest"

@@ -14,7 +14,7 @@
 # Environment overrides (all have safe defaults):
 #   DESTDIR             — staging root for testing without root (default "")
 #   PAM_FILE            — target PAM stack file (default /etc/pam.d/gdm-password)
-#   PAM_MODULE          — pam_namtor.so install path (default /usr/lib/security/pam_namtor.so)
+#   PAM_MODULE          — pam_namtor.so install path (default: first of /usr/lib/security, /usr/lib/*/security, /usr/lib64/security that has it)
 #   SOCKET_PATH         — daemon socket (default /run/namtor/auth.sock)
 #   NAMTOR_AUTH_GROUP   — group controlling socket ACL (default namtor-auth)
 #   DM_USER             — display-manager user that must be in the auth group (default gdm)
@@ -34,7 +34,7 @@ grep_all() { grep "$@" >/dev/null; }
 
 DESTDIR="${DESTDIR:-}"
 PAM_FILE="${PAM_FILE:-/etc/pam.d/gdm-password}"
-PAM_MODULE="${PAM_MODULE:-/usr/lib/security/pam_namtor.so}"
+PAM_MODULE="${PAM_MODULE:-}"
 SOCKET_PATH="${SOCKET_PATH:-/run/namtor/auth.sock}"
 NAMTOR_AUTH_GROUP="${NAMTOR_AUTH_GROUP:-namtor-auth}"
 DM_USER="${DM_USER:-gdm}"
@@ -50,6 +50,18 @@ destdir_path() {
         printf '%s\n' "$p"
     fi
 }
+
+# Default module location differs per distro (Arch /usr/lib/security, Debian
+# /usr/lib/<triplet>/security, Fedora /usr/lib64/security); take the first that
+# exists, falling back to the Arch path so the "missing" message stays specific.
+if [[ -z "$PAM_MODULE" ]]; then
+    PAM_MODULE=/usr/lib/security/pam_namtor.so
+    for _c in /usr/lib/security /usr/lib/*/security /usr/lib64/security; do
+        if [[ -e "$(destdir_path "$_c/pam_namtor.so")" ]]; then
+            PAM_MODULE="$_c/pam_namtor.so"; break
+        fi
+    done
+fi
 
 fatal() {
     echo "pam-preflight: FATAL: $*" >&2
