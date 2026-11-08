@@ -273,7 +273,9 @@ fn test_open() -> TestResult {
 fn test_open_path(path: &str) -> TestResult {
     use std::os::raw::c_int;
     extern "C" {
-        fn open(path: *const std::os::raw::c_char, flags: c_int) -> c_int;
+        // libc's open(2) is variadic (the optional third argument is the mode);
+        // rustc denies a non-variadic redeclaration of the symbol std itself uses.
+        fn open(path: *const std::os::raw::c_char, flags: c_int, ...) -> c_int;
     }
     let cpath = match CString::new(path) {
         Ok(c) => c,
