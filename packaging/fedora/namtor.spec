@@ -107,6 +107,9 @@ BuildRequires:  libadwaita-devel
 # Fedora; `libstdc++-devel` alone installs cleanly and leaves that link
 # failing.
 BuildRequires:  libseccomp-devel
+# %check runs the GTK tests, which need an X display (xvfb-run).
+BuildRequires:  xorg-x11-server-Xvfb
+BuildRequires:  xorg-x11-xauth
 BuildRequires:  gcc-c++
 # libudev-sys builds against libudev.pc; on Fedora that comes from
 # systemd-devel. Without it the build stops at "failed to run custom build
@@ -226,7 +229,7 @@ cargo build --release --frozen \
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
 unset RUSTFLAGS
-cargo test --workspace -- --test-threads=1
+xvfb-run -a cargo test --workspace -- --test-threads=1
 
 %install
 # Deterministic staging from packaging/install-manifest.toml — installs
