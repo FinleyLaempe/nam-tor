@@ -372,7 +372,9 @@ jobs:
             # failed its smoke test.
             timeout -k 10 10 /usr/bin/namtor daemon --version
             timeout -k 10 10 namtor-cli status || true
-            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+            PAM_SO="$(ls /usr/lib/security/pam_namtor.so /usr/lib/*/security/pam_namtor.so /usr/lib64/security/pam_namtor.so 2>/dev/null | head -1)"
+            [ -n "$PAM_SO" ] || { echo "::error::pam_namtor.so not installed in any distro PAM dir"; exit 1; }
+            if ldd "$PAM_SO" | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
               exit 1
             fi
@@ -386,7 +388,9 @@ jobs:
             # failed its smoke test.
             timeout -k 10 10 /usr/bin/namtor daemon --version
             timeout -k 10 10 namtor-cli status || true
-            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+            PAM_SO="$(ls /usr/lib/security/pam_namtor.so /usr/lib/*/security/pam_namtor.so /usr/lib64/security/pam_namtor.so 2>/dev/null | head -1)"
+            [ -n "$PAM_SO" ] || { echo "::error::pam_namtor.so not installed in any distro PAM dir"; exit 1; }
+            if ldd "$PAM_SO" | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
               exit 1
             fi
@@ -409,7 +413,9 @@ jobs:
             # failed its smoke test.
             timeout -k 10 10 /usr/bin/namtor daemon --version
             timeout -k 10 10 namtor-cli status || true
-            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+            PAM_SO="$(ls /usr/lib/security/pam_namtor.so /usr/lib/*/security/pam_namtor.so /usr/lib64/security/pam_namtor.so 2>/dev/null | head -1)"
+            [ -n "$PAM_SO" ] || { echo "::error::pam_namtor.so not installed in any distro PAM dir"; exit 1; }
+            if ldd "$PAM_SO" | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
               exit 1
             fi
@@ -431,7 +437,9 @@ jobs:
                 ;;
             esac
             timeout -k 10 10 namtor-cli status || true
-            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+            PAM_SO="$(ls /usr/lib/security/pam_namtor.so /usr/lib/*/security/pam_namtor.so /usr/lib64/security/pam_namtor.so 2>/dev/null | head -1)"
+            [ -n "$PAM_SO" ] || { echo "::error::pam_namtor.so not installed in any distro PAM dir"; exit 1; }
+            if ldd "$PAM_SO" | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
               exit 1
             fi
@@ -459,7 +467,8 @@ jobs:
             esac
             # Verify everything is gone.
             for f in /usr/bin/namtor /usr/bin/namtor-cli \
-                     /usr/lib/security/pam_namtor.so; do
+                     /usr/lib/security/pam_namtor.so /usr/lib/*/security/pam_namtor.so \
+                     /usr/lib64/security/pam_namtor.so; do
                 if [ -e "$f" ]; then
                   echo "::error::uninstall left $f behind"; exit 1
                 fi
