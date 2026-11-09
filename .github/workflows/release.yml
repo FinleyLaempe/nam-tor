@@ -145,7 +145,8 @@ jobs:
             dnf -y update
             dnf -y install @development-tools rust cargo python3 \
                 systemd-rpm-macros rpmlint rpm-build openssl-devel pam-devel \
-                gtk4-devel libadwaita-devel libseccomp-devel gcc-c++ systemd-devel
+                gtk4-devel libadwaita-devel libseccomp-devel gcc-c++ systemd-devel \
+                xorg-x11-server-Xvfb xorg-x11-xauth
 
       - name: Install build toolchain (Debian)
         if: startsWith(matrix.distro, 'debian')
