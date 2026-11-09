@@ -336,7 +336,7 @@ jobs:
             # first, exactly as the Arch cell does before makepkg.
             cargo fetch --locked
             dpkg-buildpackage -us -uc -b
-            mv ../namtor_*.deb /tmp/
+            mv ../namtor_*.deb ../namtor-ui_*.deb /tmp/
 
       # --- Install in a disposable container + smoke test ---
       # No systemd PID 1 is running in these bare containers (no init
