@@ -383,7 +383,7 @@ jobs:
       - name: Install + smoke test (Fedora)
         if: startsWith(matrix.distro, 'fedora')
         run: |
-            timeout -k 10 120 dnf install -y /tmp/namtor-*.rpm
+            timeout -k 10 600 dnf install -y /tmp/namtor-*.rpm
             # Not `|| true`: a package whose main binary does not run has
             # failed its smoke test.
             timeout -k 10 10 /usr/bin/namtor daemon --version
@@ -429,7 +429,7 @@ jobs:
                 timeout -k 10 120 pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
                 ;;
               fedora*)
-                timeout -k 10 120 dnf reinstall -y /tmp/namtor-*.rpm
+                timeout -k 10 600 dnf reinstall -y /tmp/namtor-*.rpm
                 ;;
               debian*)
                 timeout -k 10 600 apt-get install -y --no-install-recommends --reinstall \
