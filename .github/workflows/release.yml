@@ -555,7 +555,7 @@ jobs:
             if ref.startswith("refs/tags/"):
                 tag = ref_name
             else:
-                tag = f"dry-run-{ref_name}" if ref_name else "dry-run"
+                tag = "dry-run-" + ref_name.replace("/", "-") if ref_name else "dry-run"
             # F11: `generated_at` was fed GITHUB_RUN_ID, so a field named for a
             # timestamp held a run ID and any consumer parsing it as a date
             # mis-read it. It is now a real ISO-8601 UTC instant, and the run
