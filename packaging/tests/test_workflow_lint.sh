@@ -46,8 +46,8 @@ while IFS= read -r line; do
         *"if ldd "*"| grep 'not found'; then"*) ;;
         *) fail "ldd link check cannot fail the step: ${line#*:}" ;;
     esac
-done < <(grep -n 'ldd .*pam_namtor\.so' "$R" || true)
-if ! grep -q "if ldd .*pam_namtor\.so | grep 'not found'; then" "$R"; then
+done < <(grep -nE 'ldd .*(pam_namtor\.so|\$PAM_SO)' "$R" || true)
+if ! grep -qE "if ldd .*(pam_namtor\.so|\\\$PAM_SO\")? \| grep 'not found'; then" "$R"; then
     fail "no working ldd link check found in $R — this gate would be vacuous"
 fi
 
