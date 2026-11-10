@@ -154,7 +154,7 @@ jobs:
             apt-get update
             apt-get install -y --no-install-recommends build-essential cargo rustc \
                 python3 debhelper-compat dh-cargo libpam0g-dev openssl devscripts \
-                libgtk-4-dev libadwaita-1-dev curl ca-certificates libseccomp-dev \
+                libgtk-4-dev libadwaita-1-dev xvfb xauth curl ca-certificates libseccomp-dev \
                 libudev-dev
             # Debian's own cargo/rustc stay installed so dpkg-checkbuilddeps
             # is satisfied and dh-cargo finds what it expects, but they are
@@ -275,6 +275,9 @@ jobs:
             [ -n "$models" ] || {
               echo "::error::model archive contains no yunet_2023mar.onnx"; exit 1; }
             cd "$GITHUB_WORKSPACE"
+            # Compile first, on its own: a build error is not a weights problem
+            # and must not be reported as one (#8).
+            cargo test -p namtor-recog --test real_models_infer --no-run
             NAMTOR_MODELS_DIR="$models" \
               cargo test -p namtor-recog --test real_models_infer -- --ignored --test-threads=1 || {
               echo "::error::the shipped ONNX weights do not infer — release blocked"; exit 1; }

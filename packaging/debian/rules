@@ -68,8 +68,10 @@ override_dh_auto_build:
 # override_dh_auto_test: workspace tests, serialising env-var-mutating
 # tests (--test-threads=1).
 # ---------------------------------------------------------------------------
+# A failing test fails the build (#17). The GTK UI tests need a display; the
+# cairo renderer keeps them off the GL stack in a bare build chroot.
 override_dh_auto_test:
-	cargo test --workspace -- --test-threads=1 || true
+	GSK_RENDERER=cairo xvfb-run -a cargo test --workspace -- --test-threads=1
 
 # ---------------------------------------------------------------------------
 # override_dh_auto_install: deterministic split staging from
