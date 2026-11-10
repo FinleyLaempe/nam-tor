@@ -165,6 +165,8 @@ License:        GPL-3.0-only
 Requires:       %{name} = %{version}-%{release}
 Requires:       gtk4%{?_isa}
 Requires:       libadwaita%{?_isa}
+Requires:       librsvg2%{?_isa}
+Requires:       adwaita-icon-theme
 # UPGRADE BLOCKER FIX, not tidiness.
 #
 # namtor-gnome is this subpackage's former name. dnf migrates nothing on a
