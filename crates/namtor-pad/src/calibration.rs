@@ -568,8 +568,8 @@ mod erf {
     }
 }
 
-#[cfg(test)]
 #[allow(clippy::needless_range_loop)] // gi/ai are printed in the assertion messages
+#[cfg(test)]
 mod tests {
     use super::*;
 
