@@ -294,6 +294,7 @@ pub fn calibrate_synthetic(seed: u64, n_live: usize, n_attack: usize) -> crate::
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_range_loop)] // gi is printed in the assertion messages
 mod tests {
     use super::*;
     use crate::calibration::{AttackClass, ApcerResult, GateId};
