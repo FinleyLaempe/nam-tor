@@ -293,6 +293,7 @@ pub fn calibrate_synthetic(seed: u64, n_live: usize, n_attack: usize) -> crate::
     )
 }
 
+#[allow(clippy::needless_range_loop)] // gi are printed in the assertion messages
 #[cfg(test)]
 mod tests {
     use super::*;
