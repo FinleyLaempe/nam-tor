@@ -45,7 +45,7 @@ dpkg -s namtor | grep -E '^(Status|Version|Depends):'
 
 step "smoke"
 timeout -k 10 10 /usr/bin/namtor daemon --version
-if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then echo "FAIL: pam module unresolved"; exit 1; fi
+if ldd /usr/lib/*/security/pam_namtor.so | grep 'not found'; then echo "FAIL: pam module unresolved"; exit 1; fi
 systemd-analyze verify --man=no /usr/lib/systemd/system/namtor-daemon.service || true
 test -x /usr/bin/namtor-enroll-wizard && echo "wizard installed"
 ldd /usr/bin/namtor-enroll-wizard | grep 'not found' && { echo "FAIL: wizard unresolved"; exit 1; } || echo "wizard links"

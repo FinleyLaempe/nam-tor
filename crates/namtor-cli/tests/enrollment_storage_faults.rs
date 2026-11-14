@@ -326,6 +326,11 @@ fn daemon_reads_enrollment_with_matching_owner() {
 /// contract: mismatched ownership is rejected, not silently accepted.
 #[test]
 fn daemon_rejects_enrollment_with_mismatched_owner() {
+    // Root can chown to any uid (or fails EINVAL in a user namespace), so the
+    // "mismatched owner" condition cannot be created.
+    if skip_as_root("daemon_rejects_enrollment_with_mismatched_owner") {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let key_path = dir.path().join("key");
     let id = EnrollmentIdentity {

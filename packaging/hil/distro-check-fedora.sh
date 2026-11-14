@@ -39,13 +39,13 @@ rpm -q --requires namtor | grep -iE 'onnx|lib64gcc' && { echo "FAIL: bogus requi
 
 step "smoke"
 timeout -k 10 10 /usr/bin/namtor daemon --version
-if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then echo "FAIL: pam module unresolved"; exit 1; fi
+if ldd /usr/lib64/security/pam_namtor.so | grep 'not found'; then echo "FAIL: pam module unresolved"; exit 1; fi
 if ldd /usr/bin/namtor-enroll-wizard | grep 'not found'; then echo "FAIL: wizard unresolved"; exit 1; fi
 echo "binaries link"
 
 step "UI test suite under Xvfb"
 cd "/build/nam-tor-$PKGVER"
-export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 GSK_RENDERER=cairo
 xvfb-run -a cargo test -p namtor-ui -- --test-threads=1 2>&1 | grep -E "^test result|FAILED|panicked" | tee /out/ui-tests.txt
 
 step "render the UI on this distro"

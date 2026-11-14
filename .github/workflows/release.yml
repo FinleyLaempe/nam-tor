@@ -145,7 +145,8 @@ jobs:
             dnf -y update
             dnf -y install @development-tools rust cargo python3 \
                 systemd-rpm-macros rpmlint rpm-build openssl-devel pam-devel \
-                gtk4-devel libadwaita-devel libseccomp-devel gcc-c++ systemd-devel
+                gtk4-devel libadwaita-devel libseccomp-devel gcc-c++ systemd-devel \
+                xorg-x11-server-Xvfb xorg-x11-xauth
 
       - name: Install build toolchain (Debian)
         if: startsWith(matrix.distro, 'debian')
@@ -335,7 +336,7 @@ jobs:
             # first, exactly as the Arch cell does before makepkg.
             cargo fetch --locked
             dpkg-buildpackage -us -uc -b
-            mv ../namtor_*.deb /tmp/
+            mv ../namtor_*.deb ../namtor-ui_*.deb /tmp/
 
       # --- Install in a disposable container + smoke test ---
       # No systemd PID 1 is running in these bare containers (no init
@@ -371,7 +372,9 @@ jobs:
             # failed its smoke test.
             timeout -k 10 10 /usr/bin/namtor daemon --version
             timeout -k 10 10 namtor-cli status || true
-            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+            PAM_SO="$(ls /usr/lib/security/pam_namtor.so /usr/lib/*/security/pam_namtor.so /usr/lib64/security/pam_namtor.so 2>/dev/null | head -1)"
+            [ -n "$PAM_SO" ] || { echo "::error::pam_namtor.so not installed in any distro PAM dir"; exit 1; }
+            if ldd "$PAM_SO" | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
               exit 1
             fi
@@ -380,12 +383,14 @@ jobs:
       - name: Install + smoke test (Fedora)
         if: startsWith(matrix.distro, 'fedora')
         run: |
-            timeout -k 10 120 dnf install -y /tmp/namtor-*.rpm
+            timeout -k 10 600 dnf install -y /tmp/namtor-*.rpm
             # Not `|| true`: a package whose main binary does not run has
             # failed its smoke test.
             timeout -k 10 10 /usr/bin/namtor daemon --version
             timeout -k 10 10 namtor-cli status || true
-            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+            PAM_SO="$(ls /usr/lib/security/pam_namtor.so /usr/lib/*/security/pam_namtor.so /usr/lib64/security/pam_namtor.so 2>/dev/null | head -1)"
+            [ -n "$PAM_SO" ] || { echo "::error::pam_namtor.so not installed in any distro PAM dir"; exit 1; }
+            if ldd "$PAM_SO" | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
               exit 1
             fi
@@ -408,7 +413,9 @@ jobs:
             # failed its smoke test.
             timeout -k 10 10 /usr/bin/namtor daemon --version
             timeout -k 10 10 namtor-cli status || true
-            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+            PAM_SO="$(ls /usr/lib/security/pam_namtor.so /usr/lib/*/security/pam_namtor.so /usr/lib64/security/pam_namtor.so 2>/dev/null | head -1)"
+            [ -n "$PAM_SO" ] || { echo "::error::pam_namtor.so not installed in any distro PAM dir"; exit 1; }
+            if ldd "$PAM_SO" | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
               exit 1
             fi
@@ -422,7 +429,7 @@ jobs:
                 timeout -k 10 120 pacman -U --noconfirm /tmp/namtor-*.pkg.tar.zst
                 ;;
               fedora*)
-                timeout -k 10 120 dnf reinstall -y /tmp/namtor-*.rpm
+                timeout -k 10 600 dnf reinstall -y /tmp/namtor-*.rpm
                 ;;
               debian*)
                 timeout -k 10 600 apt-get install -y --no-install-recommends --reinstall \
@@ -430,7 +437,9 @@ jobs:
                 ;;
             esac
             timeout -k 10 10 namtor-cli status || true
-            if ldd /usr/lib/security/pam_namtor.so | grep 'not found'; then
+            PAM_SO="$(ls /usr/lib/security/pam_namtor.so /usr/lib/*/security/pam_namtor.so /usr/lib64/security/pam_namtor.so 2>/dev/null | head -1)"
+            [ -n "$PAM_SO" ] || { echo "::error::pam_namtor.so not installed in any distro PAM dir"; exit 1; }
+            if ldd "$PAM_SO" | grep 'not found'; then
               echo "::error::pam_namtor.so has unresolved shared libraries"
               exit 1
             fi
@@ -458,7 +467,8 @@ jobs:
             esac
             # Verify everything is gone.
             for f in /usr/bin/namtor /usr/bin/namtor-cli \
-                     /usr/lib/security/pam_namtor.so; do
+                     /usr/lib/security/pam_namtor.so /usr/lib/*/security/pam_namtor.so \
+                     /usr/lib64/security/pam_namtor.so; do
                 if [ -e "$f" ]; then
                   echo "::error::uninstall left $f behind"; exit 1
                 fi
@@ -474,6 +484,14 @@ jobs:
                 /tmp/*.pkg.tar.zst
                 /tmp/*.rpm
                 /tmp/*.deb
+
+      # The cell runs as root inside a container on a self-hosted runner, so it
+      # leaves root-owned files in the bind-mounted workspace; the next job's
+      # actions/checkout then dies with EACCES while cleaning it (#18). Give
+      # the tree back to the uid that owns the workspace's parent directory.
+      - name: Hand the workspace back to the runner user
+        if: always()
+        run: chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE/..")" "$GITHUB_WORKSPACE" || true
 
   # ===========================================================================
   # package-matrix-evidence — collect per-cell results into the evidence file
@@ -537,7 +555,7 @@ jobs:
             if ref.startswith("refs/tags/"):
                 tag = ref_name
             else:
-                tag = f"dry-run-{ref_name}" if ref_name else "dry-run"
+                tag = "dry-run-" + ref_name.replace("/", "-") if ref_name else "dry-run"
             # F11: `generated_at` was fed GITHUB_RUN_ID, so a field named for a
             # timestamp held a run ID and any consumer parsing it as a date
             # mis-read it. It is now a real ISO-8601 UTC instant, and the run

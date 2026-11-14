@@ -312,6 +312,23 @@ else
     ok "post-install fails nonzero when PAM module missing"
 fi
 
+# PAM module in the Debian multiarch / Fedora lib64 directory must satisfy the
+# check as well (regression: the .deb installed it under /usr/lib/<triplet>/
+# security and post-install failed with "module missing").
+for alt in usr/lib/x86_64-linux-gnu/security usr/lib64/security; do
+    root="$(mk_temp_dir)"
+    stub="$root/usr/lib/namtor/namtor-pam-edit"
+    log="$root/pam-edit-calls.log"
+    build_complete_root "$root" "$stub" "$log"
+    mkdir -p "$root/$alt"
+    mv "$root/usr/lib/security/pam_namtor.so" "$root/$alt/pam_namtor.so"
+    if run_lc post-install --root "$root" --pam-edit "$stub" >/dev/null 2>&1; then
+        ok "post-install accepts the PAM module under /$alt"
+    else
+        not_ok "post-install rejects the PAM module under /$alt"
+    fi
+done
+
 # Tampered model (hash mismatch).
 root="$(mk_temp_dir)"
 stub="$root/usr/lib/namtor/namtor-pam-edit"
