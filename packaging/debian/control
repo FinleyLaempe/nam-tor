@@ -72,6 +72,8 @@ Depends:
     namtor (= 0.3.8-1),
     libgtk-4-1,
     libadwaita-1-0,
+    librsvg2-common,
+    adwaita-icon-theme,
 Provides: namtor-gnome
 Replaces: namtor-gnome, namtor-kde
 Breaks: namtor-gnome, namtor-kde

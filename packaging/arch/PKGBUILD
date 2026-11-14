@@ -263,6 +263,8 @@ package_namtor-ui() {
         "namtor=$pkgver"
         'gtk4'
         'libadwaita'
+        'librsvg'
+        'adwaita-icon-theme'
     )
     provides=('namtor-gnome')
     conflicts=('namtor-gnome' 'namtor-kde')
