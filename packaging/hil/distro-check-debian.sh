@@ -14,7 +14,7 @@ step "toolchain"
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends build-essential cargo rustc \
     python3 debhelper-compat dh-cargo libpam0g-dev openssl devscripts \
-    libgtk-4-dev libadwaita-1-dev curl ca-certificates libseccomp-dev \
+    libgtk-4-dev libadwaita-1-dev xvfb xauth curl ca-certificates libseccomp-dev \
     libudev-dev xvfb xauth >/dev/null
 if ! command -v rustup >/dev/null; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
