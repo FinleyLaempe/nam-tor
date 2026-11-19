@@ -318,4 +318,56 @@ mod tests {
             "verify_start must ask the capture for an illuminated window"
         );
     }
+
+    /// Review B1 (round 1): `prepare_for_auth` opens and arms the emitter,
+    /// and nothing pulls a frame until `verify_start`. The 2 s continuous-on
+    /// cap must be enforced with ZERO `next_frame` calls — the emitter goes
+    /// dark while the daemon just sits in `Warming` (no `Daemon::tick`).
+    #[test]
+    fn warming_capture_is_capped_without_any_frame_pulls() {
+        use crate::live_capture::emitter_test_support::{armed_test_source, FakeDev};
+        use std::time::Duration;
+
+        let dev = FakeDev::new();
+        let dev_handle = dev.clone();
+        let sup = MockSupervisor::new();
+        let mut daemon = Daemon::new(
+            sup,
+            &models(),
+            Duration::from_secs(30),
+            MockClock::new(Instant::now()),
+            Some(Box::new(move || {
+                Ok(armed_test_source(
+                    &dev_handle,
+                    300,
+                    300,
+                    Box::new(crate::lifecycle::SystemClock),
+                    Duration::from_millis(10),
+                ) as Box<dyn CaptureSource>)
+            })),
+        )
+        .expect("boot");
+
+        daemon.prepare_for_auth(requester()).unwrap();
+        assert_eq!(daemon.phase(), LcPhase::Warming);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && dev.current() != armed_test_source_payload_off() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            daemon.phase(),
+            LcPhase::Warming,
+            "no tick was called: the cap held purely in the capture layer"
+        );
+        assert_eq!(
+            dev.current(),
+            armed_test_source_payload_off(),
+            "the emitter must be forced off during warming with zero frame pulls (review B1)"
+        );
+    }
+
+    fn armed_test_source_payload_off() -> Vec<u8> {
+        crate::live_capture::emitter_test_support::PAYLOAD_OFF.to_vec()
+    }
 }

@@ -70,9 +70,19 @@ pub enum CycleAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CycleState {
-    Off,
-    On { since: Instant },
-    Cooldown { since: Instant },
+    /// Not cycling. `since` records when the emitter went dark by our own
+    /// action (stop/darken), so a verify/start transition can wait out the
+    /// full cooldown before turning on again instead of skipping it.
+    /// `None` means the emitter was never controlled on (no wait owed).
+    Off {
+        since: Option<Instant>,
+    },
+    On {
+        since: Instant,
+    },
+    Cooldown {
+        since: Instant,
+    },
 }
 
 /// The duty-cycle state machine. Pure: all time comes in as parameters.
@@ -88,7 +98,7 @@ impl DutyCycler {
         Self {
             max_on_ms,
             cooldown_ms,
-            state: CycleState::Off,
+            state: CycleState::Off { since: None },
         }
     }
 
@@ -112,10 +122,28 @@ impl DutyCycler {
 
     pub fn phase(&self) -> CyclePhase {
         match self.state {
-            CycleState::Off => CyclePhase::Off,
+            CycleState::Off { .. } => CyclePhase::Off,
             CycleState::On { .. } => CyclePhase::On,
             CycleState::Cooldown { .. } => CyclePhase::Cooldown,
         }
+    }
+
+    /// How long a turn-on must still wait to honour the full cooldown, given
+    /// how long the emitter has already been dark. `ZERO` means a turn-on is
+    /// allowed now. Only meaningful when not `On` (the caller checks that
+    /// first); while `On` it returns `ZERO`.
+    pub fn rearm_allowed_in(&self, now: Instant) -> Duration {
+        let dark_since = match self.state {
+            CycleState::On { .. } => return Duration::ZERO,
+            CycleState::Cooldown { since } => since,
+            CycleState::Off { since } => match since {
+                Some(s) => s,
+                // Never controlled on: no dark gap is owed.
+                None => return Duration::ZERO,
+            },
+        };
+        let dark_for = now.saturating_duration_since(dark_since);
+        self.cooldown().saturating_sub(dark_for)
     }
 
     /// Time the emitter has been on in the current window, if it is on.
@@ -147,10 +175,11 @@ impl DutyCycler {
     }
 
     /// Record that the emitter is fully off and must stay off until an
-    /// explicit re-arm: stop/drop. The next [`Self::activate`] starts a
-    /// fresh budget with no cooldown wait.
-    pub fn deactivate(&mut self) {
-        self.state = CycleState::Off;
+    /// explicit re-arm: stop/drop. `now` stamps when the emitter went dark,
+    /// so a later verify/start transition can wait out any remaining cooldown
+    /// instead of turning on sooner than `cooldown_ms` after the darkening.
+    pub fn deactivate(&mut self, now: Instant) {
+        self.state = CycleState::Off { since: Some(now) };
     }
 
     /// Enter the cooldown phase without a device write. Used when a turn-on
@@ -163,7 +192,7 @@ impl DutyCycler {
     /// Evaluate the machine at `now`.
     pub fn tick(&mut self, now: Instant) -> CycleAction {
         match self.state {
-            CycleState::Off => CycleAction::None,
+            CycleState::Off { .. } => CycleAction::None,
             // Strictly after: a window of exactly max_on_ms is still legal.
             CycleState::On { since } => {
                 if now.saturating_duration_since(since) > self.max_on() {
@@ -181,24 +210,6 @@ impl DutyCycler {
                 }
             }
         }
-    }
-
-    /// Verification hook: guarantee an illuminated window.
-    ///
-    /// - `On` → no-op, returns `false`. **The live on-budget is retained** —
-    ///   a verify landing mid-window must not restart the 2 s cap.
-    /// - `Cooldown` or `Off` → turn on immediately with a fresh budget,
-    ///   returns `true`. The remaining cooldown is skipped on purpose: this
-    ///   is a user-initiated authentication, and determinism (verify frames
-    ///   are never captured in a dark window) outranks the short off-window.
-    ///
-    /// Returns whether a transition to `On` was made.
-    pub fn ensure_on(&mut self, now: Instant) -> bool {
-        if matches!(self.state, CycleState::On { .. }) {
-            return false;
-        }
-        self.activate(now);
-        true
     }
 }
 
@@ -332,46 +343,63 @@ mod tests {
         assert_eq!(c.on_elapsed(t0 + ms(700)), None);
     }
 
-    /// The verification hook must never reset a live budget.
+    /// The verify/start transition path waits out the full cooldown: the
+    /// wait owed is the remaining cooldown, and it shrinks with time already
+    /// spent dark. It never goes negative, and it is `ZERO` once elapsed.
     #[test]
-    fn ensure_on_retains_live_budget() {
-        let t0 = epoch();
-        let mut c = cycler(2000, 300);
-        c.activate(t0);
-
-        assert!(
-            !c.ensure_on(t0 + ms(1500)),
-            "already on: no transition, budget retained"
-        );
-        assert_eq!(c.phase(), CyclePhase::On);
-        assert_eq!(
-            c.tick(t0 + ms(2001)),
-            CycleAction::Expire,
-            "budget anchored at the original activation, not the ensure_on"
-        );
-    }
-
-    #[test]
-    fn ensure_on_from_cooldown_or_off_turns_on_with_fresh_budget() {
+    fn rearm_allowed_in_waits_out_the_full_cooldown() {
         let t0 = epoch();
         let mut c = cycler(2000, 300);
         c.activate(t0);
         c.force_off(t0 + ms(2000));
 
-        assert!(c.ensure_on(t0 + ms(2050)), "cooldown skipped deliberately");
-        assert_eq!(c.phase(), CyclePhase::On);
-        assert_eq!(c.tick(t0 + ms(2050) + ms(1999)), CycleAction::None);
         assert_eq!(
-            c.tick(t0 + ms(2050) + ms(2001)),
-            CycleAction::Expire,
-            "fresh budget anchored at the ensure_on"
+            c.rearm_allowed_in(t0 + ms(2050)),
+            ms(250),
+            "50 ms into a 300 ms cooldown: 250 ms still owed"
+        );
+        assert_eq!(c.rearm_allowed_in(t0 + ms(2300)), Duration::ZERO);
+        assert_eq!(
+            c.rearm_allowed_in(t0 + ms(5000)),
+            Duration::ZERO,
+            "no wait owed after the cooldown has fully elapsed"
+        );
+    }
+
+    /// A stop stamps when the emitter went dark, so a verify/start
+    /// transition after a short stop honours the cooldown too: turning on
+    /// again is a new emission window and must respect the same dark gap.
+    #[test]
+    fn rearm_allowed_in_after_deactivate_honours_remaining_cooldown() {
+        let t0 = epoch();
+        let mut c = cycler(2000, 300);
+        c.activate(t0);
+        c.deactivate(t0 + ms(1000));
+
+        assert_eq!(
+            c.rearm_allowed_in(t0 + ms(1150)),
+            ms(150),
+            "150 ms dark since the stop: 150 ms still owed"
+        );
+        assert_eq!(
+            c.rearm_allowed_in(t0 + ms(1300)),
+            Duration::ZERO,
+            "a stop older than the cooldown owes nothing"
         );
 
-        c.force_off(t0 + ms(2050) + ms(2001));
-        c.deactivate();
-        assert_eq!(c.phase(), CyclePhase::Off);
-        assert!(c.ensure_on(t0 + ms(5000)));
-        assert_eq!(c.phase(), CyclePhase::On);
+        // A never-activated guard (Off with no stamp) owes no wait.
+        let c2 = cycler(2000, 300);
+        assert_eq!(c2.rearm_allowed_in(t0), Duration::ZERO);
+    }
+
+    /// While `On` there is never a wait to report: the caller treats the
+    /// on-phase as a no-op (budget retained) before consulting the wait.
+    #[test]
+    fn rearm_allowed_in_is_zero_while_on() {
+        let t0 = epoch();
+        let mut c = cycler(2000, 300);
+        c.activate(t0);
+        assert_eq!(c.rearm_allowed_in(t0 + ms(100)), Duration::ZERO);
     }
 
     #[test]
@@ -380,9 +408,12 @@ mod tests {
         let mut c = cycler(2000, 300);
         c.activate(t0);
         c.force_off(t0 + ms(1000));
-        c.deactivate();
+        c.deactivate(t0 + ms(1000));
         assert_eq!(c.phase(), CyclePhase::Off);
 
+        // The fresh budget starts at the activate, but the cooldown wait is
+        // measured from the deactivate stamp.
+        assert_eq!(c.rearm_allowed_in(t0 + ms(1050)), ms(250));
         let t2 = t0 + ms(4000);
         c.activate(t2);
         assert_eq!(c.phase(), CyclePhase::On);
@@ -412,7 +443,7 @@ mod tests {
         let t0 = epoch();
         let mut c = cycler(2000, 300);
         c.force_off(t0);
-        c.deactivate();
+        c.deactivate(t0);
         assert_eq!(c.phase(), CyclePhase::Off);
         assert_eq!(c.tick(t0 + ms(5000)), CycleAction::None);
     }
