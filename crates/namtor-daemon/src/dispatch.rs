@@ -180,6 +180,28 @@ impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> DaemonDispatc
             }),
         }
     }
+
+    /// Deterministic teardown: close the capture and shut the worker down.
+    ///
+    /// Called explicitly on normal termination and on startup errors, so
+    /// worker lifetime does not depend on whichever thread happens to drop
+    /// the last `Arc` to the dispatcher (issue #31). The worker shutdown is
+    /// bounded (`supervisor::SHUTDOWN_GRACE`), so this can never hang the
+    /// caller even if the worker is wedged; a poisoned lock is recovered
+    /// rather than propagated, because the capture and the worker must be
+    /// released whatever happened to the auth path.
+    pub fn shutdown(&self) {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Err(e) = state.daemon.release() {
+            tracing::warn!(error = %e, "dispatcher shutdown: capture release failed");
+        }
+        if let Err(e) = state.daemon.supervisor_mut().shutdown() {
+            tracing::warn!(error = %e, "dispatcher shutdown: worker shutdown failed");
+        }
+    }
 }
 
 impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> LifecycleDispatch
@@ -304,7 +326,10 @@ impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> LifecycleDisp
     }
 
     fn snapshot(&self) -> StatusReply {
-        let state = self.state.lock().expect("dispatcher mutex");
+        let state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         state.daemon.snapshot()
     }
 }
@@ -447,6 +472,36 @@ mod tests {
             clock.clone(),
         );
         (disp, clock)
+    }
+
+    /// Deterministic teardown (issue #31): `shutdown` must invoke the
+    /// supervisor's shutdown exactly once per call, on the calling thread —
+    /// not indirectly through a `Drop` racing whichever thread releases the
+    /// last `Arc` to the dispatcher.
+    #[test]
+    fn shutdown_invokes_the_worker_supervisor_shutdown_per_call() {
+        use crate::supervisor::ShutdownCountingSupervisor;
+        use std::sync::atomic::Ordering;
+
+        let sup = ShutdownCountingSupervisor::new();
+        let counter = sup.shutdowns.clone();
+        let clock = MockClock::new(Instant::now());
+        let daemon =
+            Daemon::new(sup, &models(), Duration::from_secs(30), clock.clone(), None).unwrap();
+        let disp = DaemonDispatcher::new(
+            daemon,
+            verifier(VerifyOutcome::no_match("none")),
+            BackoffStore::new(BackoffConfig::default()),
+            None,
+            clock,
+        );
+        disp.shutdown();
+        disp.shutdown();
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            2,
+            "each shutdown call must reach the worker supervisor"
+        );
     }
 
     // Given a Prepare request, when dispatched, then the daemon acks with
