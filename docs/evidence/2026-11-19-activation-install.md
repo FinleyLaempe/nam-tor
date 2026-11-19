@@ -25,6 +25,12 @@ the exact identity declarations match the shipped config, checks failure
 propagation, and checks the systemd socket/service contract. It never modifies
 the host's users or services.
 
+An isolated, unprivileged `dbus-daemon --nofork --config-file=...` also parsed
+the shipped policy with the host's already-established `namtor` identity and
+produced no stderr diagnostics. It used a private socket under `/tmp/opencode`
+and was terminated immediately. This checks classic-daemon policy parsing,
+not the system broker's activation or cache behavior.
+
 No reboot, system bus restart, installed package replacement, or real fresh
 package installation was performed for this investigation. A clean fresh-boot
 broker journal (issue #33 task 1) remains unverified; do not describe the
