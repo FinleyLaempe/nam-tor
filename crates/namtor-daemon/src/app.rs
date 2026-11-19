@@ -143,11 +143,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // would pin the bind path: a restarted daemon could not re-bind while the
     // stale worker still held the socket. Every descriptor the supervisor
     // creates is close-on-exec already, so marking the activation range here
-    // is sufficient — no generic descriptor sweep.
-    if let Some(count) = std::env::var("LISTEN_FDS")
-        .ok()
-        .and_then(|c| c.parse::<u32>().ok())
-    {
+    // is sufficient — no generic descriptor sweep. The range is only ours if
+    // LISTEN_PID names this process and the count is sane (see
+    // `validate_listen_fds`).
+    let listen_count = validate_listen_fds(
+        std::env::var("LISTEN_FDS").ok().as_deref(),
+        std::env::var("LISTEN_PID").ok().as_deref(),
+        std::process::id(),
+    );
+    if let Some(count) = listen_count {
         let marked = mark_listen_fds_cloexec(count, 3);
         tracing::debug!(count, marked, "activation listeners marked close-on-exec");
     }
@@ -248,6 +252,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "spawning worker"
     );
     let supervisor = ChildSupervisor::spawn(&worker_bin, &model_specs, mock_infer, &models_dir)?;
+    // Take the out-of-band termination handle now, before the supervisor
+    // moves behind the dispatcher mutex: a wedged verify can hold that mutex
+    // forever, and teardown must still be able to terminate the worker.
+    let worker_terminator = supervisor.terminator();
 
     tracing::info!(store = %store_dir.display(), "opening template store");
     let learned_pad = namtor_worker::learned_pad::OnnxCpuLearnedPad::load(&pad_path)
@@ -290,13 +298,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "backoff store loaded"
     );
 
-    let dispatcher = Arc::new(DaemonDispatcher::new(
-        daemon,
-        verify,
-        backoff,
-        Some(backoff_path),
-        SystemClock,
-    ));
+    let dispatcher = Arc::new(
+        DaemonDispatcher::new(daemon, verify, backoff, Some(backoff_path), SystemClock)
+            .with_terminator(worker_terminator),
+    );
 
     let auth_gid = resolve_namtor_auth_gid().unwrap_or_else(|_| {
         tracing::warn!("namtor-auth group not found — allowing all connections");
@@ -410,7 +415,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let started = if std::env::var("LISTEN_FDS").is_ok() {
+    let started = if listen_count.is_some() {
         tracing::info!(fd = 3, "adopting socket-activation listener");
         adopt_listener(3, socket_path, auth_gid, &dispatcher)?
     } else {
@@ -436,7 +441,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 fn mark_listen_fds_cloexec(count: u32, first: std::os::fd::RawFd) -> usize {
     let mut marked = 0;
     for offset in 0..count {
-        let raw = first + offset as i32;
+        // checked_add: an absurd count must skip, not wrap into unrelated fds.
+        let Some(raw) = first.checked_add(offset as i32) else {
+            break;
+        };
         // SAFETY: fcntl flag inspection on the descriptors systemd handed us
         // (sd_listen_fds semantics: `first..first+count` are valid open
         // listening sockets); both calls are async-signal-safe.
@@ -450,6 +458,25 @@ fn mark_listen_fds_cloexec(count: u32, first: std::os::fd::RawFd) -> usize {
         }
     }
     marked
+}
+
+/// Validate the socket-activation environment per `sd_listen_fds` semantics:
+/// the count must parse and be sane, and `LISTEN_PID` must name *this*
+/// process. A foreign or missing `LISTEN_PID` means the variables were
+/// inherited across exec and describe another process's sockets — consuming
+/// the range would mark (and later adopt) arbitrary descriptors.
+fn validate_listen_fds(count: Option<&str>, pid: Option<&str>, own_pid: u32) -> Option<u32> {
+    // A bound far above any real socket unit, small enough that marking
+    // cannot run away; anything larger is not an activation set.
+    const MAX_LISTEN_FDS: u32 = 4096;
+    let count: u32 = count?.parse().ok()?;
+    if count == 0 || count > MAX_LISTEN_FDS {
+        return None;
+    }
+    match pid.and_then(|p| p.parse::<u32>().ok()) {
+        Some(pid) if pid == own_pid => Some(count),
+        _ => None,
+    }
 }
 
 /// Bind the listener; on failure, tear the dispatcher down before returning.
@@ -475,7 +502,9 @@ where
         Ok(started) => Ok(started),
         Err(e) => {
             tracing::warn!(error = %e, "listener startup failed; shutting the worker down");
-            dispatcher.shutdown();
+            if let Err(te) = dispatcher.shutdown() {
+                tracing::error!(error = %te, "worker teardown after startup failure failed");
+            }
             Err(e)
         }
     }
@@ -502,7 +531,9 @@ where
         Ok(started) => Ok(started),
         Err(e) => {
             tracing::warn!(error = %e, "listener adoption failed; shutting the worker down");
-            dispatcher.shutdown();
+            if let Err(te) = dispatcher.shutdown() {
+                tracing::error!(error = %te, "worker teardown after adoption failure failed");
+            }
             Err(e)
         }
     }
@@ -536,7 +567,9 @@ where
             }
         }
     }
-    dispatcher.shutdown();
+    if let Err(e) = dispatcher.shutdown() {
+        tracing::error!(error = %e, "worker teardown on shutdown failed");
+    }
 }
 
 type ManagerBusHandle = (
@@ -778,5 +811,54 @@ mod teardown_tests {
     #[test]
     fn marking_tolerates_missing_descriptors() {
         assert_eq!(mark_listen_fds_cloexec(1, -1), 0);
+    }
+
+    /// sd_listen_fds semantics: only a `LISTEN_PID` naming *this* process
+    /// with a sane count authorizes consuming the range. A foreign pid means
+    /// the variables were inherited across exec and describe someone else's
+    /// sockets; an absurd count must be rejected, not marked.
+    #[test]
+    fn activation_gating_requires_our_own_listen_pid_and_a_sane_count() {
+        let own = 4242u32;
+        assert_eq!(
+            validate_listen_fds(Some("1"), Some("4242"), own),
+            Some(1),
+            "matching LISTEN_PID authorizes the range"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("3"), Some("4242"), own),
+            Some(3),
+            "multi-fd activation is honored"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("1"), Some("999"), own),
+            None,
+            "a foreign LISTEN_PID means the variables are not ours"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("1"), None, own),
+            None,
+            "systemd always sets LISTEN_PID; a missing one is not ours"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("0"), Some("4242"), own),
+            None,
+            "a zero count is not an activation set"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("999999"), Some("4242"), own),
+            None,
+            "absurd counts are rejected, not marked"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("nope"), Some("4242"), own),
+            None,
+            "unparseable counts are rejected"
+        );
+        assert_eq!(
+            validate_listen_fds(None, Some("4242"), own),
+            None,
+            "no LISTEN_FDS, no activation"
+        );
     }
 }

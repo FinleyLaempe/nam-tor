@@ -66,6 +66,11 @@ struct DispatchState<S: WorkerSupervisor, C: Clock, V: VerifyRunner> {
 
 pub struct DaemonDispatcher<S: WorkerSupervisor, C: Clock, V: VerifyRunner> {
     state: Mutex<DispatchState<S, C, V>>,
+    /// Out-of-band worker termination handle, recorded from the supervisor at
+    /// spawn time. Used only when the mutex cannot be taken within the
+    /// teardown deadline — the supervisor is unreachable behind a wedged
+    /// lock, and teardown must not depend on it (issue #31).
+    terminator: Option<crate::supervisor::WorkerTerminator>,
 }
 
 /// Darken the emitter using the record the daemon wrote before arming it,
@@ -178,28 +183,89 @@ impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> DaemonDispatc
                 backoff_path,
                 clock,
             }),
+            terminator: None,
         }
     }
 
-    /// Deterministic teardown: close the capture and shut the worker down.
+    /// Record the out-of-band worker termination handle (see
+    /// [`crate::supervisor::WorkerTerminator`]). Taken from the supervisor
+    /// at spawn time, before it moves behind the mutex. `None` (pidfd
+    /// unavailable) is accepted; teardown then fails closed if the mutex is
+    /// ever wedged.
+    pub(crate) fn with_terminator(
+        mut self,
+        terminator: Option<crate::supervisor::WorkerTerminator>,
+    ) -> Self {
+        self.terminator = terminator;
+        self
+    }
+
+    /// How long teardown waits for the dispatcher mutex before falling back
+    /// to out-of-band worker termination. Same class as the suspend deadline
+    /// in [`Self::release_for_suspend`]: a verify wedged in a never-returning
+    /// DQBUF holds this mutex for an unbounded time and must not hang
+    /// teardown.
+    const LOCK_GRACE: Duration = Duration::from_millis(750);
+
+    /// Deterministic, bounded teardown: close the capture and shut the worker
+    /// down.
     ///
     /// Called explicitly on normal termination and on startup errors, so
     /// worker lifetime does not depend on whichever thread happens to drop
-    /// the last `Arc` to the dispatcher (issue #31). The worker shutdown is
-    /// bounded (`supervisor::SHUTDOWN_GRACE`), so this can never hang the
-    /// caller even if the worker is wedged; a poisoned lock is recovered
-    /// rather than propagated, because the capture and the worker must be
-    /// released whatever happened to the auth path.
-    pub fn shutdown(&self) {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(poisoned) => poisoned.into_inner(),
+    /// the last `Arc` to the dispatcher (issue #31). The mutex is taken with
+    /// a deadline: if it cannot be taken in time (wedged verify), the worker
+    /// is terminated through the out-of-band spawn-time handle instead and
+    /// the emitter is darkened from its record — never by waiting forever.
+    ///
+    /// # Errors
+    /// When the mutex is wedged and no termination handle was recorded (the
+    /// worker cannot be terminated from here — reported, not silently
+    /// ignored), or when the worker survives SIGTERM *and* SIGKILL.
+    pub fn shutdown(&self) -> Result<(), DaemonError> {
+        let deadline = Instant::now() + Self::LOCK_GRACE;
+        let mut state = loop {
+            match self.state.try_lock() {
+                Ok(state) => break state,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if Instant::now() >= deadline {
+                        return self.shutdown_out_of_band();
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
         };
         if let Err(e) = state.daemon.release() {
             tracing::warn!(error = %e, "dispatcher shutdown: capture release failed");
         }
-        if let Err(e) = state.daemon.supervisor_mut().shutdown() {
-            tracing::warn!(error = %e, "dispatcher shutdown: worker shutdown failed");
+        state.daemon.supervisor_mut().shutdown()
+    }
+
+    /// Teardown when the mutex could not be taken in time: the supervisor is
+    /// unreachable behind the wedged lock, so the worker is terminated
+    /// through the spawn-time handle. The emitter is darkened from the
+    /// record the daemon wrote before arming — the same fallback
+    /// [`Self::release_for_suspend`] uses — because the capture cannot be
+    /// closed from here.
+    fn shutdown_out_of_band(&self) -> Result<(), DaemonError> {
+        tracing::warn!(
+            "dispatcher mutex not released within the teardown deadline; \
+             terminating the worker out-of-band"
+        );
+        force_emitter_off_from_record();
+        match &self.terminator {
+            Some(terminator) => match terminator.terminate(crate::supervisor::SHUTDOWN_GRACE) {
+                Ok(outcome) => {
+                    tracing::info!(?outcome, "worker terminated out-of-band");
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            },
+            None => Err(DaemonError::State(
+                "dispatcher mutex wedged and no worker termination handle \
+                 available; the worker cannot be terminated from here"
+                    .into(),
+            )),
         }
     }
 }
@@ -495,12 +561,130 @@ mod tests {
             None,
             clock,
         );
-        disp.shutdown();
-        disp.shutdown();
+        disp.shutdown().unwrap();
+        disp.shutdown().unwrap();
         assert_eq!(
             counter.load(Ordering::SeqCst),
             2,
             "each shutdown call must reach the worker supervisor"
+        );
+    }
+
+    /// A verify wedged in a never-returning DQBUF holds the dispatcher mutex
+    /// for an unbounded time. Teardown must still complete boundedly and the
+    /// worker must still be terminated — through the out-of-band handle
+    /// recorded at spawn, not through the lock.
+    #[test]
+    fn wedged_dispatch_lock_shuts_the_worker_down_boundedly_out_of_band() {
+        use crate::supervisor::{ShutdownCountingSupervisor, WorkerTerminator};
+        use std::sync::atomic::Ordering;
+        use std::sync::mpsc;
+        use std::sync::Arc;
+
+        // A real child, so out-of-band termination has something to kill.
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep 30");
+        let child_pid = child.id();
+        let terminator =
+            WorkerTerminator::from_pid(child_pid).expect("pidfd for the spawned child");
+
+        let sup = ShutdownCountingSupervisor::new();
+        let counter = sup.shutdowns.clone();
+        let clock = MockClock::new(Instant::now());
+        let daemon =
+            Daemon::new(sup, &models(), Duration::from_secs(30), clock.clone(), None).unwrap();
+        let disp = Arc::new(
+            DaemonDispatcher::new(
+                daemon,
+                verifier(VerifyOutcome::no_match("none")),
+                BackoffStore::new(BackoffConfig::default()),
+                None,
+                clock,
+            )
+            .with_terminator(Some(terminator)),
+        );
+
+        // Simulate the wedged verify: the mutex is held for the whole call.
+        // The guard borrows through the Arc, so a clone can be moved into the
+        // worker thread.
+        let guard = disp.state.lock().unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let disp_for_worker = Arc::clone(&disp);
+        let worker = std::thread::spawn(move || {
+            let ok = disp_for_worker.shutdown().is_ok();
+            let _ = tx.send(ok);
+            ok
+        });
+
+        let ok = rx
+            .recv_timeout(Duration::from_secs(6))
+            .expect("shutdown must complete boundedly even with the mutex wedged");
+        drop(guard);
+        assert!(worker.join().expect("shutdown thread"), "join agrees");
+        drop(disp);
+
+        assert!(
+            ok,
+            "out-of-band teardown must succeed when the mutex is wedged"
+        );
+        // The supervisor behind the wedged lock was never reached; teardown
+        // did not depend on it.
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "out-of-band teardown must not depend on the wedged lock"
+        );
+        // The worker is gone and reaped — no zombie left behind.
+        assert!(
+            std::fs::metadata(format!("/proc/{child_pid}")).is_err(),
+            "worker must be terminated and reaped, not left as a zombie"
+        );
+    }
+
+    /// Fail-closed: when the mutex is wedged *and* no termination handle was
+    /// recorded, shutdown must report an error — never silently return while
+    /// the worker keeps running.
+    #[test]
+    fn wedged_dispatch_lock_without_terminator_fails_closed() {
+        use crate::supervisor::ShutdownCountingSupervisor;
+        use std::sync::mpsc;
+        use std::sync::Arc;
+
+        let sup = ShutdownCountingSupervisor::new();
+        let clock = MockClock::new(Instant::now());
+        let daemon =
+            Daemon::new(sup, &models(), Duration::from_secs(30), clock.clone(), None).unwrap();
+        let disp = Arc::new(DaemonDispatcher::new(
+            daemon,
+            verifier(VerifyOutcome::no_match("none")),
+            BackoffStore::new(BackoffConfig::default()),
+            None,
+            clock,
+        ));
+
+        let guard = disp.state.lock().unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let disp_for_worker = Arc::clone(&disp);
+        let worker = std::thread::spawn(move || {
+            let err = disp_for_worker.shutdown().err().map(|e| e.to_string());
+            let _ = tx.send(err);
+        });
+
+        let err = rx
+            .recv_timeout(Duration::from_secs(6))
+            .expect("shutdown must complete boundedly even with the mutex wedged")
+            .expect("no terminator: shutdown must fail closed");
+        drop(guard);
+        let _ = worker.join();
+        drop(disp);
+
+        assert!(
+            err.contains("termination handle"),
+            "the error must name the missing termination handle: {err}"
         );
     }
 

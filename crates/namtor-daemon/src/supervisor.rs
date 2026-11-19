@@ -283,11 +283,10 @@ impl ChildSupervisor {
                 // fork and the prctl above, the signal will never arrive (it
                 // covers only deaths after arming) and getppid() no longer
                 // returns our parent — refuse to start rather than leak an
-                // orphaned worker.
+                // orphaned worker. ESRCH ("no such process") names the
+                // condition without allocating in the fork child.
                 if libc::getppid() != parent_pid {
-                    return Err(std::io::Error::other(
-                        "parent died between fork and PR_SET_PDEATHSIG",
-                    ));
+                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
                 }
                 Ok(())
             });
@@ -381,6 +380,27 @@ fn worker_args(
 }
 
 impl ChildSupervisor {
+    /// Out-of-band termination handle for this supervisor's worker (see
+    /// [`WorkerTerminator`]). Take it before the supervisor moves behind the
+    /// dispatcher mutex, so teardown can terminate the worker even when a
+    /// wedged verify holds that mutex forever.
+    ///
+    /// `None` only when `pidfd_open(2)` is unavailable (pre-5.3 kernel): the
+    /// warning names it, and teardown fails closed if the mutex is ever
+    /// wedged without a handle.
+    pub(crate) fn terminator(&self) -> Option<WorkerTerminator> {
+        match WorkerTerminator::from_pid(self.child.id()) {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "pidfd unavailable; out-of-band worker termination disabled"
+                );
+                None
+            }
+        }
+    }
+
     fn send_req(&mut self, req: &WorkerReq) -> Result<(), DaemonError> {
         let mut writer = std::io::BufWriter::new(&self.daemon_writer);
         encode(req, &mut writer)?;
@@ -444,9 +464,15 @@ impl WorkerSupervisor for ChildSupervisor {
     }
 
     fn shutdown(&mut self) -> Result<(), DaemonError> {
-        // Ask nicely first. Errors are fine: a dead child has nothing left to
-        // shut down, and a wedged child is handled by the bounded reap.
-        let _ = self.send_req(&WorkerReq::Shutdown);
+        // Ask nicely first — the send is non-blocking, so a worker that is
+        // not reading can never delay the bounded reap below (LOW-1). A not
+        // delivered request is fine: the reap terminates the worker anyway.
+        if !send_shutdown_request(&self.daemon_writer) {
+            tracing::debug!(
+                pid = self.child.id(),
+                "graceful Shutdown request not delivered; falling through to bounded SIGTERM"
+            );
+        }
         terminate_bounded(&mut self.child, SHUTDOWN_GRACE);
         Ok(())
     }
@@ -456,7 +482,7 @@ impl WorkerSupervisor for ChildSupervisor {
 /// SIGKILLed. Bounded so a wedged worker can never hang daemon teardown —
 /// `Drop` runs wherever the last supervisor is dropped, including during
 /// process exit where a blocking `wait()` would deadlock the shutdown.
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+pub(crate) const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 /// Reap `child` within `grace`; SIGKILL and reap it if it misses the window.
 ///
@@ -484,6 +510,231 @@ fn terminate_bounded(child: &mut Child, grace: Duration) {
     );
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// Whether `pid` refers to a live (non-zombie) process. A zombie has already
+/// exited — only its exit status is unreaped.
+pub(crate) fn process_alive(pid: u32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => {
+            let after_comm = stat.rsplit_once(')').map(|(_, rest)| rest).unwrap_or("");
+            after_comm.split_whitespace().next() != Some("Z")
+        }
+        Err(_) => false,
+    }
+}
+
+/// Deliver the graceful `Shutdown` request without ever blocking.
+///
+/// The request pipe is a socketpair the worker reads; if the worker is wedged
+/// and the buffer is full, a plain `write_all` would block *before* the
+/// bounded reap is ever reached. `send(2)` with `MSG_DONTWAIT` makes the
+/// delivery attempt non-blocking; anything short of a complete framed write
+/// is reported as "not delivered" and the caller falls through to the bounded
+/// SIGTERM, so a truncated frame is never read by a worker that keeps
+/// running (the protocol stays correct: either the whole request arrives or
+/// the worker is terminated).
+fn send_shutdown_request(writer: &std::fs::File) -> bool {
+    let mut buf = Vec::new();
+    if encode(&WorkerReq::Shutdown, &mut buf).is_err() {
+        return false;
+    }
+    // SAFETY: send(2) on our own open socket descriptor; MSG_DONTWAIT makes
+    // this call non-blocking. Only a complete write counts as delivered.
+    let sent = unsafe {
+        libc::send(
+            writer.as_raw_fd(),
+            buf.as_ptr().cast(),
+            buf.len(),
+            libc::MSG_DONTWAIT,
+        )
+    };
+    sent == buf.len() as isize
+}
+
+/// Out-of-band worker termination handle, built on a pidfd.
+///
+/// The supervisor lives behind the dispatcher mutex, which a wedged verify
+/// can hold for an unbounded time; this handle, taken from the supervisor at
+/// spawn time (before it moves behind any lock), lets teardown terminate the
+/// worker without that lock.
+///
+/// The handle holds a **pidfd** opened immediately after spawn
+/// (`pidfd_open(2)`): the kernel pins the descriptor to that exact task, so
+/// `pidfd_send_signal(2)` can never be retargeted by pid reuse, and it
+/// reports `ESRCH` once the task is fully gone. Even after the supervisor is
+/// dropped and the worker is reaped, a stale handle can only observe
+/// [`Terminated::AlreadyGone`] — it can never signal an unrelated process
+/// that recycled the pid.
+#[derive(Debug)]
+pub(crate) struct WorkerTerminator {
+    pidfd: std::os::fd::OwnedFd,
+    /// Only for logs; the pidfd, not the pid, selects the signal target.
+    pid: u32,
+}
+
+/// Outcome of an out-of-band termination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Terminated {
+    /// SIGTERM (and, if it survived the grace window, SIGKILL) was delivered
+    /// to the worker and it was reaped.
+    Signaled,
+    /// The worker was already gone when teardown ran; nothing was signaled.
+    AlreadyGone,
+}
+
+impl WorkerTerminator {
+    /// Open a pidfd for `pid`. Call immediately after spawn, before anything
+    /// can reap the child: the parent has not waited, so the pid cannot yet
+    /// have been reused.
+    ///
+    /// # Errors
+    /// `pidfd_open(2)` failure (e.g. `ENOSYS` on a pre-5.3 kernel): the
+    /// caller proceeds without an out-of-band handle, and teardown fails
+    /// closed if the mutex is ever wedged.
+    pub(crate) fn from_pid(pid: u32) -> Result<Self, DaemonError> {
+        // SAFETY: pidfd_open(2) on a child of this process that has not been
+        // waited on; flags must be 0.
+        let fd =
+            unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::c_uint, 0 as libc::c_uint) };
+        if fd < 0 {
+            return Err(DaemonError::Worker(format!(
+                "pidfd_open({pid}): {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        // SAFETY: `fd` is a fresh, owned pidfd returned by the syscall above.
+        let pidfd =
+            unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd as RawFd) };
+        Ok(Self { pidfd, pid })
+    }
+
+    /// Terminate the worker within `grace`: SIGTERM first (the worker
+    /// installs no handler, so its default disposition ends it even while
+    /// blocked in `read(2)`), then SIGKILL if it survives the window. The
+    /// child is reaped by `waitpid` — no zombie remains.
+    ///
+    /// A process that has already exited (zombie or fully reaped) is never
+    /// signaled: the zombie is reaped directly, and a fully gone task makes
+    /// `pidfd_send_signal` return `ESRCH`, which maps to
+    /// [`Terminated::AlreadyGone`].
+    ///
+    /// # Errors
+    /// When the worker survives SIGTERM *and* SIGKILL (e.g. stuck in an
+    /// uninterruptible kernel state) — the caller must not report success,
+    /// because a worker that cannot be killed is still running.
+    pub(crate) fn terminate(&self, grace: Duration) -> Result<Terminated, DaemonError> {
+        // A zombie has exited; reaping it directly avoids delivering a
+        // (harmless but misleading) signal to a dead task.
+        if !process_alive(self.pid) {
+            self.reap()?;
+            return Ok(Terminated::AlreadyGone);
+        }
+        tracing::warn!(
+            pid = self.pid,
+            "terminating the worker out-of-band (SIGTERM)"
+        );
+        match self.send_signal(libc::SIGTERM) {
+            Ok(()) => {}
+            Err(e) if e.raw_os_error() == Some(libc::ESRCH) => {
+                // Fully gone between the liveness check and the signal —
+                // never signal anything else.
+                self.reap()?;
+                return Ok(Terminated::AlreadyGone);
+            }
+            Err(e) => {
+                return Err(DaemonError::Worker(format!(
+                    "pidfd_send_signal(SIGTERM) on worker {}: {e}",
+                    self.pid
+                )));
+            }
+        }
+        let deadline = Instant::now() + grace;
+        loop {
+            if self.try_reap() {
+                return Ok(Terminated::Signaled);
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        tracing::warn!(pid = self.pid, "worker survived SIGTERM; sending SIGKILL");
+        match self.send_signal(libc::SIGKILL) {
+            Ok(()) => {}
+            Err(e) if e.raw_os_error() == Some(libc::ESRCH) => {
+                self.reap()?;
+                return Ok(Terminated::AlreadyGone);
+            }
+            Err(e) => {
+                return Err(DaemonError::Worker(format!(
+                    "pidfd_send_signal(SIGKILL) on worker {}: {e}",
+                    self.pid
+                )));
+            }
+        }
+        let kill_deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < kill_deadline {
+            if self.try_reap() {
+                return Ok(Terminated::Signaled);
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        Err(DaemonError::Worker(format!(
+            "worker {} survived SIGTERM and SIGKILL (uninterruptible state?); \
+             it may still be running",
+            self.pid
+        )))
+    }
+
+    /// Deliver a signal through the pidfd. The kernel pins the descriptor to
+    /// the spawned task, so pid reuse can never retarget it.
+    fn send_signal(&self, sig: libc::c_int) -> Result<(), std::io::Error> {
+        // SAFETY: pidfd_send_signal(2) on our own pidfd; no siginfo, no
+        // flags.
+        let rc = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                self.pidfd.as_raw_fd(),
+                sig,
+                std::ptr::null::<libc::c_void>(),
+                0 as libc::c_uint,
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
+    /// Non-blocking reap attempt; true when the child was reaped by this
+    /// call.
+    fn try_reap(&self) -> bool {
+        let mut status = 0;
+        // SAFETY: waitpid(WNOHANG) on our own child. A reused pid is never
+        // our child, so the worst case is `ECHILD`.
+        let rc = unsafe { libc::waitpid(self.pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        rc == self.pid as libc::pid_t
+    }
+
+    /// Reap an exited child. `Ok` when reaped here or already reaped
+    /// elsewhere (`ECHILD` — it exited either way).
+    fn reap(&self) -> Result<(), DaemonError> {
+        let mut status = 0;
+        // SAFETY: waitpid(WNOHANG) on our own child, as in `try_reap`.
+        let rc = unsafe { libc::waitpid(self.pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        if rc == self.pid as libc::pid_t {
+            return Ok(());
+        }
+        if rc < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
+            return Ok(());
+        }
+        Err(DaemonError::Worker(format!(
+            "worker {} could not be reaped",
+            self.pid
+        )))
+    }
 }
 
 /// Resolve the executable to re-exec as the worker child.
@@ -659,5 +910,142 @@ mod tests {
             "the hung child must have been killed, not exited cleanly"
         );
         assert_eq!(status.signal(), Some(9), "expected SIGKILL, got {status}");
+    }
+
+    /// The graceful `Shutdown` request must never block: on a full request
+    /// pipe (worker not reading) the bounded reap must remain the only wait,
+    /// so the send is non-blocking and reports "not delivered" instead.
+    #[test]
+    fn graceful_shutdown_request_on_a_full_pipe_does_not_block() {
+        use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+
+        let (req_w, req_r) = socketpair(
+            AddressFamily::Unix,
+            SockType::Stream,
+            None,
+            SockFlag::empty(),
+        )
+        .expect("socketpair");
+        // Keep the read end open but unread: the pipe must stay full.
+        let _read_end = req_r;
+        let writer = std::fs::File::from(req_w);
+        // SAFETY: fcntl F_SETFL on our own socket descriptor.
+        unsafe {
+            let flags = libc::fcntl(writer.as_raw_fd(), libc::F_GETFL);
+            assert!(flags >= 0);
+            assert_eq!(
+                libc::fcntl(writer.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK),
+                0
+            );
+        }
+        // Fill the socket buffer until the kernel says EAGAIN.
+        let chunk = vec![0u8; 65536];
+        let mut written = 0usize;
+        loop {
+            match nix::unistd::write(&writer, &chunk) {
+                Ok(n) => written += n,
+                Err(nix::errno::Errno::EAGAIN) => break,
+                Err(e) => panic!("unexpected write error: {e}"),
+            }
+        }
+        assert!(written > 0, "socket buffer was filled");
+
+        let start = Instant::now();
+        assert!(
+            !send_shutdown_request(&writer),
+            "a full request pipe must report the graceful request as not delivered"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "the graceful send must not block on a full pipe"
+        );
+    }
+
+    /// The out-of-band terminator kills and reaps a hung child within the
+    /// grace window — this is the path teardown takes when the dispatcher
+    /// mutex is wedged and the supervisor is unreachable.
+    #[test]
+    fn terminator_reaps_a_hung_child_boundedly() {
+        let child = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep 30");
+        let pid = child.id();
+        let terminator = WorkerTerminator::from_pid(pid).expect("pidfd");
+        let start = Instant::now();
+        let outcome = terminator
+            .terminate(Duration::from_millis(300))
+            .expect("terminate hung child");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "out-of-band termination took {:?}",
+            start.elapsed()
+        );
+        assert!(
+            matches!(outcome, Terminated::Signaled),
+            "a live child must be signaled and reaped, got {outcome:?}"
+        );
+        // Reaped, not left as a zombie: /proc/<pid> must be gone.
+        assert!(
+            std::fs::metadata(format!("/proc/{pid}")).is_err(),
+            "child must be reaped, not left unreaped"
+        );
+    }
+
+    /// A child that already exited (zombie: exited but unreaped) is reaped
+    /// cleanly by the terminator — no signal is delivered to anything.
+    #[test]
+    fn terminator_reaps_an_already_exited_child_without_signaling() {
+        let child = Command::new("sleep")
+            .arg("0")
+            .spawn()
+            .expect("spawn sleep 0");
+        let pid = child.id();
+        while process_alive(pid) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let outcome = WorkerTerminator::from_pid(pid)
+            .expect("pidfd of a zombie")
+            .terminate(Duration::from_millis(300))
+            .expect("already-exited child reaps cleanly");
+        assert!(
+            matches!(outcome, Terminated::AlreadyGone),
+            "a zombie must be reaped, not signaled: {outcome:?}"
+        );
+        assert!(
+            std::fs::metadata(format!("/proc/{pid}")).is_err(),
+            "zombie must be reaped"
+        );
+    }
+
+    /// After the worker is fully reaped (supervisor dropped it), the
+    /// terminator must signal nothing at all: the pidfd resolves to a dead
+    /// task (ESRCH), so even a reused pid can never be hit by a stray
+    /// signal — the handle cannot kill an unrelated process.
+    #[test]
+    fn terminator_signals_nothing_after_the_child_is_fully_reaped() {
+        let mut child = Command::new("sleep")
+            .arg("0")
+            .spawn()
+            .expect("spawn sleep 0");
+        let pid = child.id();
+        let terminator = WorkerTerminator::from_pid(pid).expect("pidfd");
+        // Full reap by the supervisor side (as Drop would do).
+        child.wait().expect("reap child");
+        assert!(std::fs::metadata(format!("/proc/{pid}")).is_err());
+
+        let outcome = terminator
+            .terminate(Duration::from_millis(300))
+            .expect("terminate after full reap must be a clean no-op");
+        assert!(
+            matches!(outcome, Terminated::AlreadyGone),
+            "nothing may be signaled after a full reap: {outcome:?}"
+        );
+        // Repeated calls stay clean: the handle stays safe after supervisor
+        // drop for the rest of its life.
+        let again = terminator
+            .terminate(Duration::from_millis(300))
+            .expect("repeat terminate stays clean");
+        assert!(matches!(again, Terminated::AlreadyGone));
     }
 }
