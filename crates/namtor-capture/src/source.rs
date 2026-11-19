@@ -61,6 +61,13 @@ pub trait CaptureSource: Send {
     fn start(&mut self) -> Result<(), CaptureError>;
     fn next_frame(&mut self) -> Result<Option<Frame>, CaptureError>;
     fn stop(&mut self);
+    /// Ask the source to be in an illuminated (emitter-on) window before the
+    /// next frames are pulled — the deterministic verify-readiness hook
+    /// (issue #30). Best-effort: sources without emitter control (replay,
+    /// synthetic) keep the no-op default, and a source that cannot illuminate
+    /// stays dark, which fails closed downstream. A source that is already
+    /// illuminated must not restart its continuous-on budget.
+    fn ensure_illuminated(&mut self) {}
 }
 
 #[cfg(test)]

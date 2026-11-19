@@ -12,6 +12,8 @@ pub mod backoff;
 pub mod daemon;
 pub mod dbus;
 pub mod dispatch;
+/// Emitter duty-cycle state machine (issue #30).
+pub mod emitter_cycle;
 pub mod fusion;
 pub mod licence;
 pub mod lifecycle;

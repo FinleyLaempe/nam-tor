@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::daemon::CaptureFactory;
+use crate::emitter_cycle::{
+    CycleAction, CyclePhase, DutyCycler, DEFAULT_COOLDOWN_MS, DEFAULT_MAX_ON_MS,
+};
+use crate::lifecycle::{Clock, SystemClock};
 use crate::DaemonError;
 use namtor_camera::always_on::ProtectionLevel;
 use namtor_camera::emitter_ctrl::{ApplyOutcome, EmitterController, EnvConsent};
@@ -14,8 +18,10 @@ use namtor_camera::inventory::{
 };
 use namtor_camera::resume::{ReconcileOutcome, Reconciler, SleepEvent};
 use namtor_camera::watchdog::force_off_lib;
+use namtor_capture::ir_uvc::IrUvc;
 use namtor_capture::source::CaptureSource;
 use namtor_hwdb::quirks::EmitterCfg;
+use namtor_uvc::probe::{SafeXu, XuTransport};
 
 /// Keeps "another program has the camera" typed on its way out of the
 /// capture layer. Everything else flattens to [`DaemonError::Capture`].
@@ -104,31 +110,69 @@ fn open_selected_camera(
     let mut source =
         namtor_capture::ir_uvc::IrUvc::new(streamer, namtor_capture::ir_uvc::ParityPolicy, caps);
     source.start().map_err(capture_err)?;
-    Ok(Box::new(EmitterSource {
-        source,
-        _emitter: emitter,
-    }) as Box<dyn CaptureSource>)
+    Ok(
+        Box::new(EmitterSource::new(source, emitter, Box::new(SystemClock)))
+            as Box<dyn CaptureSource>,
+    )
 }
 
-struct EmitterGuard {
-    xu: Option<Box<namtor_uvc::probe::SafeXu<namtor_uvc::device::V4l2Device>>>,
+/// Owns the IR emitter for one open capture and duty-cycles it (spec
+/// §4.10.2, issue #30).
+///
+/// The emitter is on in bounded windows of at most `max_on_ms` (default
+/// 2000, from quirks), separated by a cooldown of [`DEFAULT_COOLDOWN_MS`].
+/// The cycle machine ([`DutyCycler`]) decides *when*; this guard performs
+/// the device writes and reports success back to it:
+///
+/// - A force-off write that fails leaves the phase `On`, so the next
+///   per-frame tick retries the force-off — the watchdog never switches
+///   itself off, and `Drop` is the final backstop.
+/// - A turn-on write that fails fails closed: the emitter stays dark and
+///   retries are paced by the cooldown, so verification sees dark frames
+///   (which PAD rejects) rather than mislabelled ones.
+struct EmitterGuard<T: XuTransport + Send + 'static> {
+    xu: Option<Box<SafeXu<T>>>,
     cfg: Option<EmitterCfg>,
     outcome: ApplyOutcome,
-    armed: bool,
-    armed_at: Option<Instant>,
-    max_on_ms: u32,
+    cycle: DutyCycler,
+    /// Flood control for repeated failed control writes: warn on the first
+    /// failure of an episode, debug afterwards; reset on any success.
+    write_failure_warned: bool,
 }
 
-impl EmitterGuard {
+impl<T: XuTransport + Send + 'static> EmitterGuard<T> {
+    /// A guard for a device that could not be activated. Never cycles: the
+    /// emitter was never ours to control.
     fn failed(cfg: Option<EmitterCfg>) -> Self {
         Self {
             xu: None,
             cfg,
             outcome: ApplyOutcome::SkippedAlwaysOn,
-            armed: false,
-            armed_at: None,
-            max_on_ms: 2000,
+            cycle: DutyCycler::new(DEFAULT_MAX_ON_MS, DEFAULT_COOLDOWN_MS),
+            write_failure_warned: false,
         }
+    }
+
+    /// A guard for a device whose initial gated activation has already run
+    /// (`outcome`). When activated, the first on-window starts at `now`.
+    fn new(
+        xu: Box<SafeXu<T>>,
+        cfg: Option<EmitterCfg>,
+        outcome: ApplyOutcome,
+        max_on_ms: u32,
+        now: Instant,
+    ) -> Self {
+        let mut guard = Self {
+            xu: Some(xu),
+            cfg,
+            outcome,
+            cycle: DutyCycler::new(max_on_ms, DEFAULT_COOLDOWN_MS),
+            write_failure_warned: false,
+        };
+        if outcome == ApplyOutcome::Activated {
+            guard.cycle.activate(now);
+        }
+        guard
     }
 
     fn protection_level(&self) -> ProtectionLevel {
@@ -140,82 +184,178 @@ impl EmitterGuard {
         }
     }
 
-    /// Per-frame watchdog enforcement (spec §4.10.2). If the emitter has been
-    /// on longer than `max_on_ms`, force it off and disarm. Called before
-    /// each frame pull so a stuck capture loop cannot leave the emitter on.
-    fn check_watchdog_and_force_off(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let Some(t0) = self.armed_at else { return };
-        if t0.elapsed() > Duration::from_millis(self.max_on_ms as u64) {
-            if let (Some(xu), Some(cfg)) = (self.xu.as_mut(), self.cfg.as_ref()) {
-                let _ = force_off_lib(xu.as_mut(), cfg);
-            }
-            self.armed = false;
-            self.armed_at = None;
+    fn activatable(&self) -> bool {
+        self.outcome == ApplyOutcome::Activated && self.xu.is_some() && self.cfg.is_some()
+    }
+
+    /// Log a failed control write: warn on the first failure of an episode,
+    /// debug afterwards (a per-frame retry loop must not flood the journal).
+    fn log_write_failure(&mut self, msg: &str, e: String) {
+        if self.write_failure_warned {
+            tracing::debug!(error = %e, "{msg}");
+        } else {
+            tracing::warn!(error = %e, "{msg}");
+            self.write_failure_warned = true;
         }
     }
-}
 
-impl EmitterGuard {
-    /// Darken the emitter without giving up the device, so a later
-    /// [`Self::rearm`] can turn it back on.
+    /// Attempt to turn the emitter on. On success, records the fresh
+    /// on-budget. Returns whether the device is now driven on.
+    fn turn_on(&mut self, now: Instant) -> bool {
+        if !self.activatable() {
+            return false;
+        }
+        let outcome = {
+            let (Some(xu), Some(cfg)) = (self.xu.as_mut(), self.cfg.as_ref()) else {
+                return false;
+            };
+            let mut ctrl = EmitterController::new(xu.as_mut(), cfg);
+            match ctrl.apply_on_gated(&EnvConsent) {
+                Ok(ApplyOutcome::Activated) => {
+                    ctrl.release_to_guard();
+                    Ok(ApplyOutcome::Activated)
+                }
+                other => other,
+            }
+        };
+        match outcome {
+            Ok(ApplyOutcome::Activated) => {
+                self.cycle.activate(now);
+                self.write_failure_warned = false;
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                self.log_write_failure(
+                    "emitter turn-on write failed; staying dark (fail closed)",
+                    e.to_string(),
+                );
+                false
+            }
+        }
+    }
+
+    /// Attempt to force the emitter off. On success, records the cooldown.
+    /// Returns whether the force-off write succeeded.
+    fn darken(&mut self, now: Instant) -> bool {
+        let (Some(xu), Some(cfg)) = (self.xu.as_mut(), self.cfg.as_ref()) else {
+            return true;
+        };
+        match force_off_lib(xu.as_mut(), cfg) {
+            Ok(()) => {
+                self.cycle.force_off(now);
+                self.write_failure_warned = false;
+                true
+            }
+            Err(e) => {
+                self.log_write_failure(
+                    "emitter force-off write failed; the emitter may still be lit and the \
+                     watchdog keeps retrying",
+                    e,
+                );
+                false
+            }
+        }
+    }
+
+    /// Per-frame duty-cycle enforcement (spec §4.10.2). Runs before each
+    /// frame pull. Returns `true` when a control transition was made, so the
+    /// caller can drop the one buffered frame that was captured before the
+    /// write landed.
+    fn duty_tick(&mut self, now: Instant) -> bool {
+        match self.cycle.tick(now) {
+            CycleAction::None => false,
+            CycleAction::Expire => {
+                let elapsed_ms = self
+                    .cycle
+                    .on_elapsed(now)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let darkened = self.darken(now);
+                if darkened {
+                    tracing::warn!(
+                        elapsed_ms = elapsed_ms,
+                        max_on_ms = self.cycle.max_on_ms(),
+                        "emitter on-budget expired; forced off (duty cycle, spec §4.10.2)"
+                    );
+                }
+                darkened
+            }
+            CycleAction::Rearm => {
+                if self.turn_on(now) {
+                    tracing::info!(
+                        cooldown_ms = self.cycle.cooldown_ms(),
+                        "emitter re-armed after duty-cycle cooldown"
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Stop-path darken: the emitter must be off while the stream is stopped,
+    /// without giving up the device, so a later [`Self::rearm`] can turn it
+    /// back on.
     ///
     /// Needed because a stopped capture is not always a dropped one. An
     /// enrollment session keeps its source across Stop → Review → Resume, and
     /// `EmitterSource::stop` used to stop only the stream. The per-frame
-    /// watchdog cannot help — it runs before a frame pull, and a stopped
+    /// duty cycle cannot help — it runs before a frame pull, and a stopped
     /// source pulls none — so the IR emitter stayed lit for as long as the
     /// user sat on the Review screen. Measured on the reference camera:
     /// still `payload_on` 1500 ms after `stop()`.
-    fn disarm(&mut self) {
-        if !self.armed {
+    fn disarm(&mut self, now: Instant) {
+        if self.cycle.phase() == CyclePhase::Off {
             return;
         }
-        if let (Some(xu), Some(cfg)) = (self.xu.as_mut(), self.cfg.as_ref()) {
-            if let Err(e) = force_off_lib(xu.as_mut(), cfg) {
-                // The write failed, so the emitter is still lit. Do NOT clear
-                // `armed`: that is the flag `check_watchdog_and_force_off`
-                // tests first, so clearing it here would switch the watchdog
-                // off for the rest of this guard's life and leave `Drop` as
-                // the only thing that could ever darken the LED — and the
-                // Stop -> Review -> Resume flow deliberately does not drop.
-                // Staying armed keeps the watchdog trying.
-                tracing::warn!(error = %e, "emitter force-off failed; leaving the watchdog armed");
-                return;
-            }
+        if self.darken(now) {
+            self.cycle.deactivate();
+        } else {
+            // The write failed, so the emitter is still lit and the phase stays
+            // `On`. The stream is stopped, so no per-frame tick will run — but a
+            // later `start` finds the phase `On`, does not re-arm (the emitter is
+            // already lit), and the first tick after start expires the stale
+            // budget and retries the force-off. `Drop` is the final backstop.
         }
-        self.armed = false;
-        self.armed_at = None;
     }
 
     /// Turn the emitter back on after [`Self::disarm`], if it was on before.
     ///
     /// Only re-applies when the original activation succeeded; an emitter that
     /// was skipped (always-on hardware, or a vendor XU without consent) stays
-    /// as it was. The watchdog budget restarts from now.
-    fn rearm(&mut self) {
-        if self.armed || self.outcome != ApplyOutcome::Activated {
+    /// as it was. A fresh on-budget starts now.
+    fn rearm(&mut self, now: Instant) {
+        if self.outcome != ApplyOutcome::Activated || self.cycle.phase() == CyclePhase::On {
             return;
         }
-        let (Some(xu), Some(cfg)) = (self.xu.as_mut(), self.cfg.as_ref()) else {
+        if self.turn_on(now) {
             return;
-        };
-        let mut ctrl = EmitterController::new(xu.as_mut(), cfg);
-        match ctrl.apply_on_gated(&EnvConsent) {
-            Ok(ApplyOutcome::Activated) => {
-                ctrl.release_to_guard();
-                self.armed = true;
-                self.armed_at = Some(Instant::now());
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "emitter re-arm on resume failed"),
+        }
+        // Turn-on failed: pace the retries by the cooldown instead of
+        // hammering the device on every frame. Fails closed (dark).
+        self.cycle.enter_cooldown(now);
+    }
+
+    /// Verification hook (issue #30): guarantee an illuminated window.
+    ///
+    /// - Already on → no-op: the live on-budget is retained and never resets
+    ///   while the emitter is illuminated.
+    /// - Off or cooling down → turn on immediately with a fresh budget. A
+    ///   failed write enters the cooldown, from which the per-frame ticks
+    ///   retry; until one succeeds the frames are dark, which fails closed.
+    fn ensure_on(&mut self, now: Instant) {
+        if self.cycle.phase() == CyclePhase::On {
+            return;
+        }
+        if !self.turn_on(now) {
+            self.cycle.enter_cooldown(now);
         }
     }
 }
 
-impl Drop for EmitterGuard {
+impl<T: XuTransport + Send + 'static> Drop for EmitterGuard<T> {
     fn drop(&mut self) {
         if let (Some(mut xu), Some(cfg)) = (self.xu.take(), self.cfg.as_ref()) {
             let _ = force_off_lib(xu.as_mut(), cfg);
@@ -270,9 +410,8 @@ fn activate_emitter(
     dev: &Path,
     emitter_cfg: Option<&EmitterCfg>,
     state_path: &Path,
-) -> Result<EmitterGuard, String> {
+) -> Result<EmitterGuard<namtor_uvc::device::V4l2Device>, String> {
     use namtor_uvc::device::V4l2Device;
-    use namtor_uvc::probe::SafeXu;
 
     let cfg = emitter_cfg.ok_or_else(|| "no emitter config for selected device".to_string())?;
 
@@ -290,7 +429,11 @@ fn activate_emitter(
 
     let v4l2_dev = V4l2Device::open(dev).map_err(|e| format!("open {}: {e}", dev.display()))?;
     let mut xu = Box::new(SafeXu::new(v4l2_dev));
-    let max_on_ms = cfg.lifecycle.as_ref().map(|l| l.max_on_ms).unwrap_or(2000);
+    let max_on_ms = cfg
+        .lifecycle
+        .as_ref()
+        .map(|l| l.max_on_ms)
+        .unwrap_or(DEFAULT_MAX_ON_MS);
 
     let outcome = {
         let mut ctrl = EmitterController::new(&mut xu, cfg);
@@ -306,26 +449,45 @@ fn activate_emitter(
         }
     };
 
-    let armed = outcome == ApplyOutcome::Activated;
-    let armed_at = if armed { Some(Instant::now()) } else { None };
-    Ok(EmitterGuard {
-        xu: Some(xu),
-        cfg: emitter_cfg.cloned(),
+    Ok(EmitterGuard::new(
+        xu,
+        emitter_cfg.cloned(),
         outcome,
-        armed,
-        armed_at,
         max_on_ms,
-    })
+        Instant::now(),
+    ))
 }
 
-struct EmitterSource<S: namtor_capture::ir_uvc::Streamer, P: namtor_capture::ir_uvc::EmitterPolicy>
-{
+struct EmitterSource<
+    S: namtor_capture::ir_uvc::Streamer,
+    P: namtor_capture::ir_uvc::EmitterPolicy,
+    T: XuTransport + Send + 'static,
+> {
     source: namtor_capture::ir_uvc::IrUvc<S, P>,
-    _emitter: EmitterGuard,
+    emitter: EmitterGuard<T>,
+    clock: Box<dyn Clock + Send>,
 }
 
-impl<S: namtor_capture::ir_uvc::Streamer, P: namtor_capture::ir_uvc::EmitterPolicy> CaptureSource
-    for EmitterSource<S, P>
+impl<
+        S: namtor_capture::ir_uvc::Streamer,
+        P: namtor_capture::ir_uvc::EmitterPolicy,
+        T: XuTransport + Send + 'static,
+    > EmitterSource<S, P, T>
+{
+    fn new(source: IrUvc<S, P>, emitter: EmitterGuard<T>, clock: Box<dyn Clock + Send>) -> Self {
+        Self {
+            source,
+            emitter,
+            clock,
+        }
+    }
+}
+
+impl<
+        S: namtor_capture::ir_uvc::Streamer,
+        P: namtor_capture::ir_uvc::EmitterPolicy,
+        T: XuTransport + Send + 'static,
+    > CaptureSource for EmitterSource<S, P, T>
 {
     fn caps(&self) -> namtor_capture::source::SourceCaps {
         self.source.caps()
@@ -335,26 +497,45 @@ impl<S: namtor_capture::ir_uvc::Streamer, P: namtor_capture::ir_uvc::EmitterPoli
         // Stream first, emitter second. `source.start()` can fail (REQBUFS,
         // mmap, STREAMON); arming before it meant a failed start returned Err
         // with the emitter lit and no stream, so `next_frame` — the only thing
-        // that runs the watchdog — would never be called.
+        // that runs the duty cycle — would never be called.
         self.source.start()?;
         // Resume after a Stop: `stop` darkened the emitter, so light it again
         // now that frames are actually coming. A no-op on first start.
-        self._emitter.rearm();
+        let now = self.clock.now();
+        self.emitter.rearm(now);
         Ok(())
     }
 
     fn next_frame(
         &mut self,
     ) -> Result<Option<namtor_capture::frame::Frame>, namtor_capture::source::CaptureError> {
-        self._emitter.check_watchdog_and_force_off();
-        self.source.next_frame()
+        let now = self.clock.now();
+        let transitioned = self.emitter.duty_tick(now);
+        let frame = self.source.next_frame()?;
+        if transitioned {
+            // A control write just landed, but the frames queued in the V4L2
+            // ring were captured before it: the first frame dequeued now can
+            // still show the previous illumination state. Discard one frame
+            // per transition. Deeper staleness is bounded by the ring depth
+            // and fails closed downstream: a pair captured entirely in one
+            // illumination state produces a ~zero strobe differential, which
+            // the PAD gates veto — never a false accept.
+            return self.source.next_frame();
+        }
+        Ok(frame)
     }
 
     fn stop(&mut self) {
         self.source.stop();
         // A stop must darken the emitter, not only halt the stream: the source
         // may be kept for a later Resume. See `EmitterGuard::disarm`.
-        self._emitter.disarm();
+        let now = self.clock.now();
+        self.emitter.disarm(now);
+    }
+
+    fn ensure_illuminated(&mut self) {
+        let now = self.clock.now();
+        self.emitter.ensure_on(now);
     }
 }
 
@@ -776,5 +957,471 @@ mod tests {
                 Ok(self.pre.clone())
             }
         }
+    }
+}
+
+/// Deterministic regressions for the emitter duty cycle (issue #30).
+///
+/// Everything runs on [`MockClock`] and a fake XU transport: no sleeping, no
+/// device. The device state (`FakeDev::current`) is the source of truth —
+/// every "emitter is on/off" assertion reads the control back.
+#[cfg(test)]
+mod emitter_duty_cycle_tests {
+    use super::*;
+    use crate::lifecycle::MockClock;
+    use namtor_capture::frame::PixFmt;
+    use namtor_capture::ir_uvc::{RawFrame, Streamer};
+    use namtor_capture::source::{CaptureError, SourceCaps, Spectrum};
+    use namtor_hwdb::quirks::{EmitterMethod, LifecycleCfg};
+    use namtor_uvc::probe::XuError;
+    use namtor_uvc::xu::Query;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    const PAYLOAD_ON: [u8; 9] = [0x01, 0x03, 0x02, 0, 0, 0, 0, 0, 0];
+    const PAYLOAD_OFF: [u8; 9] = [0x01, 0x03, 0x01, 0, 0, 0, 0, 0, 0];
+
+    struct FakeInner {
+        current: Vec<u8>,
+        writes: Vec<Vec<u8>>,
+        fail_sets: bool,
+    }
+
+    /// Fake XU transport with one control at unit 4, selector 6. Clones share
+    /// the device state, so the test keeps a handle while the source owns one.
+    #[derive(Clone)]
+    struct FakeDev {
+        inner: Arc<Mutex<FakeInner>>,
+    }
+
+    impl FakeDev {
+        fn new() -> Self {
+            Self {
+                inner: Arc::new(Mutex::new(FakeInner {
+                    current: PAYLOAD_OFF.to_vec(),
+                    writes: Vec::new(),
+                    fail_sets: false,
+                })),
+            }
+        }
+
+        fn set_fail_sets(&self, fail: bool) {
+            self.inner.lock().unwrap().fail_sets = fail;
+        }
+
+        fn current(&self) -> Vec<u8> {
+            self.inner.lock().unwrap().current.clone()
+        }
+
+        /// Number of times `payload_on` was written.
+        fn on_writes(&self) -> usize {
+            self.inner
+                .lock()
+                .unwrap()
+                .writes
+                .iter()
+                .filter(|w| w.as_slice() == PAYLOAD_ON)
+                .count()
+        }
+    }
+
+    impl XuTransport for FakeDev {
+        fn query(
+            &self,
+            unit: u8,
+            selector: u8,
+            query: Query,
+            buf: &mut [u8],
+        ) -> Result<(), XuError> {
+            if (unit, selector) != (4, 6) {
+                return Err(XuError::Ioctl("ENOENT".into()));
+            }
+            let mut inner = self.inner.lock().unwrap();
+            match query {
+                Query::GetLen => {
+                    buf[0] = 9;
+                }
+                Query::GetInfo => buf[0] = 0b11,
+                Query::GetCur => buf.copy_from_slice(&inner.current),
+                Query::SetCur => {
+                    if inner.fail_sets {
+                        return Err(XuError::Ioctl("EIO".into()));
+                    }
+                    inner.current = buf.to_vec();
+                    inner.writes.push(buf.to_vec());
+                }
+                _ => return Err(XuError::Ioctl("unsupported".into())),
+            }
+            Ok(())
+        }
+    }
+
+    /// A streamer that always has the next frame, counting raw pulls through a
+    /// shared counter so the test can compare pulls with frames handed out.
+    struct EndlessStreamer {
+        n: Arc<AtomicU64>,
+    }
+
+    impl EndlessStreamer {
+        fn new() -> (Self, Arc<AtomicU64>) {
+            let n = Arc::new(AtomicU64::new(0));
+            (Self { n: n.clone() }, n)
+        }
+    }
+
+    impl Streamer for EndlessStreamer {
+        fn next_raw(&mut self) -> Result<RawFrame, CaptureError> {
+            let i = self.n.fetch_add(1, Ordering::SeqCst);
+            Ok(RawFrame {
+                data: vec![0u8; 4096],
+                ts: Duration::from_millis(33 * i),
+                sof: None,
+                frame_index: i,
+            })
+        }
+    }
+
+    fn msxu_cfg() -> EmitterCfg {
+        EmitterCfg {
+            method: EmitterMethod::MsxuMode,
+            guid: Some("0f3f95dc-2632-4c4e-92c9-a04782f43bc8".into()),
+            vc_interface: Some(2),
+            unit: Some(4),
+            selector: Some(6),
+            length: Some(9),
+            payload_on: PAYLOAD_ON.to_vec(),
+            payload_off: PAYLOAD_OFF.to_vec(),
+            mode: Some(2),
+            strobe: None,
+            idle: None,
+            lifecycle: Some(LifecycleCfg { max_on_ms: 2000 }),
+        }
+    }
+
+    /// Mirrors production `activate_emitter`: apply the on payload first, then
+    /// hand the transport to a guard whose cycle is anchored at `now`.
+    /// Returns the source and the streamer's raw-pull counter.
+    fn armed_source(
+        dev: &FakeDev,
+        clock: MockClock,
+    ) -> (
+        EmitterSource<EndlessStreamer, namtor_capture::ir_uvc::ParityPolicy, FakeDev>,
+        Arc<AtomicU64>,
+    ) {
+        let mut xu = Box::new(SafeXu::new(dev.clone()));
+        let cfg = msxu_cfg();
+        let outcome = {
+            let mut ctrl = EmitterController::new(xu.as_mut(), &cfg);
+            match ctrl.apply_on_gated(&EnvConsent) {
+                Ok(ApplyOutcome::Activated) => {
+                    ctrl.release_to_guard();
+                    ApplyOutcome::Activated
+                }
+                Ok(other) => other,
+                Err(e) => panic!("test arming failed: {e}"),
+            }
+        };
+        let guard = EmitterGuard::new(xu, Some(cfg), outcome, 2000, clock.now());
+        let caps = SourceCaps {
+            spectrum: Spectrum::Ir,
+            format: PixFmt::Grey8,
+            width: 64,
+            height: 64,
+            fps: 30,
+            has_metadata: false,
+        };
+        let (streamer, raws) = EndlessStreamer::new();
+        let src = IrUvc::new(streamer, namtor_capture::ir_uvc::ParityPolicy, caps);
+        (
+            EmitterSource::new(src, guard, Box::new(clock.clone())),
+            raws,
+        )
+    }
+
+    fn ms(m: u64) -> Duration {
+        Duration::from_millis(m)
+    }
+
+    /// The issue #30 regression: a 10-second stream must duty-cycle. Before
+    /// the fix the watchdog forced the emitter off after 2 s and nothing ever
+    /// turned it back on — the last 8 s of every capture were dark.
+    #[test]
+    fn ten_second_stream_stays_illuminated_by_duty_cycling() {
+        let dev = FakeDev::new();
+        let clock = MockClock::new(Instant::now());
+        let (mut src, _raws) = armed_source(&dev, clock.clone());
+        src.start().unwrap();
+
+        for _ in 0..303 {
+            clock.advance(ms(33));
+            src.next_frame().unwrap();
+        }
+
+        assert!(
+            dev.on_writes() >= 4,
+            "the emitter must be re-armed after each expiry; got {} on-writes",
+            dev.on_writes()
+        );
+        assert_eq!(
+            dev.current(),
+            PAYLOAD_ON,
+            "the stream must end inside an illuminated window, not permanently dark"
+        );
+    }
+
+    /// The watchdog expiry is exact: a window of exactly max_on_ms is legal,
+    /// one millisecond more is not.
+    #[test]
+    fn expiry_forces_off_strictly_after_max_on() {
+        let dev = FakeDev::new();
+        let clock = MockClock::new(Instant::now());
+        let (mut src, _raws) = armed_source(&dev, clock.clone());
+        src.start().unwrap();
+
+        clock.advance(ms(1999));
+        src.next_frame().unwrap();
+        assert_eq!(dev.current(), PAYLOAD_ON, "1999 ms is within the budget");
+
+        clock.advance(ms(2));
+        src.next_frame().unwrap();
+        assert_eq!(dev.current(), PAYLOAD_OFF, "2001 ms must expire");
+    }
+
+    /// A force-off write that fails must not disarm the watchdog: it retries
+    /// on the next frame and darkens as soon as the device accepts a write.
+    #[test]
+    fn force_off_failure_keeps_retrying_until_it_succeeds() {
+        let dev = FakeDev::new();
+        let clock = MockClock::new(Instant::now());
+        let (mut src, _raws) = armed_source(&dev, clock.clone());
+        src.start().unwrap();
+
+        dev.set_fail_sets(true);
+        clock.advance(ms(2001));
+        src.next_frame().unwrap();
+        assert_eq!(
+            dev.current(),
+            PAYLOAD_ON,
+            "the write failed, so the emitter is still lit"
+        );
+
+        dev.set_fail_sets(false);
+        clock.advance(ms(33));
+        src.next_frame().unwrap();
+        assert_eq!(
+            dev.current(),
+            PAYLOAD_OFF,
+            "the watchdog must retry the force-off instead of disarming"
+        );
+    }
+
+    /// A turn-on write that fails fails closed (dark) and is retried after
+    /// the cooldown, not abandoned for the rest of the session.
+    #[test]
+    fn turn_on_failure_retries_with_cooldown_pacing() {
+        let dev = FakeDev::new();
+        let clock = MockClock::new(Instant::now());
+        let (mut src, _raws) = armed_source(&dev, clock.clone());
+        src.start().unwrap();
+
+        clock.advance(ms(2001));
+        src.next_frame().unwrap(); // expiry -> off, cooldown starts
+        assert_eq!(dev.current(), PAYLOAD_OFF);
+
+        dev.set_fail_sets(true);
+        clock.advance(ms(300));
+        src.next_frame().unwrap(); // rearm attempted, write fails
+        assert_eq!(dev.current(), PAYLOAD_OFF, "failed turn-on stays dark");
+
+        dev.set_fail_sets(false);
+        clock.advance(ms(300));
+        src.next_frame().unwrap(); // retry succeeds
+        assert_eq!(
+            dev.current(),
+            PAYLOAD_ON,
+            "a failed turn-on must be retried after the cooldown"
+        );
+    }
+
+    /// Stop darkens; resume re-arms with a fresh budget.
+    #[test]
+    fn stop_darkens_and_resume_rearms_with_fresh_budget() {
+        let dev = FakeDev::new();
+        let clock = MockClock::new(Instant::now());
+        let (mut src, _raws) = armed_source(&dev, clock.clone());
+        src.start().unwrap();
+
+        clock.advance(ms(1000));
+        src.next_frame().unwrap();
+        src.stop();
+        assert_eq!(dev.current(), PAYLOAD_OFF, "stop must darken the emitter");
+
+        clock.advance(ms(5000));
+        src.start().unwrap();
+        assert_eq!(dev.current(), PAYLOAD_ON, "resume must re-arm");
+
+        // Fresh budget: expiry is anchored at the resume, not the original t0.
+        clock.advance(ms(2001));
+        src.next_frame().unwrap();
+        assert_eq!(dev.current(), PAYLOAD_OFF);
+    }
+
+    /// A stop whose force-off write fails leaves the emitter lit; resuming
+    /// must recover the duty cycle instead of going permanently dark.
+    #[test]
+    fn failed_stop_force_off_recovers_on_resume() {
+        let dev = FakeDev::new();
+        let clock = MockClock::new(Instant::now());
+        let (mut src, _raws) = armed_source(&dev, clock.clone());
+        src.start().unwrap();
+
+        dev.set_fail_sets(true);
+        clock.advance(ms(1500));
+        src.stop();
+        assert_eq!(
+            dev.current(),
+            PAYLOAD_ON,
+            "the stop force-off failed, so the emitter is still lit"
+        );
+
+        dev.set_fail_sets(false);
+        // The user sits on the Review screen; resume happens well past the
+        // (already exceeded) budget.
+        clock.advance(ms(3500));
+        src.start().unwrap();
+        clock.advance(ms(33));
+        src.next_frame().unwrap();
+        assert_eq!(
+            dev.current(),
+            PAYLOAD_OFF,
+            "the stale budget expires on the first frame after resume"
+        );
+        clock.advance(ms(300));
+        src.next_frame().unwrap();
+        assert_eq!(
+            dev.current(),
+            PAYLOAD_ON,
+            "the duty cycle must resume after the cooldown"
+        );
+    }
+
+    /// Dropping the guard is the final backstop: the emitter goes dark even
+    /// if the stream was never stopped.
+    #[test]
+    fn drop_forces_the_emitter_off() {
+        let dev = FakeDev::new();
+        let clock = MockClock::new(Instant::now());
+        let (mut src, _raws) = armed_source(&dev, clock.clone());
+        src.start().unwrap();
+        assert_eq!(dev.current(), PAYLOAD_ON);
+        drop(src);
+        assert_eq!(dev.current(), PAYLOAD_OFF, "Drop must darken the emitter");
+    }
+
+    /// The verify-readiness hook must not rewrite the control while the
+    /// emitter is already on: the live budget is retained and still expires
+    /// at its original deadline.
+    #[test]
+    fn ensure_on_while_on_retains_the_live_budget() {
+        let dev = FakeDev::new();
+        let clock = MockClock::new(Instant::now());
+        let (mut src, _raws) = armed_source(&dev, clock.clone());
+        src.start().unwrap();
+
+        clock.advance(ms(1500));
+        src.ensure_illuminated();
+        assert_eq!(dev.on_writes(), 1, "no re-write while already on");
+        clock.advance(ms(501));
+        src.next_frame().unwrap();
+        assert_eq!(
+            dev.current(),
+            PAYLOAD_OFF,
+            "the budget is still anchored at the original activation"
+        );
+    }
+
+    /// The verify-readiness hook turns the emitter on immediately when
+    /// reached during the cooldown, so verification never lands in a dark
+    /// window (issue #30, fix 3).
+    #[test]
+    fn ensure_on_during_cooldown_illuminates_immediately() {
+        let dev = FakeDev::new();
+        let clock = MockClock::new(Instant::now());
+        let (mut src, _raws) = armed_source(&dev, clock.clone());
+        src.start().unwrap();
+
+        clock.advance(ms(2001));
+        src.next_frame().unwrap(); // expiry -> off, cooldown
+        assert_eq!(dev.current(), PAYLOAD_OFF);
+
+        clock.advance(ms(50));
+        src.ensure_illuminated();
+        assert_eq!(
+            dev.current(),
+            PAYLOAD_ON,
+            "verify must obtain an illuminated window without waiting out the cooldown"
+        );
+
+        // Fresh budget anchored at the ensure_on.
+        clock.advance(ms(2001));
+        src.next_frame().unwrap();
+        assert_eq!(dev.current(), PAYLOAD_OFF);
+    }
+
+    /// A failed ensure_on turn-on fails closed and is retried on later ticks.
+    #[test]
+    fn ensure_on_write_failure_retries_with_cooldown_pacing() {
+        let dev = FakeDev::new();
+        let clock = MockClock::new(Instant::now());
+        let (mut src, _raws) = armed_source(&dev, clock.clone());
+        src.start().unwrap();
+
+        clock.advance(ms(2001));
+        src.next_frame().unwrap(); // expiry -> off, cooldown
+
+        dev.set_fail_sets(true);
+        clock.advance(ms(300));
+        src.ensure_illuminated(); // turn-on fails
+        assert_eq!(dev.current(), PAYLOAD_OFF, "failed turn-on stays dark");
+
+        dev.set_fail_sets(false);
+        clock.advance(ms(300));
+        src.next_frame().unwrap(); // retry succeeds
+        assert_eq!(
+            dev.current(),
+            PAYLOAD_ON,
+            "a failed ensure_on must be retried after the cooldown"
+        );
+    }
+
+    /// Frames queued in the V4L2 ring before a control write landed were
+    /// captured in the previous illumination state. One such buffered frame
+    /// is discarded after each transition; the rest fail closed downstream
+    /// (a fully-lit pair produces a ~zero differential, which PAD vetoes).
+    #[test]
+    fn one_buffered_frame_is_discarded_after_each_control_transition() {
+        let dev = FakeDev::new();
+        let clock = MockClock::new(Instant::now());
+        let (mut src, raws) = armed_source(&dev, clock.clone());
+        src.start().unwrap();
+
+        let mut frames = 0u64;
+        for _ in 0..121 {
+            // ~4 s: exactly one expiry and one cooldown re-arm, i.e. exactly
+            // two control transitions.
+            clock.advance(ms(33));
+            if src.next_frame().unwrap().is_some() {
+                frames += 1;
+            }
+        }
+
+        let raw_pulls = raws.load(Ordering::SeqCst);
+        assert_eq!(
+            raw_pulls,
+            frames + 2,
+            "one extra raw pull per control transition: the buffered frame captured \
+             before the write landed is discarded (transitions in 4 s: expiry + re-arm)"
+        );
     }
 }

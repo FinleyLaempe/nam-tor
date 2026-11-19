@@ -69,7 +69,15 @@ impl<S: WorkerSupervisor, C: Clock> Daemon<S, C> {
     }
 
     pub fn verify_start(&mut self, req: Requester) -> Result<(), DaemonError> {
-        self.lifecycle.verify_start(req)
+        self.lifecycle.verify_start(req)?;
+        // Issue #30, fix 3: entering Verifying must not land in a duty-cycle
+        // off-window. The capture turns the emitter on if it is dark; if it
+        // is already on, the live on-budget is retained (never reset while
+        // illuminated). A source without emitter control is a no-op.
+        if let Some(src) = self.capture.as_mut() {
+            src.ensure_illuminated();
+        }
+        Ok(())
     }
 
     pub fn release(&mut self) -> Result<(), DaemonError> {
@@ -246,5 +254,68 @@ mod tests {
         daemon.tick();
         assert_eq!(daemon.phase(), LcPhase::Cold);
         assert!(!daemon.capture_open());
+    }
+
+    /// A capture source that counts `ensure_illuminated` calls (issue #30).
+    struct HookSource {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl CaptureSource for HookSource {
+        fn caps(&self) -> SourceCaps {
+            SourceCaps {
+                spectrum: Spectrum::Ir,
+                format: PixFmt::Grey8,
+                width: 8,
+                height: 8,
+                fps: 30,
+                has_metadata: false,
+            }
+        }
+        fn start(&mut self) -> Result<(), CaptureError> {
+            Ok(())
+        }
+        fn next_frame(&mut self) -> Result<Option<Frame>, CaptureError> {
+            Ok(None)
+        }
+        fn stop(&mut self) {}
+        fn ensure_illuminated(&mut self) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Issue #30, fix 3: entering Verifying must obtain an illuminated window
+    /// deterministically — `verify_start` asks the capture, which turns the
+    /// emitter on if it is dark and keeps the live budget if it is already on.
+    #[test]
+    fn verify_start_requests_an_illuminated_window() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hook_calls = calls.clone();
+        let sup = MockSupervisor::new();
+        let mut daemon = Daemon::new(
+            sup,
+            &models(),
+            Duration::from_secs(30),
+            MockClock::new(Instant::now()),
+            Some(Box::new(move || {
+                Ok(Box::new(HookSource {
+                    calls: hook_calls.clone(),
+                }) as Box<dyn CaptureSource>)
+            })),
+        )
+        .expect("boot");
+
+        daemon.prepare_for_auth(requester()).unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "warming must not force a window"
+        );
+        daemon.verify_start(requester()).unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "verify_start must ask the capture for an illuminated window"
+        );
     }
 }
