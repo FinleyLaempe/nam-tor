@@ -1,3 +1,12 @@
+namtor (0.3.9-1) unstable; urgency=medium
+
+  * Fix D-Bus activation, bounded emitter cycling, worker lifetime, and GTK switches.
+  * Establish Arch install identities before policy extraction.
+  * Isolate NoFetch tests and add crate/distro version consistency gate.
+  * Preserve experimental status; document outstanding TPM2 build support.
+
+ -- Nam-tor Project <namtor@example.invalid>  Thu, 19 Nov 2026 23:40:00 +0100
+
 namtor (0.3.8-1) unstable; urgency=medium
 
   * Rendered every page of the settings app and looked at it. Four defects the

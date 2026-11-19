@@ -27,5 +27,8 @@ fedora = (root / 'packaging/fedora/namtor.spec').read_text()
 assert re.search(r'^Version:\s+' + re.escape(expected) + r'$', fedora, re.M)
 debian = (root / 'packaging/debian/changelog').read_text().splitlines()[0]
 assert debian.startswith(f'namtor ({expected}-'), debian
+debian_release = re.search(r'^namtor \(([^)]+)\)', debian)[1]
+control = (root / 'packaging/debian/control').read_text()
+assert f'namtor (= {debian_release})' in control, 'Debian UI exact core pin drift'
 print(f'PASS: {len(versions)} crates, lockfile and three distro recipes agree on {expected}')
 PY
