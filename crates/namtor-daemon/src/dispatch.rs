@@ -71,6 +71,11 @@ pub struct DaemonDispatcher<S: WorkerSupervisor, C: Clock, V: VerifyRunner> {
     /// teardown deadline — the supervisor is unreachable behind a wedged
     /// lock, and teardown must not depend on it (issue #31).
     terminator: Option<crate::supervisor::WorkerTerminator>,
+    /// Best-effort device cleanup for the out-of-band path (darken the IR
+    /// emitter from its record when the capture cannot be closed). Runs
+    /// *after* worker termination: it is synchronous device I/O with no
+    /// hard bound, and a stalled cleanup must never delay the kill.
+    emitter_cleanup: fn(),
 }
 
 /// Darken the emitter using the record the daemon wrote before arming it,
@@ -184,7 +189,17 @@ impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> DaemonDispatc
                 clock,
             }),
             terminator: None,
+            emitter_cleanup: force_emitter_off_from_record,
         }
+    }
+
+    /// Override the out-of-band device cleanup. Test-only: every test that
+    /// reaches the out-of-band path must stub this so no test touches real
+    /// emitter hardware through a stale `/run` record.
+    #[cfg(test)]
+    pub(crate) fn with_emitter_cleanup_for_test(mut self, cleanup: fn()) -> Self {
+        self.emitter_cleanup = cleanup;
+        self
     }
 
     /// Record the out-of-band worker termination handle (see
@@ -235,38 +250,48 @@ impl<S: WorkerSupervisor + Send, C: Clock + Send, V: VerifyRunner> DaemonDispatc
                 }
             }
         };
+        // Terminate the worker FIRST, then close the capture. Device cleanup
+        // (v4l2 ioctls in `release`) has no hard bound — a camera wedged by
+        // the same event that wedged the verify must not postpone the kill.
+        // The emitter stays lit at most by the worker's own bounded grace
+        // window; the watchdog (2 s max-on) bounds the on-time independently.
+        let worker = state.daemon.supervisor_mut().shutdown();
         if let Err(e) = state.daemon.release() {
             tracing::warn!(error = %e, "dispatcher shutdown: capture release failed");
         }
-        state.daemon.supervisor_mut().shutdown()
+        worker
     }
 
     /// Teardown when the mutex could not be taken in time: the supervisor is
     /// unreachable behind the wedged lock, so the worker is terminated
-    /// through the spawn-time handle. The emitter is darkened from the
-    /// record the daemon wrote before arming — the same fallback
-    /// [`Self::release_for_suspend`] uses — because the capture cannot be
-    /// closed from here.
+    /// through the spawn-time handle.
+    ///
+    /// Ordering is worker-kill first, device cleanup second: the cleanup is
+    /// synchronous device I/O without a hard bound, and worker termination
+    /// is the bounded, must-not-delay step. Honest bounds: worker
+    /// termination *is* bounded (grace + SIGKILL + reap); the device cleanup
+    /// is best-effort and cannot be made hard-realtime from here.
     fn shutdown_out_of_band(&self) -> Result<(), DaemonError> {
         tracing::warn!(
             "dispatcher mutex not released within the teardown deadline; \
              terminating the worker out-of-band"
         );
-        force_emitter_off_from_record();
-        match &self.terminator {
-            Some(terminator) => match terminator.terminate(crate::supervisor::SHUTDOWN_GRACE) {
-                Ok(outcome) => {
-                    tracing::info!(?outcome, "worker terminated out-of-band");
-                    Ok(())
-                }
-                Err(e) => Err(e),
-            },
+        let worker = match &self.terminator {
+            Some(terminator) => terminator.terminate(crate::supervisor::SHUTDOWN_GRACE),
             None => Err(DaemonError::State(
                 "dispatcher mutex wedged and no worker termination handle \
                  available; the worker cannot be terminated from here"
                     .into(),
             )),
-        }
+        };
+        // Best-effort device cleanup, strictly after the kill: darken the IR
+        // emitter from the record the daemon wrote before arming (the same
+        // fallback `release_for_suspend` uses — the capture cannot be closed
+        // from here). Never let a stalled device postpone the termination.
+        (self.emitter_cleanup)();
+        worker.map(|outcome| {
+            tracing::info!(?outcome, "worker terminated out-of-band");
+        })
     }
 }
 
@@ -576,17 +601,14 @@ mod tests {
     /// recorded at spawn, not through the lock.
     #[test]
     fn wedged_dispatch_lock_shuts_the_worker_down_boundedly_out_of_band() {
-        use crate::supervisor::{ShutdownCountingSupervisor, WorkerTerminator};
+        use crate::supervisor::{ReapOnDrop, ShutdownCountingSupervisor, WorkerTerminator};
         use std::sync::atomic::Ordering;
         use std::sync::mpsc;
         use std::sync::Arc;
 
         // A real child, so out-of-band termination has something to kill.
-        let child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleep 30");
-        let child_pid = child.id();
+        let child = ReapOnDrop::spawn(std::process::Command::new("sleep").arg("30"));
+        let child_pid = child.pid();
         let terminator =
             WorkerTerminator::from_pid(child_pid).expect("pidfd for the spawned child");
 
@@ -603,7 +625,9 @@ mod tests {
                 None,
                 clock,
             )
-            .with_terminator(Some(terminator)),
+            .with_terminator(Some(terminator))
+            // No test may touch real emitter hardware through a stale record.
+            .with_emitter_cleanup_for_test(|| {}),
         );
 
         // Simulate the wedged verify: the mutex is held for the whole call.
@@ -648,6 +672,28 @@ mod tests {
     /// recorded, shutdown must report an error — never silently return while
     /// the worker keeps running.
     #[test]
+    fn worker_is_reaped_before_potentially_blocking_device_cleanup() {
+        use crate::supervisor::{ReapOnDrop, WorkerTerminator};
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static PID: AtomicU32 = AtomicU32::new(0);
+        fn cleanup() {
+            let pid = PID.load(Ordering::SeqCst);
+            assert!(pid > 0);
+            assert!(
+                std::fs::metadata(format!("/proc/{pid}")).is_err(),
+                "device cleanup must not start before worker termination and reap"
+            );
+        }
+        let child = ReapOnDrop::spawn(std::process::Command::new("sleep").arg("30"));
+        PID.store(child.pid(), Ordering::SeqCst);
+        let (disp, _) = build(VerifyOutcome::no_match("none"));
+        let disp = disp
+            .with_terminator(Some(WorkerTerminator::from_pid(child.pid()).unwrap()))
+            .with_emitter_cleanup_for_test(cleanup);
+        disp.shutdown_out_of_band().unwrap();
+    }
+
+    #[test]
     fn wedged_dispatch_lock_without_terminator_fails_closed() {
         use crate::supervisor::ShutdownCountingSupervisor;
         use std::sync::mpsc;
@@ -657,13 +703,16 @@ mod tests {
         let clock = MockClock::new(Instant::now());
         let daemon =
             Daemon::new(sup, &models(), Duration::from_secs(30), clock.clone(), None).unwrap();
-        let disp = Arc::new(DaemonDispatcher::new(
-            daemon,
-            verifier(VerifyOutcome::no_match("none")),
-            BackoffStore::new(BackoffConfig::default()),
-            None,
-            clock,
-        ));
+        let disp = Arc::new(
+            DaemonDispatcher::new(
+                daemon,
+                verifier(VerifyOutcome::no_match("none")),
+                BackoffStore::new(BackoffConfig::default()),
+                None,
+                clock,
+            )
+            .with_emitter_cleanup_for_test(|| {}),
+        );
 
         let guard = disp.state.lock().unwrap();
 

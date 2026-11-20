@@ -105,6 +105,44 @@ impl ShutdownCountingSupervisor {
     }
 }
 
+/// A spawned test child that is reaped through its own `Child` on drop.
+///
+/// The code under test may reap the child earlier through its own `waitpid`
+/// (terminator, bounded teardown) — `wait()` then fails with `ECHILD`, which
+/// is exactly the accepted outcome. The guard exists so no test child can
+/// outlive the test as a zombie whichever path ran, and so every spawned
+/// `Child` is waited on through its owning handle.
+#[cfg(test)]
+pub(crate) struct ReapOnDrop(std::process::Child);
+
+#[cfg(test)]
+impl ReapOnDrop {
+    pub(crate) fn spawn(cmd: &mut std::process::Command) -> Self {
+        ReapOnDrop(cmd.spawn().expect("spawn test child"))
+    }
+
+    pub(crate) fn pid(&self) -> u32 {
+        self.0.id()
+    }
+
+    /// Explicit reap through the owning handle (ECHILD-tolerant by Drop).
+    pub(crate) fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.0.wait()
+    }
+}
+
+#[cfg(test)]
+impl Drop for ReapOnDrop {
+    fn drop(&mut self) {
+        // Only kill while our child is still running. ECHILD means the
+        // terminator already reaped it; never signal a recycled numeric PID.
+        if matches!(self.0.try_wait(), Ok(None)) {
+            let _ = self.0.kill();
+        }
+        let _ = self.0.wait();
+    }
+}
+
 #[cfg(test)]
 impl WorkerSupervisor for ShutdownCountingSupervisor {
     fn load_all(&self, models: &[ModelSpec]) -> Result<Vec<Loaded>, DaemonError> {
@@ -966,11 +1004,8 @@ mod tests {
     /// mutex is wedged and the supervisor is unreachable.
     #[test]
     fn terminator_reaps_a_hung_child_boundedly() {
-        let child = Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleep 30");
-        let pid = child.id();
+        let child = ReapOnDrop::spawn(Command::new("sleep").arg("30"));
+        let pid = child.pid();
         let terminator = WorkerTerminator::from_pid(pid).expect("pidfd");
         let start = Instant::now();
         let outcome = terminator
@@ -996,11 +1031,8 @@ mod tests {
     /// cleanly by the terminator — no signal is delivered to anything.
     #[test]
     fn terminator_reaps_an_already_exited_child_without_signaling() {
-        let child = Command::new("sleep")
-            .arg("0")
-            .spawn()
-            .expect("spawn sleep 0");
-        let pid = child.id();
+        let child = ReapOnDrop::spawn(Command::new("sleep").arg("0"));
+        let pid = child.pid();
         while process_alive(pid) {
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -1024,11 +1056,8 @@ mod tests {
     /// signal — the handle cannot kill an unrelated process.
     #[test]
     fn terminator_signals_nothing_after_the_child_is_fully_reaped() {
-        let mut child = Command::new("sleep")
-            .arg("0")
-            .spawn()
-            .expect("spawn sleep 0");
-        let pid = child.id();
+        let mut child = ReapOnDrop::spawn(Command::new("sleep").arg("0"));
+        let pid = child.pid();
         let terminator = WorkerTerminator::from_pid(pid).expect("pidfd");
         // Full reap by the supervisor side (as Drop would do).
         child.wait().expect("reap child");
