@@ -87,10 +87,25 @@ fn open_selected_camera(
     let meta_dev = cam.metadata_node.as_ref().map(|n| &n.dev_path);
 
     let emitter_cfg = cam.quirks_entry.as_ref().map(|e| &e.emitter);
-    let emitter = activate_emitter(dev, emitter_cfg, state_path).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, dev = %dev.display(), "emitter activation failed");
-        EmitterGuard::failed(emitter_cfg.cloned())
-    });
+    let emitter = match activate_emitter(dev, emitter_cfg, state_path) {
+        Ok(guard) => guard,
+        // N2: the watchdog is what enforces the on-cap when no frame pull
+        // ever comes (the 30 s warm window, a blocked pull). A capture that
+        // opened without it would degrade to exactly the pre-watchdog
+        // behaviour, invisibly — fail the open instead of swallowing it.
+        Err(EmitterOpenError::Watchdog(e)) => {
+            tracing::warn!(
+                error = %e,
+                dev = %dev.display(),
+                "emitter watchdog unavailable; failing the capture open (on-cap unenforceable)"
+            );
+            return Err(crate::DaemonError::Capture(e));
+        }
+        Err(EmitterOpenError::Activation(e)) => {
+            tracing::warn!(error = %e, dev = %dev.display(), "emitter activation failed");
+            EmitterGuard::failed(emitter_cfg.cloned())
+        }
+    };
     tracing::info!(protection = ?emitter.protection_level(), "emitter ready");
 
     let streamer = namtor_capture::ir_uvc::V4l2IrStream::open(
@@ -144,6 +159,18 @@ fn open_selected_camera(
 /// - Transition waits (`ensure_on`/`rearm`) wait out the *full* cooldown,
 ///   bounded by [`TRANSITION_WAIT_CAP`]; on a misbehaving clock the emitter
 ///   stays dark rather than skipping the cooldown.
+/// - A watchdog thread spawn that fails fails the guard (and the capture
+///   open, via [`activate_emitter`]'s caller): the emitter is darkened
+///   first, never left lit by an open that silently degraded.
+///
+/// Serialization and timing (accepted limitation, review N3): both paths run
+/// their XU control transfers while holding the shared mutex, so a slow or
+/// hung ioctl in one path stalls the other, the 50 ms poll promise degrades
+/// to the ioctl duration, and `Drop`'s join waits out an in-flight ioctl.
+/// Kernel USB control-transfer timeouts bound the stall. Enforcement is
+/// never lost — whichever thread is inside the ioctl is the one enforcing or
+/// darkening — but this is scheduler/ioctl-latency bounded, **no hard
+/// realtime guarantee**.
 struct EmitterGuard<T: XuTransport + Send + 'static> {
     shared: SharedLock<T>,
     watchdog: Option<JoinHandle<()>>,
@@ -164,9 +191,11 @@ const TRANSITION_WAIT_CAP: Duration = Duration::from_secs(1);
 /// transition every queued buffer may hold a frame captured before the write
 /// landed.
 const RING_DEPTH: usize = 4;
-/// Frames discarded after each emitter control transition: one full ring
-/// drain, so no pre-write frame reaches the pairing path.
-const TRANSITION_DISCARD_FRAMES: usize = RING_DEPTH - 1;
+/// Frames discarded after each emitter control transition: **all**
+/// `RING_DEPTH` buffers may hold frames captured before the write landed
+/// (the consumer can stall between pulls), so the drain must empty the
+/// whole ring — `RING_DEPTH - 1` would let the last pre-write frame through.
+const TRANSITION_DISCARD_FRAMES: usize = RING_DEPTH;
 
 type SharedLock<T> = std::sync::Arc<(std::sync::Mutex<Shared<T>>, std::sync::Condvar)>;
 
@@ -358,6 +387,14 @@ impl<T: XuTransport + Send + 'static> EmitterGuard<T> {
     /// A guard for a device whose initial gated activation has already run
     /// (`outcome`). When activated, the first on-window starts now and the
     /// off-only watchdog thread is spawned.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the activated guard's watchdog thread cannot be
+    /// spawned: the on-cap would then be enforceable only on frame demand —
+    /// exactly the warm-window gap the watchdog exists to close. The emitter
+    /// is darkened before failing (fail closed), and the caller must fail
+    /// the capture open.
     fn new(
         xu: Box<SafeXu<T>>,
         cfg: Option<EmitterCfg>,
@@ -366,7 +403,34 @@ impl<T: XuTransport + Send + 'static> EmitterGuard<T> {
         cooldown_ms: u32,
         clock: Box<dyn Clock + Send + Sync>,
         poll: Duration,
-    ) -> Self {
+    ) -> Result<Self, String> {
+        Self::new_with_spawner(
+            xu,
+            cfg,
+            outcome,
+            max_on_ms,
+            cooldown_ms,
+            clock,
+            poll,
+            spawn_watchdog_thread,
+        )
+    }
+
+    /// [`Self::new`] with an injectable watchdog spawn — the seam for the
+    /// spawn-failure regression.
+    // The argument list mirrors `new` plus the spawn seam; a params struct
+    // would obscure the one-to-one correspondence at every call site.
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_spawner(
+        xu: Box<SafeXu<T>>,
+        cfg: Option<EmitterCfg>,
+        outcome: ApplyOutcome,
+        max_on_ms: u32,
+        cooldown_ms: u32,
+        clock: Box<dyn Clock + Send + Sync>,
+        poll: Duration,
+        spawner: impl FnOnce(SharedLock<T>) -> std::io::Result<std::thread::JoinHandle<()>>,
+    ) -> Result<Self, String> {
         let mut state = Shared {
             xu: Some(xu),
             cfg,
@@ -385,15 +449,36 @@ impl<T: XuTransport + Send + 'static> EmitterGuard<T> {
         let shared: SharedLock<T> =
             std::sync::Arc::new((std::sync::Mutex::new(state), std::sync::Condvar::new()));
         let watchdog = if outcome == ApplyOutcome::Activated {
-            let thread_shared = shared.clone();
-            std::thread::Builder::new()
-                .name("emitter-watchdog".into())
-                .spawn(move || watchdog_loop(thread_shared))
-                .ok()
+            match spawner(shared.clone()) {
+                Ok(handle) => Some(handle),
+                Err(e) => {
+                    // Fail closed (N2): without the watchdog the on-cap is
+                    // only enforced on frame demand, which is silently absent
+                    // during the warm window. Darken before refusing, so a
+                    // capture open that fails here never leaves the emitter
+                    // lit.
+                    let mut s = lock_shared(&shared);
+                    if let (Some(mut xu), Some(cfg)) = (s.xu.take(), s.cfg.as_ref()) {
+                        if let Err(fe) = force_off_lib(xu.as_mut(), cfg) {
+                            tracing::error!(
+                                error = %fe,
+                                "could not darken the emitter after the watchdog spawn failure; \
+                                 the ExecStopPost backstop remains"
+                            );
+                        }
+                    }
+                    drop(s);
+                    tracing::error!(
+                        error = %e,
+                        "emitter watchdog thread could not be spawned; failing the capture open"
+                    );
+                    return Err(format!("spawn the emitter watchdog thread: {e}"));
+                }
+            }
         } else {
             None
         };
-        Self { shared, watchdog }
+        Ok(Self { shared, watchdog })
     }
 
     fn protection_level(&self) -> ProtectionLevel {
@@ -529,6 +614,16 @@ impl<T: XuTransport + Send + 'static> EmitterGuard<T> {
     }
 }
 
+/// Spawns the off-only watchdog thread for `shared`. The indirection is the
+/// injection seam for the spawn-failure regression (`new_with_spawner`).
+fn spawn_watchdog_thread<T: XuTransport + Send + 'static>(
+    shared: SharedLock<T>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name("emitter-watchdog".into())
+        .spawn(move || watchdog_loop(shared))
+}
+
 /// The off-only watchdog: enforce the continuous-on cap with no frame demand
 /// whatsoever. It can only darken; re-arm belongs exclusively to the
 /// frame-demand path. Exits when `shutdown` is set (drop joins it).
@@ -657,14 +752,32 @@ fn usb_identity_of(sysfs_root: &Path, node: &Path) -> Option<(u16, u16, u8)> {
     None
 }
 
+/// Why opening a camera's emitter failed. The two classes must not be
+/// conflated: an activation failure degrades to a non-activatable guard
+/// (existing skipped semantics), while a watchdog spawn failure means the
+/// on-cap cannot be enforced without frame demand — the capture open must
+/// fail.
+enum EmitterOpenError {
+    /// Activation itself failed (no emitter config, device open error, gated
+    /// apply error). The emitter was never lit by us; the caller degrades to
+    /// [`EmitterGuard::failed`].
+    Activation(String),
+    /// The mandatory off-only watchdog could not be spawned. Fail the
+    /// capture open (N2): falling back would silently drop the autonomous
+    /// on-cap.
+    Watchdog(String),
+}
+
 fn activate_emitter(
     dev: &Path,
     emitter_cfg: Option<&EmitterCfg>,
     state_path: &Path,
-) -> Result<EmitterGuard<namtor_uvc::device::V4l2Device>, String> {
+) -> Result<EmitterGuard<namtor_uvc::device::V4l2Device>, EmitterOpenError> {
     use namtor_uvc::device::V4l2Device;
 
-    let cfg = emitter_cfg.ok_or_else(|| "no emitter config for selected device".to_string())?;
+    let cfg = emitter_cfg.ok_or_else(|| {
+        EmitterOpenError::Activation("no emitter config for selected device".to_string())
+    })?;
 
     // Record how to darken this emitter BEFORE turning it on, so the record
     // exists even if we die between here and the first frame. `ExecStopPost`
@@ -678,7 +791,8 @@ fn activate_emitter(
         );
     }
 
-    let v4l2_dev = V4l2Device::open(dev).map_err(|e| format!("open {}: {e}", dev.display()))?;
+    let v4l2_dev = V4l2Device::open(dev)
+        .map_err(|e| EmitterOpenError::Activation(format!("open {}: {e}", dev.display())))?;
     let mut xu = Box::new(SafeXu::new(v4l2_dev));
     let max_on_ms = cfg
         .lifecycle
@@ -696,11 +810,15 @@ fn activate_emitter(
                 }
                 o
             }
-            Err(e) => return Err(format!("emitter gated apply failed: {e}")),
+            Err(e) => {
+                return Err(EmitterOpenError::Activation(format!(
+                    "emitter gated apply failed: {e}"
+                )))
+            }
         }
     };
 
-    Ok(EmitterGuard::new(
+    EmitterGuard::new(
         xu,
         emitter_cfg.cloned(),
         outcome,
@@ -708,7 +826,8 @@ fn activate_emitter(
         DEFAULT_COOLDOWN_MS,
         Box::new(SystemClock),
         WATCHDOG_POLL,
-    ))
+    )
+    .map_err(EmitterOpenError::Watchdog)
 }
 
 struct EmitterSource<
@@ -1299,6 +1418,11 @@ pub(crate) mod emitter_test_support {
                 .count()
         }
 
+        /// Number of `SetCur` attempts of any payload (any outcome).
+        pub fn attempts_total(&self) -> usize {
+            self.inner.lock().unwrap().attempts.len()
+        }
+
         pub fn current(&self) -> Vec<u8> {
             self.inner.lock().unwrap().current.clone()
         }
@@ -1395,7 +1519,8 @@ pub(crate) mod emitter_test_support {
                 Err(e) => panic!("test arming failed: {e}"),
             }
         };
-        let guard = EmitterGuard::new(xu, Some(cfg), outcome, max_on_ms, cooldown_ms, clock, poll);
+        let guard = EmitterGuard::new(xu, Some(cfg), outcome, max_on_ms, cooldown_ms, clock, poll)
+            .expect("armed guard with live watchdog");
         let caps = namtor_capture::source::SourceCaps {
             spectrum: namtor_capture::source::Spectrum::Ir,
             format: namtor_capture::frame::PixFmt::Grey8,
@@ -1440,14 +1565,104 @@ mod emitter_duty_cycle_tests {
     use namtor_capture::frame::PixFmt;
     use namtor_capture::ir_uvc::{RawFrame, Streamer};
     use namtor_capture::source::{CaptureError, SourceCaps, Spectrum};
+    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     /// Watchdog poll so large that the background thread stays dormant for
     /// the whole mock test (its waits are mock-clock-based); drop notifies it
     /// to exit. All enforcement in this module is exercised on the frame path.
     const DORMANT_POLL: Duration = Duration::from_secs(60);
+
+    /// Sensor ring model: the sensor captures continuously (one frame per
+    /// [`Self::tick_sensor`]), the driver queues captures FIFO in the
+    /// 4-deep ring, and DQBUF dequeues the oldest — the real dequeue order.
+    /// Each frame carries its capture id in the payload (distinguishable
+    /// content) and a freshness stamp: whether a control write had already
+    /// landed when it was captured.
+    #[derive(Clone)]
+    struct RingStreamer {
+        dev: FakeDev,
+        inner: Arc<Mutex<RingInner>>,
+    }
+
+    struct RingInner {
+        /// Control-write count at the last [`RingStreamer::rebaseline`]: a
+        /// capture is fresh iff a control write landed after it (the attempts
+        /// count grew since `baseline`).
+        baseline: usize,
+        next_id: u64,
+        pending: VecDeque<(u64, bool)>,
+        fresh_by_id: std::collections::HashMap<u64, bool>,
+    }
+
+    impl RingStreamer {
+        fn new(dev: FakeDev) -> Self {
+            let baseline = dev.attempts_total();
+            Self {
+                dev,
+                inner: Arc::new(Mutex::new(RingInner {
+                    baseline,
+                    next_id: 0,
+                    pending: VecDeque::new(),
+                    fresh_by_id: std::collections::HashMap::new(),
+                })),
+            }
+        }
+
+        /// Re-anchor freshness: from here on, a capture is fresh iff a
+        /// control write landed after it. Called immediately before the
+        /// pre-write window, so the frames staged next are stamped stale.
+        fn rebaseline(&self) {
+            let baseline = self.dev.attempts_total();
+            self.inner.lock().unwrap().baseline = baseline;
+        }
+
+        /// The sensor captures one frame *now*.
+        fn tick_sensor(&self) {
+            let mut inner = self.inner.lock().unwrap();
+            let id = inner.next_id;
+            inner.next_id += 1;
+            let fresh = self.dev.attempts_total() > inner.baseline;
+            inner.fresh_by_id.insert(id, fresh);
+            inner.pending.push_back((id, fresh));
+        }
+
+        /// Whether the frame with this payload was captured after the
+        /// transition write.
+        fn is_fresh(&self, data: &[u8]) -> bool {
+            let mut id_bytes = [0u8; 8];
+            id_bytes.copy_from_slice(&data[..8]);
+            let id = u64::from_le_bytes(id_bytes);
+            self.inner.lock().unwrap().fresh_by_id[&id]
+        }
+    }
+
+    impl Streamer for RingStreamer {
+        fn next_raw(&mut self) -> Result<RawFrame, CaptureError> {
+            let mut inner = self.inner.lock().unwrap();
+            let (id, _fresh) = match inner.pending.pop_front() {
+                Some(pair) => pair,
+                None => {
+                    // The ring ran dry: the sensor captured exactly now.
+                    let id = inner.next_id;
+                    inner.next_id += 1;
+                    let fresh = self.dev.attempts_total() > inner.baseline;
+                    inner.fresh_by_id.insert(id, fresh);
+                    (id, fresh)
+                }
+            };
+            let mut data = vec![0u8; 4096];
+            data[..8].copy_from_slice(&id.to_le_bytes());
+            Ok(RawFrame {
+                data,
+                ts: Duration::from_millis(33 * id),
+                sof: None,
+                frame_index: id,
+            })
+        }
+    }
 
     /// A streamer that always has the next frame, counting raw pulls through a
     /// shared counter so the test can compare pulls with frames handed out.
@@ -1505,7 +1720,8 @@ mod emitter_duty_cycle_tests {
             DEFAULT_COOLDOWN_MS,
             Box::new(clock.clone()),
             DORMANT_POLL,
-        );
+        )
+        .expect("armed guard with live watchdog");
         let caps = SourceCaps {
             spectrum: Spectrum::Ir,
             format: PixFmt::Grey8,
@@ -1721,41 +1937,98 @@ mod emitter_duty_cycle_tests {
         );
     }
 
-    /// The verify-readiness hook turns the emitter on only after waiting out
-    /// the full cooldown — bounded, never skipped (review round-1 ruling).
-    /// Those waits need a real clock; see `emitter_watchdog_tests`
-    /// (`ensure_on_waits_out_the_cooldown`,
-    /// `ensure_on_write_failure_retries_with_cooldown_pacing`).
-    ///
     /// Frames queued in the V4L2 ring before a control write landed were
-    /// captured in the previous illumination state. A full ring drain
-    /// (`RING_DEPTH - 1` frames) is discarded after each transition, and the
-    /// transition may have been made by the watchdog thread while no pull was
-    /// running — the counter-based diffing catches both paths.
+    /// captured in the previous illumination state. After a transition a
+    /// **full ring drain** must run, so no pre-write frame reaches the
+    /// pairing path — asserted here on distinguishable frame content, not on
+    /// the implementation's own discard count. The ring model
+    /// ([`RingStreamer`]) reproduces the worst case: the consumer stalls and
+    /// all `RING_DEPTH` buffers hold pre-write frames when the write lands.
+    /// (A transition made by the watchdog thread while no pull is running is
+    /// caught by the same counter diffing; see the watchdog tests.)
     #[test]
-    fn one_buffered_frame_is_discarded_after_each_control_transition() {
+    fn no_pre_write_frame_reaches_the_consumer_after_a_transition() {
         let dev = FakeDev::new();
         let clock = MockClock::new(Instant::now());
-        let (mut src, raws) = armed_source(&dev, clock.clone());
+        let streamer = RingStreamer::new(dev.clone());
+        let mut xu = Box::new(SafeXu::new(dev.clone()));
+        let cfg = emitter_test_support::msxu_cfg(2000);
+        let outcome = {
+            let mut ctrl = EmitterController::new(xu.as_mut(), &cfg);
+            match ctrl.apply_on_gated(&EnvConsent) {
+                Ok(ApplyOutcome::Activated) => {
+                    ctrl.release_to_guard();
+                    ApplyOutcome::Activated
+                }
+                Ok(other) => other,
+                Err(e) => panic!("test arming failed: {e}"),
+            }
+        };
+        let guard = EmitterGuard::new(
+            xu,
+            Some(cfg),
+            outcome,
+            2000,
+            DEFAULT_COOLDOWN_MS,
+            Box::new(clock.clone()),
+            DORMANT_POLL,
+        )
+        .expect("armed guard with live watchdog");
+        let caps = SourceCaps {
+            spectrum: Spectrum::Ir,
+            format: PixFmt::Grey8,
+            width: 64,
+            height: 64,
+            fps: 30,
+            has_metadata: false,
+        };
+        let mut src = EmitterSource::new(
+            IrUvc::new(streamer.clone(), namtor_capture::ir_uvc::ParityPolicy, caps),
+            guard,
+        );
         src.start().unwrap();
 
-        let mut frames = 0u64;
-        for _ in 0..121 {
-            // ~4 s: exactly one expiry and one cooldown re-arm, i.e. exactly
-            // two control transitions.
+        // Stream 60 frames at 30 fps = 1980 ms, still inside the first
+        // 2000 ms on-window: no transition yet.
+        for _ in 0..60 {
             clock.advance(ms(33));
-            if src.next_frame().unwrap().is_some() {
-                frames += 1;
-            }
+            streamer.tick_sensor();
+            src.next_frame().unwrap().unwrap();
         }
 
-        let raw_pulls = raws.load(Ordering::SeqCst);
+        // From here, a capture is fresh iff the next control write has
+        // already landed — the frames staged next are pre-write (stale).
+        streamer.rebaseline();
+        let attempts_before = dev.attempts_total();
+
+        // Consumer stall: capture `RING_DEPTH` frames without pulling — the
+        // ring is now full of pre-write frames.
+        for _ in 0..RING_DEPTH {
+            streamer.tick_sensor();
+        }
+
+        // The next pull is at 2013 ms > 2000 ms: the force-off write lands
+        // while every ring buffer holds a pre-write frame.
+        clock.advance(ms(33));
+        let frame = src.next_frame().unwrap().unwrap();
         assert_eq!(
-            raw_pulls,
-            frames + 2 * (RING_DEPTH - 1) as u64,
-            "a full ring drain per control transition: the frames captured before \
-             the write landed never reach pairing (transitions in 4 s: expiry + re-arm)"
+            dev.attempts_total(),
+            attempts_before + 1,
+            "precondition: the expiry force-off write landed"
         );
+        assert!(
+            streamer.is_fresh(&frame.data),
+            "the first frame returned after a transition must have been captured \
+             after the write landed, even when the full ring held pre-write frames (N1)"
+        );
+
+        // And every later frame is fresh too.
+        for _ in 0..3 {
+            clock.advance(ms(33));
+            streamer.tick_sensor();
+            let frame = src.next_frame().unwrap().unwrap();
+            assert!(streamer.is_fresh(&frame.data));
+        }
     }
 }
 
@@ -1891,7 +2164,8 @@ mod emitter_watchdog_tests {
             DEFAULT_COOLDOWN_MS,
             Box::new(SystemClock),
             FAST_POLL,
-        );
+        )
+        .expect("armed guard with live watchdog");
         let caps = SourceCaps {
             spectrum: Spectrum::Ir,
             format: PixFmt::Grey8,
@@ -2159,5 +2433,75 @@ mod emitter_watchdog_tests {
             "a joined watchdog can never darken another guard's window"
         );
         drop(src2);
+    }
+
+    /// N2: `.spawn().ok()` used to silently drop the watchdog — the exact
+    /// B1 gap (cap enforced only on frame demand), invisibly. An activated
+    /// guard whose watchdog thread cannot be spawned must fail closed:
+    /// darken the lit emitter, then refuse the guard so the caller fails the
+    /// capture open instead of degrading.
+    #[test]
+    fn failed_watchdog_spawn_forces_off_and_fails_the_guard() {
+        let dev = FakeDev::new();
+        let mut xu = Box::new(SafeXu::new(dev.clone()));
+        let cfg = emitter_test_support::msxu_cfg(MAX_ON_MS);
+        let outcome = {
+            let mut ctrl = EmitterController::new(xu.as_mut(), &cfg);
+            match ctrl.apply_on_gated(&EnvConsent) {
+                Ok(ApplyOutcome::Activated) => {
+                    ctrl.release_to_guard();
+                    ApplyOutcome::Activated
+                }
+                Ok(other) => other,
+                Err(e) => panic!("test arming failed: {e}"),
+            }
+        };
+        assert_eq!(dev.current(), PAYLOAD_ON, "precondition: emitter lit");
+
+        let r = EmitterGuard::new_with_spawner(
+            xu,
+            Some(cfg),
+            outcome,
+            MAX_ON_MS,
+            DEFAULT_COOLDOWN_MS,
+            Box::new(SystemClock),
+            FAST_POLL,
+            |_shared| Err(std::io::Error::other("thread spawn refused")),
+        );
+        let Err(err) = r else {
+            panic!("a failed watchdog spawn must fail the guard");
+        };
+        assert!(
+            err.contains("watchdog"),
+            "the error must name the watchdog: {err}"
+        );
+        assert_eq!(
+            dev.current(),
+            PAYLOAD_OFF,
+            "fail closed: the lit emitter must be darkened before the guard fails"
+        );
+    }
+
+    /// Skipped always-on/consent semantics are preserved: a non-activatable
+    /// guard never needs a watchdog, so a broken spawner must not fail its
+    /// construction (the emitter was never ours to control).
+    #[test]
+    fn failed_spawn_is_not_attempted_without_activation() {
+        let dev = FakeDev::new();
+        let r = EmitterGuard::new_with_spawner(
+            Box::new(SafeXu::new(dev.clone())),
+            None,
+            ApplyOutcome::SkippedAlwaysOn,
+            MAX_ON_MS,
+            DEFAULT_COOLDOWN_MS,
+            Box::new(SystemClock),
+            FAST_POLL,
+            |_shared| Err(std::io::Error::other("thread spawn refused")),
+        );
+        assert!(
+            r.is_ok(),
+            "a non-activatable guard needs no watchdog and must not fail: {:?}",
+            r.err()
+        );
     }
 }
