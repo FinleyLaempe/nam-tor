@@ -2,9 +2,17 @@
 //! PAM services inventory component for the Nam-tor management UI.
 //!
 //! Renders a list of PAM services as an [`adw::PreferencesGroup`] containing
-//! one [`adw::ActionRow`] per service with an [`adw::SwitchRow`] suffix
-//! toggle, descriptions as subtitles, and compatibility warnings. High-impact
+//! one [`adw::ActionRow`] per service with a [`gtk4::Switch`] suffix toggle,
+//! descriptions as subtitles, and compatibility warnings. High-impact
 //! (risky) services require an explicit confirmation dialog before enabling.
+//!
+//! The toggle must be a bare `gtk4::Switch`, not an [`adw::SwitchRow`]: a
+//! `SwitchRow` is a `GtkListBoxRow` and must be a child of a `GtkListBox`,
+//! while an ActionRow suffix is parented into the row's internal `GtkBox`.
+//! Nesting a `SwitchRow` there is an invalid hierarchy — and because
+//! `gtk_widget_activate` only works on widgets that set an activate signal,
+//! a `SwitchRow` as the row's activatable widget never toggled when the row
+//! was activated (#32).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -39,7 +47,7 @@ thread_local! {
 }
 
 /// Set a switch without the change being read back as a user action.
-fn set_switch_silently(switch: &adw::SwitchRow, active: bool) {
+fn set_switch_silently(switch: &gtk4::Switch, active: bool) {
     if switch.is_active() == active {
         return;
     }
@@ -55,7 +63,7 @@ fn set_switch_silently(switch: &adw::SwitchRow, active: bool) {
 /// undone half a second later.
 fn report_toggle_outcome<C: crate::client::ManagerClient + Send + Sync + 'static>(
     rc: &PresenterRc<C>,
-    switch: &adw::SwitchRow,
+    switch: &gtk4::Switch,
     service_id: &str,
 ) {
     let (error, authoritative) = {
@@ -80,7 +88,7 @@ fn report_toggle_outcome<C: crate::client::ManagerClient + Send + Sync + 'static
 
 /// A privileged action that was refused deserves a modal, not a silent
 /// revert. This is the only surface the services list owns.
-fn show_error_dialog(switch: &adw::SwitchRow, err: &crate::view_model::ErrorView) {
+fn show_error_dialog(switch: &gtk4::Switch, err: &crate::view_model::ErrorView) {
     let mut body = err.detail.clone();
     if let Some(hint) = &err.recovery {
         body.push_str("\n\n");
@@ -159,8 +167,12 @@ fn create_pam_service_row<C: crate::client::ManagerClient + Send + Sync + 'stati
         row.add_css_class("error");
     }
 
-    let toggle = adw::SwitchRow::builder()
+    // A bare gtk4::Switch, not an adw::SwitchRow: a SwitchRow is a
+    // GtkListBoxRow and must live in a GtkListBox, while an ActionRow suffix
+    // is parented into the row's internal GtkBox. See the module docs (#32).
+    let toggle = gtk4::Switch::builder()
         .active(service.enabled)
+        .valign(gtk4::Align::Center)
         .tooltip_text(tr(&format!(
             "Toggle {} ({})",
             service.display_name, service.id
@@ -202,7 +214,7 @@ fn create_pam_service_row<C: crate::client::ManagerClient + Send + Sync + 'stati
 
 fn handle_toggle<C: crate::client::ManagerClient + Send + Sync + 'static>(
     rc: &PresenterRc<C>,
-    switch: &adw::SwitchRow,
+    switch: &gtk4::Switch,
     service_id: &str,
     service_name: &str,
 ) {
@@ -211,6 +223,28 @@ fn handle_toggle<C: crate::client::ManagerClient + Send + Sync + 'static>(
         return;
     }
     let new_state = switch.is_active();
+
+    // A notify that already agrees with the authoritative model state is not
+    // a user action and must never reach the presenter. This is not just an
+    // optimization: GObject's `notify` signal is `G_SIGNAL_NO_RECURSE`, so a
+    // `set_active` made *while this handler is running* — the programmatic
+    // rollback below — does not dispatch right away. Instead GLib marks the
+    // running emission `EMISSION_RESTART` (gsignal.c) and, once the handler
+    // returns, re-runs the handler from the beginning with the rolled-back
+    // state. At that point `APPLYING` has long been reset, so the thread-local
+    // guard cannot catch the re-run. Without this check the re-run would
+    // request the opposite toggle — a second polkit prompt — whose rollback
+    // restarts the emission again: an infinite loop of requests and dialogs.
+    let authoritative = rc
+        .borrow()
+        .model()
+        .pam_services
+        .iter()
+        .find(|s| s.id == service_id)
+        .map(|s| s.enabled);
+    if authoritative == Some(new_state) {
+        return;
+    }
 
     // The toggle is applied synchronously by `request_pam_toggle` below, so
     // the GTK main loop is blocked for the length of the D-Bus round trip,
@@ -265,7 +299,7 @@ fn handle_toggle<C: crate::client::ManagerClient + Send + Sync + 'static>(
 
 fn show_high_impact_dialog<C: crate::client::ManagerClient + Send + Sync + 'static>(
     rc: &PresenterRc<C>,
-    switch: &adw::SwitchRow,
+    switch: &gtk4::Switch,
     _service_id: &str,
     service_name: &str,
 ) {

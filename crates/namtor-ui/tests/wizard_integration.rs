@@ -372,7 +372,9 @@ fn review_component_connects_callbacks() {
 /// The profile list component must connect the enabled toggle to a
 /// callback so profile enable/disable is wired through the presenter.
 /// Verified by constructing a ProfileListView with a toggle callback and
-/// asserting the rendered group contains a SwitchRow.
+/// asserting the rendered group contains a `gtk4::Switch` toggle (a bare
+/// `gtk4::Switch` suffix — a nested `AdwSwitchRow` is an invalid hierarchy,
+/// #32).
 #[test]
 fn profile_list_component_connects_toggle() {
     use gtk4::prelude::*;
@@ -393,8 +395,8 @@ fn profile_list_component_connects_toggle() {
         let group = view.render(&model);
 
         assert!(
-            common::widget_tree_contains_type(group.upcast_ref::<gtk4::Widget>(), "SwitchRow"),
-            "profile list must contain a SwitchRow toggle"
+            common::widget_tree_contains_type(group.upcast_ref::<gtk4::Widget>(), "GtkSwitch"),
+            "profile list must contain a gtk4::Switch toggle"
         );
     });
 }

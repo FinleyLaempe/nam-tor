@@ -2,8 +2,16 @@
 //! Profile list view component.
 //!
 //! Renders enrolled profiles as an [`adw::PreferencesGroup`] containing one
-//! [`adw::ActionRow`] per profile, with an [`adw::SwitchRow`] suffix to
-//! toggle the profile on or off, and a rename button suffix (USA-10).
+//! [`adw::ActionRow`] per profile, with a [`gtk4::Switch`] suffix to toggle
+//! the profile on or off, and a rename button suffix (USA-10).
+//!
+//! The toggle must be a bare `gtk4::Switch`, not an [`adw::SwitchRow`]: a
+//! `SwitchRow` is a `GtkListBoxRow` and must be a child of a `GtkListBox`,
+//! while an ActionRow suffix is parented into the row's internal `GtkBox`.
+//! Nesting a `SwitchRow` there is an invalid hierarchy — and because
+//! `gtk_widget_activate` only works on widgets that set an activate signal,
+//! a `SwitchRow` as the row's activatable widget never toggled when the row
+//! was activated (#32).
 
 use std::cell::RefCell;
 
@@ -37,7 +45,7 @@ impl ProfileListView {
     }
 
     /// Render with optional toggle and rename callbacks.
-    /// `on_toggle(id, enabled)` fires when the SwitchRow changes.
+    /// `on_toggle(id, enabled)` fires when the switch changes.
     /// `on_rename(id, current_name)` fires when the rename button is clicked (USA-10).
     pub fn render_with_callback(
         &self,
@@ -83,8 +91,13 @@ impl ProfileListView {
                     row.name
                 )))]);
 
-                let toggle = adw::SwitchRow::builder()
+                // A bare gtk4::Switch, not an adw::SwitchRow: a SwitchRow is
+                // a GtkListBoxRow and must live in a GtkListBox, while an
+                // ActionRow suffix is parented into the row's internal
+                // GtkBox. See the module docs (#32).
+                let toggle = gtk4::Switch::builder()
                     .active(row.enabled)
+                    .valign(gtk4::Align::Center)
                     .tooltip_text(crate::tr_args("Toggle profile {} on or off", &[&row.name]))
                     .build();
                 toggle.update_property(&[

@@ -14,6 +14,18 @@
 
 NAMTOR_LIFECYCLE_CACHE=/var/tmp/namtor-lifecycle.sh
 
+pre_install() {
+    # A running broker watches policy/service directories as pacman unpacks
+    # them, before post_install or 20-systemd-sysusers.hook runs. Establish
+    # identities first; keep this stdin config in sync with sysusers.d.
+    systemd-sysusers - <<'EOF'
+u namtor - "Nam-tor daemon" /var/lib/namtor /usr/sbin/nologin
+g namtor-auth -
+m namtor video
+m namtor tss
+EOF
+}
+
 post_install() {
     if ! /usr/share/namtor/lifecycle.sh post-install --version "${pkgver:-}"; then
         echo ":: namtor: post-install mandatory checks failed — see FATAL lines above." >&2

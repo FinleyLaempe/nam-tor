@@ -25,9 +25,10 @@
 
 use std::ffi::OsString;
 use std::io::{Seek, Write};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use namtor_proto::framing::{decode, encode};
 use namtor_proto::worker::{FrameRef, Loaded, ModelSpec, WorkerReq, WorkerRsp};
@@ -87,6 +88,94 @@ impl WorkerSupervisor for MockSupervisor {
     }
 }
 
+/// Test-only supervisor that counts `shutdown` calls, so teardown wiring can
+/// be asserted without a real child process. Shutdown must be *invoked* by
+/// the teardown paths — a Drop that depends on whichever thread releases the
+/// last `Arc` is exactly the non-determinism being fixed (issue #31).
+#[cfg(test)]
+#[derive(Default)]
+pub struct ShutdownCountingSupervisor {
+    pub shutdowns: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(test)]
+impl ShutdownCountingSupervisor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// A spawned test child that is reaped through its own `Child` on drop.
+///
+/// The code under test may reap the child earlier through its own `waitpid`
+/// (terminator, bounded teardown) — `wait()` then fails with `ECHILD`, which
+/// is exactly the accepted outcome. The guard exists so no test child can
+/// outlive the test as a zombie whichever path ran, and so every spawned
+/// `Child` is waited on through its owning handle.
+#[cfg(test)]
+pub(crate) struct ReapOnDrop(std::process::Child);
+
+#[cfg(test)]
+impl ReapOnDrop {
+    pub(crate) fn spawn(cmd: &mut std::process::Command) -> Self {
+        match cmd.spawn() {
+            Ok(child) => ReapOnDrop(child),
+            Err(error) => panic!("spawn test child: {error}"),
+        }
+    }
+
+    pub(crate) fn pid(&self) -> u32 {
+        self.0.id()
+    }
+
+    /// Explicit reap through the owning handle (ECHILD-tolerant by Drop).
+    pub(crate) fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.0.wait()
+    }
+}
+
+#[cfg(test)]
+impl Drop for ReapOnDrop {
+    fn drop(&mut self) {
+        // Only kill while our child is still running. ECHILD means the
+        // terminator already reaped it; never signal a recycled numeric PID.
+        if matches!(self.0.try_wait(), Ok(None)) {
+            let _ = self.0.kill();
+        }
+        let _ = self.0.wait();
+    }
+}
+
+#[cfg(test)]
+impl WorkerSupervisor for ShutdownCountingSupervisor {
+    fn load_all(&self, models: &[ModelSpec]) -> Result<Vec<Loaded>, DaemonError> {
+        Ok(models
+            .iter()
+            .map(|m| Loaded {
+                model_id: m.id.clone(),
+                quant: m.quant,
+                input_shape: vec![1, 112, 112, 3],
+                output_shape: vec![1, 192],
+            })
+            .collect())
+    }
+
+    fn infer(
+        &mut self,
+        _model_idx: usize,
+        _frame_ref: &FrameRef,
+        _frame: &[u8],
+    ) -> Result<Vec<f32>, DaemonError> {
+        Ok(vec![0.0; 192])
+    }
+
+    fn shutdown(&mut self) -> Result<(), DaemonError> {
+        use std::sync::atomic::Ordering;
+        self.shutdowns.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
 /// Real worker supervisor: spawns `namtor-worker` as a child, communicates
 /// over a socketpair, and shares frame bytes via `memfd`.
 pub struct ChildSupervisor {
@@ -115,6 +204,22 @@ impl ChildSupervisor {
     /// Spawn `<exe> worker ...` as the worker child. [`Self::spawn`] resolves
     /// `exe` for the running daemon; tests pass the built `namtor` binary
     /// directly, because their own `/proc/self/exe` is the test harness.
+    ///
+    /// Inheritance contract (issue #31):
+    ///
+    /// * Every descriptor this function creates is close-on-exec. Exactly the
+    ///   worker's three IPC descriptors — request-read, reply-write and the
+    ///   frame memfd — have the flag cleared in the forked child just before
+    ///   exec, so the worker never holds a daemon-side endpoint (its own copy
+    ///   of the request-write end would otherwise keep the request pipe open
+    ///   forever and it could never observe EOF).
+    /// * The child arms `PR_SET_PDEATHSIG(SIGTERM)` *before* exec — i.e.
+    ///   before the worker applies its sandbox — and re-checks the parent's
+    ///   pid afterwards, closing the fork-to-prctl race. A SIGKILLed daemon
+    ///   therefore cannot orphan the worker, even while it is blocked in
+    ///   `read(2)` or inference.
+    /// * Socket-activation state (`LISTEN_FDS`/`LISTEN_PID`/`LISTEN_FDNAMES`)
+    ///   is stripped from the child environment: the worker serves no sockets.
     pub fn spawn_with_exe(
         exe: &Path,
         models: &[ModelSpec],
@@ -123,43 +228,44 @@ impl ChildSupervisor {
     ) -> Result<Self, DaemonError> {
         use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
         use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+        use std::os::unix::process::CommandExt;
 
         // Create the frame memfd (64 MiB region).
         let memfd_name = std::ffi::CString::new("namtor-frames")
             .map_err(|e| DaemonError::Worker(format!("memfd name: {e}")))?;
-        let frame_memfd = memfd_create(&memfd_name, MemFdCreateFlag::empty())
+        // CLOEXEC by default: no descriptor crosses exec unless the pre_exec
+        // hook below clears the flag for one of the worker's three IPC
+        // descriptors.
+        let frame_memfd = memfd_create(&memfd_name, MemFdCreateFlag::MFD_CLOEXEC)
             .map_err(|e| DaemonError::Worker(format!("memfd_create: {e}")))?;
         // Size it to 64 MiB.
         nix::unistd::ftruncate(&frame_memfd, 64 * 1024 * 1024)
             .map_err(|e| DaemonError::Worker(format!("ftruncate: {e}")))?;
-        let frame_memfd_file = unsafe { std::fs::File::from_raw_fd(frame_memfd.as_raw_fd()) };
         let frame_memfd_raw = frame_memfd.as_raw_fd();
-        std::mem::forget(frame_memfd);
 
-        // Create socketpair for daemon↔worker pipe.
+        // Socketpairs for daemon↔worker requests and replies, CLOEXEC for the
+        // same reason as the memfd.
         let (req_w, req_r) = socketpair(
             AddressFamily::Unix,
             SockType::Stream,
             None,
-            SockFlag::empty(),
+            SockFlag::SOCK_CLOEXEC,
         )
         .map_err(|e| DaemonError::Worker(format!("socketpair: {e}")))?;
         let (rsp_w, rsp_r) = socketpair(
             AddressFamily::Unix,
             SockType::Stream,
             None,
-            SockFlag::empty(),
+            SockFlag::SOCK_CLOEXEC,
         )
         .map_err(|e| DaemonError::Worker(format!("socketpair: {e}")))?;
 
         let req_r_raw = req_r.as_raw_fd();
-        let req_w_raw = req_w.as_raw_fd();
         let rsp_w_raw = rsp_w.as_raw_fd();
-        let rsp_r_raw = rsp_r.as_raw_fd();
 
-        // Spawn the worker, inheriting the fds. `namtor worker` is this same
-        // executable re-exec'd with the `worker` subcommand — a separate
-        // process, not a thread.
+        // Spawn the worker, inheriting the fds via the pre_exec hook below.
+        // `namtor worker` is this same executable re-exec'd with the `worker`
+        // subcommand — a separate process, not a thread.
         let mut cmd = Command::new(exe);
         cmd.args(worker_args(
             req_r_raw,
@@ -172,38 +278,74 @@ impl ChildSupervisor {
         if mock_infer {
             cmd.env("NAMTOR_WORKER_FEATURES", "mock-infer");
         }
+        // The worker serves no sockets: it must never see socket-activation
+        // state, whatever the daemon's own environment contains. (A
+        // `LISTEN_PID` naming the daemon could otherwise let an
+        // `sd_listen_fds`-style consumer in the worker adopt the daemon's
+        // listeners.)
+        cmd.env_remove("LISTEN_FDS")
+            .env_remove("LISTEN_PID")
+            .env_remove("LISTEN_FDNAMES");
         cmd.stdin(Stdio::null())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
 
-        // The worker inherits the fds via the parent's fd table. We need to
-        // clear CLOEXEC on the inherited fds so they survive exec.
-        // socketpair creates fds without CLOEXEC by default (we used SockFlag::empty()).
-        // memfd has MFD_CLOEXEC — clear it for the worker by dup'ing.
-        // Actually, we set MFD_CLOEXEC above. Let's not set it.
-        // For simplicity, just pass the fds and hope the worker gets them.
-        // The socketpair fds don't have CLOEXEC, so they survive exec.
-        // The memfd has CLOEXEC — we need to re-create without it, or dup.
-        // Let's just not set CLOEXEC on the memfd.
-        // (Fix: re-create without CFD_CLOEXEC. For now, just proceed — the
-        // worker test will tell us if the fd doesn't survive.)
+        // In the forked child, exactly the three IPC descriptors survive exec:
+        // their CLOEXEC flag is cleared here, everything else keeps it. Then
+        // the parent-death signal is armed *before* exec — before the worker
+        // applies its sandbox — and the parent's identity is re-checked to
+        // close the fork-to-prctl race.
+        let ipc_fds = [req_r_raw, rsp_w_raw, frame_memfd_raw];
+        // SAFETY: getpid is async-signal-safe and has no preconditions.
+        let parent_pid = unsafe { libc::getpid() };
+        // SAFETY: the closure runs in the forked child between fork and exec
+        // and calls only async-signal-safe libc functions (fcntl, prctl,
+        // getppid); it performs no allocation on the success path.
+        unsafe {
+            cmd.pre_exec(move || {
+                // SAFETY: F_GETFD/F_SETFD on our own still-open descriptors.
+                for fd in ipc_fds {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                // SAFETY: single async-signal-safe prctl call. SIGTERM's
+                // default disposition ends the process even while it is
+                // blocked in read(2); the sandbox cannot affect delivery
+                // because this runs before the worker applies it.
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM, 0, 0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // SAFETY: async-signal-safe. If the parent died between the
+                // fork and the prctl above, the signal will never arrive (it
+                // covers only deaths after arming) and getppid() no longer
+                // returns our parent — refuse to start rather than leak an
+                // orphaned worker. ESRCH ("no such process") names the
+                // condition without allocating in the fork child.
+                if libc::getppid() != parent_pid {
+                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+                }
+                Ok(())
+            });
+        }
 
         let child = cmd
             .spawn()
             .map_err(|e| DaemonError::Worker(format!("spawn {exe:?} worker: {e}")))?;
 
-        // Drop the worker-side fds from the daemon (they're now in the child).
+        // The worker now holds its own copies of the read end, the reply end
+        // and the memfd. Drop the worker-side ends here and adopt the
+        // daemon-side ends as owned files (`From<OwnedFd>` transfers
+        // ownership; no double close, no forgotten handles).
         drop(req_r);
         drop(rsp_w);
-
-        // Prevent the daemon-side fds from being closed when the OwnedFd
-        // wrappers go out of scope — File::from_raw_fd takes ownership of
-        // the raw fd, so the OwnedFd must not also close it.
-        std::mem::forget(req_w);
-        std::mem::forget(rsp_r);
-
-        let daemon_reader = unsafe { std::fs::File::from_raw_fd(rsp_r_raw) };
-        let daemon_writer = unsafe { std::fs::File::from_raw_fd(req_w_raw) };
+        let daemon_writer = std::fs::File::from(req_w);
+        let daemon_reader = std::fs::File::from(rsp_r);
+        let frame_memfd_file = std::fs::File::from(frame_memfd);
 
         let mut supervisor = Self {
             child,
@@ -279,6 +421,27 @@ fn worker_args(
 }
 
 impl ChildSupervisor {
+    /// Out-of-band termination handle for this supervisor's worker (see
+    /// [`WorkerTerminator`]). Take it before the supervisor moves behind the
+    /// dispatcher mutex, so teardown can terminate the worker even when a
+    /// wedged verify holds that mutex forever.
+    ///
+    /// `None` only when `pidfd_open(2)` is unavailable (pre-5.3 kernel): the
+    /// warning names it, and teardown fails closed if the mutex is ever
+    /// wedged without a handle.
+    pub(crate) fn terminator(&self) -> Option<WorkerTerminator> {
+        match WorkerTerminator::from_pid(self.child.id()) {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "pidfd unavailable; out-of-band worker termination disabled"
+                );
+                None
+            }
+        }
+    }
+
     fn send_req(&mut self, req: &WorkerReq) -> Result<(), DaemonError> {
         let mut writer = std::io::BufWriter::new(&self.daemon_writer);
         encode(req, &mut writer)?;
@@ -342,9 +505,276 @@ impl WorkerSupervisor for ChildSupervisor {
     }
 
     fn shutdown(&mut self) -> Result<(), DaemonError> {
-        let _ = self.send_req(&WorkerReq::Shutdown);
-        let _ = self.child.wait();
+        // Ask nicely first — the send is non-blocking, so a worker that is
+        // not reading can never delay the bounded reap below (LOW-1). A not
+        // delivered request is fine: the reap terminates the worker anyway.
+        if !send_shutdown_request(&self.daemon_writer) {
+            tracing::debug!(
+                pid = self.child.id(),
+                "graceful Shutdown request not delivered; falling through to bounded SIGTERM"
+            );
+        }
+        terminate_bounded(&mut self.child, SHUTDOWN_GRACE);
         Ok(())
+    }
+}
+
+/// How long a worker gets to exit on its own after `Shutdown` before it is
+/// SIGKILLed. Bounded so a wedged worker can never hang daemon teardown —
+/// `Drop` runs wherever the last supervisor is dropped, including during
+/// process exit where a blocking `wait()` would deadlock the shutdown.
+pub(crate) const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+/// Reap `child` within `grace`; SIGKILL and reap it if it misses the window.
+///
+/// The `Shutdown` request is not honoured by every possible worker state
+/// (an inference blocked in a wedged DQBUF never returns to the request
+/// loop), so the wait must be bounded and must always end with a reaped
+/// child — no zombie, no orphan.
+fn terminate_bounded(child: &mut Child, grace: Duration) {
+    let deadline = Instant::now() + grace;
+    loop {
+        match child.try_wait() {
+            // Reaped. `Err` is treated the same way: a `waitpid` failure
+            // (e.g. `ECHILD`) means there is nothing left to wait for.
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) => {}
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    tracing::warn!(
+        pid = child.id(),
+        "worker missed the shutdown grace window; sending SIGKILL"
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Whether `pid` refers to a live (non-zombie) process. A zombie has already
+/// exited — only its exit status is unreaped.
+pub(crate) fn process_alive(pid: u32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => {
+            let after_comm = stat.rsplit_once(')').map(|(_, rest)| rest).unwrap_or("");
+            after_comm.split_whitespace().next() != Some("Z")
+        }
+        Err(_) => false,
+    }
+}
+
+/// Deliver the graceful `Shutdown` request without ever blocking.
+///
+/// The request pipe is a socketpair the worker reads; if the worker is wedged
+/// and the buffer is full, a plain `write_all` would block *before* the
+/// bounded reap is ever reached. `send(2)` with `MSG_DONTWAIT` makes the
+/// delivery attempt non-blocking; anything short of a complete framed write
+/// is reported as "not delivered" and the caller falls through to the bounded
+/// SIGTERM, so a truncated frame is never read by a worker that keeps
+/// running (the protocol stays correct: either the whole request arrives or
+/// the worker is terminated).
+fn send_shutdown_request(writer: &std::fs::File) -> bool {
+    let mut buf = Vec::new();
+    if encode(&WorkerReq::Shutdown, &mut buf).is_err() {
+        return false;
+    }
+    // SAFETY: send(2) on our own open socket descriptor; MSG_DONTWAIT makes
+    // this call non-blocking. Only a complete write counts as delivered.
+    let sent = unsafe {
+        libc::send(
+            writer.as_raw_fd(),
+            buf.as_ptr().cast(),
+            buf.len(),
+            libc::MSG_DONTWAIT,
+        )
+    };
+    sent == buf.len() as isize
+}
+
+/// Out-of-band worker termination handle, built on a pidfd.
+///
+/// The supervisor lives behind the dispatcher mutex, which a wedged verify
+/// can hold for an unbounded time; this handle, taken from the supervisor at
+/// spawn time (before it moves behind any lock), lets teardown terminate the
+/// worker without that lock.
+///
+/// The handle holds a **pidfd** opened immediately after spawn
+/// (`pidfd_open(2)`): the kernel pins the descriptor to that exact task, so
+/// `pidfd_send_signal(2)` can never be retargeted by pid reuse, and it
+/// reports `ESRCH` once the task is fully gone. Even after the supervisor is
+/// dropped and the worker is reaped, a stale handle can only observe
+/// [`Terminated::AlreadyGone`] — it can never signal an unrelated process
+/// that recycled the pid.
+#[derive(Debug)]
+pub(crate) struct WorkerTerminator {
+    pidfd: std::os::fd::OwnedFd,
+    /// Only for logs; the pidfd, not the pid, selects the signal target.
+    pid: u32,
+}
+
+/// Outcome of an out-of-band termination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Terminated {
+    /// SIGTERM (and, if it survived the grace window, SIGKILL) was delivered
+    /// to the worker and it was reaped.
+    Signaled,
+    /// The worker was already gone when teardown ran; nothing was signaled.
+    AlreadyGone,
+}
+
+impl WorkerTerminator {
+    /// Open a pidfd for `pid`. Call immediately after spawn, before anything
+    /// can reap the child: the parent has not waited, so the pid cannot yet
+    /// have been reused.
+    ///
+    /// # Errors
+    /// `pidfd_open(2)` failure (e.g. `ENOSYS` on a pre-5.3 kernel): the
+    /// caller proceeds without an out-of-band handle, and teardown fails
+    /// closed if the mutex is ever wedged.
+    pub(crate) fn from_pid(pid: u32) -> Result<Self, DaemonError> {
+        // SAFETY: pidfd_open(2) on a child of this process that has not been
+        // waited on; flags must be 0.
+        let fd =
+            unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::c_uint, 0 as libc::c_uint) };
+        if fd < 0 {
+            return Err(DaemonError::Worker(format!(
+                "pidfd_open({pid}): {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        // SAFETY: `fd` is a fresh, owned pidfd returned by the syscall above.
+        let pidfd =
+            unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd as RawFd) };
+        Ok(Self { pidfd, pid })
+    }
+
+    /// Terminate the worker within `grace`: SIGTERM first (the worker
+    /// installs no handler, so its default disposition ends it even while
+    /// blocked in `read(2)`), then SIGKILL if it survives the window. The
+    /// child is reaped by `waitpid` — no zombie remains.
+    ///
+    /// A process that has already exited (zombie or fully reaped) is never
+    /// signaled: the zombie is reaped directly, and a fully gone task makes
+    /// `pidfd_send_signal` return `ESRCH`, which maps to
+    /// [`Terminated::AlreadyGone`].
+    ///
+    /// # Errors
+    /// When the worker survives SIGTERM *and* SIGKILL (e.g. stuck in an
+    /// uninterruptible kernel state) — the caller must not report success,
+    /// because a worker that cannot be killed is still running.
+    pub(crate) fn terminate(&self, grace: Duration) -> Result<Terminated, DaemonError> {
+        // A zombie has exited; reaping it directly avoids delivering a
+        // (harmless but misleading) signal to a dead task.
+        if !process_alive(self.pid) {
+            self.reap()?;
+            return Ok(Terminated::AlreadyGone);
+        }
+        tracing::warn!(
+            pid = self.pid,
+            "terminating the worker out-of-band (SIGTERM)"
+        );
+        match self.send_signal(libc::SIGTERM) {
+            Ok(()) => {}
+            Err(e) if e.raw_os_error() == Some(libc::ESRCH) => {
+                // Fully gone between the liveness check and the signal —
+                // never signal anything else.
+                self.reap()?;
+                return Ok(Terminated::AlreadyGone);
+            }
+            Err(e) => {
+                return Err(DaemonError::Worker(format!(
+                    "pidfd_send_signal(SIGTERM) on worker {}: {e}",
+                    self.pid
+                )));
+            }
+        }
+        let deadline = Instant::now() + grace;
+        loop {
+            if self.try_reap() {
+                return Ok(Terminated::Signaled);
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        tracing::warn!(pid = self.pid, "worker survived SIGTERM; sending SIGKILL");
+        match self.send_signal(libc::SIGKILL) {
+            Ok(()) => {}
+            Err(e) if e.raw_os_error() == Some(libc::ESRCH) => {
+                self.reap()?;
+                return Ok(Terminated::AlreadyGone);
+            }
+            Err(e) => {
+                return Err(DaemonError::Worker(format!(
+                    "pidfd_send_signal(SIGKILL) on worker {}: {e}",
+                    self.pid
+                )));
+            }
+        }
+        let kill_deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < kill_deadline {
+            if self.try_reap() {
+                return Ok(Terminated::Signaled);
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        Err(DaemonError::Worker(format!(
+            "worker {} survived SIGTERM and SIGKILL (uninterruptible state?); \
+             it may still be running",
+            self.pid
+        )))
+    }
+
+    /// Deliver a signal through the pidfd. The kernel pins the descriptor to
+    /// the spawned task, so pid reuse can never retarget it.
+    fn send_signal(&self, sig: libc::c_int) -> Result<(), std::io::Error> {
+        // SAFETY: pidfd_send_signal(2) on our own pidfd; no siginfo, no
+        // flags.
+        let rc = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                self.pidfd.as_raw_fd(),
+                sig,
+                std::ptr::null::<libc::c_void>(),
+                0 as libc::c_uint,
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
+    /// Non-blocking reap attempt; true when the child was reaped by this
+    /// call.
+    fn try_reap(&self) -> bool {
+        let mut status = 0;
+        // SAFETY: waitpid(WNOHANG) on our own child. A reused pid is never
+        // our child, so the worst case is `ECHILD`.
+        let rc = unsafe { libc::waitpid(self.pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        rc == self.pid as libc::pid_t
+    }
+
+    /// Reap an exited child. `Ok` when reaped here or already reaped
+    /// elsewhere (`ECHILD` — it exited either way).
+    fn reap(&self) -> Result<(), DaemonError> {
+        let mut status = 0;
+        // SAFETY: waitpid(WNOHANG) on our own child, as in `try_reap`.
+        let rc = unsafe { libc::waitpid(self.pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        if rc == self.pid as libc::pid_t {
+            return Ok(());
+        }
+        if rc < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
+            return Ok(());
+        }
+        Err(DaemonError::Worker(format!(
+            "worker {} could not be reaped",
+            self.pid
+        )))
     }
 }
 
@@ -370,6 +800,8 @@ fn self_exe(fallback: &Path) -> std::path::PathBuf {
 
 impl Drop for ChildSupervisor {
     fn drop(&mut self) {
+        // Bounded: a hung worker cannot block the drop (see
+        // `terminate_bounded` and `SHUTDOWN_GRACE`).
         let _ = self.shutdown();
     }
 }
@@ -378,6 +810,8 @@ impl Drop for ChildSupervisor {
 mod tests {
     use super::*;
     use namtor_proto::worker::Quant;
+    use std::os::unix::process::ExitStatusExt;
+    use std::time::{Duration, Instant};
 
     fn specs() -> Vec<ModelSpec> {
         vec![
@@ -476,5 +910,174 @@ mod tests {
         let loaded = sup.load_all(&models).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].model_id, "m");
+    }
+
+    /// A child that exits on its own is reaped by the bounded teardown without
+    /// a SIGKILL and without the grace window elapsing.
+    #[test]
+    fn bounded_teardown_reaps_an_exiting_child() {
+        let mut child = Command::new("sleep")
+            .arg("0")
+            .spawn()
+            .expect("spawn sleep 0");
+        terminate_bounded(&mut child, Duration::from_secs(2));
+        let status = child.try_wait().expect("try_wait after reap");
+        assert!(status.is_some(), "child was not reaped");
+    }
+
+    /// A child that ignores the graceful request must not hang teardown: the
+    /// bounded teardown returns within the grace window plus scheduling slack
+    /// and leaves the child reaped (SIGKILLed), so no zombie and no orphan.
+    #[test]
+    fn bounded_teardown_kills_a_hung_child_within_the_grace_window() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep 30");
+        let start = Instant::now();
+        terminate_bounded(&mut child, Duration::from_millis(300));
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "teardown took {elapsed:?}; a hung worker must not block it unboundedly"
+        );
+        let status = child
+            .try_wait()
+            .expect("try_wait after reap")
+            .expect("reaped");
+        assert_eq!(
+            status.code(),
+            None,
+            "the hung child must have been killed, not exited cleanly"
+        );
+        assert_eq!(status.signal(), Some(9), "expected SIGKILL, got {status}");
+    }
+
+    /// The graceful `Shutdown` request must never block: on a full request
+    /// pipe (worker not reading) the bounded reap must remain the only wait,
+    /// so the send is non-blocking and reports "not delivered" instead.
+    #[test]
+    fn graceful_shutdown_request_on_a_full_pipe_does_not_block() {
+        use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+
+        let (req_w, req_r) = socketpair(
+            AddressFamily::Unix,
+            SockType::Stream,
+            None,
+            SockFlag::empty(),
+        )
+        .expect("socketpair");
+        // Keep the read end open but unread: the pipe must stay full.
+        let _read_end = req_r;
+        let writer = std::fs::File::from(req_w);
+        // SAFETY: fcntl F_SETFL on our own socket descriptor.
+        unsafe {
+            let flags = libc::fcntl(writer.as_raw_fd(), libc::F_GETFL);
+            assert!(flags >= 0);
+            assert_eq!(
+                libc::fcntl(writer.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK),
+                0
+            );
+        }
+        // Fill the socket buffer until the kernel says EAGAIN.
+        let chunk = vec![0u8; 65536];
+        let mut written = 0usize;
+        loop {
+            match nix::unistd::write(&writer, &chunk) {
+                Ok(n) => written += n,
+                Err(nix::errno::Errno::EAGAIN) => break,
+                Err(e) => panic!("unexpected write error: {e}"),
+            }
+        }
+        assert!(written > 0, "socket buffer was filled");
+
+        let start = Instant::now();
+        assert!(
+            !send_shutdown_request(&writer),
+            "a full request pipe must report the graceful request as not delivered"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "the graceful send must not block on a full pipe"
+        );
+    }
+
+    /// The out-of-band terminator kills and reaps a hung child within the
+    /// grace window — this is the path teardown takes when the dispatcher
+    /// mutex is wedged and the supervisor is unreachable.
+    #[test]
+    fn terminator_reaps_a_hung_child_boundedly() {
+        let child = ReapOnDrop::spawn(Command::new("sleep").arg("30"));
+        let pid = child.pid();
+        let terminator = WorkerTerminator::from_pid(pid).expect("pidfd");
+        let start = Instant::now();
+        let outcome = terminator
+            .terminate(Duration::from_millis(300))
+            .expect("terminate hung child");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "out-of-band termination took {:?}",
+            start.elapsed()
+        );
+        assert!(
+            matches!(outcome, Terminated::Signaled),
+            "a live child must be signaled and reaped, got {outcome:?}"
+        );
+        // Reaped, not left as a zombie: /proc/<pid> must be gone.
+        assert!(
+            std::fs::metadata(format!("/proc/{pid}")).is_err(),
+            "child must be reaped, not left unreaped"
+        );
+    }
+
+    /// A child that already exited (zombie: exited but unreaped) is reaped
+    /// cleanly by the terminator — no signal is delivered to anything.
+    #[test]
+    fn terminator_reaps_an_already_exited_child_without_signaling() {
+        let child = ReapOnDrop::spawn(Command::new("sleep").arg("0"));
+        let pid = child.pid();
+        while process_alive(pid) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let outcome = WorkerTerminator::from_pid(pid)
+            .expect("pidfd of a zombie")
+            .terminate(Duration::from_millis(300))
+            .expect("already-exited child reaps cleanly");
+        assert!(
+            matches!(outcome, Terminated::AlreadyGone),
+            "a zombie must be reaped, not signaled: {outcome:?}"
+        );
+        assert!(
+            std::fs::metadata(format!("/proc/{pid}")).is_err(),
+            "zombie must be reaped"
+        );
+    }
+
+    /// After the worker is fully reaped (supervisor dropped it), the
+    /// terminator must signal nothing at all: the pidfd resolves to a dead
+    /// task (ESRCH), so even a reused pid can never be hit by a stray
+    /// signal — the handle cannot kill an unrelated process.
+    #[test]
+    fn terminator_signals_nothing_after_the_child_is_fully_reaped() {
+        let mut child = ReapOnDrop::spawn(Command::new("sleep").arg("0"));
+        let pid = child.pid();
+        let terminator = WorkerTerminator::from_pid(pid).expect("pidfd");
+        // Full reap by the supervisor side (as Drop would do).
+        child.wait().expect("reap child");
+        assert!(std::fs::metadata(format!("/proc/{pid}")).is_err());
+
+        let outcome = terminator
+            .terminate(Duration::from_millis(300))
+            .expect("terminate after full reap must be a clean no-op");
+        assert!(
+            matches!(outcome, Terminated::AlreadyGone),
+            "nothing may be signaled after a full reap: {outcome:?}"
+        );
+        // Repeated calls stay clean: the handle stays safe after supervisor
+        // drop for the rest of its life.
+        let again = terminator
+            .terminate(Duration::from_millis(300))
+            .expect("repeat terminate stays clean");
+        assert!(matches!(again, Terminated::AlreadyGone));
     }
 }

@@ -205,6 +205,10 @@ jobs:
         run: bash packaging/tests/test_install_default_off.sh
       - name: Gate — lifecycle helper phases
         run: bash packaging/tests/test_lifecycle.sh
+      - name: Gate — D-Bus activation and install identity ordering
+        run: bash packaging/tests/test_dbus_activation.sh
+      - name: Gate — crate and distro version consistency
+        run: bash packaging/tests/test_version_consistency.sh
       - name: "Gate — model archive reproducibility + tamper (hw-gated: 77 = skip)"
         run: |
           set +e

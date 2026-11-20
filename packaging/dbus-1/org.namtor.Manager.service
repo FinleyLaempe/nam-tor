@@ -2,10 +2,11 @@
 # D-Bus system-bus service activation for org.namtor.Manager.
 #
 # When a D-Bus client calls a method on org.namtor.Manager and no process
-# currently owns the name, dbus-daemon starts namtor-daemon via this unit.
-# Under normal operation systemd has already started the daemon via
-# namtor-daemon.service, so this file is a fallback for direct bus
-# activation (e.g. debugging without systemd).
+# currently owns the name, delegate to the same hardened systemd service
+# that PAM socket activation uses. It receives the socket unit's listener
+# fd, preserving root:namtor-auth ownership without an unprivileged bind.
+# Exec/User remain the direct-activation fallback on non-systemd buses;
+# that mode needs an explicitly writable NAMTOR_SOCKET location.
 #
 # Installed to /usr/share/dbus-1/system-services/org.namtor.Manager.service.
 
@@ -13,3 +14,4 @@
 Name=org.namtor.Manager
 Exec=/usr/bin/namtor daemon
 User=namtor
+SystemdService=namtor-daemon.service

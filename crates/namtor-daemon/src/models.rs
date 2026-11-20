@@ -1619,7 +1619,8 @@ mod tests {
 
     #[test]
     fn no_fetch_errors_on_fetch_call() {
-        let fetcher = ModelFetcher::new(Path::new("/tmp"), Box::new(NoFetch));
+        let tmp = tempfile::tempdir().unwrap();
+        let fetcher = ModelFetcher::new(tmp.path(), Box::new(NoFetch));
         let spec = ModelSpec {
             id: "x".into(),
             quant: Quant::Fp32,

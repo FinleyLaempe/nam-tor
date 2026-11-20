@@ -24,8 +24,9 @@ use crate::acl::resolve_namtor_auth_gid;
 use crate::backoff::{BackoffConfig, BackoffStore};
 use crate::daemon::Daemon;
 use crate::dbus::{ManagerService, SystemPolkit};
-use crate::dispatch::DaemonDispatcher;
-use crate::lifecycle::SystemClock;
+use crate::dispatch::{DaemonDispatcher, VerifyRunner};
+use crate::lifecycle::{Clock, SystemClock};
+use crate::listener::Listener;
 use crate::live_capture;
 use crate::manager::bus::ManagerBusService;
 use crate::manager::dbus::{Manager2Service, Manager3EmbedFactory, Manager3Service};
@@ -37,6 +38,7 @@ use crate::models::{
 use crate::startup;
 use crate::supervisor::ChildSupervisor;
 use crate::verify::VerifyEngine;
+use crate::DaemonError;
 use namtor_layout::{InstallRoot, LayoutPaths};
 use namtor_store::TemplateStore;
 use namtor_worker::learned_pad::LearnedPadBackend;
@@ -135,6 +137,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "namtor daemon starting"
     );
 
+    // Before any child is spawned: systemd hands activation listeners over
+    // with CLOEXEC *cleared* (sd_listen_fds semantics), and the worker is
+    // spawned before the listener is adopted. An inherited activation socket
+    // would pin the bind path: a restarted daemon could not re-bind while the
+    // stale worker still held the socket. Every descriptor the supervisor
+    // creates is close-on-exec already, so marking the activation range here
+    // is sufficient — no generic descriptor sweep. The range is only ours if
+    // LISTEN_PID names this process and the count is sane (see
+    // `validate_listen_fds`).
+    let listen_count = validate_listen_fds(
+        std::env::var("LISTEN_FDS").ok().as_deref(),
+        std::env::var("LISTEN_PID").ok().as_deref(),
+        std::process::id(),
+    );
+    if let Some(count) = listen_count {
+        let marked = mark_listen_fds_cloexec(count, 3);
+        tracing::debug!(count, marked, "activation listeners marked close-on-exec");
+    }
+
     let layout = LayoutPaths::resolve(
         std::path::Path::new("/"),
         std::path::Path::new("/usr/share/namtor/install-manifest.toml"),
@@ -231,6 +252,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "spawning worker"
     );
     let supervisor = ChildSupervisor::spawn(&worker_bin, &model_specs, mock_infer, &models_dir)?;
+    // Take the out-of-band termination handle now, before the supervisor
+    // moves behind the dispatcher mutex: a wedged verify can hold that mutex
+    // forever, and teardown must still be able to terminate the worker.
+    let worker_terminator = supervisor.terminator();
 
     tracing::info!(store = %store_dir.display(), "opening template store");
     let learned_pad = namtor_worker::learned_pad::OnnxCpuLearnedPad::load(&pad_path)
@@ -273,13 +298,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "backoff store loaded"
     );
 
-    let dispatcher = Arc::new(DaemonDispatcher::new(
-        daemon,
-        verify,
-        backoff,
-        Some(backoff_path),
-        SystemClock,
-    ));
+    let dispatcher = Arc::new(
+        DaemonDispatcher::new(daemon, verify, backoff, Some(backoff_path), SystemClock)
+            .with_terminator(worker_terminator),
+    );
 
     let auth_gid = resolve_namtor_auth_gid().unwrap_or_else(|_| {
         tracing::warn!("namtor-auth group not found — allowing all connections");
@@ -331,7 +353,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // every time they open, so a camera renumbered by the resume is found
     // fresh by the next auth or enrollment.
     {
-        let dispatcher = Arc::clone(&dispatcher);
+        // The monitor holds only a `Weak`: it must not pin the dispatcher.
+        // Teardown is explicit (`serve_until_shutdown` / the bind-error path
+        // below) and must not wait for this thread to release an Arc — a
+        // strong Arc here used to keep the worker alive through startup
+        // errors (issue #31).
+        let dispatcher = Arc::downgrade(&dispatcher);
         let svc3 = bus_service.as_ref().map(|(_, _, svc3)| Arc::clone(svc3));
         let spawned = std::thread::Builder::new()
             .name("namtor-sleep".into())
@@ -339,6 +366,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let result =
                     namtor_camera::resume::ResumeMonitor::run_with_delay_inhibitor(|event| {
                         if event == namtor_camera::resume::SleepEvent::Suspend {
+                            let Some(dispatcher) = dispatcher.upgrade() else {
+                                // The dispatcher is already torn down: the
+                                // daemon is exiting and there is no capture
+                                // left to darken.
+                                return;
+                            };
                             dispatcher.release_for_suspend();
                             if let Some(svc3) = &svc3 {
                                 let (cancelled, stuck) = svc3.cancel_all_sessions();
@@ -382,17 +415,139 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let started = if std::env::var("LISTEN_FDS").is_ok() {
+    let started = if listen_count.is_some() {
         tracing::info!(fd = 3, "adopting socket-activation listener");
-        startup::from_fd(3, socket_path, auth_gid, dispatcher)?
+        adopt_listener(3, socket_path, auth_gid, &dispatcher)?
     } else {
-        startup::bind(&socket_path, auth_gid, dispatcher)?
+        bind_listener(&socket_path, auth_gid, &dispatcher)?
     };
 
     let listener = started.listener;
 
     install_signal_handlers();
 
+    serve_until_shutdown(listener, &dispatcher);
+
+    if let Some((bus, _svc, _svc3)) = bus_service {
+        bus.shutdown();
+    }
+
+    Ok(())
+}
+
+/// Mark `count` socket-activation descriptors, starting at `first`,
+/// close-on-exec. Missing descriptors are skipped: a partially consumed
+/// activation set must not abort startup. Returns how many were marked.
+fn mark_listen_fds_cloexec(count: u32, first: std::os::fd::RawFd) -> usize {
+    let mut marked = 0;
+    for offset in 0..count {
+        // checked_add: an absurd count must skip, not wrap into unrelated fds.
+        let Some(raw) = first.checked_add(offset as i32) else {
+            break;
+        };
+        // SAFETY: fcntl flag inspection on the descriptors systemd handed us
+        // (sd_listen_fds semantics: `first..first+count` are valid open
+        // listening sockets); both calls are async-signal-safe.
+        let flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
+        if flags < 0 {
+            continue;
+        }
+        // SAFETY: as above.
+        if unsafe { libc::fcntl(raw, libc::F_SETFD, flags | libc::FD_CLOEXEC) } >= 0 {
+            marked += 1;
+        }
+    }
+    marked
+}
+
+/// Validate the socket-activation environment per `sd_listen_fds` semantics:
+/// the count must parse and be sane, and `LISTEN_PID` must name *this*
+/// process. A foreign or missing `LISTEN_PID` means the variables were
+/// inherited across exec and describe another process's sockets — consuming
+/// the range would mark (and later adopt) arbitrary descriptors.
+fn validate_listen_fds(count: Option<&str>, pid: Option<&str>, own_pid: u32) -> Option<u32> {
+    // A bound far above any real socket unit, small enough that marking
+    // cannot run away; anything larger is not an activation set.
+    const MAX_LISTEN_FDS: u32 = 4096;
+    let count: u32 = count?.parse().ok()?;
+    if count == 0 || count > MAX_LISTEN_FDS {
+        return None;
+    }
+    match pid.and_then(|p| p.parse::<u32>().ok()) {
+        Some(pid) if pid == own_pid => Some(count),
+        _ => None,
+    }
+}
+
+/// Bind the listener; on failure, tear the dispatcher down before returning.
+///
+/// A startup error after the worker was spawned used to leave the worker
+/// running: the sleep monitor held a strong `Arc` to the dispatcher, so no
+/// `Drop` ran before the process exited and destructors were skipped. The
+/// teardown here is explicit and runs on the error path, whatever the
+/// monitor thread is doing (issue #31).
+fn bind_listener<S, C, V>(
+    socket_path: &std::path::Path,
+    auth_gid: u32,
+    dispatcher: &Arc<DaemonDispatcher<S, C, V>>,
+) -> Result<startup::Started, DaemonError>
+where
+    S: crate::supervisor::WorkerSupervisor + Send + 'static,
+    C: Clock + Send + 'static,
+    V: VerifyRunner + 'static,
+{
+    let dispatcher_for_listener: Arc<DaemonDispatcher<S, C, V>> = Arc::clone(dispatcher);
+    let result = startup::bind(socket_path, auth_gid, dispatcher_for_listener);
+    match result {
+        Ok(started) => Ok(started),
+        Err(e) => {
+            tracing::warn!(error = %e, "listener startup failed; shutting the worker down");
+            if let Err(te) = dispatcher.shutdown() {
+                tracing::error!(error = %te, "worker teardown after startup failure failed");
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Adopt the socket-activation listener; on failure, tear the dispatcher
+/// down before returning — same rationale as [`bind_listener`].
+fn adopt_listener<S, C, V>(
+    fd: std::os::fd::RawFd,
+    socket_path: std::path::PathBuf,
+    auth_gid: u32,
+    dispatcher: &Arc<DaemonDispatcher<S, C, V>>,
+) -> Result<startup::Started, DaemonError>
+where
+    S: crate::supervisor::WorkerSupervisor + Send + 'static,
+    C: Clock + Send + 'static,
+    V: VerifyRunner + 'static,
+{
+    let dispatcher_for_listener: Arc<DaemonDispatcher<S, C, V>> = Arc::clone(dispatcher);
+    // `from_fd` is safe here because, with `LISTEN_FDS` set, systemd has
+    // passed a bound AF_UNIX listener at `fd` (sd_listen_fds semantics).
+    let result = startup::from_fd(fd, socket_path, auth_gid, dispatcher_for_listener);
+    match result {
+        Ok(started) => Ok(started),
+        Err(e) => {
+            tracing::warn!(error = %e, "listener adoption failed; shutting the worker down");
+            if let Err(te) = dispatcher.shutdown() {
+                tracing::error!(error = %te, "worker teardown after adoption failure failed");
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Run the accept loop until the shutdown flag is observed, then tear the
+/// dispatcher down explicitly — not through whichever thread happens to drop
+/// the last `Arc` (issue #31).
+fn serve_until_shutdown<S, C, V>(listener: Listener, dispatcher: &Arc<DaemonDispatcher<S, C, V>>)
+where
+    S: crate::supervisor::WorkerSupervisor + Send + 'static,
+    C: Clock + Send + 'static,
+    V: VerifyRunner + 'static,
+{
     loop {
         if SHUTDOWN.load(Ordering::Relaxed) {
             tracing::info!("shutdown signal received, stopping");
@@ -412,12 +567,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-
-    if let Some((bus, _svc, _svc3)) = bus_service {
-        bus.shutdown();
+    if let Err(e) = dispatcher.shutdown() {
+        tracing::error!(error = %e, "worker teardown on shutdown failed");
     }
-
-    Ok(())
 }
 
 type ManagerBusHandle = (
@@ -531,5 +683,182 @@ mod model_binding_tests {
         let ids = [MODEL_DETECTOR, MODEL_EMBEDDER, MODEL_PAD];
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
         assert_eq!(unique.len(), ids.len(), "{ids:?}");
+    }
+}
+
+#[cfg(test)]
+mod teardown_tests {
+    use super::*;
+    use crate::backoff::{BackoffConfig, BackoffStore};
+    use crate::dispatch::VerifyRunner;
+    use crate::lifecycle::MockClock;
+    use crate::supervisor::ShutdownCountingSupervisor;
+    use crate::verify::VerifyOutcome;
+    use namtor_capture::source::CaptureSource;
+    use namtor_proto::worker::{ModelSpec, Quant};
+    use std::os::fd::AsRawFd;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// Runner that never runs — teardown tests never dispatch a verify.
+    struct NoVerify;
+    impl VerifyRunner for NoVerify {
+        fn run_verify(
+            &mut self,
+            _capture: &mut dyn CaptureSource,
+            _target_uid: u32,
+            _deadline: Instant,
+        ) -> VerifyOutcome {
+            VerifyOutcome::unavailable("test")
+        }
+    }
+
+    type TestDispatcher = DaemonDispatcher<ShutdownCountingSupervisor, MockClock, NoVerify>;
+
+    fn models() -> Vec<ModelSpec> {
+        vec![ModelSpec {
+            id: "m".into(),
+            quant: Quant::Fp32,
+            sha256: [0; 32],
+        }]
+    }
+
+    fn dispatcher() -> (Arc<TestDispatcher>, Arc<AtomicUsize>) {
+        let sup = ShutdownCountingSupervisor::new();
+        let counter = sup.shutdowns.clone();
+        let clock = MockClock::new(Instant::now());
+        let daemon =
+            Daemon::new(sup, &models(), Duration::from_secs(30), clock.clone(), None).unwrap();
+        let disp = Arc::new(DaemonDispatcher::new(
+            daemon,
+            NoVerify,
+            BackoffStore::new(BackoffConfig::default()),
+            None,
+            clock,
+        ));
+        (disp, counter)
+    }
+
+    /// A bind failure after the worker was spawned must tear the worker down
+    /// *on the error path* — not via a Drop racing the sleep monitor's Arc.
+    #[test]
+    fn bind_failure_tears_the_worker_supervisor_down() {
+        let (disp, counter) = dispatcher();
+        let result = bind_listener(
+            std::path::Path::new("/proc/namtor-cannot-bind-here.sock"),
+            1000,
+            &disp,
+        );
+        assert!(result.is_err(), "bind in /proc must fail");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "startup failure must shut the worker supervisor down deterministically"
+        );
+    }
+
+    /// Normal termination (shutdown flag observed by the accept loop) must
+    /// shut the worker supervisor down explicitly, not through a last-Arc
+    /// Drop.
+    #[test]
+    fn normal_termination_tears_the_worker_supervisor_down() {
+        let (disp, counter) = dispatcher();
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let path = dir.path().join("auth.sock");
+        let started = bind_listener(&path, 1000, &disp).expect("bind");
+        SHUTDOWN.store(true, Ordering::Relaxed);
+        serve_until_shutdown(started.listener, &disp);
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "normal termination must shut the worker supervisor down deterministically"
+        );
+    }
+
+    /// systemd hands activation listeners over with CLOEXEC *cleared*; before
+    /// any child is spawned the daemon must mark them close-on-exec, or the
+    /// worker pins the activation socket across exec.
+    #[test]
+    fn activation_listener_is_marked_cloexec_before_any_spawn() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let sock = std::os::unix::net::UnixListener::bind(dir.path().join("s.sock"))
+            .expect("bind test listener");
+        let raw = sock.as_raw_fd();
+        // Simulate systemd: activation fds arrive with the flag cleared.
+        // SAFETY: fcntl flag manipulation on our own open descriptor.
+        unsafe {
+            let flags = libc::fcntl(raw, libc::F_GETFD);
+            assert!(flags >= 0);
+            assert_eq!(
+                libc::fcntl(raw, libc::F_SETFD, flags & !libc::FD_CLOEXEC),
+                0
+            );
+        }
+
+        let marked = mark_listen_fds_cloexec(1, raw);
+        assert_eq!(marked, 1, "the handed-over listener must be marked");
+        // SAFETY: read-back of our own descriptor's flags.
+        let flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
+        assert_ne!(
+            flags & libc::FD_CLOEXEC,
+            0,
+            "activation listener must carry FD_CLOEXEC before the worker is spawned"
+        );
+    }
+
+    /// Missing descriptors in the activation range are skipped, not fatal —
+    /// a partially consumed set must not abort startup.
+    #[test]
+    fn marking_tolerates_missing_descriptors() {
+        assert_eq!(mark_listen_fds_cloexec(1, -1), 0);
+    }
+
+    /// sd_listen_fds semantics: only a `LISTEN_PID` naming *this* process
+    /// with a sane count authorizes consuming the range. A foreign pid means
+    /// the variables were inherited across exec and describe someone else's
+    /// sockets; an absurd count must be rejected, not marked.
+    #[test]
+    fn activation_gating_requires_our_own_listen_pid_and_a_sane_count() {
+        let own = 4242u32;
+        assert_eq!(
+            validate_listen_fds(Some("1"), Some("4242"), own),
+            Some(1),
+            "matching LISTEN_PID authorizes the range"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("3"), Some("4242"), own),
+            Some(3),
+            "multi-fd activation is honored"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("1"), Some("999"), own),
+            None,
+            "a foreign LISTEN_PID means the variables are not ours"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("1"), None, own),
+            None,
+            "systemd always sets LISTEN_PID; a missing one is not ours"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("0"), Some("4242"), own),
+            None,
+            "a zero count is not an activation set"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("999999"), Some("4242"), own),
+            None,
+            "absurd counts are rejected, not marked"
+        );
+        assert_eq!(
+            validate_listen_fds(Some("nope"), Some("4242"), own),
+            None,
+            "unparseable counts are rejected"
+        );
+        assert_eq!(
+            validate_listen_fds(None, Some("4242"), own),
+            None,
+            "no LISTEN_FDS, no activation"
+        );
     }
 }

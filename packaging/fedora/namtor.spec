@@ -58,7 +58,7 @@
 %global debug_package %{nil}
 
 Name:           namtor
-Version:        0.3.8
+Version:        0.3.9
 Release:        1%{?dist}
 Summary:        IR face authentication for Linux — daemon, PAM module, CLI
 
@@ -395,6 +395,11 @@ fi
 /usr/bin/gtk-update-icon-cache -q %{_datadir}/icons/hicolor 2>/dev/null || :
 
 %changelog
+* Thu Nov 19 2026 Nam-tor Project <namtor@example.invalid> - 0.3.9-1
+- Fix D-Bus activation, bounded emitter cycling, worker lifetime, and GTK switches.
+- Establish Arch install identities early and isolate the NoFetch regression test.
+- Preserve experimental-preview status and document outstanding TPM2 build support.
+
 * Thu Sep 17 2026 Nam-tor Project <namtor@example.invalid> - 0.3.8-1
 - Every page of the settings app was rendered and looked at, which is not
   something the test suite can do for you. Four defects that the design

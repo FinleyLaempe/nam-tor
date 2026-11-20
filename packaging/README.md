@@ -153,6 +153,8 @@ needed to start the daemon:
 - registers the `namtor` system user and `namtor-auth` group (sysusers)
 - creates `/var/lib/namtor` and `/run/namtor` (tmpfiles)
 - enables `namtor-daemon.socket` (socket-activated)
+- routes D-Bus activation to `namtor-daemon.service`, the same hardened
+  service the socket starts (the service need not be enabled at boot)
 - validates that the bundled models, systemd units, D-Bus service, and
   PAM module are on disk (fails nonzero if any mandatory piece is missing)
 
@@ -204,6 +206,28 @@ namtor-cli status
 
 `namtor-cli status` should show `stream: closed` immediately after daemon
 start (warm worker, cold camera — spec §5.5).
+
+Both D-Bus clients and PAM socket clients activate **the same** systemd
+service. Its `Requires=namtor-daemon.socket` supplies the pre-bound listener
+with mode `0660`, owner `root:namtor-auth`. Do not grant the daemon write
+access to `/run/namtor` or try to chown a self-bound socket to root: the
+daemon is deliberately unprivileged. Direct execution without systemd is
+a debugging mode and requires an explicitly writable `NAMTOR_SOCKET` path.
+
+On Arch, `pre_install` establishes the system identities **before payload
+extraction**. A running D-Bus broker can notice new policy files immediately,
+before `post_install` or pacman's later sysusers hook. This avoids an initial
+unknown-user parse without restarting the system bus. The regression test
+`bash packaging/tests/test_dbus_activation.sh` checks activation delegation
+and that the pre-install identities match `sysusers.d/namtor.conf`.
+
+If an older install logged `NSS returned no entry for 'namtor'`, check the
+current boot with `journalctl -u dbus-broker -b --grep=namtor`. An early
+parse warning does not establish that a negative entry remained cached:
+compare its time with the transaction's later `dbus-reload.hook`. Do not
+restart the system bus just to clear historical warnings. A clean fresh-boot
+journal remains a host verification step, not evidence supplied by the
+packaging test.
 
 ## Determinism proof
 
@@ -351,4 +375,3 @@ install preserves fallback, uninstall restores original, broken module caught
 by preflight, daemon failure leaves PAM intact (stack shape + source-level
 fail-closed contract), upgrade idempotent, unsafe ordering refused, rollback
 restores backup.
-
