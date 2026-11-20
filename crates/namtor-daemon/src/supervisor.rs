@@ -118,7 +118,10 @@ pub(crate) struct ReapOnDrop(std::process::Child);
 #[cfg(test)]
 impl ReapOnDrop {
     pub(crate) fn spawn(cmd: &mut std::process::Command) -> Self {
-        ReapOnDrop(cmd.spawn().expect("spawn test child"))
+        match cmd.spawn() {
+            Ok(child) => ReapOnDrop(child),
+            Err(error) => panic!("spawn test child: {error}"),
+        }
     }
 
     pub(crate) fn pid(&self) -> u32 {
