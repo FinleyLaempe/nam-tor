@@ -278,10 +278,10 @@ const ACTIONABLE_WIDGETS: &[(&str, &str, &str)] = &[
     ("scan_feedback.rs", "accepted count", "Accepted views"),
     ("scan_feedback.rs", "seen count", "Views seen"),
     ("scan_feedback.rs", "rejected count", "Rejected views"),
-    ("profile_list.rs", "toggle (SwitchRow)", "Enable profile"),
+    ("profile_list.rs", "toggle (Switch)", "Enable profile"),
     (
         "pam_services.rs",
-        "toggle (SwitchRow)",
+        "toggle (Switch)",
         "Enable face authentication",
     ),
     (
@@ -855,7 +855,9 @@ fn review_component_builds_preferences_page() {
 }
 
 /// The profile list component MUST build a `PreferencesGroup` with
-/// `ActionRow`s and `SwitchRow` suffixes (not the old GtkBox + CheckButton).
+/// `ActionRow`s and bare `gtk4::Switch` suffixes (not the old GtkBox +
+/// CheckButton, and not a nested `AdwSwitchRow`, which is a `GtkListBoxRow`
+/// and may not be parented into an ActionRow's suffix `GtkBox` — #32).
 #[test]
 fn profile_list_uses_preferences_group_and_action_rows() {
     use gtk4::prelude::*;
@@ -887,8 +889,10 @@ fn profile_list_uses_preferences_group_and_action_rows() {
             "profile list must contain ActionRow"
         );
         assert!(
-            common::widget_tree_contains_type(group_widget, "SwitchRow"),
-            "profile list must contain SwitchRow"
+            common::widget_tree_contains_type(group_widget, "GtkSwitch")
+                && !common::widget_tree_contains_type(group_widget, "SwitchRow"),
+            "profile list must toggle with a bare gtk4::Switch suffix, not a \
+             nested SwitchRow"
         );
         assert!(
             !common::widget_tree_contains_type(group_widget, "CheckButton"),
@@ -898,7 +902,7 @@ fn profile_list_uses_preferences_group_and_action_rows() {
 }
 
 /// The PAM services component MUST build a `PreferencesGroup` with
-/// `ActionRow`s and `SwitchRow` suffixes.
+/// `ActionRow`s and bare `gtk4::Switch` suffixes (#32).
 #[test]
 fn pam_services_uses_preferences_group_and_action_rows() {
     use gtk4::prelude::*;
@@ -925,8 +929,10 @@ fn pam_services_uses_preferences_group_and_action_rows() {
             "pam_services must contain ActionRow"
         );
         assert!(
-            common::widget_tree_contains_type(group_widget, "SwitchRow"),
-            "pam_services must contain SwitchRow"
+            common::widget_tree_contains_type(group_widget, "GtkSwitch")
+                && !common::widget_tree_contains_type(group_widget, "SwitchRow"),
+            "pam_services must toggle with a bare gtk4::Switch suffix, not a \
+             nested SwitchRow"
         );
     });
 }

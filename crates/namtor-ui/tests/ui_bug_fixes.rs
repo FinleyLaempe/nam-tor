@@ -957,14 +957,13 @@ fn flipping_a_profile_switch_does_not_re_enter_the_controller() {
 
         // The fake serves profiles, so rows must have rendered. If they did
         // not, the rest of this test would pass by finding nothing.
-        let switches = common::count_widgets_of_type::<libadwaita::SwitchRow>(&root);
+        let switches = common::count_widgets_of_type::<gtk4::Switch>(&root);
         assert!(
             switches > 0,
             "no profile switch rendered — the test would prove nothing"
         );
 
-        let sw =
-            common::first_widget_of_type::<libadwaita::SwitchRow>(&root).expect("a profile switch");
+        let sw = common::first_widget_of_type::<gtk4::Switch>(&root).expect("a profile switch");
         let before = sw.is_active();
 
         // The user flips it. Everything downstream — presenter borrow,
@@ -984,7 +983,7 @@ fn flipping_a_profile_switch_does_not_re_enter_the_controller() {
 
         // The re-render replaces the rows, so the widget flipped above is
         // detached; the current tree is what the user sees.
-        let after = common::count_widgets_of_type::<libadwaita::SwitchRow>(&root);
+        let after = common::count_widgets_of_type::<gtk4::Switch>(&root);
         assert_eq!(
             after, switches,
             "the list must still hold one switch per profile after re-render"
@@ -1308,10 +1307,10 @@ fn pam_fixture(
 /// that flipped one of those would observe nothing happening and call it a
 /// pass. The switch carries the service id in its tooltip, so it can be
 /// named.
-fn switch_for_service(root: &gtk4::Widget, service_id: &str) -> Option<libadwaita::SwitchRow> {
+fn switch_for_service(root: &gtk4::Widget, service_id: &str) -> Option<gtk4::Switch> {
     use gtk4::prelude::*;
     let mut found = None;
-    collect_switch_rows(root, &mut |sw| {
+    collect_switches(root, &mut |sw| {
         if found.is_none()
             && sw
                 .tooltip_text()
@@ -1323,15 +1322,15 @@ fn switch_for_service(root: &gtk4::Widget, service_id: &str) -> Option<libadwait
     found
 }
 
-/// Walk a widget tree and hand every `AdwSwitchRow` to `f`.
-fn collect_switch_rows(widget: &gtk4::Widget, f: &mut dyn FnMut(&libadwaita::SwitchRow)) {
+/// Walk a widget tree and hand every `gtk4::Switch` to `f`.
+fn collect_switches(widget: &gtk4::Widget, f: &mut dyn FnMut(&gtk4::Switch)) {
     use gtk4::prelude::*;
-    if let Some(sw) = widget.downcast_ref::<libadwaita::SwitchRow>() {
+    if let Some(sw) = widget.downcast_ref::<gtk4::Switch>() {
         f(sw);
     }
     let mut child = widget.first_child();
     while let Some(c) = child {
-        collect_switch_rows(&c, f);
+        collect_switches(&c, f);
         child = c.next_sibling();
     }
 }
